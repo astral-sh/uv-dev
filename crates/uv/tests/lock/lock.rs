@@ -34,6 +34,8 @@ use uv_test::archive::{generate_source_archive, write_tar_gz};
 use uv_test::package_server::PackageServer;
 #[cfg(feature = "test-universal")]
 use uv_test::packse::{PackseServer, generate_wheel_with_files, scenario::Scenario};
+#[cfg(feature = "test-universal")]
+use uv_test::subdirectory_archive::SubdirectoryArchive;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 #[cfg(feature = "test-universal")]
@@ -3805,11 +3807,11 @@ async fn lock_sdist_url_cache_heal_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sdist_url_subdirectory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let archive = SubdirectoryArchive::start()?;
+    let context = uv_test::test_context!("3.12").with_filter((archive.sha256(), "[ARCHIVE_HASH]"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -3817,9 +3819,8 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
         dependencies = ["root"]
 
         [tool.uv.sources]
-        root = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
-        "#,
-    )?;
+        root = {{ url = "{}", subdirectory = "packages/root" }}
+        "#, archive.url()})?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -3872,16 +3873,16 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "root", url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
+        requires-dist = [{ name = "root", url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
 
         [[package]]
         name = "root"
         version = "0.0.1"
-        source = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
+        source = { url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:24b55efee28d08ad3cdc58903e359e820601baa6a4a4b3424311541ebcfb09d3" }
+        sdist = { hash = "sha256:[ARCHIVE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
@@ -3913,7 +3914,7 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root==0.0.1 (from http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root)
      + sniffio==1.3.1
     ");
 
@@ -3931,18 +3932,17 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let archive = SubdirectoryArchive::start()?;
+    let context = uv_test::test_context!("3.12").with_filter((archive.sha256(), "[ARCHIVE_HASH]"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root"]
-        "#,
-    )?;
+        dependencies = ["root @ {}#subdirectory=packages/root"]
+        "#, archive.url()})?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -3995,16 +3995,16 @@ fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "root", url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
+        requires-dist = [{ name = "root", url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
 
         [[package]]
         name = "root"
         version = "0.0.1"
-        source = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
+        source = { url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:24b55efee28d08ad3cdc58903e359e820601baa6a4a4b3424311541ebcfb09d3" }
+        sdist = { hash = "sha256:[ARCHIVE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
@@ -4036,7 +4036,7 @@ fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root==0.0.1 (from http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root)
      + sniffio==1.3.1
     ");
 
