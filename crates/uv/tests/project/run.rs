@@ -2908,6 +2908,8 @@ fn run_empty_requirements_txt() -> Result<()> {
     Ok(())
 }
 
+/// Requirements-file layers expose the requested version at runtime and reuse compatible base
+/// packages.
 #[test]
 fn run_requirements_txt() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -2935,6 +2937,7 @@ fn run_requirements_txt() -> Result<()> {
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r"
         import sniffio
+        print(sniffio.__version__)
        "
     })?;
 
@@ -2944,6 +2947,9 @@ fn run_requirements_txt() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.run().arg("--with-requirements").arg(requirements_txt.as_os_str()).arg("main.py"), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    1.3.1
+
     ----- stderr -----
     Resolved 6 packages in [TIME]
     Prepared 4 packages in [TIME]
@@ -2963,6 +2969,9 @@ fn run_requirements_txt() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.run().arg("--with-requirements").arg(requirements_txt.as_os_str()).arg("main.py"), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    1.3.1
+
     ----- stderr -----
     Resolved 6 packages in [TIME]
     Checked 4 packages in [TIME]
@@ -2973,6 +2982,9 @@ fn run_requirements_txt() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.run().arg("--with-requirements").arg(requirements_txt.as_os_str()).arg("main.py"), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    1.3.0
+
     ----- stderr -----
     Resolved 6 packages in [TIME]
     Checked 4 packages in [TIME]
@@ -2992,6 +3004,9 @@ fn run_requirements_txt() -> Result<()> {
         .arg("iniconfig")
         .arg("main.py"), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    1.3.1
+
     ----- stderr -----
     Resolved 6 packages in [TIME]
     Checked 4 packages in [TIME]
@@ -3010,6 +3025,9 @@ fn run_requirements_txt() -> Result<()> {
         .arg("main.py")
         .stdin(std::fs::File::open(&requirements_txt)?), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    1.3.1
+
     ----- stderr -----
     Resolved 6 packages in [TIME]
     Checked 4 packages in [TIME]
