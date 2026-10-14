@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Context;
 use itertools::Itertools;
 
 use uv_cli_output::printer::Printer;
@@ -169,11 +168,9 @@ pub async fn resolve(
                 client.credentials_cache(),
             )
             .await
-            .with_context(|| {
-                format!(
-                    "Failed to read dependency groups from: {}",
-                    pyproject_path.display()
-                )
+            .map_err(|source| Error::DependencyGroups {
+                path: pyproject_path.clone(),
+                source: Box::new(source),
             })?;
 
             // Complain if dependency groups are named that don't appear.
