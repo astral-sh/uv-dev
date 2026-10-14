@@ -1,5 +1,7 @@
 //! Provenance and reuse of direct URL installations.
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
@@ -38,7 +40,7 @@ fn path_changes_with_same_name() -> Result<()> {
             &name,
             &version,
             &[],
-            &Default::default(),
+            &BTreeMap::new(),
             None,
             "py3-none-any",
             &[("ok/origin.txt", payload)],
@@ -126,7 +128,7 @@ async fn direct_url_json_query() -> Result<()> {
         &"six".parse()?,
         &"1.17.0".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py2.py3-none-any",
         &[],

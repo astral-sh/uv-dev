@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -14,7 +15,7 @@ fn bytecode_wheel(context: &TestContext) -> Result<PathBuf> {
         &"bytecode-test".parse()?,
         &"1.0.0".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],

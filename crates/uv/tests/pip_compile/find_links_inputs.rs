@@ -1,5 +1,7 @@
 //! Find-links inputs and artifact hashes.
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use assert_fs::prelude::*;
 use sha2::{Digest, Sha256};
@@ -15,7 +17,7 @@ fn setup_wheelhouse() -> Result<TestContext> {
         &"tqdm".parse()?,
         &"4.64.1".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],

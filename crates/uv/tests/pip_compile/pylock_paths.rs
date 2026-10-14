@@ -1,5 +1,7 @@
 //! Archive paths in PEP 751 lockfiles are relative to the lockfile location.
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use assert_fs::prelude::*;
 use sha2::{Digest, Sha256};
@@ -15,7 +17,7 @@ fn pep_751_compile_path_wheel() -> Result<()> {
         &"iniconfig".parse()?,
         &"2.0.0".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],
