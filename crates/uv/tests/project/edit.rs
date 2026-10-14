@@ -27,12 +27,28 @@ use wiremock::{
 };
 
 #[cfg(feature = "test-git")]
+use uv_cache::{Cache, CacheBucket};
+#[cfg(feature = "test-git")]
 use uv_cache_key::{RepositoryUrl, cache_digest};
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
 use uv_test::{uv_snapshot, venv_bin_path};
+
+#[cfg(feature = "test-git")]
+fn git(repository: &Path, arguments: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .args(arguments)
+        .current_dir(repository)
+        .output()?
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    Ok(String::from_utf8(output)?.trim().to_owned())
+}
 
 /// Add a PyPI requirement.
 #[test]
@@ -851,19 +867,6 @@ fn add_git_lfs() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn git_partial_fetches_preview() -> Result<()> {
-    fn git(repository: &Path, arguments: &[&str]) -> Result<String> {
-        let output = Command::new("git")
-            .args(arguments)
-            .current_dir(repository)
-            .output()?
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        Ok(String::from_utf8(output)?.trim().to_owned())
-    }
-
     let context = uv_test::test_context!("3.12");
     let repository = context.temp_dir.child("repository");
     repository.create_dir_all()?;
@@ -910,12 +913,12 @@ fn git_partial_fetches_preview() -> Result<()> {
     "#})?;
 
     // The default path includes objects used only by older revisions.
-    context
-        .lock()
-        .arg("--no-preview")
-        .arg("--offline")
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-preview", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
     let database = context
         .cache_dir
         .child("git-v1/db")
@@ -932,17 +935,19 @@ fn git_partial_fetches_preview() -> Result<()> {
     assert!(!fs_err::read_to_string(database.child(".git/config"))?.contains("promisor = true"));
     fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
 
-    // An independent cache with preview enabled omits those historical blobs.
-    let partial_cache = context.cache_dir.child("partial");
-    let context = context.with_cache_dir(partial_cache.path());
-    context
-        .lock()
-        .arg("--preview-features")
-        .arg("git-partial-fetches")
-        .arg("--offline")
-        .assert()
-        .success();
-    let partial_database = partial_cache
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
+
+    // Preview uses a separate database and omits those historical blobs.
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "git-partial-fetches", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let partial_database = context
+        .cache_dir
         .child("git-v1/partial/db")
         .child(cache_digest(&repository_url));
     let objects = git(
@@ -958,31 +963,7 @@ fn git_partial_fetches_preview() -> Result<()> {
         fs_err::read_to_string(partial_database.child(".git/config"))?.contains("promisor = true")
     );
 
-    // Disabling preview creates a complete repository in the normal cache.
-    fs_err::remove_dir_all(partial_cache.child("git-v1/partial/checkouts"))?;
-    for entry in fs_err::read_dir(partial_cache.path())? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
-            fs_err::remove_dir_all(entry.path())?;
-        }
-    }
-    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
-    context
-        .lock()
-        .arg("--no-preview")
-        .arg("--offline")
-        .assert()
-        .success();
-    let checkout_root = partial_cache
-        .child("git-v1/checkouts")
-        .child(cache_digest(&repository_url));
-    let checkout = fs_err::read_dir(checkout_root.path())?
-        .collect::<std::io::Result<Vec<_>>>()?
-        .into_iter()
-        .find(|entry| entry.path().is_dir())
-        .ok_or_else(|| anyhow!("missing Git checkout"))?;
-    assert_eq!(git(&checkout.path(), &["rev-parse", "HEAD"])?, revision);
-    assert!(checkout.path().join("current.py").is_file());
+    assert!(!fs_err::read_to_string(database.child(".git/config"))?.contains("promisor = true"));
     Ok(())
 }
 
@@ -994,23 +975,17 @@ async fn git_partial_fetches_offline_revision_probe() -> Result<()> {
     let server = MockServer::start().await;
     let repository = context.temp_dir.child("repository");
     repository.create_dir_all()?;
-    let git = |arguments: &[&str]| -> Result<String> {
-        let output = Command::new("git")
-            .args(arguments)
-            .current_dir(repository.path())
-            .output()?
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        Ok(String::from_utf8(output)?.trim().to_owned())
-    };
-    git(&["init", "--template="])?;
-    git(&["config", "user.name", "Alice"])?;
-    git(&["config", "user.email", "alice@example.com"])?;
-    git(&["config", "commit.gpgsign", "false"])?;
-    git(&["config", "uploadpack.allowFilter", "true"])?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        repository.path(),
+        &["config", "uploadpack.allowFilter", "true"],
+    )?;
     repository.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "dependency"
@@ -1018,9 +993,9 @@ async fn git_partial_fetches_offline_revision_probe() -> Result<()> {
         requires-python = ">=3.12"
     "#})?;
     repository.child("module.py").write_str("VALUE = 1\n")?;
-    git(&["add", "."])?;
-    git(&["commit", "-m", "Initial version"])?;
-    let first_revision = git(&["rev-parse", "HEAD"])?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Initial version"])?;
+    let first_revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let url = Url::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     context
@@ -1041,21 +1016,18 @@ async fn git_partial_fetches_offline_revision_probe() -> Result<()> {
     ");
 
     repository.child("module.py").write_str("VALUE = 2\n")?;
-    git(&["add", "."])?;
-    git(&["commit", "-m", "Update module"])?;
-    let revision = git(&["rev-parse", "HEAD"])?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Update module"])?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let project = context.read("pyproject.toml");
     context
         .temp_dir
         .child("pyproject.toml")
         .write_str(&project.replace(&first_revision, &revision))?;
     fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
-    for entry in fs_err::read_dir(context.cache_dir.path())? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
-            fs_err::remove_dir_all(entry.path())?;
-        }
-    }
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
 
     let database = context
         .cache_dir
@@ -1068,7 +1040,7 @@ async fn git_partial_fetches_offline_revision_probe() -> Result<()> {
         .assert()
         .success();
 
-    // Emulate Git versions that ignore GIT_NO_LAZY_FETCH, regardless of the installed version.
+    // Emulate Git versions that ignore `GIT_NO_LAZY_FETCH`, regardless of the installed version.
     let shim_dir = context.temp_dir.child("old-git");
     shim_dir.create_dir_all()?;
     let shim = shim_dir.child("git");
@@ -1092,6 +1064,112 @@ async fn git_partial_fetches_offline_revision_probe() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .is_some_and(|requests| requests.is_empty())
+    );
+    Ok(())
+}
+
+/// A build backend's local history read must not fetch promisor objects over HTTP offline.
+#[tokio::test]
+#[cfg(feature = "test-git")]
+async fn git_partial_fetches_offline_build() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_python_sources();
+    let server = MockServer::start().await;
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        repository.path(),
+        &["config", "uploadpack.allowFilter", "true"],
+    )?;
+    repository
+        .child("old.txt")
+        .write_str("old revision content\n")?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Historical file"])?;
+    fs_err::remove_file(repository.child("old.txt"))?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [project]
+        name = "dependency"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    repository.child("backend.py").write_str(indoc! {r#"
+        import subprocess
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            result = subprocess.run(["git", "show", "HEAD~1:old.txt"])
+            raise SystemExit(result.returncode)
+    "#})?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Add build backend"])?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
+    let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
+    let url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository path"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dependency @ git+{url}@{revision}"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "git-partial-fetches", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let checkout = context
+        .cache_dir
+        .child("git-v1/partial/checkouts")
+        .child(cache_digest(&RepositoryUrl::parse(url.as_str())?))
+        .child(short_revision);
+    Command::new("git")
+        .args(["remote", "set-url", "origin", &server.uri()])
+        .current_dir(checkout.path())
+        .output()?
+        .assert()
+        .success();
+    let context = context
+        .with_filtered_path(checkout.path(), "CHECKOUT")
+        .with_filter((r"\b[0-9a-f]{40}\b", "[OBJECT]"));
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--preview-features", "git-partial-fetches", "--offline"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Failed to build `dependency @ git+file://[TEMP_DIR]/repository/@[OBJECT]`
+      cause: The build backend returned an error
+      cause: Call to `backend.build_wheel` failed (exit status: 128)
+
+             [stderr]
+             fatal: transport 'http' not allowed
+             fatal: could not fetch [OBJECT] from promisor remote
+
+    hint: `dependency` was included because `project` (v0.1.0) depends on `dependency`
+
+    hint: Build failures usually indicate a problem with the package or the build environment
     ");
     assert!(
         server
@@ -1201,23 +1279,17 @@ fn add_git_cache_compat_downgrade() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_exclude_newer("2026-10-04T00:00:00Z");
     let repository = context.temp_dir.child("repository");
     repository.create_dir_all()?;
-    let git = |arguments: &[&str]| -> Result<String> {
-        let output = Command::new("git")
-            .args(arguments)
-            .current_dir(repository.path())
-            .output()?
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        Ok(String::from_utf8(output)?.trim().to_owned())
-    };
-    git(&["init", "--template="])?;
-    git(&["config", "user.name", "Alice"])?;
-    git(&["config", "user.email", "alice@example.com"])?;
-    git(&["config", "commit.gpgsign", "false"])?;
-    git(&["config", "uploadpack.allowFilter", "true"])?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        repository.path(),
+        &["config", "uploadpack.allowFilter", "true"],
+    )?;
     repository.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "dependency"
@@ -1225,18 +1297,18 @@ fn add_git_cache_compat_downgrade() -> Result<()> {
         requires-python = ">=3.12"
     "#})?;
     repository.child("old.py").write_str("OLD = True\n")?;
-    git(&["add", "."])?;
-    git(&["commit", "-m", "Initial version"])?;
-    let first_revision = git(&["rev-parse", "HEAD"])?;
-    let short_first_revision = git(&["rev-parse", "--short", "HEAD"])?;
-    let old_blob = git(&["rev-parse", "HEAD:old.py"])?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Initial version"])?;
+    let first_revision = git(repository.path(), &["rev-parse", "HEAD"])?;
+    let short_first_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
+    let old_blob = git(repository.path(), &["rev-parse", "HEAD:old.py"])?;
     fs_err::remove_file(repository.child("old.py"))?;
     repository
         .child("current.py")
         .write_str("CURRENT = True\n")?;
-    git(&["add", "."])?;
-    git(&["commit", "-m", "Replace module"])?;
-    let revision = git(&["rev-parse", "HEAD"])?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Replace module"])?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let url = Url::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     context
@@ -1257,12 +1329,9 @@ fn add_git_cache_compat_downgrade() -> Result<()> {
     ");
 
     fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
-    for entry in fs_err::read_dir(context.cache_dir.path())? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
-            fs_err::remove_dir_all(entry.path())?;
-        }
-    }
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
     let project = context.read("pyproject.toml");
     context
         .temp_dir
@@ -1323,30 +1392,27 @@ fn add_git_cache_recovery_lfs() -> Result<()> {
 
     let repository = context.temp_dir.child("repository");
     repository.create_dir_all()?;
-    let git = |arguments: &[&str]| -> Result<String> {
-        let output = Command::new("git")
-            .args(arguments)
-            .current_dir(repository.path())
-            .output()?
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        Ok(String::from_utf8(output)?.trim().to_owned())
-    };
-    git(&["init", "--template="])?;
-    git(&["config", "user.name", "Alice"])?;
-    git(&["config", "user.email", "alice@example.com"])?;
-    git(&["config", "commit.gpgsign", "false"])?;
-    git(&["config", "uploadpack.allowFilter", "true"])?;
-    git(&["lfs", "install", "--local", "--skip-repo"])?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        repository.path(),
+        &["config", "uploadpack.allowFilter", "true"],
+    )?;
+    git(
+        repository.path(),
+        &["lfs", "install", "--local", "--skip-repo"],
+    )?;
     repository
         .child("historical.txt")
         .write_str("historical data\n")?;
-    git(&["add", "."])?;
-    git(&["commit", "-m", "Historical data"])?;
-    let historical_blob = git(&["rev-parse", "HEAD:historical.txt"])?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Historical data"])?;
+    let historical_blob = git(repository.path(), &["rev-parse", "HEAD:historical.txt"])?;
     fs_err::remove_file(repository.child("historical.txt"))?;
     repository.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -1358,10 +1424,10 @@ fn add_git_cache_recovery_lfs() -> Result<()> {
         .child(".gitattributes")
         .write_str("module.py filter=lfs diff=lfs merge=lfs -text\n")?;
     repository.child("module.py").write_str("VALUE = True\n")?;
-    git(&["add", "."])?;
-    git(&["commit", "-m", "Initial version"])?;
-    let revision = git(&["rev-parse", "HEAD"])?;
-    let short_revision = git(&["rev-parse", "--short", "HEAD"])?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Initial version"])?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
+    let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
     let url = Url::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     context
@@ -1431,12 +1497,9 @@ fn add_git_cache_recovery_lfs() -> Result<()> {
 
     // Recreate the checkout from the cache with no source repository available.
     fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
-    for entry in fs_err::read_dir(context.cache_dir.path())? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
-            fs_err::remove_dir_all(entry.path())?;
-        }
-    }
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
     fs_err::remove_dir_all(checkout_root.path())?;
     fs_err::rename(
         repository.path(),
@@ -1458,12 +1521,9 @@ fn add_git_cache_recovery_lfs() -> Result<()> {
 
     // Older uv versions must be able to reconstruct the same checkout.
     fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
-    for entry in fs_err::read_dir(context.cache_dir.path())? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
-            fs_err::remove_dir_all(entry.path())?;
-        }
-    }
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
     fs_err::remove_dir_all(checkout_root.path())?;
 
     uv_snapshot!(context.filters(), context.command()
@@ -1495,30 +1555,27 @@ fn add_git_cache_recovery_partial_lfs() -> Result<()> {
 
     let repository = context.temp_dir.child("repository");
     repository.create_dir_all()?;
-    let git = |arguments: &[&str]| -> Result<String> {
-        let output = Command::new("git")
-            .args(arguments)
-            .current_dir(repository.path())
-            .output()?
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        Ok(String::from_utf8(output)?.trim().to_owned())
-    };
-    git(&["init", "--template="])?;
-    git(&["config", "user.name", "Alice"])?;
-    git(&["config", "user.email", "alice@example.com"])?;
-    git(&["config", "commit.gpgsign", "false"])?;
-    git(&["config", "uploadpack.allowFilter", "true"])?;
-    git(&["lfs", "install", "--local", "--skip-repo"])?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        repository.path(),
+        &["config", "uploadpack.allowFilter", "true"],
+    )?;
+    git(
+        repository.path(),
+        &["lfs", "install", "--local", "--skip-repo"],
+    )?;
     repository
         .child("historical.txt")
         .write_str("historical data\n")?;
-    git(&["add", "."])?;
-    git(&["commit", "-m", "Historical data"])?;
-    let historical_blob = git(&["rev-parse", "HEAD:historical.txt"])?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Historical data"])?;
+    let historical_blob = git(repository.path(), &["rev-parse", "HEAD:historical.txt"])?;
     fs_err::remove_file(repository.child("historical.txt"))?;
     repository.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -1530,10 +1587,10 @@ fn add_git_cache_recovery_partial_lfs() -> Result<()> {
         .child(".gitattributes")
         .write_str("module.py filter=lfs diff=lfs merge=lfs -text\n")?;
     repository.child("module.py").write_str("VALUE = True\n")?;
-    git(&["add", "."])?;
-    git(&["commit", "-m", "Initial version"])?;
-    let revision = git(&["rev-parse", "HEAD"])?;
-    let short_revision = git(&["rev-parse", "--short", "HEAD"])?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Initial version"])?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
+    let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
     let url = Url::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     // LFS and non-LFS sources share a database. Prime a partial cache without LFS objects.
@@ -1562,12 +1619,9 @@ fn add_git_cache_recovery_partial_lfs() -> Result<()> {
     ");
 
     fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
-    for entry in fs_err::read_dir(context.cache_dir.path())? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
-            fs_err::remove_dir_all(entry.path())?;
-        }
-    }
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
 
     context
         .temp_dir
@@ -1636,12 +1690,9 @@ fn add_git_cache_recovery_partial_lfs() -> Result<()> {
 
     // Recreate the checkout from the cache with no source repository available.
     fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
-    for entry in fs_err::read_dir(context.cache_dir.path())? {
-        let entry = entry?;
-        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
-            fs_err::remove_dir_all(entry.path())?;
-        }
-    }
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
     fs_err::remove_dir_all(checkout_root.path())?;
     fs_err::rename(
         repository.path(),

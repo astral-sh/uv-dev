@@ -171,24 +171,6 @@ impl GitRepository {
         result.with_context(|| format!("failed to find {} `{reference}`", reference.kind_str()))
     }
 
-    /// Returns the configured Git remotes for this repository.
-    fn remotes(&self) -> Result<Vec<String>> {
-        let output = GIT
-            .as_ref()
-            .cloned()?
-            .arg("remote")
-            .cwd(&self.path)
-            .exec_with_output()?;
-
-        let output = String::from_utf8(output.stdout)?;
-        Ok(output
-            .lines()
-            .map(str::trim)
-            .filter(|remote| !remote.is_empty())
-            .map(ToString::to_string)
-            .collect())
-    }
-
     /// Returns whether this repository can retrieve missing objects from a promisor remote.
     fn has_promisor_remote(&self) -> Result<bool> {
         let result = GIT
@@ -218,27 +200,13 @@ impl GitRepository {
     /// Configures the given remote as the promisor remote for this repository.
     fn configure_promisor_remote(&self, remote: &str, url: &DisplaySafeUrl) -> Result<()> {
         let url = without_credentials(url);
-        let remotes = self.remotes()?;
-
-        if remotes.iter().any(|existing| existing == remote) {
-            GIT.as_ref()
-                .cloned()?
-                .arg("remote")
-                .arg("set-url")
-                .arg(remote)
-                .arg(url.as_str())
-                .cwd(&self.path)
-                .exec_with_output()?;
-        } else {
-            GIT.as_ref()
-                .cloned()?
-                .arg("remote")
-                .arg("add")
-                .arg(remote)
-                .arg(url.as_str())
-                .cwd(&self.path)
-                .exec_with_output()?;
-        }
+        GIT.as_ref()
+            .cloned()?
+            .arg("config")
+            .arg(format!("remote.{remote}.url"))
+            .arg(url.as_str())
+            .cwd(&self.path)
+            .exec_with_output()?;
 
         GIT.as_ref()
             .cloned()?
@@ -256,32 +224,6 @@ impl GitRepository {
             .cwd(&self.path)
             .exec_with_output()?;
 
-        // Git creates a promisor remote whose name is the fetch URL when fetching
-        // with `--filter` from a URL. Remove any such URL-named remotes so we
-        // don't persist credentials in `.git/config`.
-        for existing in remotes {
-            if existing == remote {
-                continue;
-            }
-            let Ok(existing_url) = existing.parse::<DisplaySafeUrl>() else {
-                continue;
-            };
-            if without_credentials(&existing_url) == url {
-                let result = GIT
-                    .as_ref()
-                    .cloned()?
-                    .arg("config")
-                    .arg("--remove-section")
-                    .arg(format!("remote.{existing}"))
-                    .cwd(&self.path)
-                    .exec_with_output();
-                if let Err(err) = result {
-                    let err = redact_git_error(err, &existing_url);
-                    debug!("Failed to remove URL-named Git remote `{existing_url}`: {err}");
-                }
-            }
-        }
-
         Ok(())
     }
 
@@ -295,7 +237,7 @@ impl GitRepository {
             // Avoid triggering dynamic object fetches when we are only checking
             // whether a revision resolves locally.
             .env("GIT_NO_LAZY_FETCH", "1")
-            // Older Git versions ignore GIT_NO_LAZY_FETCH.
+            // Older Git versions ignore `GIT_NO_LAZY_FETCH`.
             .env(EnvVars::GIT_ALLOW_PROTOCOL, "")
             .cwd(&self.path)
             .exec_with_output()?;
@@ -861,13 +803,24 @@ fn apply_url_rewrite(cmd: &mut ProcessBuilder, url: &DisplaySafeUrl) {
 
 /// Append command-local configuration without replacing inherited entries.
 fn append_git_config(cmd: &mut ProcessBuilder, key: &str, value: &str) {
-    let config_index = cmd
-        .get_env("GIT_CONFIG_COUNT")
-        .and_then(|count| count.to_str()?.parse::<usize>().ok())
-        .unwrap_or(0);
-    cmd.env("GIT_CONFIG_COUNT", (config_index + 1).to_string())
-        .env(&format!("GIT_CONFIG_KEY_{config_index}"), key)
-        .env(&format!("GIT_CONFIG_VALUE_{config_index}"), value);
+    // Git before 2.31 accepts quoted `key=value` entries. Newer Git also accepts
+    // separately quoted keys and values, which allows `=` in a key.
+    let parameter = if key.contains('=') {
+        format!("{}={}", quote_git_config(key), quote_git_config(value))
+    } else {
+        quote_git_config(&format!("{key}={value}"))
+    };
+    let mut parameters = cmd.get_env("GIT_CONFIG_PARAMETERS").unwrap_or_default();
+    if !parameters.is_empty() {
+        parameters.push(" ");
+    }
+    parameters.push(parameter);
+    cmd.env("GIT_CONFIG_PARAMETERS", parameters);
+}
+
+/// Quote one parameter using Git's single-quote escaping rules.
+fn quote_git_config(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''").replace('!', "'\\!'"))
 }
 
 /// Applies transport settings to commands that can fetch Git objects.
@@ -902,6 +855,12 @@ fn git_command_error(error: anyhow::Error, url: &DisplaySafeUrl, offline: bool) 
     let message = error.to_string();
     if offline && message.contains("transport '") && message.contains("' not allowed") {
         GitError::TransportNotAllowed.into()
+    } else if url.as_str().contains('=')
+        && message.contains("bogus format in GIT_CONFIG_PARAMETERS")
+    {
+        redact_git_error(error, url).context(
+            "If Git is older than 2.31, upgrade it to use URL-specific settings containing `=`",
+        )
     } else {
         redact_git_error(error, url)
     }
@@ -1253,6 +1212,80 @@ mod tests {
             submodule_update_config(&url),
             vec!["remote.origin.url=ssh://git@example.com/org/repo.git".to_string()]
         );
+    }
+
+    #[test]
+    #[cfg(feature = "test-git")]
+    fn git_command_config_preserves_inherited_entries() -> Result<()> {
+        let mut command = GIT.as_ref().cloned()?;
+        command
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            .env("GIT_CONFIG_COUNT", "0")
+            .env(
+                "GIT_CONFIG_PARAMETERS",
+                "'test.parameter=inherited parameter value'",
+            );
+        let value = "spaces, apostrophes ' and exclamations ! with equals =";
+        append_git_config(&mut command, "test.value", value);
+        let inherited = command
+            .clone()
+            .args(&["config", "--get", "test.parameter"])
+            .exec_with_output()?;
+        assert_eq!(
+            str::from_utf8(&inherited.stdout)?.trim(),
+            "inherited parameter value"
+        );
+        let escaped = command
+            .clone()
+            .args(&["config", "--get", "test.value"])
+            .exec_with_output()?;
+        assert_eq!(str::from_utf8(&escaped.stdout)?.trim(), value);
+        // Split keys and counted configuration require Git 2.31.
+        let split_support = command
+            .clone()
+            .env("GIT_CONFIG_PARAMETERS", "'test.split'='true'")
+            .args(&["config", "--get", "test.split"])
+            .exec_with_output();
+        if let Err(error) = split_support {
+            if error
+                .to_string()
+                .contains("bogus format in GIT_CONFIG_PARAMETERS")
+            {
+                return Ok(());
+            }
+            return Err(error);
+        }
+        command
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "test.counted")
+            .env("GIT_CONFIG_VALUE_0", "inherited counted value");
+        append_git_config(
+            &mut command,
+            "http.https://example.invalid/a=b.sslVerify",
+            "false",
+        );
+        let inherited = command
+            .clone()
+            .args(&["config", "--get", "test.counted"])
+            .exec_with_output()?;
+        assert_eq!(
+            str::from_utf8(&inherited.stdout)?.trim(),
+            "inherited counted value"
+        );
+        let matching = command
+            .args(&[
+                "config",
+                "--get-urlmatch",
+                "http.sslVerify",
+                "https://example.invalid/a=b",
+            ])
+            .exec_with_output()?;
+        assert_eq!(str::from_utf8(&matching.stdout)?.trim(), "false");
+        Ok(())
     }
 
     #[test]
