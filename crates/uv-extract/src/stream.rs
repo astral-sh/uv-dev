@@ -30,7 +30,7 @@ use crate::dirhash::{
 };
 use crate::{
     DEFAULT_BUF_SIZE, Error, ExtractionDirectories, copy_zip_entry, insecure_no_validate,
-    validate_zip_directory_entry,
+    validate_zip_directory_entry, zip_entry_buffer_capacity,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,9 +245,10 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 Ok(file) => {
                     // Write the file to disk.
                     let file = AllowStdIo::new(file).compat_write();
-                    let size = zip_entry.uncompressed_size();
-                    let mut writer = if let Ok(size) = usize::try_from(size) {
-                        tokio::io::BufWriter::with_capacity(std::cmp::min(size, 1024 * 1024), file)
+                    let mut writer = if let Some(capacity) =
+                        zip_entry_buffer_capacity(expected_uncompressed_size)
+                    {
+                        tokio::io::BufWriter::with_capacity(capacity, file)
                     } else {
                         tokio::io::BufWriter::new(file)
                     };
