@@ -716,44 +716,55 @@ fn parse_url<T: Pep508Url>(
     cursor: &mut Cursor,
     working_dir: Option<&Path>,
 ) -> Result<T, Pep508Error<T>> {
+    let (start, len) = scan_url::<T>(cursor, |_| true)?;
+    T::parse_url(cursor.slice(start, len), working_dir).map_err(|err| Pep508Error {
+        message: Pep508ErrorSource::UrlError(Box::new(err)),
+        start,
+        len,
+        input: cursor.to_string(),
+    })
+}
+
+/// Scan the nonempty URL span, recognizing delimiters only at the top level.
+fn scan_url<T: Pep508Url>(
+    cursor: &mut Cursor,
+    mut at_top_level: impl FnMut(char) -> bool,
+) -> Result<(usize, usize), Pep508Error<T>> {
     // wsp*
     cursor.eat_whitespace();
     // <URI_reference>
-    let (start, len) = {
-        let start = cursor.pos();
-        let mut len = 0;
-        while let Some((_, c)) = cursor.next() {
-            // If we see a line break, we're done.
-            if matches!(c, '\r' | '\n') {
+    let start = cursor.pos();
+    let mut len = 0;
+    while let Some((_, c)) = cursor.next() {
+        // If we see a line break, we're done.
+        if matches!(c, '\r' | '\n') {
+            break;
+        }
+
+        let top_level = at_top_level(c);
+        // If we see top-level whitespace, check if it's followed by a semicolon or hash. If so,
+        // end the URL at the last non-whitespace character.
+        if top_level && c.is_whitespace() {
+            let mut cursor = cursor.clone();
+            cursor.eat_whitespace();
+            if matches!(cursor.peek_char(), None | Some(';' | '#')) {
                 break;
             }
+        }
 
-            // If we see top-level whitespace, check if it's followed by a semicolon or hash. If so,
-            // end the URL at the last non-whitespace character.
-            if c.is_whitespace() {
-                let mut cursor = cursor.clone();
-                cursor.eat_whitespace();
-                if matches!(cursor.peek_char(), None | Some(';' | '#')) {
-                    break;
-                }
-            }
+        len += c.len_utf8();
 
-            len += c.len_utf8();
-
-            // If we see a top-level semicolon or hash followed by whitespace, we're done.
-            if cursor.peek_char().is_some_and(|c| matches!(c, ';' | '#')) {
-                let mut cursor = cursor.clone();
-                cursor.next();
-                if cursor.peek_char().is_some_and(char::is_whitespace) {
-                    break;
-                }
+        // If we see a top-level semicolon or hash followed by whitespace, we're done.
+        if top_level && cursor.peek_char().is_some_and(|c| matches!(c, ';' | '#')) {
+            let mut cursor = cursor.clone();
+            cursor.next();
+            if cursor.peek_char().is_some_and(char::is_whitespace) {
+                break;
             }
         }
-        (start, len)
-    };
+    }
 
-    let url = cursor.slice(start, len);
-    if url.is_empty() {
+    if len == 0 {
         return Err(Pep508Error {
             message: Pep508ErrorSource::String("Expected URL".to_string()),
             start,
@@ -762,14 +773,7 @@ fn parse_url<T: Pep508Url>(
         });
     }
 
-    let url = T::parse_url(url, working_dir).map_err(|err| Pep508Error {
-        message: Pep508ErrorSource::UrlError(Box::new(err)),
-        start,
-        len,
-        input: cursor.to_string(),
-    })?;
-
-    Ok(url)
+    Ok((start, len))
 }
 
 /// Identify the extras in a relative URL (e.g., `../editable[dev]`).
