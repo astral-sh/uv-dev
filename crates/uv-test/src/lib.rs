@@ -175,11 +175,23 @@ impl TestContext {
         self
     }
 
-    /// Return the sorted paths of all regular files in a cache bucket.
+    /// Return the sorted paths of all regular files in a cache bucket, or an empty list if the
+    /// bucket does not exist.
     pub fn cache_files(&self, bucket: CacheBucket) -> anyhow::Result<Vec<PathBuf>> {
-        let cache = Cache::from_path(self.cache_dir.path());
+        let bucket = Cache::from_path(self.cache_dir.path()).bucket(bucket);
+        let metadata = match fs_err::symlink_metadata(&bucket) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        // A directory link is a valid bucket, but a dangling link is not an absent bucket.
+        anyhow::ensure!(
+            metadata.is_dir() || fs_err::metadata(&bucket)?.is_dir(),
+            "cache bucket `{}` is not a directory",
+            bucket.user_display()
+        );
         let mut files = Vec::new();
-        for entry in WalkDir::new(cache.bucket(bucket)).min_depth(1) {
+        for entry in WalkDir::new(bucket).min_depth(1) {
             let entry = entry?;
             if entry.file_type().is_file() {
                 files.push(entry.path().to_path_buf());
@@ -2438,6 +2450,37 @@ mod site_packages_tests {
             site_packages_path_for_version(Path::new(".venv"), "python", &version),
             PathBuf::from(".venv/lib/python3.12/site-packages")
         );
+    }
+}
+
+#[cfg(test)]
+mod cache_files_tests {
+    use assert_fs::fixture::{FileWriteStr, PathChild};
+    use uv_cache::{Cache, CacheBucket};
+
+    use super::TestContext;
+
+    #[test]
+    fn distinguishes_absent_invalid_and_linked_cache_buckets() -> anyhow::Result<()> {
+        let context = TestContext::new_with_versions_and_bin(&[], "uv".into());
+        let bucket = Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::Files);
+        assert!(context.cache_files(CacheBucket::Files)?.is_empty());
+
+        fs_err::write(&bucket, "invalid bucket")?;
+        let error = context
+            .cache_files(CacheBucket::Files)
+            .expect_err("a cache bucket file is not an empty directory");
+        assert!(error.to_string().contains("is not a directory"));
+
+        fs_err::remove_file(&bucket)?;
+        let target = context.temp_dir.child("bucket-target");
+        target.child("cached-file").write_str("cached")?;
+        uv_fs::create_symlink(target.path(), &bucket)?;
+        assert_eq!(
+            context.cache_files(CacheBucket::Files)?,
+            [bucket.join("cached-file")]
+        );
+        Ok(())
     }
 }
 
