@@ -1390,11 +1390,16 @@ fn non_project_workspace_default_groups_in_lockfile() -> Result<()> {
     let contents = context.read("uv.lock");
     let lock = Lock::from_canonical_toml(&contents)?;
     assert_eq!(lock.to_toml()?, contents);
-    let lockfile = toml::from_str::<toml::Value>(&contents)?;
-    assert!(
-        lockfile["manifest"]["dependency-groups"]
-            .get("root-only")
-            .is_some()
+    let root_group = lock
+        .dependency_groups()
+        .get(&"root-only".parse()?)
+        .context("Missing root-only dependency group")?;
+    assert_eq!(
+        root_group
+            .iter()
+            .map(|requirement| requirement.name.as_str())
+            .collect::<Vec<_>>(),
+        ["member"]
     );
     assert_eq!(
         lock.member_default_groups(&"member".parse()?),
