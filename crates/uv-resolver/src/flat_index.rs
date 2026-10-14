@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use uv_cache::Cache;
@@ -19,6 +18,7 @@ use uv_platform_tags::{IncompatibleTag, TagCompatibility, Tags};
 use uv_pypi_types::HashDigest;
 use uv_types::HashStrategy;
 
+use crate::FxHashbrownMap;
 use crate::prioritized_distribution::{
     HashComparison, IncompatibleSource, IncompatibleWheel, PrioritizedDist,
     SourceDistCompatibility, WheelCompatibility,
@@ -28,7 +28,7 @@ use crate::prioritized_distribution::{
 #[derive(Debug, Clone, Default)]
 pub struct FlatIndex {
     /// Entries are ranked using each resolver's platform and hash policies when requested.
-    index: FxHashMap<PackageName, Vec<FlatIndexEntry>>,
+    index: FxHashbrownMap<PackageName, Vec<FlatIndexEntry>>,
     /// Whether any `--find-links` entries could not be resolved due to a lack of network
     /// connectivity.
     offline: bool,
@@ -51,12 +51,12 @@ impl FlatIndex {
     /// Collect all files from a `--find-links` target into a [`FlatIndex`].
     #[instrument(skip_all)]
     fn from_entries(entries: FlatIndexEntries) -> Self {
-        let mut index = FxHashMap::<PackageName, Vec<FlatIndexEntry>>::default();
+        let mut index = FxHashbrownMap::<PackageName, Vec<FlatIndexEntry>>::default();
         let (entries, offline) = entries.into_parts();
 
         for entry in entries {
             index
-                .entry(entry.filename().name().clone())
+                .entry_ref(entry.filename().name())
                 .or_default()
                 .push(entry);
         }
