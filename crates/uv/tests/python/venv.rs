@@ -1831,8 +1831,15 @@ fn verify_pyvenv_cfg() {
 fn verify_pyvenv_cfg_relocatable() {
     let context = uv_test::test_context!("3.12");
     let prompt = "résumé \"quoted\"\\path\n";
+    let scripts = if cfg!(windows) {
+        context.venv.child("Scripts")
+    } else {
+        context.venv.child("bin")
+    };
+    let activate_csh = scripts.child("activate.csh");
+    activate_csh.assert(predicates::path::exists());
 
-    // Create a virtual environment at `.venv`.
+    // Recreate the environment as relocatable.
     context
         .venv()
         .arg(context.venv.as_os_str())
@@ -1856,12 +1863,6 @@ fn verify_pyvenv_cfg_relocatable() {
     pyvenv_cfg.assert(predicates::str::contains("relocatable = true"));
 
     // Activate scripts contain the relocatable boilerplate
-    let scripts = if cfg!(windows) {
-        context.venv.child("Scripts")
-    } else {
-        context.venv.child("bin")
-    };
-
     let activate_sh = scripts.child("activate");
     activate_sh.assert(predicates::path::is_file());
     activate_sh.assert(predicates::str::contains(
@@ -1894,8 +1895,7 @@ fn verify_pyvenv_cfg_relocatable() {
 
     // csh cannot determine its own script location, so activate.csh should not
     // be generated when --relocatable is used.
-    let activate_csh = scripts.child("activate.csh");
-    activate_csh.assert(predicates::path::missing());
+    assert_path_missing(activate_csh);
 
     let activate_xsh = scripts.child("activate.xsh");
     activate_xsh.assert(predicates::path::is_file());
@@ -1910,16 +1910,15 @@ fn verify_pyvenv_cfg_relocatable() {
 /// With `UV_VENV_RELOCATABLE=1`, the virtual environment is relocatable.
 #[test]
 fn verify_pyvenv_cfg_relocatable_env_var() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a virtual environment at `.venv` with the env var.
     context
         .venv()
         .arg(context.venv.as_os_str())
-        .arg("--clear")
         .arg("--python")
         .arg("3.12")
-        .env("UV_VENV_RELOCATABLE", "1")
+        .env(EnvVars::UV_VENV_RELOCATABLE, "1")
         .assert()
         .success();
 
@@ -1933,12 +1932,11 @@ fn verify_pyvenv_cfg_relocatable_env_var() {
 /// `--no-relocatable` takes precedence over `UV_VENV_RELOCATABLE=1`.
 #[test]
 fn no_relocatable_overrides_relocatable_env_var() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     context
         .venv()
         .arg(context.venv.as_os_str())
-        .arg("--clear")
         .arg("--python")
         .arg("3.12")
         .arg("--no-relocatable")
@@ -1954,13 +1952,12 @@ fn no_relocatable_overrides_relocatable_env_var() {
 /// With `relocatable-envs-default` preview feature, venvs are relocatable by default.
 #[test]
 fn relocatable_envs_default_preview() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a virtual environment with the preview feature enabled.
     context
         .venv()
         .arg(context.venv.as_os_str())
-        .arg("--clear")
         .arg("--python")
         .arg("3.12")
         .arg("--preview-features")
@@ -1978,13 +1975,12 @@ fn relocatable_envs_default_preview() {
 /// With `relocatable-envs-default` preview feature, `--no-relocatable` opts out.
 #[test]
 fn relocatable_envs_default_no_relocatable() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a virtual environment with the preview feature but opt out.
     context
         .venv()
         .arg(context.venv.as_os_str())
-        .arg("--clear")
         .arg("--python")
         .arg("3.12")
         .arg("--preview-features")
