@@ -37,7 +37,7 @@ use uv_test::subdirectory_archive::SubdirectoryArchive;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
 #[cfg(feature = "test-universal")]
-use uv_test::{capture_uv_snapshot, diff_uv_snapshot, download_to_disk, venv_bin_path};
+use uv_test::{capture_uv_snapshot, diff_uv_snapshot, venv_bin_path};
 use uv_test::{diff_snapshot, uv_snapshot};
 
 const TQDM_WHEEL: &str = "tqdm-1000.0.0-py3-none-any.whl";
@@ -18200,68 +18200,37 @@ fn lock_sources_archive() -> Result<()> {
     Ok(())
 }
 
-/// Lock a local archive requirement that uses `tool.uv.sources` internally (specifically, the root
-/// package `workspace` depends on `anyio`, and declares a source pointing to a local stub of
-/// `anyio`).
+/// Lock an extracted source tree that uses `tool.uv.sources` internally (specifically, the root
+/// package `workspace` depends on `anyio`, and declares a source pointing to a local stub).
 ///
 /// When resolving, we should respect the `tool.uv.sources` and pull in the stub `anyio`.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sources_source_tree() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let workspace = context.temp_dir.child("workspace");
-    workspace.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "workspace"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["anyio"]
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.workspace]
-        members = ["anyio"]
-
-        [tool.uv.sources]
-        anyio = { workspace = true }
-    "#})?;
-    workspace.child("src/workspace/__init__.py").touch()?;
-
-    let anyio = workspace.child("anyio");
-    anyio.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "anyio"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = []
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    anyio.child("src/anyio/__init__.py").touch()?;
+    let workspace_archive = context.temp_dir.child("workspace.zip");
+    fs_err::write(&workspace_archive, crate::workspace_sources::archive()?)?;
+    let file = fs_err::File::open(&*workspace_archive)?;
+    uv_extract::unzip(file, &context.temp_dir)?;
+    let workspace_url = Url::from_file_path(context.temp_dir.join("workspace"))
+        .map_err(|()| anyhow!("invalid workspace file URL"))?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(&formatdoc! {
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["workspace @ file://{}"]
+        dependencies = ["workspace @ {workspace_url}"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-        "#,
-        context.temp_dir.child("workspace").portable_display()
+        "#
     })?;
     context.temp_dir.child("src/project/__init__.py").touch()?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -18312,14 +18281,14 @@ fn lock_sources_source_tree() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
 
     // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 3 packages in [TIME]
