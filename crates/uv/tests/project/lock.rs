@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
+use toml_edit::{DocumentMut, value};
 use uv_lock::Lock;
 use uv_normalize::DefaultGroups;
 use uv_test::uv_snapshot;
@@ -984,6 +985,67 @@ fn legacy_default_groups_in_lockfile() -> Result<()> {
         .assert()
         .success();
     assert_eq!(context.read("uv.lock"), current);
+    Ok(())
+}
+
+/// Older locks without project requirement metadata are repaired on the next lock.
+#[test]
+fn legacy_lock_restores_missing_project_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = "ok-1.0.0-py3-none-any.whl";
+    fs_err::copy(
+        context.workspace_root.join("test/links").join(wheel),
+        context.temp_dir.child(wheel),
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok==1.0.0"]
+
+        [tool.uv.sources]
+        ok = {{ path = "{wheel}" }}
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let canonical = context.read("uv.lock");
+    let mut legacy = canonical.parse::<DocumentMut>()?;
+    legacy["revision"] = value(2);
+    let lockfile = context.temp_dir.child("uv.lock");
+    lockfile.write_str(&legacy.to_string())?;
+
+    // The older revision alone does not invalidate the lock.
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    let project = legacy["package"]
+        .as_array_of_tables_mut()
+        .context("generated lock has no package records")?
+        .iter_mut()
+        .find(|package| {
+            package
+                .get("name")
+                .is_some_and(|name| name.as_str() == Some("project"))
+        })
+        .context("generated lock has no project record")?;
+    project
+        .remove("metadata")
+        .context("generated project lock has no requirement metadata")?;
+    lockfile.write_str(&legacy.to_string())?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), canonical);
+
     Ok(())
 }
 
