@@ -578,80 +578,6 @@ fn python_install_minor() {
 }
 
 #[test]
-fn python_install_multiple_patch() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_python_keys()
-        .with_filtered_exe_suffix()
-        .with_managed_python_dirs();
-
-    // Install multiple patch versions
-    uv_snapshot!(context.filters(), context.python_install().arg("3.12.8").arg("3.12.6"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Installed 2 versions in [TIME]
-     + cpython-3.12.6-[PLATFORM]
-     + cpython-3.12.8-[PLATFORM] (python3.12)
-    ");
-
-    let bin_python = context
-        .bin_dir
-        .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
-
-    // The executable should be installed in the bin directory
-    bin_python.assert(predicate::path::exists());
-
-    // The link should resolve to the newer patch version
-    if cfg!(unix) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.8-[PLATFORM]/bin/python3.12"
-            );
-        });
-    } else if cfg!(windows) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.8-[PLATFORM]/python"
-            );
-        });
-    }
-
-    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.12.8"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Searching for Python versions matching: Python 3.12.8
-    Uninstalled Python 3.12.8 in [TIME]
-     - cpython-3.12.8-[PLATFORM] (python3.12)
-    ");
-
-    // TODO(zanieb): This behavior is not implemented yet
-    // // The executable should be installed in the bin directory
-    // bin_python.assert(predicate::path::exists());
-
-    // // When the version is removed, the link should point to the other patch version
-    // if cfg!(unix) {
-    //     insta::with_settings!({
-    //         filters => context.filters(),
-    //     }, {
-    //         insta::assert_snapshot!(
-    //             canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.6-[PLATFORM]/bin/python3.12"
-    //         );
-    //     });
-    // } else if cfg!(windows) {
-    //     insta::with_settings!({
-    //         filters => context.filters(),
-    //     }, {
-    //         insta::assert_snapshot!(
-    //             canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.6-[PLATFORM]/python"
-    //         );
-    //     });
-    // }
-}
-
-#[test]
 fn python_install_preview() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
@@ -3152,7 +3078,7 @@ fn uninstall_last_patch_removes_minor_version_link() {
 /// After uninstalling the highest patch but with other patches remaining,
 /// the minor version link should be updated (not removed).
 #[test]
-fn uninstall_highest_patch_updates_minor_version_link() {
+fn uninstall_highest_patch_updates_minor_version_link() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -3160,7 +3086,7 @@ fn uninstall_highest_patch_updates_minor_version_link() {
         .with_filtered_python_install_bin();
 
     let managed_dir = context.temp_dir.child("managed");
-    let platform_key = platform_key_from_env().unwrap();
+    let platform_key = platform_key_from_env()?;
 
     let minor_version_link = managed_dir.child(format!("cpython-3.12-{platform_key}"));
     let patch_dir_8 = managed_dir.child(format!("cpython-3.12.8-{platform_key}"));
@@ -3181,6 +3107,21 @@ fn uninstall_highest_patch_updates_minor_version_link() {
         patch_dir_8.path().display()
     );
     assert_minor_version_link(minor_version_link.path(), patch_dir_9.path());
+    let launcher = context
+        .bin_dir
+        .join(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
+    let patch_python = patch_dir_9.join(if cfg!(windows) {
+        "python.exe"
+    } else {
+        "bin/python3.12"
+    });
+    assert_eq!(
+        canonicalize_link_path(&launcher),
+        dunce::canonicalize(patch_python)?
+            .simplified_display()
+            .to_string(),
+        "public launcher must resolve to the highest installed patch"
+    );
 
     // Uninstall the highest patch version
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.12.9"), @"
@@ -3196,6 +3137,7 @@ fn uninstall_highest_patch_updates_minor_version_link() {
 
     // The minor version link should still exist, now pointing to the remaining patch
     assert_minor_version_link(minor_version_link.path(), patch_dir_8.path());
+    // TODO(zanieb): Reinstall the public launcher for the remaining patch when supported.
 
     // Uninstall the last remaining patch
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.12.8"), @"
@@ -3211,6 +3153,7 @@ fn uninstall_highest_patch_updates_minor_version_link() {
 
     // Removing the last patch also removes the minor version link itself.
     assert_path_missing(minor_version_link);
+    Ok(())
 }
 
 #[cfg(unix)] // Pyodide cannot be used on Windows
