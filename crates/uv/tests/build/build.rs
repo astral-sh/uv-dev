@@ -10,7 +10,6 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
-use std::env::current_dir;
 use std::path::Path;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
@@ -2464,7 +2463,7 @@ fn build_non_package() -> Result<()> {
 fn build_fast_path() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    let built_by_uv = current_dir()?.join("../../test/packages/built-by-uv");
+    let built_by_uv = context.workspace_root.join("test/packages/built-by-uv");
 
     uv_snapshot!(context.build()
         .arg(&built_by_uv)
@@ -2549,8 +2548,8 @@ fn build_fast_path() -> Result<()> {
 
 #[test]
 fn build_fast_path_require_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter(("/crates/uv/../../", "/"));
-    let built_by_uv = current_dir()?.join("../../test/packages/built-by-uv");
+    let context = uv_test::test_context!("3.12");
+    let built_by_uv = context.workspace_root.join("test/packages/built-by-uv");
     let (filename, wheel) = generate_wheel(
         &"uv-build".parse()?,
         &uv_version::version().parse()?,
@@ -3075,7 +3074,7 @@ fn build_nested_script_entry_point_name() -> Result<()> {
 fn build_list_files() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    let built_by_uv = current_dir()?.join("../../test/packages/built-by-uv");
+    let built_by_uv = context.workspace_root.join("test/packages/built-by-uv");
 
     // By default, we build the wheel from the source dist, which we need to do even for the list
     // task.
@@ -3193,11 +3192,9 @@ fn build_list_files() -> Result<()> {
 /// Test `--list` option errors.
 #[test]
 fn build_list_files_errors() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        // Normalize Windows workspace paths.
-        .with_filter(("/crates/uv/../../", "/"));
+    let context = uv_test::test_context!("3.12");
 
-    let built_by_uv = current_dir()?.join("../../test/packages/built-by-uv");
+    let built_by_uv = context.workspace_root.join("test/packages/built-by-uv");
 
     uv_snapshot!(context.filters(), context.build()
         .arg(&built_by_uv)
@@ -3215,7 +3212,7 @@ fn build_list_files_errors() -> Result<()> {
     ");
 
     // Not a uv build backend package, we can't list it.
-    let anyio_local = current_dir()?.join("../../test/packages/anyio_local");
+    let anyio_local = context.workspace_root.join("test/packages/anyio_local");
     uv_snapshot!(context.filters(), context.build()
         .arg(&anyio_local)
         .arg("--out-dir")
@@ -3232,7 +3229,7 @@ fn build_list_files_errors() -> Result<()> {
 #[test]
 fn build_version_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let anyio_local = current_dir()?.join("../../test/packages/anyio_local");
+    let anyio_local = context.workspace_root.join("test/packages/anyio_local");
     context
         .build()
         .arg("--sdist")
