@@ -1497,14 +1497,16 @@ impl ParsedRunCommand {
 
     /// Determine the [`ParsedRunCommand`] for a given set of arguments.
     pub fn from_args(
-        command: &[OsString],
+        command: Vec<OsString>,
         module: bool,
         script: bool,
         gui_script: bool,
     ) -> anyhow::Result<Self> {
-        let Some((target, args)) = command.split_first() else {
+        let mut command = command.into_iter();
+        let Some(target) = command.next() else {
             return Ok(Self::Ready(RunCommand::Empty));
         };
+        let args = command.collect();
 
         if target.eq_ignore_ascii_case("-") {
             let mut buf = Vec::with_capacity(1024);
@@ -1513,13 +1515,13 @@ impl ParsedRunCommand {
             return if module {
                 Err(anyhow!("Cannot run a Python module from stdin"))
             } else if gui_script {
-                Ok(Self::Ready(RunCommand::PythonGuiStdin(buf, args.to_vec())))
+                Ok(Self::Ready(RunCommand::PythonGuiStdin(buf, args)))
             } else {
-                Ok(Self::Ready(RunCommand::PythonStdin(buf, args.to_vec())))
+                Ok(Self::Ready(RunCommand::PythonStdin(buf, args)))
             };
         }
 
-        let target_path = PathBuf::from(target);
+        let target_path = Path::new(&target);
 
         // Determine whether the user provided a remote script.
         if target_path.starts_with("http://") || target_path.starts_with("https://") {
@@ -1529,28 +1531,19 @@ impl ParsedRunCommand {
             // be invalid anyway, and thus couldn't refer to a local file.
             if !cfg!(unix) || matches!(target_path.try_exists(), Ok(false)) {
                 let url = DisplaySafeUrl::parse(&target.to_string_lossy())?;
-                return Ok(Self::PendingRemote(PendingRemoteRunCommand {
-                    url,
-                    args: args.to_vec(),
-                }));
+                return Ok(Self::PendingRemote(PendingRemoteRunCommand { url, args }));
             }
         }
 
         if module {
-            return Ok(Self::Ready(RunCommand::PythonModule(
-                target.clone(),
-                args.to_vec(),
-            )));
+            return Ok(Self::Ready(RunCommand::PythonModule(target, args)));
         } else if gui_script {
             return Ok(Self::Ready(RunCommand::PythonGuiScript(
-                target.clone().into(),
-                args.to_vec(),
+                target.into(),
+                args,
             )));
         } else if script {
-            return Ok(Self::Ready(RunCommand::PythonScript(
-                target.clone().into(),
-                args.to_vec(),
-            )));
+            return Ok(Self::Ready(RunCommand::PythonScript(target.into(), args)));
         }
 
         let metadata = target_path.metadata();
@@ -1558,41 +1551,33 @@ impl ParsedRunCommand {
         let is_dir = metadata.as_ref().is_ok_and(std::fs::Metadata::is_dir);
 
         if target.eq_ignore_ascii_case("python") {
-            Ok(Self::Ready(RunCommand::Python(args.to_vec())))
+            Ok(Self::Ready(RunCommand::Python(args)))
         } else if target_path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("py") || ext.eq_ignore_ascii_case("pyc"))
             && is_file
         {
-            Ok(Self::Ready(RunCommand::PythonScript(
-                target_path,
-                args.to_vec(),
-            )))
+            Ok(Self::Ready(RunCommand::PythonScript(target.into(), args)))
         } else if target_path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("pyw"))
             && is_file
         {
             Ok(Self::Ready(RunCommand::PythonGuiScript(
-                target_path,
-                args.to_vec(),
+                target.into(),
+                args,
             )))
         } else if is_dir && target_path.join("__main__.py").is_file() {
+            let target_path = target_path.to_path_buf();
             Ok(Self::Ready(RunCommand::PythonPackage(
-                target.clone(),
+                target,
                 target_path,
-                args.to_vec(),
+                args,
             )))
-        } else if is_file && is_python_zipapp(&target_path) {
-            Ok(Self::Ready(RunCommand::PythonZipapp(
-                target_path,
-                args.to_vec(),
-            )))
+        } else if is_file && is_python_zipapp(target_path) {
+            Ok(Self::Ready(RunCommand::PythonZipapp(target.into(), args)))
         } else {
-            Ok(Self::Ready(RunCommand::External(
-                target.clone(),
-                args.iter().map(std::clone::Clone::clone).collect(),
-            )))
+            Ok(Self::Ready(RunCommand::External(target, args)))
         }
     }
 
