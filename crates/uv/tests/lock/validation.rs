@@ -1,4 +1,4 @@
-//! Invalid index configuration must fail before Python discovery and dependency resolution.
+//! Lock errors detected before Python discovery and dependency resolution.
 
 use anyhow::Result;
 use assert_fs::prelude::*;
@@ -133,4 +133,15 @@ fn lock_invalid_index_cache_control() -> Result<()> {
     "#);
 
     Ok(())
+}
+
+#[test]
+fn locked_without_project() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No `pyproject.toml` found in current directory or any parent directory
+    ");
 }
