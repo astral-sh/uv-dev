@@ -4014,6 +4014,11 @@ fn require_hashes_wheel_url() -> Result<()> {
     Ok(())
 }
 
+fn assert_archive_bucket_missing(context: &uv_test::TestContext) {
+    let cache = uv_cache::Cache::from_path(context.cache_dir.path());
+    uv_test::assert_path_missing(cache.bucket(uv_cache::CacheBucket::Archive));
+}
+
 /// Include the _wrong_ hash for a built distribution specified as a direct URL dependency.
 #[test]
 fn require_hashes_wheel_url_mismatch() -> Result<()> {
@@ -4041,10 +4046,7 @@ fn require_hashes_wheel_url_mismatch() -> Result<()> {
     );
 
     // A rejected wheel must not be published to the archive cache.
-    context
-        .cache_dir
-        .child("archive-v0")
-        .assert(predicates::path::missing());
+    assert_archive_bucket_missing(&context);
 
     Ok(())
 }
@@ -4305,10 +4307,7 @@ fn require_hashes_wheel_path_mismatch() -> Result<()> {
     );
 
     // A rejected wheel must not be published to the archive cache.
-    context
-        .cache_dir
-        .child("archive-v0")
-        .assert(predicates::path::missing());
+    assert_archive_bucket_missing(&context);
 
     Ok(())
 }
@@ -5081,10 +5080,7 @@ fn index_wheel_hash_mismatch() -> Result<()> {
                sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e
     ");
 
-    context
-        .cache_dir
-        .child("archive-v0")
-        .assert(predicates::path::missing());
+    assert_archive_bucket_missing(&context);
     Ok(())
 }
 

@@ -17004,26 +17004,19 @@ fn handle_record_mismatches() -> Result<()> {
     "
     );
 
-    context
-        .cache_dir
-        .child("archive-v0")
+    let cache = uv_cache::Cache::from_path(context.cache_dir.path());
+    let archive = ChildPath::new(cache.bucket(uv_cache::CacheBucket::Archive));
+    archive
         .child(unhealed_digest.as_str())
         .assert(predicate::path::missing());
-    context
-        .cache_dir
-        .child("archive-v0")
-        .child(healed_digest.as_str())
-        .assert(predicate::path::exists());
+    let healed_archive = archive.child(healed_digest.as_str());
+    healed_archive.assert(predicate::path::exists());
 
     // Installation must not mutate the healed RECORD retained in the archive.
     let healed_record = extracted.join("foo-0.1.0.dist-info/RECORD");
-    let cached_record = context
-        .cache_dir
-        .join("archive-v0")
-        .join(healed_digest.as_str())
-        .join("foo-0.1.0.dist-info/RECORD");
+    let cached_record = healed_archive.child("foo-0.1.0.dist-info/RECORD");
     assert_eq!(
-        context.read_bytes(cached_record),
+        context.read_bytes(cached_record.path()),
         context.read_bytes(healed_record)
     );
 
