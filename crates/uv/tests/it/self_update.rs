@@ -1,6 +1,7 @@
 use std::{path::PathBuf, process::Command};
 
 use anyhow::Result;
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use axoupdater::{
     ReleaseSourceType,
@@ -155,21 +156,25 @@ async fn setup_mock_update(
 }
 
 #[test]
-fn test_self_update_help() {
+fn self_update_help_describes_token() {
     let context = uv_test::test_context_with_versions!(&[]);
 
-    let output = context
+    context
         .help()
         .arg("self")
         .arg("update")
-        .output()
-        .expect("`uv help self update` should succeed");
-    assert!(output.status.success());
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("A GitHub token for authentication."));
-    assert!(stdout.contains("A token is not required but can be used to reduce the"));
-    assert!(stdout.contains("chance of encountering rate limits"));
+        .assert()
+        .success()
+        .stderr("")
+        .stdout(predicates::str::contains(
+            "A GitHub token for authentication.",
+        ))
+        .stdout(predicates::str::contains(
+            "A token is not required but can be used to reduce the",
+        ))
+        .stdout(predicates::str::contains(
+            "chance of encountering rate limits",
+        ));
 }
 
 #[tokio::test]
