@@ -14677,20 +14677,7 @@ fn wheel_with_reserved_script(context: &TestContext, reserved_path: &str) -> Res
     Ok(path)
 }
 
-#[test]
-fn reject_reserved_wheel_scripts_data_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let wheel = wheel_with_reserved_script(&context, "foo-0.1.0.data/scripts/python")?;
-
-    uv_snapshot!(context.filters(), context.pip_install().arg(wheel), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-      cause: Scripts must not use the reserved name `python`, got: `python`
-    ");
-
+fn assert_reserved_script_install_is_atomic(context: &TestContext) {
     Command::new(context.interpreter())
         .arg("--version")
         .assert()
@@ -14706,7 +14693,41 @@ fn reject_reserved_wheel_scripts_data_name() -> Result<()> {
         .venv
         .child("harmless.txt")
         .assert(predicates::path::missing());
+}
 
+#[test]
+fn reject_reserved_wheel_scripts_data_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = wheel_with_reserved_script(&context, "foo-0.1.0.data/scripts/python")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
+      cause: Scripts must not use the reserved name `python`, got: `python`
+    ");
+
+    assert_reserved_script_install_is_atomic(&context);
+    Ok(())
+}
+
+#[test]
+fn reject_reserved_wheel_scripts_data_python_extension() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = wheel_with_reserved_script(&context, "foo-0.1.0.data/scripts/Python.PY")?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
+      cause: Scripts must not use the reserved name `python`, got: `Python.PY`
+    ");
+
+    assert_reserved_script_install_is_atomic(&context);
     Ok(())
 }
 
@@ -14729,22 +14750,7 @@ fn reject_reserved_wheel_prefix_data_name() -> Result<()> {
       cause: Scripts must not use the reserved name `python`, got: `Python.EXE`
     ");
 
-    Command::new(context.interpreter())
-        .arg("--version")
-        .assert()
-        .success();
-    let site_packages = ChildPath::new(context.site_packages());
-    site_packages
-        .child("foo")
-        .assert(predicates::path::missing());
-    site_packages
-        .child("foo-0.1.0.dist-info")
-        .assert(predicates::path::missing());
-    context
-        .venv
-        .child("harmless.txt")
-        .assert(predicates::path::missing());
-
+    assert_reserved_script_install_is_atomic(&context);
     Ok(())
 }
 
