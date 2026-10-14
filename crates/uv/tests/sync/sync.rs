@@ -4853,7 +4853,9 @@ fn sync_relative_wheel() -> Result<()> {
 
     context.temp_dir.child("wheels").create_dir_all()?;
     fs_err::copy(
-        "../../test/links/ok-1.0.0-py3-none-any.whl",
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
         context.temp_dir.join("wheels/ok-1.0.0-py3-none-any.whl"),
     )?;
 
