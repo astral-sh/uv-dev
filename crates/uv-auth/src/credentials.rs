@@ -163,7 +163,8 @@ impl Credentials {
         }
     }
 
-    fn to_username(&self) -> Username {
+    /// Return the username as an owned value.
+    pub(crate) fn to_username(&self) -> Username {
         match self {
             Self::Basic { username, .. } => username.clone(),
             Self::Bearer { .. } => Username::none(),

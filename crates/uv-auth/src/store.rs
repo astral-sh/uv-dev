@@ -279,14 +279,8 @@ impl TextCredentialStore {
             .credentials
             .into_iter()
             .map(|credential| {
-                let username = match &credential.credentials {
-                    Credentials::Basic { username, .. } => username.clone(),
-                    Credentials::Bearer { .. } => Username::none(),
-                };
-                (
-                    (credential.service.clone(), username),
-                    credential.credentials,
-                )
+                let username = credential.credentials.to_username();
+                ((credential.service, username), credential.credentials)
             })
             .collect();
 
@@ -396,10 +390,7 @@ impl TextCredentialStore {
 
     /// Store credentials for a given service.
     pub fn insert(&mut self, service: Service, credentials: Credentials) -> Option<Credentials> {
-        let username = match &credentials {
-            Credentials::Basic { username, .. } => username.clone(),
-            Credentials::Bearer { .. } => Username::none(),
-        };
+        let username = credentials.to_username();
         self.credentials.insert((service, username), credentials)
     }
 
