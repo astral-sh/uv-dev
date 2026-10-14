@@ -1216,19 +1216,16 @@ impl RenameOrCopy {
     /// Usually, source and target are on the same device, so we can rename, but if that fails, we
     /// have to copy. If renaming failed once, we switch to copy permanently.
     fn rename_or_copy(&mut self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
-        match self {
-            Self::Rename => match fs_err::rename(from.as_ref(), to.as_ref()) {
-                Ok(()) => {}
+        if matches!(self, Self::Rename) {
+            match fs_err::rename(from.as_ref(), to.as_ref()) {
+                Ok(()) => return Ok(()),
                 Err(err) => {
                     *self = Self::Copy;
                     debug!("Failed to rename, falling back to copy: {err}");
-                    fs_err::copy(from.as_ref(), to.as_ref())?;
                 }
-            },
-            Self::Copy => {
-                fs_err::copy(from.as_ref(), to.as_ref())?;
             }
         }
+        fs_err::copy(from.as_ref(), to.as_ref())?;
         Ok(())
     }
 }
