@@ -648,7 +648,7 @@ fn select_requirements(
                 package: requirement.name.clone(),
                 dependency_type: DependencyType::Production,
                 original_text: dependency.clone(),
-                display_text: display_requirement(&requirement),
+                display_text: display_requirement(requirement),
                 reason,
             });
             continue;
@@ -763,8 +763,7 @@ fn validate_requirements(
 }
 
 /// Return a requirement suitable for diagnostics without exposing URL query parameters.
-fn display_requirement(requirement: &Requirement<VerbatimParsedUrl>) -> String {
-    let mut requirement = requirement.clone();
+fn display_requirement(mut requirement: Requirement<VerbatimParsedUrl>) -> String {
     if let Some(VersionOrUrl::Url(url)) = &mut requirement.version_or_url {
         let mut display_url = url.verbatim.to_url();
         display_url.set_query(None);
