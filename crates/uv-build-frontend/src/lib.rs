@@ -973,6 +973,9 @@ impl SourceBuild {
             .path()
             .join(format!("build_{}.txt", self.build_kind));
 
+        let output_dir_arg = output_dir.escape_for_python();
+        let config_settings_arg = self.config_settings.escape_for_python();
+
         // Construct the appropriate build script based on the build kind.
         let script = match self.build_kind {
             BuildKind::Sdist => {
@@ -980,8 +983,8 @@ impl SourceBuild {
                     r"Calling `{}.build_{}({}, {})`",
                     self.pep517_backend.backend,
                     self.build_kind,
-                    output_dir.escape_for_python(),
-                    self.config_settings.escape_for_python(),
+                    output_dir_arg,
+                    config_settings_arg,
                 );
                 formatdoc! {
                     r#"
@@ -993,8 +996,8 @@ impl SourceBuild {
                     "#,
                     self.pep517_backend.backend_import(),
                     self.build_kind,
-                    output_dir.escape_for_python(),
-                    self.config_settings.escape_for_python(),
+                    output_dir_arg,
+                    config_settings_arg,
                     outfile.escape_for_python()
                 }
             }
@@ -1002,13 +1005,13 @@ impl SourceBuild {
                 let metadata_directory = self
                     .metadata_directory
                     .as_deref()
-                    .map_or("None".to_string(), |path| path.escape_for_python());
+                    .map_or_else(|| "None".to_string(), |path| path.escape_for_python());
                 debug!(
                     r"Calling `{}.build_{}({}, {}, {})`",
                     self.pep517_backend.backend,
                     self.build_kind,
-                    output_dir.escape_for_python(),
-                    self.config_settings.escape_for_python(),
+                    output_dir_arg,
+                    config_settings_arg,
                     metadata_directory,
                 );
                 formatdoc! {
@@ -1021,8 +1024,8 @@ impl SourceBuild {
                     "#,
                     self.pep517_backend.backend_import(),
                     self.build_kind,
-                    output_dir.escape_for_python(),
-                    self.config_settings.escape_for_python(),
+                    output_dir_arg,
+                    config_settings_arg,
                     metadata_directory,
                     outfile.escape_for_python()
                 }
