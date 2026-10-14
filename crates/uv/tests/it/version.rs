@@ -1301,38 +1301,30 @@ requires-python = ">=3.12"
 }
 
 #[test]
-fn bump_invalid_component_fails() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+fn bump_invalid_components() {
+    let context = uv_test::test_context_with_versions!(&[]);
 
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-            [project]
-            name = "myproject"
-            version = "1.2.3"
-            requires-python = ">=3.12"
-        "#})?;
-
-    let output = uv_snapshot!(context.filters(), context.version()
-        .arg("--bump").arg("foo"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: invalid bump component `foo`
-
-    Usage: uv version [OPTIONS] [VALUE]
-
-    For more information, try '--help'.
-    ");
-
-    assert!(output.stderr.ends_with(b"\n"));
-
-    Ok(())
+    for (argument, error) in [
+        ("foo", "invalid bump component `foo`"),
+        ("stable=1", "`--bump stable` does not accept a value"),
+        ("patch=", "`--bump` values cannot be empty"),
+        ("dev=foo", "invalid numeric value `foo` for `--bump dev`"),
+    ] {
+        context
+            .version()
+            .args(["--bump", argument])
+            .assert()
+            .code(2)
+            .stdout("")
+            .stderr(format!(
+                "error: {error}\n\nUsage: uv version [OPTIONS] [VALUE]\n\nFor more information, try '--help'.\n"
+            ));
+    }
 }
 
 #[test]
 fn bump_invalid_component_color() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let output = context
         .version()
@@ -1352,87 +1344,6 @@ fn bump_invalid_component_color() -> Result<()> {
         @r#""\u{1b}[1m\u{1b}[31merror:\u{1b}[0m invalid bump component `foo`\n\n\u{1b}[1m\u{1b}[32mUsage:\u{1b}[0m \u{1b}[1m\u{1b}[36muv version\u{1b}[0m \u{1b}[36m[OPTIONS]\u{1b}[0m \u{1b}[36m[VALUE]\u{1b}[0m\n\nFor more information, try '\u{1b}[1m\u{1b}[36m--help\u{1b}[0m'.\n""#
     );
 
-    Ok(())
-}
-
-#[test]
-fn bump_stable_with_value_fails() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-[project]
-name = "myproject"
-version = "1.2.3"
-requires-python = ">=3.12"
-"#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.version()
-        .arg("--bump").arg("stable=1"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `--bump stable` does not accept a value
-
-    Usage: uv version [OPTIONS] [VALUE]
-
-    For more information, try '--help'.
-    ");
-    Ok(())
-}
-
-#[test]
-fn bump_empty_value_fails() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-[project]
-name = "myproject"
-version = "1.2.3"
-requires-python = ">=3.12"
-"#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.version()
-        .arg("--bump").arg("patch="), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `--bump` values cannot be empty
-
-    Usage: uv version [OPTIONS] [VALUE]
-
-    For more information, try '--help'.
-    ");
-    Ok(())
-}
-
-#[test]
-fn bump_invalid_numeric_value_fails() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-[project]
-name = "myproject"
-version = "1.2.3"
-requires-python = ">=3.12"
-"#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.version()
-        .arg("--bump").arg("dev=foo"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: invalid numeric value `foo` for `--bump dev`
-
-    Usage: uv version [OPTIONS] [VALUE]
-
-    For more information, try '--help'.
-    ");
     Ok(())
 }
 
