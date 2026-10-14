@@ -1675,12 +1675,9 @@ fn frozen() -> Result<()> {
     "
     );
 
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
+    let original_lock = context.read("uv.lock");
 
     // Update the project dependencies.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
         [project]
@@ -1701,6 +1698,7 @@ fn frozen() -> Result<()> {
         └── sniffio v1.3.1
     "
     );
+    assert_eq!(context.read("uv.lock"), original_lock);
 
     Ok(())
 }
