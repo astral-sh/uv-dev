@@ -619,29 +619,7 @@ fn install_script(
         Err(err) => return Err(Error::Io(err)),
     }
     let size_and_encoded_hash = if &start == PLACEHOLDER_PYTHON {
-        // `#!pythonw` denotes a GUI script.
-        let is_gui = script.fill_buf()?.first() == Some(&b'w');
-
-        // Read the rest of the first line, one byte at a time, until we hit a newline.
-        let mut byte = [0u8; 1];
-        loop {
-            match script.read_exact(&mut byte) {
-                Ok(()) => {
-                    if byte[0] == b'\n' {
-                        break;
-                    }
-                    if byte[0] == b'\r' {
-                        if script.fill_buf()?.first() == Some(&b'\n') {
-                            script.consume(1);
-                        }
-                        break;
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
-                Err(err) => return Err(Error::Io(err)),
-            }
-        }
-
+        let is_gui = consume_script_shebang(&mut script)?;
         let executable = get_script_executable(&layout.sys_executable, is_gui);
         let executable = get_relocatable_executable(executable, layout, relocatable)?;
         let mut shebang = format_shebang(&executable, &layout.os_name, relocatable);
@@ -753,6 +731,34 @@ fn install_script(
         entry.hash = Some(encoded_hash);
     }
     Ok(())
+}
+
+/// Consume the rest of a wheel script's placeholder shebang and return whether it denotes a GUI
+/// script.
+fn consume_script_shebang(script: &mut impl BufRead) -> io::Result<bool> {
+    let mut first_byte = None;
+    let mut byte = [0u8; 1];
+    loop {
+        match script.read_exact(&mut byte) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(err) => return Err(err),
+        }
+
+        match byte[0] {
+            b'\n' => break,
+            b'\r' => {
+                if script.fill_buf()?.first() == Some(&b'\n') {
+                    script.consume(1);
+                }
+                break;
+            }
+            byte => {
+                first_byte.get_or_insert(byte);
+            }
+        }
+    }
+    Ok(first_byte == Some(b'w'))
 }
 
 /// Move the files from the .data directory to the right location in the venv
