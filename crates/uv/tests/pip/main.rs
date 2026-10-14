@@ -25,6 +25,9 @@ mod pip_sync;
 #[cfg(feature = "test-python")]
 mod pip_sync_cache;
 
+#[cfg(feature = "test-python")]
+mod pip_sync_reinstall;
+
 mod pip_tree;
 
 mod pip_uninstall;
