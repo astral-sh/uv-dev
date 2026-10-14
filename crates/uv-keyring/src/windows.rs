@@ -287,7 +287,7 @@ impl WinCredential {
     /// Construct a credential from this credential's underlying Generic credential.
     ///
     /// This can be useful for seeing modifications made by a third party.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-auth"))]
     async fn get_credential(&self) -> Result<Self> {
         self.extract_from_platform(Self::extract_credential).await
     }
@@ -758,7 +758,8 @@ mod tests {
             .await
             .expect("Can't set test get password");
         let credential: &WinCredential = entry
-            .get_credential()
+            .inner
+            .as_any()
             .downcast_ref()
             .expect("Not a windows credential");
         let actual = credential
