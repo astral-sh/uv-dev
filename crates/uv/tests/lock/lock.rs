@@ -15213,6 +15213,8 @@ fn lock_index_url_username_change_no_update() -> Result<()> {
     ----- stderr -----
     Resolved 4 packages in [TIME]
     ");
+    let anyio = locked_package(&context.read("uv.lock"), "anyio")?;
+    assert_eq!(anyio["version"].as_str(), Some("4.0.0"));
 
     // Update pyproject.toml to simulate availability of newer package with more open but still compatible constraint
     pyproject_toml.write_str(
@@ -15240,8 +15242,7 @@ fn lock_index_url_username_change_no_update() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    let anyio = locked_package(&context.read("uv.lock"), "anyio")?;
-    assert_eq!(anyio["version"].as_str(), Some("4.0.0"));
+    assert_eq!(locked_package(&context.read("uv.lock"), "anyio")?, anyio);
 
     Ok(())
 }
