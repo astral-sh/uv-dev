@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use arcstr::ArcStr;
 use itertools::Itertools;
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use version_ranges::Ranges;
 
 use uv_normalize::{ExtraName, GroupName};
@@ -22,7 +22,10 @@ use crate::marker::lowering::{
     CanonicalMarkerListPair, CanonicalMarkerValueString, CanonicalMarkerValueVersion,
 };
 use crate::marker::parse;
-use crate::{CanonicalMarkerValueExtra, MarkerEnvironment, Pep508Error, Reporter, TracingReporter};
+use crate::{
+    CanonicalMarkerValueExtra, MarkerEnvironment, ParseVisitor, Pep508Error, Reporter,
+    TracingReporter,
+};
 
 /// Ways in which marker evaluation can fail
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
@@ -435,21 +438,10 @@ impl<'de> Deserialize<'de> for StringVersion {
     where
         D: Deserializer<'de>,
     {
-        struct Visitor;
-
-        impl de::Visitor<'_> for Visitor {
-            type Value = StringVersion;
-
-            fn expecting(&self, f: &mut Formatter) -> fmt::Result {
-                f.write_str("a string")
-            }
-
-            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-                StringVersion::from_str(v).map_err(de::Error::custom)
-            }
-        }
-
-        deserializer.deserialize_str(Visitor)
+        deserializer.deserialize_str(ParseVisitor {
+            expected: "a string",
+            parse: Self::from_str,
+        })
     }
 }
 
@@ -774,21 +766,10 @@ impl<'de> Deserialize<'de> for MarkerTree {
     where
         D: Deserializer<'de>,
     {
-        struct Visitor;
-
-        impl de::Visitor<'_> for Visitor {
-            type Value = MarkerTree;
-
-            fn expecting(&self, f: &mut Formatter) -> fmt::Result {
-                f.write_str("a string")
-            }
-
-            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-                MarkerTree::from_str(v).map_err(de::Error::custom)
-            }
-        }
-
-        deserializer.deserialize_str(Visitor)
+        deserializer.deserialize_str(ParseVisitor {
+            expected: "a string",
+            parse: Self::from_str,
+        })
     }
 }
 
