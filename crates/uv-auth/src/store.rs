@@ -85,8 +85,11 @@ pub enum TomlCredentialError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     LockedFile(#[from] LockedFileError),
-    #[error("Failed to parse TOML credential file{0}")]
-    ParseError(String),
+    #[error(
+        "Failed to parse TOML credential file{}",
+        .location.map_or_else(String::new, |(line, column)| format!(" at line {line}, column {column}"))
+    )]
+    ParseError { location: Option<(usize, usize)> },
     #[error("Failed to serialize credentials to TOML")]
     SerializeError(#[from] toml::ser::Error),
     #[error(transparent)]
@@ -105,7 +108,7 @@ impl TomlCredentialError {
         let location = error
             .span()
             .and_then(|span| content.get(..span.start))
-            .map_or_else(String::new, |prefix| {
+            .map(|prefix| {
                 let line = prefix.bytes().filter(|&byte| byte == b'\n').count() + 1;
                 let column = prefix
                     .rsplit_once('\n')
@@ -113,9 +116,9 @@ impl TomlCredentialError {
                     .chars()
                     .count()
                     + 1;
-                format!(" at line {line}, column {column}")
+                (line, column)
             });
-        Self::ParseError(location)
+        Self::ParseError { location }
     }
 }
 
@@ -547,6 +550,27 @@ mod tests {
             "Failed to parse TOML credential file at line 2, column 11"
         );
         assert!(std::error::Error::source(&error).is_none());
+        insta::assert_debug_snapshot!(error, @r#"
+        ParseError {
+            location: Some(
+                (
+                    2,
+                    11,
+                ),
+            ),
+        }
+        "#);
+    }
+
+    #[test]
+    fn credential_parse_error_without_a_location() {
+        let error = TomlCredentialError::ParseError { location: None };
+        assert_eq!(error.to_string(), "Failed to parse TOML credential file");
+        insta::assert_debug_snapshot!(error, @r#"
+        ParseError {
+            location: None,
+        }
+        "#);
     }
 
     #[test]
