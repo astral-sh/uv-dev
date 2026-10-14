@@ -197,26 +197,24 @@ impl Entry {
     ///
     /// # Errors
     ///
-    /// This function will return an [`Error`] if the `service` or `user` values are invalid.
-    /// The specific reasons for invalidity are platform-dependent, but include length constraints.
-    ///
-    /// # Panics
-    ///
-    /// In the very unlikely event that the internal credential builder's `RwLock` is poisoned, this function
-    /// will panic. If you encounter this, and especially if you can reproduce it, please report a bug with the
-    /// details (and preferably a backtrace) so the developers can investigate.
+    /// Returns an [`Error`] if the `service` or `user` values are invalid or no credential store
+    /// was compiled for the current platform. Validation constraints depend on the platform.
     pub fn new(service: &str, user: &str) -> Result<Self> {
-        let entry = build_default_credential(None, service, user)?;
-        Ok(entry)
+        build_default_credential(None, service, user)
     }
 
     /// Create an entry for the given target, service, and user.
     ///
     /// The default credential builder is used.
-    #[cfg(all(test, target_os = "macos", feature = "apple-native"))]
+    #[cfg(all(
+        test,
+        feature = "native-auth",
+        target_os = "macos",
+        feature = "apple-native",
+        not(miri)
+    ))]
     fn new_with_target(target: &str, service: &str, user: &str) -> Result<Self> {
-        let entry = build_default_credential(Some(target), service, user)?;
-        Ok(entry)
+        build_default_credential(Some(target), service, user)
     }
 
     /// Create an entry from a credential that may be in any credential store.
@@ -326,26 +324,6 @@ impl Entry {
     /// affects the underlying credential store.
     pub async fn delete_credential(&self) -> Result<()> {
         self.inner.delete_credential().await
-    }
-
-    /// Return a reference to this entry's wrapped credential.
-    ///
-    /// The reference is of the [Any](std::any::Any) type, so it can be
-    /// downgraded to a concrete credential object.  The client must know
-    /// what type of concrete object to cast to.
-    #[cfg(all(
-        test,
-        any(
-            all(
-                any(target_os = "linux", target_os = "freebsd", target_os = "openbsd"),
-                feature = "secret-service"
-            ),
-            all(target_os = "macos", feature = "apple-native"),
-            all(target_os = "windows", feature = "windows-native"),
-        )
-    ))]
-    fn get_credential(&self) -> &dyn std::any::Any {
-        self.inner.as_any()
     }
 }
 

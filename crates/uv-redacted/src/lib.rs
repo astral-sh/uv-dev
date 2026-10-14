@@ -12,7 +12,6 @@ const SENSITIVE_QUERY_PARAMETERS: &[&str] = &[
     "X-Amz-Credential",
     "X-Amz-Security-Token",
     "X-Amz-Signature",
-    "sig",
 ];
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -72,21 +71,13 @@ pub struct DisplaySafeUrl(Url);
 /// rather than credentials. This is important for handling nested URLs like proxy URLs:
 /// `git+https://proxy.com/https://github.com/user/repo.git@branch`.
 fn has_credential_like_pattern(s: &str) -> bool {
-    let mut remaining = s;
-    while let Some(colon_pos) = remaining.find(':') {
-        let after_colon = &remaining[colon_pos + 1..];
-        // If the colon is followed by "//", consider it a URL scheme.
-        if after_colon.starts_with("//") {
-            remaining = after_colon;
-            continue;
-        }
-        // Check if there's an @ after this colon.
-        if after_colon.contains('@') {
-            return true;
-        }
-        remaining = after_colon;
-    }
-    false
+    let Some((before_last_at, _)) = s.rsplit_once('@') else {
+        return false;
+    };
+    before_last_at
+        .split(':')
+        .skip(1)
+        .any(|after_colon| !after_colon.starts_with("//"))
 }
 
 impl DisplaySafeUrl {
@@ -273,11 +264,7 @@ impl Debug for DisplaySafeUrl {
             .field("host", &url.host())
             .field("port", &url.port())
             .field("path", &url.path())
-            .field(
-                "query",
-                &url.query()
-                    .map(|query| redacted_query(query, url.query_pairs())),
-            )
+            .field("query", &redacted_query(url))
             .field("fragment", &url.fragment())
             .finish()
     }
@@ -327,26 +314,26 @@ fn is_sensitive_query_parameter(key: &str) -> bool {
         .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
 }
 
-fn redacted_query<'a>(
-    query: &'a str,
-    query_pairs: impl Iterator<Item = (Cow<'a, str>, Cow<'a, str>)>,
-) -> Cow<'a, str> {
-    let mut redacted = false;
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    for (key, value) in query_pairs {
-        if is_sensitive_query_parameter(&key) {
-            serializer.append_pair(&key, "****");
-            redacted = true;
-        } else {
-            serializer.append_pair(&key, &value);
-        }
+fn redacted_query(url: &Url) -> Option<Cow<'_, str>> {
+    let query = url.query()?;
+    // Re-serializing a query can change its spelling, so only do so when redaction is needed.
+    if !url
+        .query_pairs()
+        .any(|(key, _)| is_sensitive_query_parameter(&key))
+    {
+        return Some(Cow::Borrowed(query));
     }
 
-    if redacted {
-        Cow::Owned(serializer.finish())
-    } else {
-        Cow::Borrowed(query)
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    for (key, value) in url.query_pairs() {
+        let value = if is_sensitive_query_parameter(&key) {
+            "****"
+        } else {
+            &value
+        };
+        serializer.append_pair(&key, value);
     }
+    Some(Cow::Owned(serializer.finish()))
 }
 
 fn display_with_redacted_credentials(
@@ -372,8 +359,8 @@ fn display_with_redacted_credentials(
     }
 
     write!(f, "{}", url.path())?;
-    if let Some(query) = url.query() {
-        write!(f, "?{}", redacted_query(query, url.query_pairs()))?;
+    if let Some(query) = redacted_query(url) {
+        write!(f, "?{query}")?;
     }
     if let Some(fragment) = url.fragment() {
         write!(f, "#{fragment}")?;
@@ -730,5 +717,9 @@ mod tests {
 
         assert!(has_credential_like_pattern("/name:password@domain/a/b/c"));
         assert!(has_credential_like_pattern(":password@domain"));
+        assert!(has_credential_like_pattern(
+            "/https://proxy.example/name:password@domain"
+        ));
+        assert!(!has_credential_like_pattern("/user@domain:port"));
     }
 }

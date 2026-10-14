@@ -31,7 +31,7 @@ but this module controls the _account_ and _name_ attributes and
 ignores all the others. so clients can't use it to access or update any attributes.
  */
 use crate::credential::{Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi};
-use crate::error::{Error as ErrorCode, Result, decode_password};
+use crate::error::{Error as ErrorCode, Result};
 use security_framework::base::Error;
 use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
 use security_framework::os::macos::passwords::find_generic_password;
@@ -50,25 +50,6 @@ struct MacCredential {
 
 #[async_trait::async_trait]
 impl CredentialApi for MacCredential {
-    /// Create and write a credential with password for this entry.
-    ///
-    /// The new credential replaces any existing one in the store.
-    /// Since there is only one credential with a given _account_ and _user_
-    /// in any given keychain, there is no chance of ambiguity.
-    async fn set_password(&self, password: &str) -> Result<()> {
-        let service = self.service.clone();
-        let account = self.account.clone();
-        let domain = self.domain;
-        let password = password.to_string();
-        crate::blocking::spawn_blocking(move || {
-            get_keychain(domain)?
-                .set_generic_password(&service, &account, password.as_bytes())
-                .map_err(decode_error)
-        })
-        .await?;
-        Ok(())
-    }
-
     /// Create and write a credential with secret for this entry.
     ///
     /// The new credential replaces any existing one in the store.
@@ -84,28 +65,7 @@ impl CredentialApi for MacCredential {
                 .set_generic_password(&service, &account, &secret)
                 .map_err(decode_error)
         })
-        .await?;
-        Ok(())
-    }
-
-    /// Look up the password for this entry, if any.
-    ///
-    /// Returns a [`NoEntry`](ErrorCode::NoEntry) error if there is no
-    /// credential in the store.
-    async fn get_password(&self) -> Result<String> {
-        let service = self.service.clone();
-        let account = self.account.clone();
-        let domain = self.domain;
-
-        let password_bytes = crate::blocking::spawn_blocking(move || -> Result<Vec<u8>> {
-            let keychain = get_keychain(domain)?;
-            let (password_bytes, _) = find_generic_password(Some(&[keychain]), &service, &account)
-                .map_err(decode_error)?;
-            Ok(password_bytes.to_owned())
-        })
-        .await?;
-
-        decode_password(password_bytes)
+        .await
     }
 
     /// Look up the secret for this entry, if any.
@@ -117,15 +77,13 @@ impl CredentialApi for MacCredential {
         let account = self.account.clone();
         let domain = self.domain;
 
-        let password_bytes = crate::blocking::spawn_blocking(move || -> Result<Vec<u8>> {
+        crate::blocking::spawn_blocking(move || {
             let keychain = get_keychain(domain)?;
             let (password_bytes, _) = find_generic_password(Some(&[keychain]), &service, &account)
                 .map_err(decode_error)?;
             Ok(password_bytes.to_owned())
         })
-        .await?;
-
-        Ok(password_bytes)
+        .await
     }
 
     /// Delete the underlying generic credential for this entry, if any.
@@ -144,8 +102,7 @@ impl CredentialApi for MacCredential {
             item.delete();
             Ok(())
         })
-        .await?;
-        Ok(())
+        .await
     }
 
     /// Return the underlying concrete object with an `Any` type so that it can
@@ -166,7 +123,7 @@ impl MacCredential {
     /// On Mac, this is basically a no-op, because we represent any attributes
     /// other than the ones we use to find the generic credential.
     /// But at least this checks whether the underlying credential exists.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-auth", not(miri)))]
     async fn get_credential(&self) -> Result<Self> {
         let service = self.service.clone();
         let account = self.account.clone();
@@ -191,11 +148,7 @@ impl MacCredential {
     /// This will fail if the service or user strings are empty,
     /// because empty attribute values act as wildcards in the
     /// Keychain Services API.
-    fn new_with_target(
-        target: Option<MacKeychainDomain>,
-        service: &str,
-        user: &str,
-    ) -> Result<Self> {
+    fn new(domain: MacKeychainDomain, service: &str, user: &str) -> Result<Self> {
         if service.is_empty() {
             return Err(ErrorCode::Invalid(
                 "service".to_string(),
@@ -208,11 +161,6 @@ impl MacCredential {
                 "cannot be empty".to_string(),
             ));
         }
-        let domain = if let Some(target) = target {
-            target
-        } else {
-            MacKeychainDomain::User
-        };
         Ok(Self {
             domain,
             service: service.to_string(),
@@ -238,22 +186,10 @@ impl CredentialBuilderApi for MacCredentialBuilder {
     /// If a target is specified but not recognized as a keychain name,
     /// the User keychain is selected.
     fn build(&self, target: Option<&str>, service: &str, user: &str) -> Result<Box<Credential>> {
-        let domain: MacKeychainDomain = if let Some(target) = target {
-            target.parse().unwrap_or(MacKeychainDomain::User)
-        } else {
-            MacKeychainDomain::User
-        };
-        Ok(Box::new(MacCredential::new_with_target(
-            Some(domain),
-            service,
-            user,
-        )?))
-    }
-
-    /// Return the underlying builder object with an `Any` type so that it can
-    /// be downgraded to a [`MacCredentialBuilder`] for platform-specific processing.
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
+        let domain = target
+            .and_then(|target| target.parse().ok())
+            .unwrap_or(MacKeychainDomain::User);
+        Ok(Box::new(MacCredential::new(domain, service, user)?))
     }
 }
 
@@ -340,11 +276,11 @@ mod tests {
 
     use crate::{Entry, Error, tests::generate_random_string};
 
-    use super::MacCredential;
+    use super::{MacCredential, MacKeychainDomain};
 
     fn entry_new(service: &str, user: &str) -> Entry {
         crate::tests::entry_from_constructor(
-            |_, s, u| MacCredential::new_with_target(None, s, u),
+            |_, s, u| MacCredential::new(MacKeychainDomain::User, s, u),
             service,
             user,
         )
@@ -352,13 +288,13 @@ mod tests {
 
     #[test]
     fn test_invalid_parameter() {
-        let credential = MacCredential::new_with_target(None, "", "user");
+        let credential = MacCredential::new(MacKeychainDomain::User, "", "user");
         assert_matches!(
             credential,
             Err(Error::Invalid(_, _)),
             "Created credential with empty service"
         );
-        let credential = MacCredential::new_with_target(None, "service", "");
+        let credential = MacCredential::new(MacKeychainDomain::User, "service", "");
         assert_matches!(
             credential,
             Err(Error::Invalid(_, _)),
@@ -401,7 +337,8 @@ mod tests {
         let name = generate_random_string();
         let entry = entry_new(&name, &name);
         let credential: &MacCredential = entry
-            .get_credential()
+            .inner
+            .as_any()
             .downcast_ref()
             .expect("Not a mac credential");
         assert!(
@@ -438,7 +375,7 @@ mod tests {
             if name == "unknown" {
                 assert_matches!(
                     mac_cred.domain,
-                    super::MacKeychainDomain::User,
+                    MacKeychainDomain::User,
                     "wrong domain for unknown specifier"
                 );
             }

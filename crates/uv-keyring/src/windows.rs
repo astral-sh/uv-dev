@@ -128,11 +128,11 @@ impl CredentialApi for WinCredential {
     /// credential in the store.
     async fn get_attributes(&self) -> Result<HashMap<String, String>> {
         let cred = self.extract_from_platform(Self::extract_credential).await?;
-        let mut attributes: HashMap<String, String> = HashMap::new();
-        attributes.insert("comment".to_string(), cred.comment.clone());
-        attributes.insert("target_alias".to_string(), cred.target_alias.clone());
-        attributes.insert("username".to_string(), cred.username.clone());
-        Ok(attributes)
+        Ok(HashMap::from([
+            ("comment".to_string(), cred.comment),
+            ("target_alias".to_string(), cred.target_alias),
+            ("username".to_string(), cred.username),
+        ]))
     }
 
     /// Update the attributes on the credential for this entry, if it exists.
@@ -287,7 +287,7 @@ impl WinCredential {
     /// Construct a credential from this credential's underlying Generic credential.
     ///
     /// This can be useful for seeing modifications made by a third party.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-auth"))]
     async fn get_credential(&self) -> Result<Self> {
         self.extract_from_platform(Self::extract_credential).await
     }
@@ -396,12 +396,6 @@ impl CredentialBuilderApi for WinCredentialBuilder {
         Ok(Box::new(WinCredential::new_with_target(
             target, service, user,
         )?))
-    }
-
-    /// Return the underlying builder object with an `Any` type so that it can
-    /// be downgraded to a [`WinCredentialBuilder`] for platform-specific processing.
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -758,7 +752,8 @@ mod tests {
             .await
             .expect("Can't set test get password");
         let credential: &WinCredential = entry
-            .get_credential()
+            .inner
+            .as_any()
             .downcast_ref()
             .expect("Not a windows credential");
         let actual = credential
