@@ -817,20 +817,21 @@ async fn tool_audit_sarif_all_tools() -> Result<()> {
         .arg("--service-url")
         .arg(server.uri())
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .output()?;
-    assert_eq!(output.status.code(), Some(0));
+        .assert()
+        .success();
 
-    let report: Value = serde_json::from_slice(&output.stdout)?;
-    let runs = report["runs"].as_array().map(|runs| {
-        runs.iter()
-            .map(|run| {
-                json!({
-                    "automation_id": run["automationDetails"]["id"],
-                    "results": run["results"],
-                })
+    let report: Value = serde_json::from_slice(&output.get_output().stdout)?;
+    let runs = report["runs"]
+        .as_array()
+        .expect("SARIF runs should be an array")
+        .iter()
+        .map(|run| {
+            json!({
+                "automation_id": run["automationDetails"]["id"],
+                "results": run["results"],
             })
-            .collect::<Vec<_>>()
-    });
+        })
+        .collect::<Vec<_>>();
     assert_json_snapshot!(runs, @r#"
     [
       {
@@ -863,10 +864,10 @@ async fn tool_audit_sarif_vulnerability_location() -> Result<()> {
         .arg("--service-url")
         .arg(server.uri())
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .output()?;
-    assert_eq!(output.status.code(), Some(1));
+        .assert()
+        .code(1);
 
-    let report: Value = serde_json::from_slice(&output.stdout)?;
+    let report: Value = serde_json::from_slice(&output.get_output().stdout)?;
     assert_json_snapshot!(json!({
         "automation_id": report["runs"][0]["automationDetails"]["id"],
         "artifact": report["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
