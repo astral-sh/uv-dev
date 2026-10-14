@@ -1330,35 +1330,17 @@ impl CacheBucket {
         let mut summary = cache.removal();
         match self {
             Self::Wheels => {
-                // For `pypi` wheels, we expect a directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Pypi);
-                summary += cache.remove_path(root.join(name.to_string()))?;
-
-                // For alternate indices, we expect a directory for every index (under an `index`
-                // subdirectory), followed by a directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Index);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(name.to_string()))?;
-                }
+                summary += self.remove_registry_entries(cache, name.as_str())?;
 
                 // For direct URLs, we expect a directory for every URL, followed by a
                 // directory per package (indexed by name).
                 let root = cache.bucket(self).join(WheelCacheKind::Url);
                 for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(name.to_string()))?;
+                    summary += cache.remove_path(directory.join(name.as_str()))?;
                 }
             }
             Self::SourceDistributions => {
-                // For `pypi` wheels, we expect a directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Pypi);
-                summary += cache.remove_path(root.join(name.to_string()))?;
-
-                // For alternate indices, we expect a directory for every index (under an `index`
-                // subdirectory), followed by a directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Index);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(name.to_string()))?;
-                }
+                summary += self.remove_registry_entries(cache, name.as_str())?;
 
                 // For direct URLs, we expect a directory for every URL, followed by a
                 // directory per version. To determine whether the URL is relevant, we need to
@@ -1393,16 +1375,7 @@ impl CacheBucket {
                 }
             }
             Self::Simple => {
-                // For `pypi` wheels, we expect a rkyv file per package, indexed by name.
-                let root = cache.bucket(self).join(WheelCacheKind::Pypi);
-                summary += cache.remove_path(root.join(format!("{name}.rkyv")))?;
-
-                // For alternate indices, we expect a directory for every index (under an `index`
-                // subdirectory), followed by a directory per package (indexed by name).
-                let root = cache.bucket(self).join(WheelCacheKind::Index);
-                for directory in directories(root)? {
-                    summary += cache.remove_path(directory.join(format!("{name}.rkyv")))?;
-                }
+                summary += self.remove_registry_entries(cache, &format!("{name}.rkyv"))?;
             }
             Self::FlatIndex => {
                 // We can't know if the flat index includes a package, so we just remove the entire
@@ -1421,6 +1394,16 @@ impl CacheBucket {
             | Self::Osv => {
                 // Nothing to do.
             }
+        }
+        Ok(summary)
+    }
+
+    /// Remove a package entry from PyPI and alternate registry cache shards.
+    fn remove_registry_entries(self, cache: &Cache, entry: &str) -> io::Result<Removal> {
+        let root = cache.bucket(self);
+        let mut summary = cache.remove_path(root.join(WheelCacheKind::Pypi).join(entry))?;
+        for index in directories(root.join(WheelCacheKind::Index))? {
+            summary += cache.remove_path(index.join(entry))?;
         }
         Ok(summary)
     }
