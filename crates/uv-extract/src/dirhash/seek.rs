@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use crate::vendor::CloneableSeekableReader;
 use crate::{
     Error, ExtractionDirectories, copy_zip_entry, insecure_no_validate,
-    validate_zip_directory_entry,
+    validate_zip_directory_entry, zip_entry_buffer_capacity,
 };
 use async_zip::StoredZipEntry;
 use async_zip::base::read::seek::ZipFileReader;
@@ -300,8 +300,8 @@ where
 
 /// Build a buffered writer sized for the expected entry contents.
 fn buffered_file_writer(file: fs_err::File, size: u64) -> std::io::BufWriter<fs_err::File> {
-    if let Ok(size) = usize::try_from(size) {
-        std::io::BufWriter::with_capacity(std::cmp::min(size, 1024 * 1024), file)
+    if let Some(capacity) = zip_entry_buffer_capacity(size) {
+        std::io::BufWriter::with_capacity(capacity, file)
     } else {
         std::io::BufWriter::new(file)
     }
