@@ -852,7 +852,7 @@ impl SourceBuild {
                 "Call to `{}.{hook_prefix}_{}` failed",
                 self.pep517_backend.backend, self.build_kind
             ),
-            &output,
+            output,
             self.runner.level,
             self.package_name.as_ref(),
             self.package_version.as_ref(),
@@ -1027,7 +1027,7 @@ impl SourceBuild {
                         "Call to `{}.{hook_prefix}_{}` failed: {}",
                         self.pep517_backend.backend, self.build_kind, err
                     ),
-                    &output,
+                    output,
                     self.runner.level,
                     self.package_name.as_ref(),
                     self.package_version.as_ref(),

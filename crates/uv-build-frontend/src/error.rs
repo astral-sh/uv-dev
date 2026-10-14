@@ -382,7 +382,7 @@ impl Error {
     /// Construct an [`Error`] from the output of a failed command.
     pub(crate) fn from_command_output(
         message: String,
-        output: &PythonRunnerOutput,
+        output: PythonRunnerOutput,
         level: BuildOutput,
         name: Option<&PackageName>,
         version: Option<&Version>,
@@ -391,7 +391,7 @@ impl Error {
         let missing_library = MissingLibrary::from_stderr(&output.stderr);
         let (stdout, stderr) = match level {
             BuildOutput::Stderr | BuildOutput::Quiet => (Vec::new(), Vec::new()),
-            BuildOutput::Debug => (output.stdout.clone(), output.stderr.clone()),
+            BuildOutput::Debug => (output.stdout, output.stderr),
         };
 
         if let Some(missing_library) = missing_library {
@@ -469,7 +469,7 @@ mod test {
 
         let err = Error::from_command_output(
             "Failed building wheel through setup.py".to_string(),
-            &output,
+            output,
             BuildOutput::Debug,
             None,
             None,
@@ -523,7 +523,7 @@ mod test {
 
         let err = Error::from_command_output(
             "Failed building wheel through setup.py".to_string(),
-            &output,
+            output,
             BuildOutput::Debug,
             None,
             None,
@@ -566,7 +566,7 @@ mod test {
 
         let err = Error::from_command_output(
             "Failed building wheel through setup.py".to_string(),
-            &output,
+            output,
             BuildOutput::Debug,
             None,
             None,
@@ -612,7 +612,7 @@ mod test {
 
         let err = Error::from_command_output(
             "Failed building wheel through setup.py".to_string(),
-            &output,
+            output,
             BuildOutput::Debug,
             Some(&PackageName::from_str("pygraphviz").unwrap()),
             Some(&Version::new([1, 11])),
