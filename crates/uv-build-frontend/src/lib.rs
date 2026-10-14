@@ -632,13 +632,12 @@ impl SourceBuild {
                 .cloned();
         }
 
-        let requirements: Cow<'_, [Requirement]> = if extra_build_dependencies.is_empty() {
-            Cow::Borrowed(&pep517_backend.requirements)
+        let backend_requirements = pep517_backend.requirements.as_slice();
+        let requirements = if extra_build_dependencies.is_empty() {
+            Cow::Borrowed(backend_requirements)
         } else {
             // Resolve extra build dependencies together with the backend requirements.
-            let mut requirements = pep517_backend.requirements.clone();
-            requirements.extend_from_slice(extra_build_dependencies);
-            Cow::Owned(requirements)
+            Cow::Owned([backend_requirements, extra_build_dependencies].concat())
         };
         build_context
             .resolve(&requirements, None, build_stack)
