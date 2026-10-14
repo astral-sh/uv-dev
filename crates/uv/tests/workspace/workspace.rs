@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
@@ -644,64 +643,83 @@ fn test_uv_run_isolate() -> Result<()> {
     Ok(())
 }
 
-/// Check that the resolution is the same no matter where in the workspace we are.
-fn workspace_lock_idempotence(workspace: &str, subdirectories: &[&str]) -> Result<()> {
-    let mut shared_lock = None;
-
-    for dir in subdirectories {
-        let context = uv_test::test_context!("3.12");
-        let work_dir = context.temp_dir.join(workspace);
-
-        copy_dir_ignore(
-            context
-                .workspace_root
-                .join("test/workspaces")
-                .join(workspace),
-            &work_dir,
-        )?;
-
-        context
-            .lock()
-            .current_dir(work_dir.join(dir))
-            .assert()
-            .success();
-
-        let lock = context.read(PathBuf::from(workspace).join("uv.lock"));
-        // Check the lockfile is the same for all resolutions.
-        if let Some(shared_lock) = &shared_lock {
-            assert_eq!(shared_lock, &lock);
-        } else {
-            shared_lock = Some(lock);
-        }
-    }
-    Ok(())
-}
-
-/// Check that the resolution is the same no matter where in the workspace we are.
+/// Locking from a root workspace or either member resolves to the same lockfile.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn workspace_lock_idempotence_root_workspace() -> Result<()> {
-    workspace_lock_idempotence(
-        "albatross-root-workspace",
-        &[".", "packages/bird-feeder", "packages/seeds"],
+    let context = uv_test::test_context!("3.12");
+    let workspace = context.temp_dir.child("albatross-root-workspace");
+    copy_dir_ignore(
+        context
+            .workspace_root
+            .join("test/workspaces/albatross-root-workspace"),
+        &workspace,
     )?;
+    let lockfile = workspace.child("uv.lock");
+
+    context.lock().current_dir(&workspace).assert().success();
+    let baseline = context.read(&lockfile);
+
+    fs_err::remove_file(&lockfile)?;
+    context
+        .lock()
+        .current_dir(workspace.child("packages/bird-feeder"))
+        .assert()
+        .success();
+    assert_eq!(context.read(&lockfile), baseline);
+
+    fs_err::remove_file(&lockfile)?;
+    context
+        .lock()
+        .current_dir(workspace.child("packages/seeds"))
+        .assert()
+        .success();
+    assert_eq!(context.read(&lockfile), baseline);
+
     Ok(())
 }
 
-/// Check that the resolution is the same no matter where in the workspace we are, and that locking
-/// works even if there is no root project.
+/// Locking from a virtual workspace or any member resolves to the same lockfile.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn workspace_lock_idempotence_virtual_workspace() -> Result<()> {
-    workspace_lock_idempotence(
-        "albatross-virtual-workspace",
-        &[
-            ".",
-            "packages/albatross",
-            "packages/bird-feeder",
-            "packages/seeds",
-        ],
+    let context = uv_test::test_context!("3.12");
+    let workspace = context.temp_dir.child("albatross-virtual-workspace");
+    copy_dir_ignore(
+        context
+            .workspace_root
+            .join("test/workspaces/albatross-virtual-workspace"),
+        &workspace,
     )?;
+    let lockfile = workspace.child("uv.lock");
+
+    context.lock().current_dir(&workspace).assert().success();
+    let baseline = context.read(&lockfile);
+
+    fs_err::remove_file(&lockfile)?;
+    context
+        .lock()
+        .current_dir(workspace.child("packages/albatross"))
+        .assert()
+        .success();
+    assert_eq!(context.read(&lockfile), baseline);
+
+    fs_err::remove_file(&lockfile)?;
+    context
+        .lock()
+        .current_dir(workspace.child("packages/bird-feeder"))
+        .assert()
+        .success();
+    assert_eq!(context.read(&lockfile), baseline);
+
+    fs_err::remove_file(&lockfile)?;
+    context
+        .lock()
+        .current_dir(workspace.child("packages/seeds"))
+        .assert()
+        .success();
+    assert_eq!(context.read(&lockfile), baseline);
+
     Ok(())
 }
 
