@@ -38,8 +38,8 @@ use uv_workspace::WorkspaceCache;
 use uv_lock_operations::LockValidationError;
 
 use crate::common::{
-    ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    tool_environment_spec,
+    ToolLock, ToolPython, ValidatedToolLock, finalize_tool_install, refine_interpreter,
+    remove_entrypoints, tool_environment_spec,
 };
 use crate::error::ToolLockError;
 use crate::requirements::{registry_requirement, resolve_latest, resolve_names};
@@ -607,6 +607,9 @@ pub async fn install(
             &settings.resolver.dependency_metadata,
         )
     };
+    let satisfied_tool_lock = existing_tool_lock
+        .take_if(|lock| lock.is_satisfied())
+        .map(ValidatedToolLock::into_lock);
 
     // TODO(zanieb): Build the environment in the cache directory then copy into the tool directory.
     // This lets us confirm the environment is valid before removing an existing install. However,
@@ -616,13 +619,6 @@ pub async fn install(
         let environment = environment.into_environment();
         let (environment, tool_lock) = if tool_locks {
             let site_packages = SitePackages::from_environment(&environment)?;
-            let satisfied_tool_lock = match existing_tool_lock.take() {
-                Some(lock) if lock.is_satisfied() => Some(lock.into_lock()),
-                lock => {
-                    existing_tool_lock = lock;
-                    None
-                }
-            };
             let (resolution, tool_lock) = if let Some(tool_lock) = satisfied_tool_lock {
                 let resolution = tool_lock.to_resolution(
                     Some(package_name),
@@ -802,13 +798,6 @@ pub async fn install(
 
         (environment, tool_lock)
     } else {
-        let satisfied_tool_lock = match existing_tool_lock.take() {
-            Some(lock) if lock.is_satisfied() => Some(lock.into_lock()),
-            lock => {
-                existing_tool_lock = lock;
-                None
-            }
-        };
         let (resolution, interpreter, tool_lock) = if let Some(tool_lock) = satisfied_tool_lock {
             let resolution = tool_lock.to_resolution(
                 Some(package_name),
