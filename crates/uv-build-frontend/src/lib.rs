@@ -228,6 +228,23 @@ impl Pep517Backend {
         // either `setuptools.build_meta` or `setuptools.build_meta:__legacy__`
         self.backend.split(':').next() == Some("setuptools.build_meta")
     }
+
+    /// Whether the metadata preparation hook should be skipped for this project.
+    fn skip_metadata_hook(&self, project: Option<&Project>) -> bool {
+        // Hatchling's dynamic metadata hooks can violate PEP 517's guarantee that prepared
+        // metadata matches the built wheel. Hatchling disables metadata preparation entirely for
+        // pip; here, disable it only when dependencies are declared dynamic. This may skip safe
+        // projects, but avoids relying on inconsistent dependency metadata.
+        // See: https://github.com/astral-sh/uv/issues/2130
+        self.backend == "hatchling.build"
+            && project
+                .and_then(|project| project.dynamic.as_ref())
+                .is_some_and(|dynamic| {
+                    dynamic
+                        .iter()
+                        .any(|field| field == "dependencies" || field == "optional-dependencies")
+                })
+    }
 }
 
 /// Uses an [`Arc`] internally, clone freely.
@@ -264,8 +281,8 @@ pub struct SourceBuild {
     extra_build_dependencies: Vec<Requirement>,
     /// Whether dependencies are installed in a temporary, isolated environment.
     isolated: bool,
-    /// The PEP 621 project metadata, if any.
-    project: Option<Project>,
+    /// Whether to avoid preparing metadata independently of building the distribution.
+    skip_metadata_hook: bool,
     /// The virtual environment in which to build the source distribution.
     venv: PythonEnvironment,
     /// Populated if `prepare_metadata_for_build_wheel` was called.
@@ -348,16 +365,12 @@ impl SourceBuild {
         .await
         .map_err(|err| *err)?;
 
-        let package_name = project
-            .as_ref()
-            .map(|project| &project.name)
-            .or(fallback_package_name)
-            .cloned();
-        let package_version = project
-            .as_ref()
-            .and_then(|project| project.version.as_ref())
-            .or(fallback_package_version)
-            .cloned();
+        let skip_metadata_hook = pep517_backend.skip_metadata_hook(project.as_ref());
+        let (project_name, project_version) = project
+            .map(|project| (Some(project.name), project.version))
+            .unwrap_or_default();
+        let package_name = project_name.or_else(|| fallback_package_name.cloned());
+        let package_version = project_version.or_else(|| fallback_package_version.cloned());
 
         let extra_build_dependencies = if let Some(package_name) = &package_name {
             extra_build_requires
@@ -525,7 +538,7 @@ impl SourceBuild {
             pep517_backend,
             extra_build_dependencies,
             isolated,
-            project,
+            skip_metadata_hook,
             venv,
             build_kind,
             level,
@@ -869,32 +882,7 @@ impl SourceBuild {
         // Lock the source tree, if necessary.
         let _lock = self.acquire_lock().await?;
 
-        // Hatch allows for highly dynamic customization of metadata via hooks. In such cases, Hatch
-        // can't uphold the PEP 517 contract, in that the metadata Hatch would return by
-        // `prepare_metadata_for_build_wheel` isn't guaranteed to match that of the built wheel.
-        //
-        // Hatch disables `prepare_metadata_for_build_wheel` entirely for pip. We'll instead disable
-        // it on our end when metadata is defined as "dynamic" in the pyproject.toml, which should
-        // allow us to leverage the hook in _most_ cases while still avoiding incorrect metadata for
-        // the remaining cases.
-        //
-        // This heuristic will have false positives (i.e., there will be some Hatch projects for
-        // which we could have safely called `prepare_metadata_for_build_wheel`, despite having
-        // dynamic metadata). However, false positives are preferable to false negatives, since
-        // this is just an optimization.
-        //
-        // See: https://github.com/astral-sh/uv/issues/2130
-        if self.pep517_backend.backend == "hatchling.build"
-            && self
-                .project
-                .as_ref()
-                .and_then(|project| project.dynamic.as_ref())
-                .is_some_and(|dynamic| {
-                    dynamic
-                        .iter()
-                        .any(|field| field == "dependencies" || field == "optional-dependencies")
-                })
-        {
+        if self.skip_metadata_hook {
             return Ok(None);
         }
 
