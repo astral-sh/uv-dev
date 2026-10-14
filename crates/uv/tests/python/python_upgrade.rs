@@ -1,10 +1,10 @@
-use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::prelude::PathChild;
+use indoc::indoc;
 use insta::assert_snapshot;
 use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 
@@ -750,9 +750,9 @@ fn python_sync_honors_pinned_patch_version() -> Result<()> {
 // A script environment must retain a patch pin discovered from a version file.
 #[test]
 fn python_script_honors_patch_version_file() -> Result<()> {
-    let (context, python) = script_interpreter_after_upgrade(Some("3.10.17"), ">=3.10")?;
+    let (context, probe) = script_interpreter_after_upgrade(Some("3.10.17"), ">=3.10")?;
 
-    uv_snapshot!(context.filters(), Command::new(python).arg("--version"), @r"
+    uv_snapshot!(context.filters(), probe, @r"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -764,9 +764,9 @@ fn python_script_honors_patch_version_file() -> Result<()> {
 // A script environment must retain an exact patch requirement from its inline metadata.
 #[test]
 fn python_script_honors_patch_requires_python() -> Result<()> {
-    let (context, python) = script_interpreter_after_upgrade(None, "==3.10.17")?;
+    let (context, probe) = script_interpreter_after_upgrade(None, "==3.10.17")?;
 
-    uv_snapshot!(context.filters(), Command::new(python).arg("--version"), @r"
+    uv_snapshot!(context.filters(), probe, @r"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -778,9 +778,9 @@ fn python_script_honors_patch_requires_python() -> Result<()> {
 // A minor-version request from a version file permits transparent patch upgrades.
 #[test]
 fn python_script_upgrades_minor_version_file() -> Result<()> {
-    let (context, python) = script_interpreter_after_upgrade(Some("3.10"), ">=3.10,<3.11")?;
+    let (context, probe) = script_interpreter_after_upgrade(Some("3.10"), ">=3.10,<3.11")?;
 
-    uv_snapshot!(context.filters(), Command::new(python).arg("--version"), @r"
+    uv_snapshot!(context.filters(), probe, @r"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.[LATEST]
@@ -792,9 +792,9 @@ fn python_script_upgrades_minor_version_file() -> Result<()> {
 // A script's inline metadata can permit transparent patch upgrades without a version file.
 #[test]
 fn python_script_upgrades_requires_python() -> Result<()> {
-    let (context, python) = script_interpreter_after_upgrade(None, ">=3.10,<3.11")?;
+    let (context, probe) = script_interpreter_after_upgrade(None, ">=3.10,<3.11")?;
 
-    uv_snapshot!(context.filters(), Command::new(python).arg("--version"), @r"
+    uv_snapshot!(context.filters(), probe, @r"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.[LATEST]
@@ -805,11 +805,12 @@ fn python_script_upgrades_requires_python() -> Result<()> {
 
 /// Create a script environment, then upgrade its managed Python installation.
 ///
-/// Return the cached executable so assertions cannot rediscover Python or recreate the environment.
+/// Return a command that verifies the cached interpreter still initializes as a virtual
+/// environment and prints its version, without rediscovering Python or recreating the environment.
 fn script_interpreter_after_upgrade(
     pin: Option<&str>,
     requires_python: &str,
-) -> Result<(TestContext, PathBuf)> {
+) -> Result<(TestContext, Command)> {
     let initial_version = "3.10.17";
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
@@ -838,9 +839,20 @@ print(sys.executable)
 "#,
     ))?;
     let output = context.run().arg("script.py").assert().success();
-    let python = PathBuf::from(std::str::from_utf8(&output.get_output().stdout)?.trim());
+    let python = std::str::from_utf8(&output.get_output().stdout)?.trim();
 
     context.python_upgrade().arg("3.10").assert().success();
 
-    Ok((context, python))
+    let mut probe = context.external_command(python);
+    probe.args([
+        "-I",
+        "-c",
+        indoc! {"
+            import sys
+            if sys.prefix == sys.base_prefix:
+                raise RuntimeError('the script interpreter is no longer in a virtual environment')
+            print('Python ' + sys.version.split()[0])
+        "},
+    ]);
+    Ok((context, probe))
 }
