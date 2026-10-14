@@ -879,8 +879,16 @@ fn configure_git_network(
     cmd.env(EnvVars::GIT_TERMINAL_PROMPT, "0");
     apply_url_rewrite(cmd, url);
     if disable_ssl {
-        let origin = remote_url_root(url.without_credentials().into_owned());
+        let remote_url = url.without_credentials();
+        let origin = remote_url_root(remote_url.clone().into_owned());
         append_git_config(cmd, &format!("http.{origin}.sslVerify"), "false");
+        // Git prefers URL path specificity over configuration scope.
+        append_git_config(cmd, &format!("http.{remote_url}.sslVerify"), "false");
+        // Username matching breaks ties between equally specific paths; passwords are ignored.
+        let mut username_url = (**url).clone();
+        if !username_url.username().is_empty() && username_url.set_password(None).is_ok() {
+            append_git_config(cmd, &format!("http.{username_url}.sslVerify"), "false");
+        }
     }
     if offline {
         cmd.env(EnvVars::GIT_ALLOW_PROTOCOL, "file");
@@ -1251,14 +1259,38 @@ mod tests {
         command
             .arg("-c")
             .arg("http.sslVerify=true")
+            .arg("-c")
+            .arg("http.https://allowed.example/org/.sslVerify=true")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env(
                 "GIT_CONFIG_GLOBAL",
                 if cfg!(windows) { "NUL" } else { "/dev/null" },
             )
-            .env("GIT_CONFIG_COUNT", "0")
+            .env("GIT_CONFIG_COUNT", "1")
+            .env(
+                "GIT_CONFIG_KEY_0",
+                "http.https://user@allowed.example/org/repo.git.sslVerify",
+            )
+            .env("GIT_CONFIG_VALUE_0", "true")
             .env_remove(EnvVars::GIT_SSL_NO_VERIFY);
         configure_git_network(&mut command, &url, true, false);
+
+        let requested = command
+            .clone()
+            .args(&["config", "--get-urlmatch", "http.sslVerify", url.as_str()])
+            .exec_with_output()?;
+        assert_eq!(str::from_utf8(&requested.stdout)?.trim(), "false");
+
+        let without_username = command
+            .clone()
+            .args(&[
+                "config",
+                "--get-urlmatch",
+                "http.sslVerify",
+                "https://allowed.example/org/repo.git",
+            ])
+            .exec_with_output()?;
+        assert_eq!(str::from_utf8(&without_username.stdout)?.trim(), "false");
 
         let allowed = command
             .clone()
