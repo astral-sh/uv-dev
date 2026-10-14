@@ -566,15 +566,13 @@ impl TestContext {
     /// Adds a filter for platform-specific errors when a file is not executable.
     #[inline]
     #[must_use]
-    pub fn with_filtered_not_executable(mut self) -> Self {
-        let pattern = if cfg!(unix) {
-            r"Permission denied \(os error 13\)"
-        } else {
-            r"\%1 is not a valid Win32 application. \(os error 193\)"
-        };
-        self.filters
-            .push((pattern.to_string(), "[PERMISSION DENIED]".to_string()));
-        self
+    pub fn with_filtered_not_executable(self) -> Self {
+        // Operating-system messages can be localized; identify the non-executable cause by code.
+        let code = if cfg!(unix) { 13 } else { 193 };
+        self.with_filter((
+            format!(r"(?m)^([ \t]*cause: )[^\r\n]* \(os error {code}\)(\r?)$"),
+            "${1}[PERMISSION DENIED]${2}",
+        ))
     }
 
     /// Adds a filter that ignores platform information in a Python installation key.
@@ -2571,6 +2569,23 @@ mod filter_tests {
         assert_eq!(
             apply_filters(output, context.filters()),
             format!("Python 3.12.[LATEST]; Python {malformed}")
+        );
+    }
+
+    #[test]
+    fn non_executable_filter_handles_localized_messages() {
+        let context =
+            TestContext::new_with_versions_and_bin(&[], "uv".into()).with_filtered_not_executable();
+        let localized = if cfg!(unix) {
+            "  cause: Accès refusé (os error 13)\r\n"
+        } else {
+            "  cause: Keine zulässige Win32-Anwendung. (os error 193)\r\n"
+        };
+        let output = format!("{localized}  cause: unrelated failure (os error 5)\n");
+
+        assert_eq!(
+            apply_filters(output, context.filters()),
+            "  cause: [PERMISSION DENIED]\r\n  cause: unrelated failure (os error 5)\n"
         );
     }
 }
