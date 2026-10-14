@@ -2161,6 +2161,7 @@ fn venv_python_preference() {
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     ");
+    assert_venv_python_version(&context, "3.11");
 
     uv_snapshot!(context.filters(), context.venv(), @"
     exit_code: 2 (failure)
@@ -2180,6 +2181,7 @@ fn venv_python_preference() {
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     ");
+    assert_venv_python_version(&context, "3.12");
 }
 
 #[test]
