@@ -395,10 +395,8 @@ impl DiscoveryOptions {
     }
 
     fn find_project_root<'a>(&self, path: &'a Path) -> Result<&'a Path, WorkspaceError> {
-        let project_root = self
-            .ancestors(path)
-            .find(|path| path.join("pyproject.toml").is_file())
-            .ok_or(WorkspaceErrorKind::MissingPyprojectToml)?;
+        let (project_root, _) =
+            find_pyproject(self.ancestors(path)).ok_or(WorkspaceErrorKind::MissingPyprojectToml)?;
         debug!("Found project root: {}", project_root.simplified_display());
         Ok(project_root)
     }
@@ -417,6 +415,13 @@ impl DiscoveryOptions {
         };
         Some(normalize_path(cache_root))
     }
+}
+
+/// Find the first `pyproject.toml` in the given ancestor directories.
+fn find_pyproject<'a>(ancestors: impl Iterator<Item = &'a Path>) -> Option<(&'a Path, PathBuf)> {
+    ancestors
+        .map(|root| (root, root.join("pyproject.toml")))
+        .find(|(_, pyproject)| pyproject.is_file())
 }
 
 /// The declaration contributing a workspace Python requirement.
@@ -1823,85 +1828,82 @@ async fn find_workspace(
         return Ok(None);
     }
 
-    // Skip 1 to ignore the current project itself.
-    for workspace_root in options.ancestors(project_root).skip(1) {
-        let pyproject_path = workspace_root.join("pyproject.toml");
-        if !pyproject_path.is_file() {
-            continue;
-        }
-        trace!(
-            "Found `pyproject.toml` at: {}",
-            pyproject_path.simplified_display()
-        );
+    // Skip the current project itself.
+    let Some((workspace_root, pyproject_path)) =
+        find_pyproject(options.ancestors(project_root).skip(1))
+    else {
+        return Ok(None);
+    };
+    trace!(
+        "Found `pyproject.toml` at: {}",
+        pyproject_path.simplified_display()
+    );
 
-        // Read the `pyproject.toml`.
-        let contents = fs_err::tokio::read_to_string(&pyproject_path).await?;
-        let pyproject_toml = PyProjectToml::from_string(contents, &pyproject_path)
-            .map_err(|err| WorkspaceErrorKind::Toml(pyproject_path.clone(), Box::new(err)))?;
+    // Read the `pyproject.toml`.
+    let contents = fs_err::tokio::read_to_string(&pyproject_path).await?;
+    let pyproject_toml = PyProjectToml::from_string(contents, &pyproject_path)
+        .map_err(|err| WorkspaceErrorKind::Toml(pyproject_path.clone(), Box::new(err)))?;
 
-        return if let Some(workspace) = pyproject_toml
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.workspace.as_ref())
-        {
-            if !is_included_in_workspace(project_root, workspace_root, workspace)? {
-                debug!(
-                    "Found workspace root `{}`, but project is not included",
-                    workspace_root.simplified_display()
-                );
-                return Ok(None);
-            }
-
-            if is_excluded_from_workspace(project_root, workspace_root, workspace)? {
-                debug!(
-                    "Found workspace root `{}`, but project is excluded",
-                    workspace_root.simplified_display()
-                );
-                return Ok(None);
-            }
-
-            // We found a workspace root.
-            Ok(Some((
-                workspace_root.to_path_buf(),
-                workspace.clone(),
-                pyproject_toml,
-            )))
-        } else if pyproject_toml.project.is_some() {
-            // We're in a directory of another project, e.g. tests or examples.
-            // Example:
-            // ```
-            // albatross
-            // ├── examples
-            // │   └── bird-feeder [CURRENT DIRECTORY]
-            // │       ├── pyproject.toml
-            // │       └── src
-            // │           └── bird_feeder
-            // │               └── __init__.py
-            // ├── pyproject.toml
-            // └── src
-            //     └── albatross
-            //         └── __init__.py
-            // ```
-            // The current project is the example (non-workspace) `bird-feeder` in `albatross`,
-            // we ignore all `albatross` is doing and any potential workspace it might be
-            // contained in.
+    if let Some(workspace) = pyproject_toml
+        .tool
+        .as_ref()
+        .and_then(|tool| tool.uv.as_ref())
+        .and_then(|uv| uv.workspace.as_ref())
+    {
+        if !is_included_in_workspace(project_root, workspace_root, workspace)? {
             debug!(
-                "Project is contained in non-workspace project: {}",
+                "Found workspace root `{}`, but project is not included",
                 workspace_root.simplified_display()
             );
-            Ok(None)
-        } else {
-            // We require that a `project.toml` file either declares a workspace or a project.
-            warn!(
-                "`pyproject.toml` does not contain a `project` table: {}",
-                pyproject_path.simplified_display()
-            );
-            Ok(None)
-        };
-    }
+            return Ok(None);
+        }
 
-    Ok(None)
+        if is_excluded_from_workspace(project_root, workspace_root, workspace)? {
+            debug!(
+                "Found workspace root `{}`, but project is excluded",
+                workspace_root.simplified_display()
+            );
+            return Ok(None);
+        }
+
+        // We found a workspace root.
+        Ok(Some((
+            workspace_root.to_path_buf(),
+            workspace.clone(),
+            pyproject_toml,
+        )))
+    } else if pyproject_toml.project.is_some() {
+        // We're in a directory of another project, e.g. tests or examples.
+        // Example:
+        // ```
+        // albatross
+        // ├── examples
+        // │   └── bird-feeder [CURRENT DIRECTORY]
+        // │       ├── pyproject.toml
+        // │       └── src
+        // │           └── bird_feeder
+        // │               └── __init__.py
+        // ├── pyproject.toml
+        // └── src
+        //     └── albatross
+        //         └── __init__.py
+        // ```
+        // The current project is the example (non-workspace) `bird-feeder` in `albatross`,
+        // we ignore all `albatross` is doing and any potential workspace it might be
+        // contained in.
+        debug!(
+            "Project is contained in non-workspace project: {}",
+            workspace_root.simplified_display()
+        );
+        Ok(None)
+    } else {
+        // We require that a `project.toml` file either declares a workspace or a project.
+        warn!(
+            "`pyproject.toml` does not contain a `project` table: {}",
+            pyproject_path.simplified_display()
+        );
+        Ok(None)
+    }
 }
 
 /// Check if a directory only contains files that are ignored.
