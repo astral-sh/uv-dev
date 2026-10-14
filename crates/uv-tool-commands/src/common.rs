@@ -188,8 +188,10 @@ impl ToolPython {
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
     ) -> Result<Self, io::Error> {
-        let requires_python = if python_request.is_none() {
-            match requirement {
+        let (source, python_request) = if let Some(request) = python_request {
+            (PythonRequestSource::UserRequest, Some(request))
+        } else {
+            let requires_python = match requirement {
                 Some(requirement) => {
                     infer_requires_python_from_requirement(
                         requirement,
@@ -201,37 +203,30 @@ impl ToolPython {
                     .await
                 }
                 None => None,
-            }
-        } else {
-            None
-        };
-
-        let (source, python_request) = if let Some(request) = python_request {
-            (PythonRequestSource::UserRequest, Some(request))
-        } else if let Some(file) = PythonVersionFile::discover(
-            &*CWD,
-            &VersionFileDiscoveryOptions::default()
-                .with_config_discovery(config_discovery)
-                .with_no_local(true),
-        )
-        .await?
-        .filter(|file| match (file.version(), requires_python.as_ref()) {
-            (Some(request), Some(requires_python)) => {
-                request.intersects_specifiers(requires_python.specifiers())
-            }
-            _ => true,
-        }) {
-            (
-                PythonRequestSource::DotPythonVersion(file.clone()),
-                file.version().cloned(),
+            };
+            if let Some(file) = PythonVersionFile::discover(
+                &*CWD,
+                &VersionFileDiscoveryOptions::default()
+                    .with_config_discovery(config_discovery)
+                    .with_no_local(true),
             )
-        } else {
-            (
-                PythonRequestSource::RequiresPython,
-                requires_python.as_ref().and_then(|requires_python| {
-                    PythonRequest::from_specifiers(requires_python.specifiers())
-                }),
-            )
+            .await?
+            .filter(|file| match (file.version(), requires_python.as_ref()) {
+                (Some(request), Some(requires_python)) => {
+                    request.intersects_specifiers(requires_python.specifiers())
+                }
+                _ => true,
+            }) {
+                let request = file.version().cloned();
+                (PythonRequestSource::DotPythonVersion(file), request)
+            } else {
+                (
+                    PythonRequestSource::RequiresPython,
+                    requires_python.as_ref().and_then(|requires_python| {
+                        PythonRequest::from_specifiers(requires_python.specifiers())
+                    }),
+                )
+            }
         };
 
         if let Some(python_request) = python_request.as_ref() {
