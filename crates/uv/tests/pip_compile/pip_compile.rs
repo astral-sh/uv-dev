@@ -2,10 +2,10 @@
 
 use std::collections::BTreeMap;
 use std::env::current_dir;
-#[cfg(all(unix, feature = "test-git"))]
+#[cfg(all(unix, not(target_os = "macos"), feature = "test-git"))]
 use std::ffi::OsStr;
 use std::fs;
-#[cfg(all(unix, feature = "test-git"))]
+#[cfg(all(unix, not(target_os = "macos"), feature = "test-git"))]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
@@ -19,7 +19,10 @@ use std::thread;
 use anyhow::Result;
 #[cfg(all(feature = "test-git", feature = "test-universal"))]
 use anyhow::{Context, anyhow};
-#[cfg(any(feature = "test-universal", all(unix, feature = "test-git")))]
+#[cfg(any(
+    feature = "test-universal",
+    all(unix, not(target_os = "macos"), feature = "test-git")
+))]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use fs_err::{File, read};
@@ -14815,8 +14818,10 @@ fn git_source_missing_tag() -> Result<()> {
 }
 
 /// Git must receive the original cache path bytes when cloning a checkout.
+///
+/// The macOS test filesystem rejects the non-UTF-8 cache directory.
 #[test]
-#[cfg(all(unix, feature = "test-git"))]
+#[cfg(all(unix, not(target_os = "macos"), feature = "test-git"))]
 fn git_source_non_utf8_cache_path() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_cache_dir(OsStr::from_bytes(b"cache-\xff"))
