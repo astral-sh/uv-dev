@@ -1,8 +1,11 @@
 use std::borrow::Cow;
 
+use either::Either;
+
 use uv_distribution_types::{Requirement, ResolutionRecorder};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
+use uv_pep508::MarkerTree;
 
 use crate::{Excludes, Overrides};
 
@@ -123,4 +126,29 @@ impl DependencyModifiers {
                     .contains_for_package(excludes, &requirement.name)
             })
     }
+}
+
+/// Apply a requirement's extra conditions to its constraints or overrides.
+///
+/// Project away environmental conditions while retaining alternatives and negative extra
+/// conditions. A false marker has no extra condition to retain.
+pub(crate) fn apply_extra_marker(
+    marker: MarkerTree,
+    requirements: &[Requirement],
+) -> impl Iterator<Item = Cow<'_, Requirement>> {
+    let extra_marker = if marker.is_false() {
+        MarkerTree::TRUE
+    } else {
+        marker.only_extras()
+    };
+    if extra_marker.is_true() {
+        return Either::Left(requirements.iter().map(Cow::Borrowed));
+    }
+
+    Either::Right(requirements.iter().map(move |requirement| {
+        Cow::Owned(Requirement {
+            marker: extra_marker.and(requirement.marker),
+            ..requirement.clone()
+        })
+    }))
 }
