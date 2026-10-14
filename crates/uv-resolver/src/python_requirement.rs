@@ -38,6 +38,16 @@ impl PythonRequirement {
         }
     }
 
+    /// Clone the installed interpreter requirement with a different target.
+    fn clone_with_target(&self, target: RequiresPython) -> Self {
+        Self::new(
+            self.source,
+            self.exact.clone(),
+            self.installed.clone(),
+            target,
+        )
+    }
+
     /// Create a [`PythonRequirement`] to resolve against both an [`Interpreter`] and a
     /// [`PythonVersion`].
     pub fn from_python_version(interpreter: &Interpreter, python_version: &PythonVersion) -> Self {
@@ -121,12 +131,7 @@ impl PythonRequirement {
     ///
     /// Returns `None` if the given range is not narrower than the current range.
     pub(crate) fn narrow(&self, target: &RequiresPythonRange) -> Option<Self> {
-        Some(Self::new(
-            self.source,
-            self.exact.clone(),
-            self.installed.clone(),
-            self.target.narrow(target)?,
-        ))
+        Some(self.clone_with_target(self.target.narrow(target)?))
     }
 
     /// Split the [`PythonRequirement`] at the given version.
@@ -135,20 +140,7 @@ impl PythonRequirement {
     /// the result will be `>=3.10 and <3.11` and `>=3.11`.
     pub(crate) fn split(&self, at: Bound<Version>) -> Option<(Self, Self)> {
         let (lower, upper) = self.target.split(at)?;
-        Some((
-            Self::new(
-                self.source,
-                self.exact.clone(),
-                self.installed.clone(),
-                lower,
-            ),
-            Self::new(
-                self.source,
-                self.exact.clone(),
-                self.installed.clone(),
-                upper,
-            ),
-        ))
+        Some((self.clone_with_target(lower), self.clone_with_target(upper)))
     }
 
     /// Returns `true` if the minimum version of Python required by the target is greater than the
