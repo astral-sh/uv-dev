@@ -76,21 +76,24 @@ impl<'a> VersionRangeCoverage<'a> {
 }
 
 /// A segment tree supporting range increments and range-minimum queries.
-///
-/// Each node's minimum includes its own lazy update but excludes its ancestors' updates. This
-/// permits updates and queries without pushing lazy values into child nodes.
 struct RangeCounts {
     len: usize,
-    minimum: Vec<isize>,
-    lazy: Vec<isize>,
+    nodes: Vec<RangeCount>,
+}
+
+/// The minimum includes this node's lazy update but excludes its ancestors' updates, permitting
+/// updates and queries without pushing lazy values into child nodes.
+#[derive(Clone, Default)]
+struct RangeCount {
+    minimum: isize,
+    lazy: isize,
 }
 
 impl RangeCounts {
     fn new(len: usize) -> Self {
         Self {
             len,
-            minimum: vec![0; 4 * len],
-            lazy: vec![0; 4 * len],
+            nodes: vec![RangeCount::default(); 4 * len],
         }
     }
 
@@ -111,15 +114,19 @@ impl RangeCounts {
             return;
         }
         if start <= left && right <= end {
-            self.minimum[node] += delta;
-            self.lazy[node] += delta;
+            let node = &mut self.nodes[node];
+            node.minimum += delta;
+            node.lazy += delta;
             return;
         }
         let middle = left + (right - left) / 2;
         self.add_node(node * 2, left, middle, start, end, delta);
         self.add_node(node * 2 + 1, middle, right, start, end, delta);
-        self.minimum[node] =
-            self.lazy[node] + self.minimum[node * 2].min(self.minimum[node * 2 + 1]);
+        let child_minimum = self.nodes[node * 2]
+            .minimum
+            .min(self.nodes[node * 2 + 1].minimum);
+        let node = &mut self.nodes[node];
+        node.minimum = node.lazy + child_minimum;
     }
 
     fn minimum(&self, start: usize, end: usize) -> isize {
@@ -139,10 +146,10 @@ impl RangeCounts {
             return isize::MAX;
         }
         if start <= left && right <= end {
-            return parent + self.minimum[node];
+            return parent + self.nodes[node].minimum;
         }
         let middle = left + (right - left) / 2;
-        let parent = parent + self.lazy[node];
+        let parent = parent + self.nodes[node].lazy;
         self.minimum_node(node * 2, left, middle, start, end, parent)
             .min(self.minimum_node(node * 2 + 1, middle, right, start, end, parent))
     }
