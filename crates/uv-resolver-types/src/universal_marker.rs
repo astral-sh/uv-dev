@@ -190,12 +190,7 @@ impl UniversalMarker {
             conflict_set
                 .iter()
                 .fold(initial_marker, |marker, inference| {
-                    let extra = encode_conflict_item(&inference.item);
-                    if inference.included {
-                        marker.simplify_extras_with(|candidate| *candidate == extra)
-                    } else {
-                        marker.simplify_not_extras_with(|candidate| *candidate == extra)
-                    }
+                    apply_conflict_assumption(marker, &inference.item, inference.included)
                 })
         });
 
@@ -209,11 +204,7 @@ impl UniversalMarker {
     /// This may simplify the conflicting marker component of this universal
     /// marker.
     pub fn assume_conflict_item(&mut self, item: &ConflictItem) {
-        let extra = encode_conflict_item(item);
-        *self = Self::from_combined(
-            self.marker
-                .simplify_extras_with(|candidate| *candidate == extra),
-        );
+        *self = Self::from_combined(apply_conflict_assumption(self.marker, item, true));
     }
 
     /// Assumes that the given conflict item is not activated.
@@ -221,11 +212,7 @@ impl UniversalMarker {
     /// This may simplify the conflicting marker component of this universal
     /// marker.
     pub fn assume_not_conflict_item(&mut self, item: &ConflictItem) {
-        let extra = encode_conflict_item(item);
-        *self = Self::from_combined(
-            self.marker
-                .simplify_not_extras_with(|candidate| *candidate == extra),
-        );
+        *self = Self::from_combined(apply_conflict_assumption(self.marker, item, false));
     }
 
     /// Returns true if this universal marker will always evaluate to `true`.
@@ -548,6 +535,21 @@ impl std::fmt::Debug for ConflictMarker {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // This is a little more succinct than the default.
         write!(f, "ConflictMarker({:?})", self.marker)
+    }
+}
+
+/// Simplify a marker by assuming that one conflict item is active or inactive.
+fn apply_conflict_assumption(
+    marker: MarkerTree,
+    item: &ConflictItem,
+    included: bool,
+) -> MarkerTree {
+    let extra = encode_conflict_item(item);
+    let matches = |candidate: &ExtraName| *candidate == extra;
+    if included {
+        marker.simplify_extras_with(matches)
+    } else {
+        marker.simplify_not_extras_with(matches)
     }
 }
 
