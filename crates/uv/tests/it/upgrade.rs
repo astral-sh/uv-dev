@@ -1,4 +1,5 @@
 use anyhow::Result;
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 #[cfg(feature = "test-pypi")]
 use indoc::indoc;
@@ -1589,112 +1590,56 @@ fn upgrade_rejects_git_revision() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn upgrade_rejects_git_source_without_revision() -> Result<()> {
+fn assert_upgrade_rejects_non_registry_source(source: &str) -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
-    let pyproject_toml = r#"
+    let pyproject_toml = format!(
+        r#"
         [project]
         name = "example"
         version = "0.1.0"
         dependencies = ["requests>=2"]
 
         [tool.uv.sources]
-        requests = { git = "https://github.com/psf/requests" }
-    "#;
+        requests = {source}
+    "#
+    );
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(pyproject_toml)?;
+        .write_str(&pyproject_toml)?;
 
-    uv_snapshot!(context.filters(), context.upgrade().arg("requests"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Dependency `requests` uses a non-registry source in `tool.uv.sources` and cannot be upgraded
-    ");
+    context
+        .upgrade()
+        .arg("requests")
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr("error: Dependency `requests` uses a non-registry source in `tool.uv.sources` and cannot be upgraded\n");
 
-    assert_project_unchanged(&context, pyproject_toml);
+    assert_project_unchanged(&context, &pyproject_toml);
     Ok(())
+}
+
+#[test]
+fn upgrade_rejects_git_source_without_revision() -> Result<()> {
+    assert_upgrade_rejects_non_registry_source(r#"{ git = "https://github.com/psf/requests" }"#)
 }
 
 #[test]
 fn upgrade_rejects_url_source() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
-    let pyproject_toml = r#"
-        [project]
-        name = "example"
-        version = "0.1.0"
-        dependencies = ["requests>=2"]
-
-        [tool.uv.sources]
-        requests = { url = "https://example.com/requests-2.32.0-py3-none-any.whl" }
-    "#;
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(pyproject_toml)?;
-
-    uv_snapshot!(context.filters(), context.upgrade().arg("requests"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Dependency `requests` uses a non-registry source in `tool.uv.sources` and cannot be upgraded
-    ");
-
-    assert_project_unchanged(&context, pyproject_toml);
-    Ok(())
+    assert_upgrade_rejects_non_registry_source(
+        r#"{ url = "https://example.com/requests-2.32.0-py3-none-any.whl" }"#,
+    )
 }
 
 #[test]
 fn upgrade_rejects_path_source() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
-    let pyproject_toml = r#"
-        [project]
-        name = "example"
-        version = "0.1.0"
-        dependencies = ["requests>=2"]
-
-        [tool.uv.sources]
-        requests = { path = "vendor/requests" }
-    "#;
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(pyproject_toml)?;
-
-    uv_snapshot!(context.filters(), context.upgrade().arg("requests"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Dependency `requests` uses a non-registry source in `tool.uv.sources` and cannot be upgraded
-    ");
-
-    assert_project_unchanged(&context, pyproject_toml);
-    Ok(())
+    assert_upgrade_rejects_non_registry_source(r#"{ path = "vendor/requests" }"#)
 }
 
 #[test]
 fn upgrade_rejects_workspace_source() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
-    let pyproject_toml = r#"
-        [project]
-        name = "example"
-        version = "0.1.0"
-        dependencies = ["requests>=2"]
-
-        [tool.uv.sources]
-        requests = { workspace = true }
-    "#;
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(pyproject_toml)?;
-
-    uv_snapshot!(context.filters(), context.upgrade().arg("requests"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Dependency `requests` uses a non-registry source in `tool.uv.sources` and cannot be upgraded
-    ");
-
-    assert_project_unchanged(&context, pyproject_toml);
-    Ok(())
+    assert_upgrade_rejects_non_registry_source("{ workspace = true }")
 }
 
 #[test]
