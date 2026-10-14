@@ -17,6 +17,8 @@ mod hash_preservation;
 mod index_inputs;
 mod input_validation;
 #[cfg(feature = "test-python")]
+mod lower_bound_warnings;
+#[cfg(feature = "test-python")]
 mod marker_expression;
 #[cfg(feature = "test-python")]
 mod offline;
