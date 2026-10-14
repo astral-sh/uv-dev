@@ -2126,38 +2126,38 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 };
 
                 // If the registry provided metadata for this distribution, use it.
-                for version_map in version_maps {
-                    if let Some(metadata) = version_map.get_metadata(candidate.version()) {
-                        let dist = dist.for_resolution();
-                        if version_map.index() == dist.index() {
-                            debug!("Found registry-provided metadata for: {dist}");
+                let resolution_dist = dist.for_resolution();
+                if let Some(metadata) = version_maps
+                    .iter()
+                    .filter(|version_map| version_map.index() == resolution_dist.index())
+                    .find_map(|version_map| version_map.get_metadata(candidate.version()))
+                {
+                    debug!("Found registry-provided metadata for: {resolution_dist}");
 
-                            let metadata =
-                                MetadataResponse::Found(ArchiveMetadata::from_metadata23(metadata));
+                    let metadata =
+                        MetadataResponse::Found(ArchiveMetadata::from_metadata23(metadata));
 
-                            let dist = dist.to_owned();
-                            if &package_name != dist.name() {
-                                return Err(ResolveError::MismatchedPackageName {
-                                    request: "distribution",
-                                    expected: package_name,
-                                    actual: dist.name().clone(),
-                                });
-                            }
-
-                            let response = match dist {
-                                ResolvedDist::Installable { dist, .. } => Response::Dist {
-                                    dist: (*dist).clone(),
-                                    metadata,
-                                },
-                                ResolvedDist::Installed { dist } => Response::Installed {
-                                    dist: (*dist).clone(),
-                                    metadata,
-                                },
-                            };
-
-                            return Ok(Some(response));
-                        }
+                    let dist = resolution_dist.to_owned();
+                    if &package_name != dist.name() {
+                        return Err(ResolveError::MismatchedPackageName {
+                            request: "distribution",
+                            expected: package_name,
+                            actual: dist.name().clone(),
+                        });
                     }
+
+                    let response = match dist {
+                        ResolvedDist::Installable { dist, .. } => Response::Dist {
+                            dist: (*dist).clone(),
+                            metadata,
+                        },
+                        ResolvedDist::Installed { dist } => Response::Installed {
+                            dist: (*dist).clone(),
+                            metadata,
+                        },
+                    };
+
+                    return Ok(Some(response));
                 }
 
                 // Avoid prefetching source distributions with unbounded lower-bound ranges. This
@@ -2192,9 +2192,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 }
 
                 // Emit a request to fetch the metadata for this version.
-                let dist = dist.for_resolution();
-                if self.index.distributions().register(dist.distribution_id()) {
-                    let dist = dist.to_owned();
+                if self
+                    .index
+                    .distributions()
+                    .register(resolution_dist.distribution_id())
+                {
+                    let dist = resolution_dist.to_owned();
                     if &package_name != dist.name() {
                         return Err(ResolveError::MismatchedPackageName {
                             request: "distribution",
