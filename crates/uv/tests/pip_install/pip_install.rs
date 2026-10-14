@@ -16501,6 +16501,9 @@ fn reject_normalized_reserved_wheel_entrypoint_name() -> Result<()> {
     "
     );
 
+    assert!(!context.site_packages().join("foo").exists());
+    assert!(!context.site_packages().join("foo-0.1.0.dist-info").exists());
+
     Ok(())
 }
 
