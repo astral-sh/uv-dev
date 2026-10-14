@@ -2007,11 +2007,8 @@ fn python_install_relative_broken_link() -> anyhow::Result<()> {
 
 /// A minor-version request that resolves to a prerelease creates the default executable links.
 #[test]
-fn python_install_default_prerelease() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_python_keys()
-        .with_filtered_exe_suffix()
-        .with_managed_python_dirs();
+fn python_install_default_prerelease() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
 
     // Python 3.16 is only available as a prerelease.
     context
@@ -2035,10 +2032,30 @@ fn python_install_default_prerelease() {
         .bin_dir
         .child(format!("python{}", std::env::consts::EXE_SUFFIX));
 
-    // Verify that all three executables are created when --default is used with a pre-release version
-    bin_python_minor_16.assert(predicate::path::exists());
-    bin_python_major.assert(predicate::path::exists());
-    bin_python_default.assert(predicate::path::exists());
+    assert_managed_minor_launchers(
+        &context,
+        "3.16",
+        [
+            bin_python_default.path(),
+            bin_python_major.path(),
+            bin_python_minor_16.path(),
+        ],
+    )?;
+    context
+        .external_command(bin_python_default.path())
+        .args([
+            "-I",
+            "-c",
+            indoc! {r#"
+                import sys
+                version = sys.version_info
+                print(f"{version.major}.{version.minor} prerelease={version.releaselevel != 'final'}", end="")
+            "#},
+        ])
+        .assert()
+        .success()
+        .stdout("3.16 prerelease=True");
+    Ok(())
 }
 
 #[test]
