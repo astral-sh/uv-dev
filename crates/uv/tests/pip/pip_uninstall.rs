@@ -107,34 +107,41 @@ fn uninstall() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn missing_record() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
-
+    let (filename, bytes) = generate_wheel(
+        &"demo".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &Default::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel = context.temp_dir.child(filename);
+    wheel.write_binary(&bytes)?;
     context
-        .pip_sync()
-        .arg("requirements.txt")
+        .pip_install()
+        .arg("--no-index")
+        .arg(wheel.path())
         .assert()
         .success();
 
-    context.assert_command("import markupsafe").success();
-
-    // Delete the RECORD file.
-    let dist_info = context.site_packages().join("MarkupSafe-2.1.3.dist-info");
-    fs_err::remove_file(dist_info.join("RECORD"))?;
+    let dist_info = ChildPath::new(context.site_packages()).child("demo-1.0.0.dist-info");
+    let metadata = dist_info.child("METADATA");
+    let contents = context.read(metadata.path());
+    fs_err::remove_file(dist_info.child("RECORD"))?;
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
-        .arg("MarkupSafe"), @"
+        .arg("demo"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Cannot uninstall package; `RECORD` file not found at: [SITE_PACKAGES]/MarkupSafe-2.1.3.dist-info/RECORD
+    error: Cannot uninstall package; `RECORD` file not found at: [SITE_PACKAGES]/demo-1.0.0.dist-info/RECORD
     "
     );
 
-    context.assert_command("import markupsafe").success();
+    metadata.assert(contents);
+    context.assert_installed("demo", "1.0.0");
 
     Ok(())
 }
