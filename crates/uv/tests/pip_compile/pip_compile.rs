@@ -17868,6 +17868,9 @@ fn compile_invalid_output_file() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("anyio==3.7.0")?;
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let original = "[project]\nname = 'example'\nversion = '1.0.0'\n";
+    pyproject.write_str(original)?;
 
     uv_snapshot!(context
         .pip_compile()
@@ -17878,6 +17881,7 @@ fn compile_invalid_output_file() -> Result<()> {
     ----- stderr -----
     error: `pyproject.toml` is not a supported output format for `uv pip compile` (only `requirements.txt`-style output is supported)
     ");
+    pyproject.assert(original);
 
     Ok(())
 }
