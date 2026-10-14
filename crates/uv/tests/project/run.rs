@@ -3644,16 +3644,15 @@ fn run_zipapp() -> Result<()> {
     })?;
 
     let zipapp = context.temp_dir.child("app.pyz");
-    let status = context
-        .run()
-        .arg("python")
-        .arg("-m")
-        .arg("zipapp")
+    context
+        .python_command()
+        .args(["-m", "zipapp"])
         .arg(child.as_ref())
         .arg("--output")
         .arg(zipapp.as_ref())
-        .status()?;
-    assert!(status.success());
+        .assert()
+        .success();
+    zipapp.assert(predicate::path::is_file());
 
     // Run the zipapp.
     uv_snapshot!(context.filters(), context.run().arg(zipapp.as_ref()), @"
