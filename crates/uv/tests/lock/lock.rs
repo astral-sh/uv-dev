@@ -35988,6 +35988,10 @@ fn lock_bump_static_version() -> Result<()> {
 fn assert_lock_derivation_chain(context: &uv_test::TestContext, chain: &str) {
     let output = capture_uv_snapshot!(context.filters(), context.lock());
     let expected_hint = format!("hint: `wsgiref` (v0.1.2) was included because {chain}");
+    assert!(
+        output.contains(&expected_hint),
+        "expected derivation hint:\n{expected_hint}\n\nactual output:\n{output}"
+    );
     assert_snapshot!(output.replacen(&expected_hint, "hint: [DERIVATION]", 1), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
