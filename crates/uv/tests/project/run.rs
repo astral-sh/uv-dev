@@ -3611,17 +3611,28 @@ fn run_stdin() -> Result<()> {
 #[cfg(windows)]
 fn run_stdin_non_utf8() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
     let script = context.temp_dir.child("script.py");
     script.write_binary(&[0xff])?;
 
-    context
-        .run()
-        .arg("--no-project")
+    uv_snapshot!(context.filters(), context.run()
+        .current_dir(&project)
         .arg("-")
-        .stdin(std::fs::File::open(script)?)
-        .assert()
-        .code(2)
-        .stderr(contains("Script read from stdin is not valid UTF-8"));
+        .stdin(std::fs::File::open(script)?), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Script read from stdin is not valid UTF-8
+      cause: invalid utf-8 sequence of 1 bytes from index 0
+    ");
+
+    assert!(!project.child(".venv").exists());
+    assert!(!project.child("uv.lock").exists());
 
     Ok(())
 }

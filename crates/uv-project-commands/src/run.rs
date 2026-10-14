@@ -5,7 +5,7 @@ use std::fmt::Write;
 use std::io;
 use std::io::Read;
 #[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
@@ -1192,7 +1192,7 @@ pub async fn run(
     };
 
     debug!("Running `{command}`");
-    let mut process = command.as_command(interpreter)?;
+    let mut process = command.as_command(interpreter);
     process.envs(env_file_environment);
 
     // Construct the `PATH` environment variable.
@@ -1384,9 +1384,9 @@ pub enum RunCommand {
     /// Execute a Python [zipapp](https://docs.python.org/3/library/zipapp.html).
     PythonZipapp(PathBuf, Vec<OsString>),
     /// Execute a `python` script provided via `stdin`.
-    PythonStdin(Vec<u8>, Vec<OsString>),
+    PythonStdin(OsString, Vec<OsString>),
     /// Execute a `pythonw` script provided via `stdin`.
-    PythonGuiStdin(Vec<u8>, Vec<OsString>),
+    PythonGuiStdin(OsString, Vec<OsString>),
     /// Execute a Python script downloaded from a remote URL.
     PythonRemote(tempfile::NamedTempFile, Vec<OsString>),
     /// Execute an external command.
@@ -1477,13 +1477,20 @@ impl ParsedRunCommand {
             if module {
                 bail!("Cannot run a Python module from stdin");
             }
-            let mut buf = Vec::with_capacity(1024);
-            std::io::stdin().read_to_end(&mut buf)?;
+            let mut contents = Vec::with_capacity(1024);
+            std::io::stdin().read_to_end(&mut contents)?;
+            let contents = cfg_select! {
+                unix => OsString::from_vec(contents),
+                _ => OsString::from(
+                    String::from_utf8(contents)
+                        .context("Script read from stdin is not valid UTF-8")?
+                ),
+            };
 
             return if gui_script {
-                Ok(Self::Ready(RunCommand::PythonGuiStdin(buf, args)))
+                Ok(Self::Ready(RunCommand::PythonGuiStdin(contents, args)))
             } else {
-                Ok(Self::Ready(RunCommand::PythonStdin(buf, args)))
+                Ok(Self::Ready(RunCommand::PythonStdin(contents, args)))
             };
         }
 
@@ -1608,7 +1615,8 @@ impl RunCommand {
                 ignore_missing_script(Pep723Script::read(script).await)?.map(Pep723Item::Script),
             ),
             Self::PythonStdin(contents, _) | Self::PythonGuiStdin(contents, _) => {
-                Pep723Metadata::parse(contents).map(|metadata| metadata.map(Pep723Item::Stdin))
+                Pep723Metadata::parse(contents.as_encoded_bytes())
+                    .map(|metadata| metadata.map(Pep723Item::Stdin))
             }
             Self::Python(_)
             | Self::PythonPackage(..)
@@ -1652,15 +1660,8 @@ impl RunCommand {
     }
 
     /// Convert a [`RunCommand`] into a [`Command`].
-    #[cfg_attr(
-        unix,
-        expect(
-            clippy::unnecessary_wraps,
-            reason = "stdin scripts require UTF-8 on non-Unix platforms"
-        )
-    )]
-    fn as_command(&self, interpreter: &Interpreter) -> anyhow::Result<Command> {
-        Ok(match self {
+    fn as_command(&self, interpreter: &Interpreter) -> Command {
+        match self {
             Self::Python(args) => {
                 let mut process = Command::new(interpreter.sys_executable());
                 process.args(args);
@@ -1716,16 +1717,7 @@ impl RunCommand {
                 };
                 process.arg("-c");
 
-                cfg_select! {
-                    unix => {
-                        process.arg(std::ffi::OsStr::from_bytes(script));
-                    },
-                    _ => {
-                        let script = std::str::from_utf8(script)
-                            .context("Script read from stdin is not valid UTF-8")?;
-                        process.arg(script);
-                    },
-                }
+                process.arg(script);
                 process.args(args);
 
                 process
@@ -1740,7 +1732,7 @@ impl RunCommand {
                 process
             }
             Self::Empty => Command::new(interpreter.sys_executable()),
-        })
+        }
     }
 
     /// Use `pythonw` if it exists, otherwise fall back to the interpreter's executable.
