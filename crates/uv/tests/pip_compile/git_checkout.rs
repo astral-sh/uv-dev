@@ -96,7 +96,7 @@ fn git_source_checkout_marker() -> Result<()> {
 }
 
 /// A pinned Git revision in `pylock.toml` is reused until an upgrade is requested.
-/// See astral-sh/uv#18224.
+/// See <https://github.com/astral-sh/uv/issues/18224>.
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_compile_git_preferences() -> Result<()> {

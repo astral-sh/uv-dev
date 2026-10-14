@@ -2062,7 +2062,8 @@ fn reinstall_build_system() -> Result<()> {
 }
 
 /// The extra index takes priority when the default index has only an incompatible version.
-/// See <https://github.com/astral-sh/uv/issues/1600>.
+/// By default, uv stops at the first index containing a package; pip considers versions from
+/// all indexes. See <https://github.com/astral-sh/uv/issues/1600>.
 #[test]
 fn install_extra_index_url_has_priority() {
     let context = uv_test::test_context!("3.12");
