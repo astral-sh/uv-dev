@@ -10625,6 +10625,19 @@ fn sync_no_editable_ignores_source_changes() -> Result<()> {
     Ok(())
 }
 
+fn write_foo_entry_point(context: &TestContext) -> Result<ChildPath> {
+    context
+        .temp_dir
+        .child("src/foo/__init__.py")
+        .write_str(indoc! {r#"
+            def custom_entry():
+                print("Hello")
+        "#})?;
+    Ok(ChildPath::new(
+        venv_bin_path(&context.venv).join(format!("entry{}", std::env::consts::EXE_SUFFIX)),
+    ))
+}
+
 #[test]
 /// Check warning message for <https://github.com/astral-sh/uv/issues/6998>
 /// if no `build-system` section is defined.
@@ -10645,13 +10658,7 @@ fn sync_scripts_without_build_system() -> Result<()> {
         "#,
     )?;
 
-    let test_script = context.temp_dir.child("src/__init__.py");
-    test_script.write_str(
-        r#"
-        def custom_entry():
-            print!("Hello")
-       "#,
-    )?;
+    let entry = write_foo_entry_point(&context)?;
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -10660,6 +10667,7 @@ fn sync_scripts_without_build_system() -> Result<()> {
     warning: Skipping installation of entry points (`project.scripts`) for package `foo` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
     Checked in [TIME]
     ");
+    entry.assert(predicate::path::missing());
 
     Ok(())
 }
@@ -10671,8 +10679,8 @@ fn sync_scripts_project_not_packaged() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let pyproject = |package: bool| {
+        formatdoc! {r#"
         [project]
         name = "foo"
         version = "0.1.0"
@@ -10687,17 +10695,11 @@ fn sync_scripts_project_not_packaged() -> Result<()> {
         build-backend = "hatchling.build"
 
         [tool.uv]
-        package = false
-        "#,
-    )?;
-
-    let test_script = context.temp_dir.child("src/__init__.py");
-    test_script.write_str(
-        r#"
-        def custom_entry():
-            print!("Hello")
-       "#,
-    )?;
+        package = {package}
+        "#}
+    };
+    pyproject_toml.write_str(&pyproject(false))?;
+    let entry = write_foo_entry_point(&context)?;
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -10706,6 +10708,14 @@ fn sync_scripts_project_not_packaged() -> Result<()> {
     warning: Skipping installation of entry points (`project.scripts`) for package `foo` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
     Checked in [TIME]
     ");
+    entry.assert(predicate::path::missing());
+
+    pyproject_toml.write_str(&pyproject(true))?;
+    context.sync().assert().success();
+    std::process::Command::new(entry.path())
+        .assert()
+        .success()
+        .stdout("Hello\n");
 
     Ok(())
 }
