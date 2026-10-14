@@ -153,3 +153,91 @@ fn index_source_rejects_package_missing_from_group() -> Result<()> {
 
     Ok(())
 }
+
+/// An index source defined only in project configuration produces an origin-specific hint.
+#[test]
+fn index_source_in_project_config_file_hint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["jinja2==3.1.2"]
+
+        [tool.uv.sources]
+        jinja2 = { index = "internal" }
+        "#,
+    )?;
+
+    let uv_toml = context.temp_dir.child("uv.toml");
+    uv_toml.write_str(
+        r#"
+        [[index]]
+        name = "internal"
+        url = "https://example.invalid/simple"
+        explicit = true
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: Failed to parse entry: `jinja2`
+      cause: Package `jinja2` references an undeclared index: `internal`
+
+    hint: Index `internal` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+    ");
+
+    Ok(())
+}
+
+/// An index source defined only in user configuration produces an origin-specific hint.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Configuration tests are not yet supported on Windows"
+)]
+fn index_source_in_user_config_file_hint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["jinja2==3.1.2"]
+
+        [tool.uv.sources]
+        jinja2 = { index = "internal" }
+        "#,
+    )?;
+
+    let uv_toml = context.user_config_dir.child("uv").child("uv.toml");
+    uv_toml.write_str(
+        r#"
+        [[index]]
+        name = "internal"
+        url = "https://example.invalid/simple"
+        explicit = true
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: Failed to parse entry: `jinja2`
+      cause: Package `jinja2` references an undeclared index: `internal`
+
+    hint: Index `internal` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
+    ");
+
+    Ok(())
+}
