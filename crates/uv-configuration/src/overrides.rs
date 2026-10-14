@@ -320,7 +320,7 @@ impl Overrides {
             let requirements = requirements.into_iter().collect::<Vec<_>>();
             let names = requirements
                 .iter()
-                .map(|requirement| requirement.name.clone())
+                .map(|&requirement| &requirement.name)
                 .collect::<FxHashSet<_>>();
             let mut additions = scoped
                 .overrides
