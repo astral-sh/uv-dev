@@ -1769,6 +1769,46 @@ fn bazel_helper_basic_auth() {
     );
 }
 
+/// Ambiguous credentials at a shorter path must not hide a unique, more specific match.
+#[test]
+fn bazel_helper_prefers_more_specific_credentials() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("credentials.toml")
+        .write_str(indoc::indoc! {r#"
+            [[credential]]
+            service = "https://example.com/api"
+            username = "general-a"
+            password = "first"
+
+            [[credential]]
+            service = "https://example.com/api"
+            username = "general-b"
+            password = "second"
+
+            [[credential]]
+            service = "https://example.com/api/v1"
+            username = "specific"
+            password = "selected"
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.auth_helper()
+        .arg("--protocol=bazel")
+        .arg("get")
+        .arg("--offline")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "auth-helper")
+        .env(EnvVars::UV_CREDENTIALS_DIR, context.temp_dir.as_os_str()),
+        input=r#"{"uri":"https://example.com/api/v1/resource"}"#,
+        @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"headers":{"Authorization":["Basic c3BlY2lmaWM6c2VsZWN0ZWQ="]}}
+    "#
+    );
+    Ok(())
+}
+
 /// Test credential helper with token credentials
 #[test]
 fn bazel_helper_token() {
