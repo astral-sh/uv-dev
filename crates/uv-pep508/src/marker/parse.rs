@@ -198,20 +198,7 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
                 MarkerValue::QuotedString(r_string) => r_string,
             };
 
-            if operator == MarkerOperator::TildeEqual {
-                reporter.report(
-                    MarkerWarningKind::LexicographicComparison,
-                    "Can't compare strings with `~=`, will be ignored".to_string(),
-                );
-
-                return Ok(None);
-            }
-
-            Some(MarkerExpression::String {
-                key,
-                operator,
-                value,
-            })
+            parse_string_expr(key, operator, value, reporter)
         }
         // `extras in "test"` or `dependency_groups not in "dev"` are invalid.
         MarkerValue::MarkerEnvList(key) => {
@@ -254,21 +241,7 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
                 }
                 // '...' == <env key>
                 MarkerValue::MarkerEnvString(key) => {
-                    if operator == MarkerOperator::TildeEqual {
-                        reporter.report(
-                            MarkerWarningKind::LexicographicComparison,
-                            "Can't compare strings with `~=`, will be ignored".to_string(),
-                        );
-
-                        return Ok(None);
-                    }
-
-                    Some(MarkerExpression::String {
-                        key,
-                        // Invert the operator to normalize the expression order.
-                        operator: operator.invert(),
-                        value: l_string,
-                    })
+                    parse_string_expr(key, operator.invert(), l_string, reporter)
                 }
                 // `"test" in extras` or `"dev" in dependency_groups`
                 MarkerValue::MarkerEnvList(key) => {
@@ -330,6 +303,27 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
     };
 
     Ok(expr)
+}
+
+/// Create a string comparison, rejecting operators that only apply to versions.
+fn parse_string_expr(
+    key: MarkerValueString,
+    operator: MarkerOperator,
+    value: ArcStr,
+    reporter: &mut impl Reporter,
+) -> Option<MarkerExpression> {
+    if operator == MarkerOperator::TildeEqual {
+        reporter.report(
+            MarkerWarningKind::LexicographicComparison,
+            "Can't compare strings with `~=`, will be ignored".to_string(),
+        );
+        return None;
+    }
+    Some(MarkerExpression::String {
+        key,
+        operator,
+        value,
+    })
 }
 
 /// Creates an instance of [`MarkerExpression::VersionIn`] with the given values.
