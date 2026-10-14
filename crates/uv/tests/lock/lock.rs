@@ -22376,22 +22376,36 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     Resolved 9 packages in [TIME]
     ");
 
-    pyproject_toml.write_str(
-        &original_pyproject.replace("sys_platform != 'win32'", "sys_platform == 'linux'"),
-    )?;
-    uv_snapshot!(context.filters(), context.lock()
-        .arg("--preview-features")
-        .arg("lock-without-metadata")
-        .arg("--locked")
-        .arg("--index-url")
-        .arg(server.index_url()), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 9 packages in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+    // Narrow the root and optional dependency markers independently.
+    let original_lock = context.read("uv.lock");
+    for requirement in ["anyio==4.4.0", "httpx[http2]>=1"] {
+        let original_requirement = format!("{requirement} ; sys_platform != 'win32'");
+        assert!(
+            original_pyproject.contains(&original_requirement),
+            "missing conditional requirement {original_requirement} in test fixture"
+        );
+        pyproject_toml.write_str(&original_pyproject.replacen(
+            &original_requirement,
+            &format!("{requirement} ; sys_platform == 'linux'"),
+            1,
+        ))?;
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), context.lock()
+                .arg("--preview-features")
+                .arg("lock-without-metadata")
+                .arg("--locked")
+                .arg("--index-url")
+                .arg(server.index_url()), @"
+            exit_code: 1 (failure)
+            ----- stderr -----
+            Resolved 9 packages in [TIME]
+            error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    hint: To update the lockfile, run `uv lock`.
-    ");
+            hint: To update the lockfile, run `uv lock`.
+            ");
+        }
+        assert_eq!(context.read("uv.lock"), original_lock, "{requirement}");
+    }
 
     pyproject_toml.write_str(&original_pyproject.replace("urllib3==1.0.0", "urllib3>=2"))?;
     uv_snapshot!(context.filters(), context.lock()
