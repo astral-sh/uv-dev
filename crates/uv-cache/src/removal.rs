@@ -2,7 +2,7 @@
 //! Cargo is dual-licensed under either Apache 2.0 or MIT, at the user's choice.
 //! Source: <https://github.com/rust-lang/cargo/blob/e1ebce1035f9b53bb46a55bd4b0ecf51e24c6458/src/cargo/ops/cargo_clean.rs#L324>
 
-use std::fs::Metadata;
+use std::fs::{FileType, Metadata};
 use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -74,6 +74,19 @@ fn file_size(metadata: &Metadata) -> u64 {
     metadata.len()
 }
 
+/// Windows directory symlinks must be removed as directories.
+#[cfg(windows)]
+fn is_directory_symlink(file_type: FileType) -> bool {
+    use std::os::windows::fs::FileTypeExt;
+
+    file_type.is_symlink() && file_type.is_symlink_dir()
+}
+
+#[cfg(not(windows))]
+fn is_directory_symlink(_file_type: FileType) -> bool {
+    false
+}
+
 /// A removal operation with statistics on the number of files and directories removed.
 #[derive(Debug, Default)]
 pub struct Removal {
@@ -138,114 +151,90 @@ impl Removal {
     ) -> io::Result<()> {
         let path = uv_fs::verbatim_path(path);
 
-        let metadata = match fs_err::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(err),
-        };
+        'retry: loop {
+            let metadata = match fs_err::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(err) => return Err(err),
+            };
 
-        if !metadata.is_dir() {
-            self.num_files += 1;
-
-            // Remove the file.
-            self.add_file(&path, &metadata);
-            if metadata.is_symlink() {
-                cfg_select! {
-                    windows => {
-                        use std::os::windows::fs::FileTypeExt;
-
-                        if metadata.file_type().is_symlink_dir() {
-                            remove_dir(&path)?;
-                        } else {
-                            remove_file(&path)?;
-                        }
-                    },
-                    _ => {
-                        remove_file(&path)?;
-                    },
-                }
-            } else {
-                remove_file(&path)?;
-            }
-
-            reporter.map(CleanReporter::on_clean);
-
-            return Ok(());
-        }
-
-        for entry in walkdir::WalkDir::new(&path).contents_first(true) {
-            // If we hit a directory that lacks read permissions, try to make it readable.
-            if let Err(ref err) = entry {
-                if err
-                    .io_error()
-                    .is_some_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
-                {
-                    if let Some(dir) = err.path() {
-                        if set_readable(dir).unwrap_or(false) {
-                            // Retry the operation; if we _just_ `self.rm_rf(dir)` and continue,
-                            // `walkdir` may give us duplicate entries for the directory.
-                            return self.rm_rf(&path, reporter, skip_locked_file);
-                        }
-                    }
-                }
-            }
-
-            let entry = entry?;
-
-            // Keep the root lock in place for other uv processes.
-            if skip_locked_file
-                && entry.file_name() == ".lock"
-                && entry
-                    .path()
-                    .strip_prefix(&path)
-                    .is_ok_and(|suffix| suffix == Path::new(".lock"))
-            {
-                continue;
-            }
-
-            if entry.file_type().is_symlink() && {
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::FileTypeExt;
-                    entry.file_type().is_symlink_dir()
-                }
-                #[cfg(not(windows))]
-                {
-                    false
-                }
-            } {
-                self.num_files += 1;
-                remove_dir(entry.path())?;
-            } else if entry.file_type().is_dir() {
-                // Keep the root directory containing the lock, too.
-                if skip_locked_file && entry.path() == path.as_ref() {
-                    continue;
-                }
-
-                self.num_dirs += 1;
-
-                // The contents should have been removed by now, but sometimes a race condition is
-                // hit where other files have been added by the OS. Fall back to `remove_dir_all`,
-                // which will remove the directory robustly across platforms.
-                remove_dir_all(entry.path())?;
-            } else {
+            if !metadata.is_dir() {
                 self.num_files += 1;
 
                 // Remove the file.
-                if let Ok(metadata) = entry.metadata() {
-                    self.add_file(entry.path(), &metadata);
-                } else if self.fine_bytes.is_some() {
-                    self.fine_bytes_incomplete = true;
+                self.add_file(&path, &metadata);
+                if is_directory_symlink(metadata.file_type()) {
+                    remove_dir(&path)?;
+                } else {
+                    remove_file(&path)?;
                 }
-                remove_file(entry.path())?;
+
+                if let Some(reporter) = reporter {
+                    reporter.on_clean();
+                }
+
+                return Ok(());
             }
 
-            reporter.map(CleanReporter::on_clean);
+            for entry in walkdir::WalkDir::new(&path).contents_first(true) {
+                // If we hit a directory that lacks read permissions, try to make it readable.
+                if let Err(ref err) = entry
+                    && err
+                        .io_error()
+                        .is_some_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
+                    && let Some(dir) = err.path()
+                    && set_readable(dir).unwrap_or(false)
+                {
+                    // Restart the traversal after changing permissions so the walker does not yield
+                    // duplicate entries for the directory.
+                    continue 'retry;
+                }
+
+                let entry = entry?;
+
+                // Keep the root lock in place for other uv processes.
+                if skip_locked_file && entry.depth() == 1 && entry.file_name() == ".lock" {
+                    continue;
+                }
+
+                if is_directory_symlink(entry.file_type()) {
+                    self.num_files += 1;
+                    remove_dir(entry.path())?;
+                } else if entry.file_type().is_dir() {
+                    // Keep the root directory containing the lock, too.
+                    if skip_locked_file && entry.depth() == 0 {
+                        continue;
+                    }
+
+                    self.num_dirs += 1;
+
+                    // The contents should have been removed by now, but sometimes a race condition is
+                    // hit where other files have been added by the OS. Fall back to `remove_dir_all`,
+                    // which will remove the directory robustly across platforms.
+                    remove_dir_all(entry.path())?;
+                } else {
+                    self.num_files += 1;
+
+                    // Remove the file.
+                    if let Ok(metadata) = entry.metadata() {
+                        self.add_file(entry.path(), &metadata);
+                    } else if self.fine_bytes.is_some() {
+                        self.fine_bytes_incomplete = true;
+                    }
+                    remove_file(entry.path())?;
+                }
+
+                if let Some(reporter) = reporter {
+                    reporter.on_clean();
+                }
+            }
+
+            if let Some(reporter) = reporter {
+                reporter.on_complete();
+            }
+
+            return Ok(());
         }
-
-        reporter.map(CleanReporter::on_complete);
-
-        Ok(())
     }
 }
 
@@ -298,44 +287,31 @@ fn set_not_readonly(path: &Path) -> io::Result<bool> {
 /// Like [`fs_err::remove_file`], but attempts to change the permissions to force the file to be
 /// deleted (if it is readonly).
 fn remove_file(path: &Path) -> io::Result<()> {
-    match fs_err::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(err)
-            if err.kind() == io::ErrorKind::PermissionDenied
-                && set_not_readonly(path).unwrap_or(false) =>
-        {
-            fs_err::remove_file(path)
-        }
-        Err(err) => Err(err),
-    }
+    remove_with_permission_retry(|| fs_err::remove_file(path), || set_not_readonly(path))
 }
 
 /// Like [`fs_err::remove_dir`], but attempts to change the permissions to force the directory to
 /// be deleted (if it is readonly).
 fn remove_dir(path: &Path) -> io::Result<()> {
-    match fs_err::remove_dir(path) {
-        Ok(()) => Ok(()),
-        Err(err)
-            if err.kind() == io::ErrorKind::PermissionDenied
-                && set_readable(path).unwrap_or(false) =>
-        {
-            fs_err::remove_dir(path)
-        }
-        Err(err) => Err(err),
-    }
+    remove_with_permission_retry(|| fs_err::remove_dir(path), || set_readable(path))
 }
 
 /// Like [`fs_err::remove_dir_all`], but attempts to change the permissions to force the directory
 /// to be deleted (if it is readonly).
 fn remove_dir_all(path: &Path) -> io::Result<()> {
-    match fs_err::remove_dir_all(path) {
-        Ok(()) => Ok(()),
-        Err(err)
-            if err.kind() == io::ErrorKind::PermissionDenied
-                && set_readable(path).unwrap_or(false) =>
-        {
-            fs_err::remove_dir_all(path)
+    remove_with_permission_retry(|| fs_err::remove_dir_all(path), || set_readable(path))
+}
+
+/// Retry removal after changing permissions, preserving the original error if the change fails.
+fn remove_with_permission_retry(
+    remove: impl Fn() -> io::Result<()>,
+    change_permissions: impl FnOnce() -> io::Result<bool>,
+) -> io::Result<()> {
+    remove().or_else(|err| {
+        if err.kind() == io::ErrorKind::PermissionDenied && change_permissions().unwrap_or(false) {
+            remove()
+        } else {
+            Err(err)
         }
-        Err(err) => Err(err),
-    }
+    })
 }
