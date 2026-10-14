@@ -16,7 +16,11 @@ mod ecosystem;
 
 mod help;
 
+#[cfg(feature = "test-python")]
 mod network;
+mod network_configuration;
+mod network_fixtures;
+mod network_python_downloads;
 
 mod publish;
 
