@@ -947,7 +947,6 @@ async fn get_or_create_environment(
         client_builder,
     )
     .await?;
-    let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
 
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
@@ -1027,7 +1026,7 @@ async fn get_or_create_environment(
                             constraints.iter().chain(latest.iter()),
                             &DependencyModifiers::new(
                                 Overrides::from_requirements(overrides.clone()),
-                                exclusions,
+                                Excludes::from_entries(spec.excludes.iter().cloned()),
                             ),
                             dependency_metadata,
                             DependencyMode::Transitive,
