@@ -10336,9 +10336,11 @@ fn sync_override_package() -> Result<()> {
     Ok(())
 }
 
-/// Avoid installing dev dependencies of transitive dependencies.
+/// Select the target workspace package's development dependencies without including those of a
+/// dependency.
 #[test]
 fn transitive_dev() -> Result<()> {
+    let server = PackseServer::new("extras/lock-without-metadata.toml");
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -10351,7 +10353,7 @@ fn transitive_dev() -> Result<()> {
         dependencies = ["child"]
 
         [tool.uv]
-        dev-dependencies = ["anyio>3"]
+        dev-dependencies = ["anyio==4.3.0"]
 
         [tool.uv.sources]
         child = { workspace = true }
@@ -10361,15 +10363,7 @@ fn transitive_dev() -> Result<()> {
         "#,
     )?;
 
-    let src = context.temp_dir.child("src").child("albatross");
-    src.create_dir_all()?;
-
-    let init = src.child("__init__.py");
-    init.touch()?;
-
     let child = context.temp_dir.child("child");
-    fs_err::create_dir_all(&child)?;
-
     let pyproject_toml = child.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -10383,23 +10377,13 @@ fn transitive_dev() -> Result<()> {
         build-backend = "uv_build"
 
         [tool.uv]
-        dev-dependencies = ["iniconfig>=1"]
+        dev-dependencies = ["six==1.0.0"]
         "#,
     )?;
 
-    let src = child.child("src").child("albatross");
-    src.create_dir_all()?;
+    child.child("src/child/__init__.py").touch()?;
 
-    let init = src.child("__init__.py");
-    init.touch()?;
-
-    child
-        .child("src")
-        .child("child")
-        .child("__init__.py")
-        .touch()?;
-
-    uv_snapshot!(context.filters(), context.sync().arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dev").arg("--index-url").arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `child/pyproject.toml`, `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
@@ -10408,8 +10392,22 @@ fn transitive_dev() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + child==0.1.0 (from file://[TEMP_DIR]/child)
-     + idna==3.6
-     + sniffio==1.3.1
+     + idna==1.0.0
+     + sniffio==1.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().args(["--locked", "--dev", "--package", "child", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `child/pyproject.toml`, `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Resolved 6 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 3 packages in [TIME]
+    Installed 1 package in [TIME]
+     - anyio==4.3.0
+     - idna==1.0.0
+     + six==1.0.0
+     - sniffio==1.0.0
     ");
 
     Ok(())
