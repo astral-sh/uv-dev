@@ -476,28 +476,20 @@ impl GitCheckout {
         // Perform a local clone of the repository, which will attempt to use
         // hardlinks to set up the repository. This should speed up the clone operation
         // quite a bit if it works.
-        let res = GIT
-            .as_ref()
-            .cloned()?
-            .arg("clone")
-            .arg("--local")
-            // Make sure to pass the local file path and not a file://... url. If given a url,
-            // Git treats the repository as a remote origin and gets confused because we don't
-            // have a HEAD checked out.
-            .arg(database.repo.path.simplified_display().to_string())
-            .arg(into.simplified_display().to_string())
-            .exec_with_output();
-
-        if let Err(e) = res {
-            debug!("Cloning git repo with --local failed, retrying without hardlinks: {e}");
-
-            GIT.as_ref()
-                .cloned()?
+        let git = GIT.as_ref()?;
+        let clone = |strategy: &str| {
+            git.clone()
                 .arg("clone")
-                .arg("--no-hardlinks")
-                .arg(database.repo.path.simplified_display().to_string())
-                .arg(into.simplified_display().to_string())
-                .exec_with_output()?;
+                .arg(strategy)
+                // A file URL would make Git treat the database as a remote origin, which has no
+                // checked-out HEAD. Pass the native path so non-UTF-8 components remain intact.
+                .arg(database.repo.path.simplified())
+                .arg(into.simplified())
+                .exec_with_output()
+        };
+        if let Err(e) = clone("--local") {
+            debug!("Cloning git repo with --local failed, retrying without hardlinks: {e}");
+            clone("--no-hardlinks")?;
         }
 
         let repo = GitRepository::open(into)?;
