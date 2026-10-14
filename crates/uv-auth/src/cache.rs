@@ -207,9 +207,9 @@ impl<T> Default for TrieState<T> {
 
 impl<T> UrlTrie<T> {
     fn new() -> Self {
-        let mut trie = Self { states: vec![] };
-        trie.alloc();
-        trie
+        Self {
+            states: vec![TrieState::default()],
+        }
     }
 
     fn get(&self, url: &Url) -> Option<&T> {
