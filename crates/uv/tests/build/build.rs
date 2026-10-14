@@ -1634,6 +1634,43 @@ fn build_dynamic_requirements_respect_extra_build_dependencies() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn build_dynamic_requirements_report_extra_build_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+
+        [tool.uv.extra-build-dependencies]
+        project = ["ok==1.0.0"]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        def get_requires_for_build_wheel(config_settings=None):
+            return ["ok>=2"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.build()
+        .args(["--wheel", "--offline", "--no-index", "--find-links"])
+        .arg(context.workspace_root.join("test/links"))
+        .current_dir(&project), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/project`
+      cause: Failed to resolve requirements from `build-system.requires` and `extra-build-dependencies`
+      cause: No solution found when resolving: `ok==1.0.0`, `ok>=2`
+      cause: Because you require ok==1.0.0 and ok>=2, we can conclude that your requirements are unsatisfiable.
+    ");
+    Ok(())
+}
+
 /// Regression test for <https://github.com/astral-sh/uv/issues/18283>.
 ///
 /// `uv build --all` should respect `tool.uv.build-constraint-dependencies` declared at the
