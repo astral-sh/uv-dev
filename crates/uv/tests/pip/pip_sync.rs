@@ -5557,8 +5557,9 @@ fn sync_seed() -> Result<()> {
      + pip==24.0
     "
     );
+    context.assert_installed("pip", "24.0");
 
-    // Syncing should remove the seed packages.
+    // A manually installed `pip` is not a seed package and must be removed.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
@@ -5571,6 +5572,7 @@ fn sync_seed() -> Result<()> {
      + requests==1.2.0
     "
     );
+    context.assert_not_installed("pip");
 
     // Re-create the environment with seed packages.
     uv_snapshot!(context.filters(), context.venv().arg("--clear")
@@ -5586,7 +5588,7 @@ fn sync_seed() -> Result<()> {
     "
     );
 
-    // Syncing should retain the seed packages.
+    // Packages recorded as seeds when the environment was created must be retained.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
@@ -5596,6 +5598,15 @@ fn sync_seed() -> Result<()> {
      + requests==1.2.0
     "
     );
+    context
+        .assert_command(indoc! {r#"
+            from importlib.metadata import version
+
+            for name in ("pip", "setuptools", "wheel"):
+                print(f"{name}=={version(name)}")
+        "#})
+        .success()
+        .stdout("pip==24.0\nsetuptools==69.2.0\nwheel==0.43.0\n");
 
     Ok(())
 }
