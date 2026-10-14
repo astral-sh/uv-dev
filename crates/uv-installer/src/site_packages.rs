@@ -49,10 +49,12 @@ pub struct SitePackages {
     by_url: FxHashMap<SafeUrl, SmallVec<[usize; 1]>>,
 }
 
-/// Keep single installations inline and reserve a small run when duplicate records spill.
+/// Append an installed distribution index, keeping a single index inline.
+///
+/// When adding a second index, reserve capacity for at least four entries to avoid
+/// reallocations for short lists of duplicates.
 fn push_index(indices: &mut SmallVec<[usize; 1]>, index: usize) {
     if indices.len() == 1 {
-        // Reserve four slots on the first spill to avoid growing again for a short duplicate run.
         indices.reserve(3);
     }
     indices.push(index);
