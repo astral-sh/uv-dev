@@ -105,37 +105,37 @@ impl PythonVersionFile {
         working_directory: impl AsRef<Path>,
         options: &DiscoveryOptions<'_>,
     ) -> Result<Option<Self>, std::io::Error> {
-        let allow_local = !options.no_local;
-        let Some(path) = allow_local.then(|| {
-            // First, try to find a local version file.
-            let local = Self::find_nearest(&working_directory, options);
+        let local = if options.no_local {
+            None
+        } else {
+            let working_directory = working_directory.as_ref();
+            let local = Self::find_nearest(working_directory, options);
             if local.is_none() {
-                // Log where we searched for the file, if not found
-                if let Some(stop_discovery_at) = options.stop_discovery_at {
-                    if stop_discovery_at == working_directory.as_ref() {
+                match options.stop_discovery_at {
+                    Some(stop_discovery_at) if stop_discovery_at == working_directory => {
                         debug!(
                             "No Python version file found in workspace: {}",
-                            working_directory.as_ref().display()
+                            working_directory.display()
                         );
-                    } else {
+                    }
+                    Some(stop_discovery_at) => {
                         debug!(
                             "No Python version file found between working directory `{}` and workspace root `{}`",
-                            working_directory.as_ref().display(),
+                            working_directory.display(),
                             stop_discovery_at.display()
                         );
                     }
-                } else {
-                    debug!(
-                        "No Python version file found in ancestors of working directory: {}",
-                        working_directory.as_ref().display()
-                    );
+                    None => {
+                        debug!(
+                            "No Python version file found in ancestors of working directory: {}",
+                            working_directory.display()
+                        );
+                    }
                 }
             }
             local
-        }).flatten().or_else(|| {
-            // Search for a global config
-            Self::find_global(options)
-        }) else {
+        };
+        let Some(path) = local.or_else(|| Self::find_global(options)) else {
             return Ok(None);
         };
 
@@ -156,66 +156,58 @@ impl PythonVersionFile {
         Self::find_in_directory(&user_config_dir, options)
     }
 
-    fn find_nearest(path: impl AsRef<Path>, options: &DiscoveryOptions<'_>) -> Option<PathBuf> {
-        path.as_ref()
-            .ancestors()
-            .take_while(|path| {
-                // Only walk up the given directory, if any.
-                options
-                    .stop_discovery_at
-                    .and_then(Path::parent)
-                    .is_none_or(|stop_discovery_at| stop_discovery_at != *path)
-            })
+    fn find_nearest(path: &Path, options: &DiscoveryOptions<'_>) -> Option<PathBuf> {
+        let stop_before = options.stop_discovery_at.and_then(Path::parent);
+        path.ancestors()
+            .take_while(|ancestor| Some(*ancestor) != stop_before)
             .find_map(|path| Self::find_in_directory(path, options))
     }
 
     fn find_in_directory(path: &Path, options: &DiscoveryOptions<'_>) -> Option<PathBuf> {
-        let version_path = path.join(PYTHON_VERSION_FILENAME);
-        let versions_path = path.join(PYTHON_VERSIONS_FILENAME);
-
-        let paths = match options.preference {
-            FilePreference::Versions => [versions_path, version_path],
-            FilePreference::Version => [version_path, versions_path],
+        let filenames = match options.preference {
+            FilePreference::Versions => [PYTHON_VERSIONS_FILENAME, PYTHON_VERSION_FILENAME],
+            FilePreference::Version => [PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME],
         };
-
-        paths.into_iter().find(|path| path.is_file())
+        filenames
+            .into_iter()
+            .map(|filename| path.join(filename))
+            .find(|path| path.is_file())
     }
 
     /// Try to read a Python version file at the given path.
     ///
     /// If the file does not exist, `Ok(None)` is returned.
     async fn try_from_path(path: PathBuf) -> Result<Option<Self>, std::io::Error> {
-        match fs::tokio::read_to_string(&path).await {
-            Ok(content) => {
-                debug!(
-                    "Reading Python requests from version file at `{}`",
-                    path.display()
-                );
-                let versions = content
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| {
-                        // Skip comments and empty lines.
-                        !(line.is_empty() || line.starts_with('#'))
-                    })
-                    .map(PythonRequest::parse)
-                    .filter(|request| {
-                        if let PythonRequest::ExecutableName(name) = request {
-                            warn_user_once!(
-                                "Ignoring unsupported Python request `{name}` in version file: {}",
-                                path.display()
-                            );
-                            false
-                        } else {
-                            true
-                        }
-                    })
-                    .collect();
-                Ok(Some(Self { path, versions }))
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err),
-        }
+        let content = match fs::tokio::read_to_string(&path).await {
+            Ok(content) => content,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        debug!(
+            "Reading Python requests from version file at `{}`",
+            path.display()
+        );
+        let versions = content
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                // Skip comments and empty lines.
+                !(line.is_empty() || line.starts_with('#'))
+            })
+            .map(PythonRequest::parse)
+            .filter(|request| {
+                if let PythonRequest::ExecutableName(name) = request {
+                    warn_user_once!(
+                        "Ignoring unsupported Python request `{name}` in version file: {}",
+                        path.display()
+                    );
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect();
+        Ok(Some(Self { path, versions }))
     }
 
     /// Create a new representation of a version file at the given path.
