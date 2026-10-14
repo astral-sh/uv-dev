@@ -303,13 +303,10 @@ pub async fn upgrade(
     )?;
     // Remove unreachable requirements from the temporary manifest, since URL requirements can be
     // fetched during metadata preparation even when their markers cannot apply.
-    for (index, requirement) in skipped.iter().enumerate() {
-        if skipped[..index].iter().any(|removed| {
-            removed.dependency_type == requirement.dependency_type
-                && removed.original_text == requirement.original_text
-        }) {
-            continue;
-        }
+    for requirement in skipped
+        .iter()
+        .unique_by(|&requirement| (&requirement.dependency_type, &requirement.original_text))
+    {
         if pyproject
             .remove_dependency_declaration_text(
                 &requirement.dependency_type,
