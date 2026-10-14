@@ -21,7 +21,6 @@ mod dependency_metadata;
 mod direct_url;
 #[cfg(feature = "test-python")]
 mod direct_url_hashes;
-mod editable_input;
 #[cfg(feature = "test-python")]
 mod entrypoints;
 #[cfg(feature = "test-python")]
@@ -32,6 +31,7 @@ mod exact;
 mod git;
 #[cfg(feature = "test-python")]
 mod index;
+mod input_validation;
 #[cfg(feature = "test-python")]
 mod json;
 #[cfg(feature = "test-python")]
@@ -40,7 +40,6 @@ mod launcher;
 mod link_mode;
 #[cfg(feature = "test-python")]
 mod no_index;
-mod offline_input;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_install;
 #[cfg(feature = "test-python")]
