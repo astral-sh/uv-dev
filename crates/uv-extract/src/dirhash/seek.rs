@@ -183,12 +183,8 @@ where
 {
     let entry = &job.archive.file().entries()[file_number];
     let file_name = entry_file_name(entry, file_number)?;
-    let enclosed_name = match SanitizedArchivePath::from_archive_member(file_name) {
-        Ok(path) => path,
-        Err(_) if skip_validation => None,
-        Err(err) => return Err(err),
-    };
-    let Some(enclosed_name) = enclosed_name else {
+    let Some(enclosed_name) = SanitizedArchivePath::for_extraction(file_name, skip_validation)?
+    else {
         warn!("Skipping unsafe file name: {file_name}");
         return Ok(None);
     };
