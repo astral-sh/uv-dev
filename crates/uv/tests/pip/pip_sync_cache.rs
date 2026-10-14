@@ -3,12 +3,13 @@
 use std::path::Path;
 
 use anyhow::Result;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use uv_redacted::SafeUrl;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
 use uv_test::archive::generate_source_archive;
-use uv_test::packse::generate_wheel;
+use uv_test::packse::{generate_wheel, generate_wheel_with_files};
 use uv_test::uv_snapshot;
 
 const SOURCE_ARCHIVE: &str = "source_distribution-0.0.1.tar.gz";
@@ -31,6 +32,21 @@ async fn artifact_downloads(server: &MockServer, filename: &str) -> usize {
         .iter()
         .filter(|request| request.method.as_str() == "GET" && request.url.path() == artifact_path)
         .count()
+}
+
+fn write_tomli_wheel(archive: &Path, payload: &str, mtime: i64) -> Result<()> {
+    let (_, wheel) = generate_wheel_with_files(
+        &"tomli".parse()?,
+        &"2.0.1".parse()?,
+        &[],
+        &Default::default(),
+        None,
+        "py3-none-any",
+        &[("tomli/payload.txt", payload)],
+    );
+    fs_err::write(archive, wheel)?;
+    filetime::set_file_mtime(archive, filetime::FileTime::from_unix_time(mtime, 0))?;
+    Ok(())
 }
 
 /// Reuse a direct URL source build until its package cache entry is removed.
@@ -260,6 +276,92 @@ async fn install_url_built_dist_cached() -> Result<()> {
         artifact_downloads(&server, &filename).await > initial_downloads,
         "clearing the package cache must fetch the wheel again"
     );
+    Ok(())
+}
+
+/// Refresh a local wheel when its timestamp changes, including in an existing environment.
+#[test]
+fn install_local_wheel() -> Result<()> {
+    // Use distinct timestamps even when the test runs faster than the filesystem clock resolution.
+    const INITIAL_MTIME: i64 = 1_700_000_000;
+
+    let context = uv_test::test_context!("3.12");
+    let archive = context.temp_dir.child("tomli-2.0.1-py3-none-any.whl");
+    write_tomli_wheel(archive.path(), "initial", INITIAL_MTIME)?;
+    let initial_size = fs_err::metadata(archive.path())?.len();
+    let url = SafeUrl::from_file_path(archive.path()).expect("absolute archive path");
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str(&format!("tomli @ {url}"))?;
+    let installed_payload = ChildPath::new(context.site_packages().join("tomli/payload.txt"));
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tomli==2.0.1 (from file://[TEMP_DIR]/tomli-2.0.1-py3-none-any.whl)
+    ");
+    installed_payload.assert("initial");
+
+    context.reset_venv();
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tomli==2.0.1 (from file://[TEMP_DIR]/tomli-2.0.1-py3-none-any.whl)
+    ");
+    installed_payload.assert("initial");
+
+    context.reset_venv();
+    write_tomli_wheel(archive.path(), "changed", INITIAL_MTIME + 2)?;
+    assert_eq!(fs_err::metadata(archive.path())?.len(), initial_size);
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tomli==2.0.1 (from file://[TEMP_DIR]/tomli-2.0.1-py3-none-any.whl)
+    ");
+    installed_payload.assert("changed");
+
+    write_tomli_wheel(archive.path(), "updated", INITIAL_MTIME + 4)?;
+    assert_eq!(fs_err::metadata(archive.path())?.len(), initial_size);
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ tomli==2.0.1 (from file://[TEMP_DIR]/tomli-2.0.1-py3-none-any.whl)
+    ");
+    installed_payload.assert("updated");
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+
+    requirements.write_str(url.as_str())?;
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    ");
+    installed_payload.assert("updated");
+    context.assert_installed("tomli", "2.0.1");
     Ok(())
 }
 
