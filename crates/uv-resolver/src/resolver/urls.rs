@@ -169,12 +169,10 @@ impl Urls {
             recorder.source_policy(name);
         }
         if let Some(member_url) = self.workspace_members.get(name) {
-            let overrides = self.overrides.get(name, env);
-            for requirement_url in overrides
-                .iter()
-                .copied()
-                .chain(url.filter(|_| overrides.is_empty()))
-            {
+            let mut overrides = self.overrides.get(name, env);
+            // An applicable override replaces the requirement URL.
+            let first_url = overrides.next().or(url);
+            for requirement_url in first_url.into_iter().chain(overrides) {
                 if !same_resource(&member_url.parsed_url, &requirement_url.parsed_url, git) {
                     let mut urls = vec![
                         member_url.parsed_url.clone(),
@@ -190,9 +188,7 @@ impl Urls {
             }
             Ok(Either::Left(Either::Right(std::iter::once(member_url))))
         } else if self.overrides.contains_key(name) {
-            Ok(Either::Left(Either::Left(
-                self.overrides.get(name, env).into_iter(),
-            )))
+            Ok(Either::Left(Either::Left(self.overrides.get(name, env))))
         } else if let Some(url) = url {
             let url =
                 self.canonicalize_allowed_url(env, name, git, &url.verbatim, &url.parsed_url)?;
