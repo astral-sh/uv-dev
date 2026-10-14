@@ -85,9 +85,9 @@ impl CredentialsCache {
         realm: Realm,
         username: Username,
     ) -> Option<Arc<Authentication>> {
-        let realms = self.realms.read().unwrap();
         let given_username = username.is_some();
         let key = (realm, username);
+        let credentials = self.realms.read().unwrap().get(&key).cloned();
         let realm_username = fmt::from_fn(|f| {
             let (realm, username) = &key;
             if let Some(username) = username.as_deref() {
@@ -97,7 +97,7 @@ impl CredentialsCache {
             }
         });
 
-        let Some(credentials) = realms.get(&key).cloned() else {
+        let Some(credentials) = credentials else {
             trace!("No credentials in cache for realm {realm_username}");
             return None;
         };
@@ -122,20 +122,26 @@ impl CredentialsCache {
         url: &DisplaySafeUrl,
         username: &Username,
     ) -> Option<Arc<Authentication>> {
-        let urls = self.urls.read().unwrap();
-        if let Some(credentials) = urls.get(url)
-            && (username.is_none() || username.as_deref() == credentials.username())
-        {
-            if username.is_some() && credentials.password().is_none() {
-                // If given a username, don't return password-less credentials
-                trace!("No password in cache for URL `{url}`");
-                return None;
-            }
-            trace!("Found cached credentials for URL `{url}`");
-            return Some(credentials.clone());
+        let credentials = self
+            .urls
+            .read()
+            .unwrap()
+            .get(url)
+            .filter(|credentials| {
+                username.is_none() || username.as_deref() == credentials.username()
+            })
+            .cloned();
+        let Some(credentials) = credentials else {
+            trace!("No credentials in cache for URL `{url}`");
+            return None;
+        };
+        if username.is_some() && credentials.password().is_none() {
+            // If given a username, don't return password-less credentials
+            trace!("No password in cache for URL `{url}`");
+            return None;
         }
-        trace!("No credentials in cache for URL `{url}`");
-        None
+        trace!("Found cached credentials for URL `{url}`");
+        Some(credentials)
     }
 
     /// Update the cache with the given credentials.
