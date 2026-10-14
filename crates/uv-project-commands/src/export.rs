@@ -359,15 +359,16 @@ pub async fn export(
         }
     };
 
-    if let Some(batch) = &batch {
+    if let Some(mut batch) = batch {
         let mut writers = Vec::with_capacity(batch.export.len());
-        for entry in &batch.export {
+        // Each writer borrows its output path until commit, so move selection fields separately.
+        for entry in &mut batch.export {
             let groups = DependencyGroups::from_args(
                 None,
-                entry.group.clone(),
-                entry.no_group.clone(),
+                std::mem::take(&mut entry.group),
+                std::mem::take(&mut entry.no_group),
                 entry.no_default_groups,
-                entry.only_group.clone(),
+                std::mem::take(&mut entry.only_group),
                 entry.all_groups,
             );
             let groups = match source {
@@ -392,8 +393,8 @@ pub async fn export(
                 }
             };
             let extras = ExtrasSpecification::from_args(
-                entry.extra.clone(),
-                entry.no_extra.clone(),
+                std::mem::take(&mut entry.extra),
+                std::mem::take(&mut entry.no_extra),
                 false,
                 vec![],
                 entry.all_extras,
