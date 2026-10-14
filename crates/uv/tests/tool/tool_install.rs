@@ -5976,18 +5976,26 @@ fn tool_install_lock_supports_local_wheel() {
         .workspace_root
         .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
 
-    for _ in 0..2 {
-        context
-            .tool_install()
-            .arg(&wheel)
-            .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-            .env(EnvVars::PATH, bin_dir.as_os_str())
-            .assert()
-            .success();
-    }
+    context
+        .tool_install()
+        .arg(&wheel)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    let lock = context.read("tools/simple-launcher/uv.lock");
+
+    context
+        .tool_install()
+        .arg(&wheel)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    assert_eq!(context.read("tools/simple-launcher/uv.lock"), lock);
 
     insta::with_settings!({ filters => context.filters() }, {
-        assert_snapshot!(context.read("tools/simple-launcher/uv.lock"), @r#"
+        assert_snapshot!(lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
