@@ -10613,7 +10613,9 @@ fn missing_top_level() -> Result<()> {
         .child("suds_community.egg-info/PKG-INFO")
         .assert(predicates::path::is_file().follow_links(true));
     let record = read_record(File::open(
-        site_packages.child("suds_community-0.8.5.dist-info/RECORD"),
+        site_packages
+            .child("suds_community-0.8.5.dist-info/RECORD")
+            .path(),
     )?)?;
     assert!(
         record
