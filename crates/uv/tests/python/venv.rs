@@ -2003,49 +2003,29 @@ fn relocatable_envs_default_no_relocatable() {
 /// Ensure that a nested virtual environment uses the same `home` directory as the parent.
 #[test]
 fn verify_nested_pyvenv_cfg() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
-
-    // Create a virtual environment at `.venv`.
-    context
-        .venv()
-        .arg(context.venv.as_os_str())
-        .arg("--python")
-        .arg("3.12")
-        .assert()
-        .success();
-
-    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
-
-    // Check pyvenv.cfg exists
-    pyvenv_cfg.assert(predicates::path::is_file());
-
-    // Extract the "home" line from the pyvenv.cfg file.
-    let contents = context.read(".venv/pyvenv.cfg");
-    let venv_home = contents
+    let context = uv_test::test_context!("3.12");
+    let parent_config = context.read(context.venv.join("pyvenv.cfg"));
+    let parent_home = parent_config
         .lines()
-        .find(|line| line.starts_with("home"))
-        .expect("home line not found");
+        .find_map(|line| line.strip_prefix("home = "))
+        .expect("parent pyvenv.cfg should contain a home entry");
 
-    // Now, create a virtual environment from within the virtual environment.
     let subvenv = context.temp_dir.child(".subvenv");
     context
         .venv()
         .arg(subvenv.as_os_str())
         .arg("--python")
-        .arg("3.12")
-        .env(EnvVars::VIRTUAL_ENV, context.venv.as_os_str())
+        .arg(context.interpreter())
         .assert()
         .success();
 
-    // Extract the "home" line from the pyvenv.cfg file.
-    let contents = context.read(".subvenv/pyvenv.cfg");
-    let sub_venv_home = contents
+    let nested_config = context.read(subvenv.join("pyvenv.cfg"));
+    let nested_home = nested_config
         .lines()
-        .find(|line| line.starts_with("home"))
-        .expect("home line not found");
+        .find_map(|line| line.strip_prefix("home = "))
+        .expect("nested pyvenv.cfg should contain a home entry");
 
-    // Check that both directories point to the same home.
-    assert_eq!(sub_venv_home, venv_home);
+    assert_eq!(nested_home, parent_home);
 }
 
 /// See <https://github.com/astral-sh/uv/issues/3280>
