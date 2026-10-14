@@ -22,7 +22,7 @@ use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 use uv_test::subdirectory_archive::SubdirectoryArchive;
 
-use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
+use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 
 #[test]
 fn sync() -> Result<()> {
@@ -10023,22 +10023,58 @@ fn no_build_path_dependency() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn sync_wheel_url_source_error() -> Result<()> {
+/// Create an ABI-incompatible wheel and a compatible transitive dependency for its lock.
+fn incompatible_wheel_with_dependency(context: &TestContext) -> Result<(String, Vec<u8>)> {
+    let (filename, wheel) = generate_wheel(
+        &"pycparser".parse()?,
+        &"2.22".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+
+    Ok(generate_wheel(
+        &"cffi".parse()?,
+        &"1.17.1".parse()?,
+        &["pycparser".parse()?],
+        &BTreeMap::new(),
+        None,
+        "cp310-cp310-macosx_11_0_arm64",
+        &[],
+    ))
+}
+
+#[tokio::test]
+async fn sync_wheel_url_source_error() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = incompatible_wheel_with_dependency(&context)?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    let url = format!("{}/{filename}", server.uri());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "uv-test"
         version = "0.0.0"
         requires-python = ">=3.10"
-        dependencies = [
-            "cffi @ https://files.pythonhosted.org/packages/08/fd/cc2fedbd887223f9f5d170c96e57cbf655df9831a6546c1727ae13fa977a/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl",
-        ]
-        "#,
-    )?;
+        dependencies = ["cffi @ {url}"]
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+    "#})?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -10050,7 +10086,7 @@ fn sync_wheel_url_source_error() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    error: Distribution `cffi==1.17.1 @ direct+https://files.pythonhosted.org/packages/08/fd/cc2fedbd887223f9f5d170c96e57cbf655df9831a6546c1727ae13fa977a/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl` can't be installed because the binary distribution is incompatible with the current platform
+    error: Distribution `cffi==1.17.1 @ direct+http://[LOCALHOST]/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl` can't be installed because the binary distribution is incompatible with the current platform
 
     hint: You're using CPython 3.12 (`cp312`), but `cffi` (v1.17.1) only has wheels with the following Python ABI tag: `cp310`
     ");
@@ -10061,37 +10097,32 @@ fn sync_wheel_url_source_error() -> Result<()> {
 #[test]
 fn sync_wheel_path_source_error() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    // Download a wheel.
-    let archive = context
-        .temp_dir
-        .child("cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/08/fd/cc2fedbd887223f9f5d170c96e57cbf655df9831a6546c1727ae13fa977a/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl",
-        &archive,
-    );
+    let (filename, wheel) = incompatible_wheel_with_dependency(&context)?;
+    context.temp_dir.child(&filename).write_binary(&wheel)?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "uv-test"
         version = "0.0.0"
         requires-python = ">=3.10"
         dependencies = ["cffi"]
 
-        [tool.uv.sources]
-        cffi = { path = "cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl" }
-        "#,
-    )?;
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+        [tool.uv.sources]
+        cffi = {{ path = "{filename}" }}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 3 packages in [TIME]
