@@ -910,6 +910,41 @@ fn parse_version_specifier_parentheses<T: Pep508Url>(
     }
 }
 
+/// Parse an optional marker and ensure the remainder is empty or starts with a permitted comment.
+fn parse_requirement_suffix<T: Pep508Url>(
+    cursor: &mut Cursor,
+    reporter: &mut impl Reporter,
+    comment_delimiter: Option<char>,
+) -> Result<MarkerTree, Pep508Error<T>> {
+    cursor.eat_whitespace();
+    let marker = if cursor.eat_char(';').is_some() {
+        marker::parse::parse_markers_cursor(cursor, reporter)?
+    } else {
+        None
+    };
+    cursor.eat_whitespace();
+
+    if let Some((pos, char)) = cursor.next().filter(|(_, c)| comment_delimiter != Some(*c)) {
+        let message = if char == '#' {
+            format!(
+                r"Expected end of input or `;`, found `{char}`; comments must be preceded by a leading space"
+            )
+        } else if marker.is_none() {
+            format!(r"Expected end of input or `;`, found `{char}`")
+        } else {
+            format!(r"Expected end of input, found `{char}`")
+        };
+        return Err(Pep508Error {
+            message: Pep508ErrorSource::String(message),
+            start: pos,
+            len: char.len_utf8(),
+            input: cursor.to_string(),
+        });
+    }
+
+    Ok(marker.unwrap_or_default())
+}
+
 /// Parse a PEP 508-compliant [dependency specifier](https://packaging.python.org/en/latest/specifications/dependency-specifiers).
 fn parse_pep508_requirement<T: Pep508Url>(
     cursor: &mut Cursor,
@@ -996,43 +1031,13 @@ fn parse_pep508_requirement<T: Pep508Url>(
         }
     }
 
-    // wsp*
-    cursor.eat_whitespace();
-    // quoted_marker?
-    let marker = if cursor.peek_char() == Some(';') {
-        // Skip past the semicolon
-        cursor.next();
-        marker::parse::parse_markers_cursor(cursor, reporter)?
-    } else {
-        None
-    };
-
-    // wsp*
-    cursor.eat_whitespace();
-
-    if let Some((pos, char)) = cursor.next().filter(|(_, c)| *c != '#') {
-        let message = if char == '#' {
-            format!(
-                r"Expected end of input or `;`, found `{char}`; comments must be preceded by a leading space"
-            )
-        } else if marker.is_none() {
-            format!(r"Expected end of input or `;`, found `{char}`")
-        } else {
-            format!(r"Expected end of input, found `{char}`")
-        };
-        return Err(Pep508Error {
-            message: Pep508ErrorSource::String(message),
-            start: pos,
-            len: char.len_utf8(),
-            input: cursor.to_string(),
-        });
-    }
+    let marker = parse_requirement_suffix(cursor, reporter, Some('#'))?;
 
     Ok(Requirement {
         name,
         extras: extras.into_boxed_slice(),
         version_or_url: requirement_kind,
-        marker: marker.unwrap_or_default(),
+        marker,
         origin: None,
     })
 }
