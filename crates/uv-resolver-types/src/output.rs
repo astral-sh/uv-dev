@@ -7,6 +7,7 @@ use itertools::Itertools;
 use petgraph::{
     Directed,
     graph::{Graph, NodeIndex},
+    visit::EdgeRef,
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::collections::BTreeMap;
@@ -438,10 +439,8 @@ impl From<ResolverOutput> for uv_distribution_types::Resolution {
         }
 
         // Re-add the edges to the reduced graph.
-        for edge in graph.edge_indices() {
-            let (source, target) = graph.edge_endpoints(edge).unwrap();
-
-            match (&graph[source], &graph[target]) {
+        for edge in graph.edge_references() {
+            match (&graph[edge.source()], &graph[edge.target()]) {
                 (ResolutionGraphNode::Root, ResolutionGraphNode::Dist(target_dist)) => {
                     let target = inverse[&target_dist.name()];
                     transformed.update_edge(root, target, Edge::Prod);
