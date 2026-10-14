@@ -1,18 +1,18 @@
 use std::sync::Arc;
 
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 
 use uv_distribution_types::{RequirementSource, ResolutionRecorder};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 
-use crate::{DependencyMode, Manifest, ResolverEnvironment};
+use crate::{DependencyMode, FxHashbrownMap, Manifest, ResolverEnvironment};
 
 /// A set of package versions that are permitted, even if they're marked as yanked by the
 /// relevant index.
 #[derive(Debug, Default, Clone)]
 pub struct AllowedYanks {
-    versions: Arc<FxHashMap<PackageName, FxHashSet<Version>>>,
+    versions: Arc<FxHashbrownMap<PackageName, FxHashSet<Version>>>,
     recorder: Option<ResolutionRecorder>,
 }
 
@@ -22,7 +22,7 @@ impl AllowedYanks {
         env: &ResolverEnvironment,
         dependencies: DependencyMode,
     ) -> Self {
-        let mut allowed_yanks = FxHashMap::<PackageName, FxHashSet<Version>>::default();
+        let mut allowed_yanks = FxHashbrownMap::<PackageName, FxHashSet<Version>>::default();
 
         // Allow yanks for any pinned input requirements.
         for requirement in manifest.candidate_selection_requirements(env, dependencies) {
@@ -37,7 +37,7 @@ impl AllowedYanks {
                 uv_pep440::Operator::Equal | uv_pep440::Operator::ExactEqual
             ) {
                 allowed_yanks
-                    .entry(requirement.name.clone())
+                    .entry_ref(&requirement.name)
                     .or_default()
                     .insert(specifier.version().clone());
             }
@@ -46,7 +46,7 @@ impl AllowedYanks {
         // Allow yanks for any packages that are already pinned in the lockfile.
         for (name, preferences) in manifest.preferences.iter() {
             allowed_yanks
-                .entry(name.clone())
+                .entry_ref(name)
                 .or_default()
                 .extend(preferences.map(|(.., version)| version.clone()));
         }
