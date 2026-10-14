@@ -30,32 +30,25 @@ use uv_test::{TestContext, uv_snapshot};
 
 const BUILD_TAG_WHEEL: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
 
-/// Creates a CONNECT tunnel proxy that forwards connections to the target.
-///
-/// Returns the proxy address and the number of established tunnels.
+/// Create a CONNECT proxy on the test runtime, which owns the listener and connection tasks.
 #[cfg(feature = "test-pypi")]
-fn start_connect_tunnel_proxy() -> (std::net::SocketAddr, Arc<AtomicUsize>) {
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
+async fn start_connect_tunnel_proxy() -> (std::net::SocketAddr, Arc<AtomicUsize>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
 
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let connections = Arc::new(AtomicUsize::new(0));
     let proxy_connections = Arc::clone(&connections);
 
-    // Spawn a real OS thread for the proxy server
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut client) = stream else { break };
+    tokio::spawn(async move {
+        while let Ok((mut client, _)) = listener.accept().await {
             let proxy_connections = Arc::clone(&proxy_connections);
-
-            // Handle each connection in its own thread
-            std::thread::spawn(move || {
-                // Read the CONNECT request
-                let mut buf = vec![0u8; 4096];
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
                 let mut total_read = 0;
                 loop {
-                    let n = match client.read(&mut buf[total_read..]) {
+                    let n = match client.read(&mut buf[total_read..]).await {
                         Ok(0) | Err(_) => return,
                         Ok(n) => n,
                     };
@@ -69,41 +62,26 @@ fn start_connect_tunnel_proxy() -> (std::net::SocketAddr, Arc<AtomicUsize>) {
                 }
 
                 let request = String::from_utf8_lossy(&buf[..total_read]);
-
-                // Parse "CONNECT host:port HTTP/1.1\r\n"
                 let Some(target_addr) = request
                     .lines()
                     .next()
                     .and_then(|line| line.strip_prefix("CONNECT "))
                     .and_then(|s| s.split_whitespace().next())
-                    .map(ToString::to_string)
                 else {
                     return;
                 };
-
-                // Connect to the target
-                let Ok(mut target) = TcpStream::connect(&target_addr) else {
+                let Ok(mut target) = TcpStream::connect(target_addr).await else {
                     return;
                 };
-
-                // Send 200 Connection Established
                 if client
                     .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .await
                     .is_err()
                 {
                     return;
                 }
                 proxy_connections.fetch_add(1, Ordering::Relaxed);
-
-                // Bidirectionally forward data using two threads
-                let mut client_read = client.try_clone().unwrap();
-                let mut target_write = target.try_clone().unwrap();
-
-                let c2t =
-                    std::thread::spawn(move || std::io::copy(&mut client_read, &mut target_write));
-
-                let _ = std::io::copy(&mut target, &mut client);
-                let _ = c2t.join();
+                let _ = tokio::io::copy_bidirectional(&mut client, &mut target).await;
             });
         }
     });
@@ -898,11 +876,11 @@ async fn proxy_valid_url_in_uv_toml() {
 
 /// Test that https-proxy in uv.toml routes HTTPS requests through a CONNECT tunnel proxy.
 #[cfg(feature = "test-pypi")]
-#[test]
-fn proxy_https_proxy_in_uv_toml() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn proxy_https_proxy_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
 
-    let (proxy_addr, connections) = start_connect_tunnel_proxy();
+    let (proxy_addr, connections) = start_connect_tunnel_proxy().await;
     let proxy_uri = format!("http://{proxy_addr}");
 
     let context = context.with_filter((proxy_uri.clone(), "[PROXY]"));
