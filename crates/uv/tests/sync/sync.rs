@@ -11352,8 +11352,6 @@ fn sync_invalid_environment() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn sync_partial_environment_delete() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]);
 
     context.init().arg("-p").arg("3.12").assert().success();
@@ -11368,32 +11366,34 @@ fn sync_partial_environment_delete() -> Result<()> {
      + temp==0.1.0 (from file://[TEMP_DIR]/)
     ");
 
-    // Create a directory that's unreadable, erroring on trying to delete its children.
-    // This relies on our implementation listing directory entries before deleting them — which is a
-    // bit of a hack but accomplishes the goal here.
-    let unreadable2 = context.temp_dir.child(".venv/z2.txt");
-    fs_err::create_dir(&unreadable2)?;
-    let perms = std::fs::Permissions::from_mode(0o000);
-    fs_err::set_permissions(&unreadable2, perms)?;
+    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
+    let original_cfg = fs_err::read_to_string(pyvenv_cfg.path())?;
+    let protected_dir = context.venv.child("protected");
+    let protected_file = protected_dir.child("keep.txt");
+    protected_file.write_str("keep")?;
+    let guard = uv_test::ReadOnlyDirectoryGuard::new(protected_dir.path())?;
+    let error = fs_err::remove_file(protected_file.path())
+        .expect_err("the protected file must prevent environment deletion");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
 
     uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.12"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: failed to remove directory `[VENV]/z2.txt`: Permission denied (os error 13)
+    error: failed to remove directory `[VENV]/protected`: Permission denied (os error 13)
     ");
+    pyvenv_cfg.assert(original_cfg.as_str());
 
     uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.12"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: failed to remove directory `[VENV]/z2.txt`: Permission denied (os error 13)
+    error: failed to remove directory `[VENV]/protected`: Permission denied (os error 13)
     ");
+    pyvenv_cfg.assert(original_cfg.as_str());
 
-    // Remove the unreadable directory
-    fs_err::remove_dir(unreadable2)?;
-
-    // We should be able to remove the venv now
+    // Restoring write permission lets uv finish deleting and recreate the environment.
+    drop(guard);
     uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.12"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -11404,6 +11404,7 @@ fn sync_partial_environment_delete() -> Result<()> {
     Installed 1 package in [TIME]
      + temp==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    protected_dir.assert(predicate::path::missing());
 
     Ok(())
 }
