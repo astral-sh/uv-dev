@@ -24,7 +24,6 @@ use uv_python_types::{
 };
 
 use crate::install::format_executables;
-use crate::{ChangeEvent, ChangeEventKind};
 
 #[derive(Debug, thiserror::Error)]
 #[error("Failed to remove symlink directory `{}`", path.display())]
@@ -95,17 +94,19 @@ async fn do_uninstall(
     let download_requests = requests
         .iter()
         .map(|request| {
-            PythonDownloadRequest::from_request(request).ok_or_else(|| {
-                anyhow::anyhow!("Cannot uninstall managed Python for request: {request}")
-            })
+            PythonDownloadRequest::from_request(request)
+                // Always include pre-releases in uninstalls.
+                .map(|request| request.with_prereleases(true))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Cannot uninstall managed Python for request: {request}")
+                })
         })
-        // Always include pre-releases in uninstalls
-        .map(|result| result.map(|request| request.with_prereleases(true)))
         .collect::<Result<Vec<_>>>()?;
     let installed_installations: Vec<_> = installations.find_all()?.collect();
     let mut matching_installations = BTreeSet::default();
+    let is_default_request = matches!(requests.as_slice(), [PythonRequest::Default]);
     for (request, download_request) in requests.iter().zip(download_requests) {
-        if matches!(requests.as_slice(), [PythonRequest::Default]) {
+        if is_default_request {
             writeln!(printer.stderr(), "Searching for Python installations")?;
         } else {
             writeln!(
@@ -114,15 +115,11 @@ async fn do_uninstall(
                 request.cyan()
             )?;
         }
-        let mut found = false;
-        for installation in installed_installations
+        let mut candidates = installed_installations
             .iter()
             .filter(|installation| download_request.satisfied_by_key(installation.key()))
-        {
-            found = true;
-            matching_installations.insert(installation.clone());
-        }
-        if !found {
+            .peekable();
+        if candidates.peek().is_none() {
             // Clear any remnants in the registry
             #[cfg(windows)]
             {
@@ -131,7 +128,7 @@ async fn do_uninstall(
                 );
             }
 
-            if matches!(requests.as_slice(), [PythonRequest::Default]) {
+            if is_default_request {
                 writeln!(printer.stderr(), "No Python installations found")?;
                 return Ok(ExitStatus::Failure);
             }
@@ -142,6 +139,7 @@ async fn do_uninstall(
                 request.cyan()
             )?;
         }
+        matching_installations.extend(candidates.cloned());
     }
 
     if matching_installations.is_empty() {
@@ -187,8 +185,8 @@ async fn do_uninstall(
         // TODO(zanieb): This is a minor optimization to avoid opening more files, but we could
         // leave broken links behind, i.e., if the user created them.
         .filter(|path| {
+            let name = path.file_name().and_then(|name| name.to_str());
             matching_installations.iter().any(|installation| {
-                let name = path.file_name().and_then(|name| name.to_str());
                 name == Some(&installation.key().executable_name_minor())
                     || name == Some(&installation.key().executable_name_major())
                     || name == Some(&installation.key().executable_name())
@@ -215,15 +213,15 @@ async fn do_uninstall(
             .insert(executable);
     }
 
-    let mut tasks = FuturesUnordered::new();
-    for installation in &matching_installations {
-        tasks.push(async {
+    let mut tasks: FuturesUnordered<_> = matching_installations
+        .iter()
+        .map(|installation| async move {
             (
                 installation.key(),
                 fs_err::tokio::remove_dir_all(installation.path()).await,
             )
-        });
-    }
+        })
+        .collect();
 
     let mut uninstalled = IndexSet::<PythonInstallationKey>::default();
     while let Some((key, result)) = tasks.next().await {
@@ -241,13 +239,11 @@ async fn do_uninstall(
         .iter()
         .map(PythonInstallationMinorVersionKey::ref_cast)
         .collect();
-    let remaining_installations: Vec<_> = installed_installations
-        .into_iter()
-        .filter(|installation| !uninstalled.contains(installation.key()))
-        .collect();
-
-    let remaining_minor_versions =
-        ManagedPythonInstallation::highest_by_minor_version_key(remaining_installations.iter());
+    let remaining_minor_versions = ManagedPythonInstallation::highest_by_minor_version_key(
+        installed_installations
+            .iter()
+            .filter(|installation| !uninstalled.contains(installation.key())),
+    );
 
     for (_, installation) in remaining_minor_versions
         .iter()
@@ -259,81 +255,57 @@ async fn do_uninstall(
     // for its minor version. If there are none remaining, remove the symlink directory
     // (or junction on Windows) if it exists.
     for installation in &matching_installations {
-        if !remaining_minor_versions.contains_key(installation.minor_version_key()) {
-            if let Some(minor_version_link) =
+        if !remaining_minor_versions.contains_key(installation.minor_version_key())
+            && let Some(minor_version_link) =
                 PythonMinorVersionLink::from_installation(installation)
-            {
-                if minor_version_link.exists() {
-                    uv_fs::remove_symlink(&minor_version_link.symlink_directory).map_err(
-                        |source| MinorVersionLinkRemovalError {
-                            path: minor_version_link.symlink_directory.clone(),
-                            source,
-                        },
-                    )?;
-                    let symlink_term = if cfg!(windows) {
-                        "junction"
-                    } else {
-                        "symlink directory"
-                    };
-                    debug!(
-                        "Removed {}: {}",
-                        symlink_term,
-                        minor_version_link.symlink_directory.to_string_lossy()
-                    );
+            && minor_version_link.exists()
+        {
+            uv_fs::remove_symlink(&minor_version_link.symlink_directory).map_err(|source| {
+                MinorVersionLinkRemovalError {
+                    path: minor_version_link.symlink_directory.clone(),
+                    source,
                 }
-            }
+            })?;
+            let symlink_term = if cfg!(windows) {
+                "junction"
+            } else {
+                "symlink directory"
+            };
+            debug!(
+                "Removed {}: {}",
+                symlink_term,
+                minor_version_link.symlink_directory.to_string_lossy()
+            );
         }
     }
 
     // Report on any uninstalled installations.
     if let Some(first_uninstalled) = uninstalled.first() {
-        if uninstalled.len() == 1 {
-            // Ex) "Uninstalled Python 3.9.7 in 1.68s"
-            writeln!(
-                printer.stderr(),
-                "{}",
-                format!(
-                    "Uninstalled {} {}",
-                    format!("Python {}", first_uninstalled.version()).bold(),
-                    format!("in {}", elapsed(start.elapsed())).dimmed()
-                )
-                .dimmed()
-            )?;
+        let summary = if uninstalled.len() == 1 {
+            format!("Python {}", first_uninstalled.version())
         } else {
-            // Ex) "Uninstalled 2 versions in 1.68s"
+            format!("{} versions", uninstalled.len())
+        };
+        writeln!(
+            printer.stderr(),
+            "{}",
+            format!(
+                "Uninstalled {} {}",
+                summary.bold(),
+                format!("in {}", elapsed(start.elapsed())).dimmed()
+            )
+            .dimmed()
+        )?;
+
+        for key in uninstalled.into_iter().sorted_unstable() {
+            let executables = format_executables(&key, &uninstalled_executables);
             writeln!(
                 printer.stderr(),
-                "{}",
-                format!(
-                    "Uninstalled {} {}",
-                    format!("{} versions", uninstalled.len()).bold(),
-                    format!("in {}", elapsed(start.elapsed())).dimmed()
-                )
-                .dimmed()
+                " {} {}{}",
+                "-".red(),
+                key.bold(),
+                executables
             )?;
-        }
-
-        for event in uninstalled
-            .into_iter()
-            .map(|key| ChangeEvent {
-                key,
-                kind: ChangeEventKind::Removed,
-            })
-            .sorted_unstable_by(|a, b| a.key.cmp(&b.key).then_with(|| a.kind.cmp(&b.kind)))
-        {
-            let executables = format_executables(&event, &uninstalled_executables);
-            match event.kind {
-                ChangeEventKind::Removed => {
-                    writeln!(
-                        printer.stderr(),
-                        " {} {}{}",
-                        "-".red(),
-                        event.key.bold(),
-                        executables,
-                    )?;
-                }
-                _ => unreachable!(),
-            }
         }
     }
 
