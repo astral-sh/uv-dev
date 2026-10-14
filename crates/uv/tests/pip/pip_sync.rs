@@ -4843,26 +4843,30 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
     Ok(())
 }
 
-/// Using `--find-links`, and the registry serves us a correct hash.
-#[test]
-fn require_hashes_find_links_valid_hash() -> Result<()> {
+/// A flat index advertises the same hash as the requirement and the downloaded wheel.
+#[tokio::test]
+async fn require_hashes_find_links_valid_hash() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let fixture = RegistryHashFixture::new(&context);
+    let requirement = fixture.hashed_requirement();
+    let hash = fixture.sha256.clone();
+    let server = fixture.serve(Some(&hash)).await;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
+    requirements_txt.write_str(&requirement)?;
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
         .arg("--require-hashes")
+        .arg("--no-index")
         .arg("--find-links")
-        .arg("https://raw.githubusercontent.com/astral-test/astral-test-hash/main/valid-hash/simple-html/example-a-961b4c22/index.html"), @"
+        .arg(format!("{}{}", server.uri(), RegistryHashFixture::PAGE_PATH)), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + example-a-961b4c22==1.0.0
+     + tqdm==1000.0.0
     "
     );
 
@@ -5004,6 +5008,7 @@ struct RegistryHashFixture {
 
 impl RegistryHashFixture {
     const FILENAME: &str = "tqdm-1000.0.0-py3-none-any.whl";
+    const PAGE_PATH: &str = "/simple/tqdm/";
     const REQUIREMENT: &str = "tqdm==1000.0.0";
 
     fn new(context: &uv_test::TestContext) -> Self {
@@ -5026,7 +5031,7 @@ impl RegistryHashFixture {
         let fragment = advertised_hash.map_or_else(String::new, |hash| format!("#sha256={hash}"));
         let filename = Self::FILENAME;
         Mock::given(method("GET"))
-            .and(path("/simple/tqdm/"))
+            .and(path(Self::PAGE_PATH))
             .respond_with(ResponseTemplate::new(200).set_body_raw(
                 format!(r#"<a href="/{filename}{fragment}">{filename}</a>"#),
                 "text/html",
