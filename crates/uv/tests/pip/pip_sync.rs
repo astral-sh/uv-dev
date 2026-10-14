@@ -175,8 +175,13 @@ fn assert_markupsafe_link_mode(
             from markupsafe import Markup
 
             installed = Path(markupsafe.__file__)
-            assert not installed.is_symlink(), f"installed module is a symlink: {installed}"
-            print("hardlink" if installed.samefile(sys.argv[1]) else "copy", end="")
+            same_file = installed.samefile(sys.argv[1])
+            if installed.is_symlink():
+                assert same_file, f"symlink does not target the cached module: {installed}"
+                mode = "symlink"
+            else:
+                mode = "hardlink" if same_file else "copy"
+            print(mode, end="")
         "#})
         .arg(cached)
         .assert()
@@ -368,9 +373,7 @@ fn install_symlink() -> Result<()> {
     "
     );
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    assert_markupsafe_link_mode(&context, "symlink")?;
 
     // Removing the cache _should_ invalidate the virtual environment.
     fs::remove_dir_all(context.cache_dir.path())?;
