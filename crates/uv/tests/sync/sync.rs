@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 #[cfg(feature = "test-git")]
 use std::process::Command;
 use tempfile::tempdir_in;
-use wiremock::matchers::{basic_auth, body_string_contains, method, path};
+use wiremock::matchers::{any, basic_auth, body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_fs::Simplified;
@@ -18462,9 +18462,11 @@ async fn sync_malware_check_clean() {
 
     Mock::given(method("POST"))
         .and(path("/v1/querybatch"))
+        .and(body_string_contains("iniconfig"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "results": [{"vulns": []}]
         })))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -18639,8 +18641,13 @@ async fn sync_malware_check_disabled() {
 
     let server = MockServer::start().await;
 
-    // The check is explicitly disabled via env var, so no request should be made. (No mocks are
-    // mounted, so any request would fail.)
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": []}]
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
 
     uv_snapshot!(context.filters(), context
         .sync()
