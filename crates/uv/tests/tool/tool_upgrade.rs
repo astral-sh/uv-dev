@@ -402,7 +402,8 @@ fn tool_upgrade_all() -> Result<()> {
     ");
 
     // An invalid directory must not prevent valid tools from being upgraded.
-    tool_dir.child("tool backup").create_dir_all()?;
+    let backup = tool_dir.child("tool backup/notes.txt");
+    backup.write_str("unrelated backup\n")?;
 
     // Upgrade all from the new index.
     uv_snapshot!(context.filters(), context.tool_upgrade()
@@ -423,6 +424,7 @@ fn tool_upgrade_all() -> Result<()> {
      + python-dotenv==1.0.1
     Installed 1 executable: dotenv
     ");
+    assert_eq!(context.read(backup), "unrelated backup\n");
 
     Ok(())
 }
