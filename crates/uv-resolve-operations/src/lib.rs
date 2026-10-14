@@ -274,7 +274,8 @@ pub async fn resolve(
             .into_iter()
             .map(|constraint| constraint.requirement)
             .chain(upgrade.constraints().cloned()),
-    );
+    )
+    .with_recorder(recorder.clone());
     let overrides = Overrides::from_entries(
         lowered_overrides
             .into_iter()
@@ -282,14 +283,12 @@ pub async fn resolve(
             .collect(),
     )?;
     let excludes = Excludes::from_entries(excludes);
-    let modifiers = DependencyModifiers::new(overrides, excludes);
+    let modifiers = DependencyModifiers::new(overrides, excludes).with_recorder(recorder.clone());
     let preferences = Preferences::from_iter(preferences, &resolver_env);
 
     // Determine any lookahead requirements.
     let (lookaheads, hasher) = match options.dependency_mode {
         DependencyMode::Transitive => {
-            let constraints = constraints.clone().with_recorder(recorder.clone());
-            let modifiers = modifiers.clone().with_recorder(recorder.clone());
             LookaheadResolver::new(
                 &requirements,
                 &constraints,
@@ -308,11 +307,12 @@ pub async fn resolve(
     // TODO(zanieb): Consider consuming these instead of cloning
     let exclusions = Exclusions::new(reinstall.clone(), UpgradePackages::for_non_project(upgrade));
 
-    // Create a manifest of the requirements.
+    // Package selection must not record settings consulted during setup. Resolution recording
+    // resumes after the resolver initializes selection rules from the manifest.
     let manifest = Manifest::new(
         requirements,
-        constraints,
-        modifiers,
+        constraints.with_recorder(None),
+        modifiers.with_recorder(None),
         preferences,
         project,
         workspace_members,
