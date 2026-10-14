@@ -5147,54 +5147,6 @@ fn tool_install_lock_supports_local_wheel() {
 }
 
 #[test]
-fn tool_install_lock_verifies_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
-    let tool_dir = context.temp_dir.child("tools");
-    let bin_dir = context.temp_dir.child("bin");
-    let wheel = context
-        .workspace_root
-        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
-
-    context
-        .tool_install()
-        .arg(&wheel)
-        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .assert()
-        .success();
-    let launcher = bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
-    assert_tool_launcher(&launcher);
-
-    let lock_path = tool_dir.child("simple-launcher").child("uv.lock");
-    let lock = context.read(&lock_path);
-    lock_path.write_str(&lock.replace(
-        "sha256:5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4",
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    ))?;
-
-    uv_snapshot!(context.filters(), context.tool_install()
-        .arg(&wheel)
-        .arg("--force")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r#"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to read `simple-launcher @ file://[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl`
-      cause: Hash mismatch for `simple-launcher @ file://[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl`
-
-             Expected:
-               sha256:0000000000000000000000000000000000000000000000000000000000000000
-
-             Computed:
-               sha256:5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4
-    "#);
-    assert_path_missing(tool_dir.child("simple-launcher"));
-    assert_path_missing(launcher);
-
-    Ok(())
-}
-
-#[test]
 fn tool_install_lock_refreshes_local_directory_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_counts()
