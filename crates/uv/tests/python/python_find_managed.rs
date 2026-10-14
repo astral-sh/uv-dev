@@ -1,5 +1,6 @@
 //! Interpreter discovery against managed installations.
 
+use assert_cmd::assert::OutputAssertExt;
 #[cfg(unix)]
 use assert_fs::prelude::{PathChild, PathCreateDir};
 #[cfg(unix)]
