@@ -10,7 +10,7 @@ use http::StatusCode;
 use http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use http_body_util::BodyExt;
 use indoc::{formatdoc, indoc};
-use insta::{allow_duplicates, assert_snapshot};
+use insta::allow_duplicates;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use wiremock::matchers::{any, method};
@@ -1061,38 +1061,7 @@ fn wheel_server(
     }
 }
 
-fn assert_wheel_download(
-    range_response: RangeResponse,
-    retries: usize,
-    full_requests: usize,
-    resumed_requests: usize,
-) -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let server = wheel_server(&context, range_response, retries);
-    server.write_lockfile(&context, server.size)?;
-    allow_duplicates! {
-        uv_snapshot!(context.filters(), context
-            .pip_sync()
-            .arg("--preview")
-            .arg("pylock.toml")
-            .env(EnvVars::UV_HTTP_RETRIES, retries.to_string())
-            .env(EnvVars::UV_HTTP_TIMEOUT, "1")
-            .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
-            .env(EnvVars::RUST_LOG, "warn"), @"
-        exit_code: 0 (success)
-        ----- stderr -----
-        WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
-        Prepared 1 package in [TIME]
-        Installed 1 package in [TIME]
-         + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
-        ");
-    }
-    assert_eq!(server.requests.full.load(Ordering::Relaxed), full_requests);
-    assert_eq!(
-        server.requests.resumed.load(Ordering::Relaxed),
-        resumed_requests
-    );
-
+fn assert_build_tag_installed(context: &TestContext) {
     let site_packages = context.site_packages();
     assert_eq!(
         context.read(site_packages.join("build_tag/__init__.py")),
@@ -1101,23 +1070,24 @@ fn assert_wheel_download(
                 print("1")
         "#},
     );
-    let metadata = context.read(site_packages.join("build_tag-1.0.0.dist-info/METADATA"));
-    let wheel = context.read(site_packages.join("build_tag-1.0.0.dist-info/WHEEL"));
-    allow_duplicates! {
-        assert_snapshot!(metadata, @"
-        Metadata-Version: 2.3
-        Name: build-tag
-        Version: 1.0.0
-        ");
-        assert_snapshot!(wheel, @"
-        Wheel-Version: 1.0
-        Generator: hatchling 1.26.3
-        Root-Is-Purelib: true
-        Tag: py2-none-any
-        Tag: py3-none-any
-        ");
-    }
-    Ok(())
+    assert_eq!(
+        context.read(site_packages.join("build_tag-1.0.0.dist-info/METADATA")),
+        indoc::indoc! {"
+            Metadata-Version: 2.3
+            Name: build-tag
+            Version: 1.0.0
+        "},
+    );
+    assert_eq!(
+        context.read(site_packages.join("build_tag-1.0.0.dist-info/WHEEL")),
+        indoc::indoc! {"
+            Wheel-Version: 1.0
+            Generator: hatchling 1.26.3
+            Root-Is-Purelib: true
+            Tag: py2-none-any
+            Tag: py3-none-any
+        "},
+    );
 }
 
 fn assert_wheel_download_timeout(
@@ -1201,39 +1171,170 @@ fn direct_url_content_length_mismatch() -> Result<()> {
 
 #[test]
 fn direct_url_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::Supported, 1, 3, 1)
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Supported, 1);
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 1);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
 fn direct_url_partial_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::Limited { known_length: true }, 1, 3, 2)
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Limited { known_length: true }, 1);
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 2);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
 fn direct_url_partial_range_resume_unknown_length() -> Result<()> {
-    assert_wheel_download(
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(
+        &context,
         RangeResponse::Limited {
             known_length: false,
         },
         1,
-        3,
-        2,
-    )
+    );
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 2);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
 fn direct_url_ignored_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::Ignored, 1, 3, 1)
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Ignored, 1);
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 1);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
 fn direct_url_no_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::NotAdvertised, 1, 4, 0)
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::NotAdvertised, 1);
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 4);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 0);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
 fn direct_url_unsatisfiable_range_retries_in_full() -> Result<()> {
-    assert_wheel_download(RangeResponse::Unsatisfiable, 2, 5, 1)
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Unsatisfiable, 2);
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "2")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 5);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 1);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
