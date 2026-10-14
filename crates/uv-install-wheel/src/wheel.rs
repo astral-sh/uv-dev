@@ -424,12 +424,15 @@ impl WheelFile {
     /// > {distribution}-{version}.dist-info/WHEEL is metadata about the archive itself in the same
     /// > email message format:
     pub fn parse(wheel_text: &str) -> Result<Self, Error> {
+        const EXPECTED_MAJOR: &str = "1";
+        const EXPECTED_MINOR: &str = "0";
+
         let wheel = Self(parse_email_message(wheel_text.as_bytes(), "WHEEL")?);
 
         // mkl_fft-1.3.6-58-cp310-cp310-manylinux2014_x86_64.whl has multiple Wheel-Version entries, we have to ignore that
         // like pip
         let wheel_version = wheel.first_header_value("Wheel-Version");
-        let wheel_version = wheel_version
+        let (major, minor) = wheel_version
             .and_then(|wheel_version| wheel_version.split_once('.'))
             .ok_or_else(|| {
                 Error::InvalidWheel(format!(
@@ -438,22 +441,19 @@ impl WheelFile {
             })?;
         // pip has some test wheels that use that ancient version,
         // and technically we only need to check that the version is not higher
-        if wheel_version == ("0", "1") {
-            warn!("Ancient wheel version 0.1 (expected is 1.0)");
+        if (major, minor) == ("0", "1") {
+            warn!("Ancient wheel version 0.1 (expected is {EXPECTED_MAJOR}.{EXPECTED_MINOR})");
             return Ok(wheel);
         }
-        // Check that installer is compatible with Wheel-Version. Warn if minor version is greater, abort if major version is greater.
-        // Wheel-Version: 1.0
-        if wheel_version.0 != "1" {
+        // Warn for a newer minor version, but reject an incompatible major version.
+        if major != EXPECTED_MAJOR {
             return Err(Error::InvalidWheel(format!(
-                "Unsupported wheel major version (expected {}, got {})",
-                1, wheel_version.0
+                "Unsupported wheel major version (expected {EXPECTED_MAJOR}, got {major})"
             )));
         }
-        if wheel_version.1 > "0" {
+        if minor > EXPECTED_MINOR {
             warn!(
-                "Warning: Unsupported wheel minor version (expected {}, got {})",
-                0, wheel_version.1
+                "Warning: Unsupported wheel minor version (expected {EXPECTED_MINOR}, got {minor})"
             );
         }
         Ok(wheel)
