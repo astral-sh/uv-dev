@@ -32,7 +32,7 @@ use uv_test::{TestContext, assert_path_missing, uv_snapshot};
 fn assert_cache_cleared(context: &TestContext) -> Result<()> {
     let lock = context.cache_dir.child(".lock");
     lock.assert(predicate::path::is_file());
-    let remaining = fs_err::read_dir(&context.cache_dir)?
+    let remaining = fs_err::read_dir(context.cache_dir.path())?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(remaining, [lock.to_path_buf()]);
