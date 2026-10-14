@@ -4,7 +4,6 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::env::current_dir;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 use wiremock::matchers::{basic_auth, body_json, method, path};
@@ -75,12 +74,13 @@ async fn mock_trusted_publishing(server: &MockServer, runs: u64) {
         .await;
 }
 
-fn github_actions_without_oidc(mut command: Command) -> Command {
-    command
-        .env(EnvVars::GITHUB_ACTIONS, "true")
-        .env_remove("ACTIONS_ID_TOKEN_REQUEST_URL")
-        .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
-    command
+async fn expect_no_upload(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(server)
+        .await;
 }
 
 #[cfg(feature = "test-pypi")]
@@ -166,13 +166,17 @@ async fn missing_trusted_publishing_permission() {
     let context = uv_test::test_context_with_versions!(&[]);
     let server = MockServer::start().await;
     mock_trusted_publishing_audience(&server, 1).await;
+    expect_no_upload(&server).await;
 
-    uv_snapshot!(context.filters(), github_actions_without_oidc(context.publish())
+    uv_snapshot!(context.filters(), context.publish()
         .arg("--publish-url")
         .arg(format!("{}/upload", server.uri()))
         .arg("--trusted-publishing")
         .arg("always")
-        .arg(dummy_wheel()), @"
+        .arg(dummy_wheel())
+        .env(EnvVars::GITHUB_ACTIONS, "true")
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_URL")
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
@@ -191,17 +195,15 @@ async fn no_credentials() {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
     let server = MockServer::start().await;
     mock_trusted_publishing_audience(&server, 1).await;
-    Mock::given(method("POST"))
-        .and(path("/upload"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(0)
-        .mount(&server)
-        .await;
+    expect_no_upload(&server).await;
 
-    uv_snapshot!(context.filters(), github_actions_without_oidc(context.publish())
+    uv_snapshot!(context.filters(), context.publish()
         .arg("--publish-url")
         .arg(format!("{}/upload", server.uri()))
-        .arg(dummy_wheel()), @"
+        .arg(dummy_wheel())
+        .env(EnvVars::GITHUB_ACTIONS, "true")
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_URL")
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
