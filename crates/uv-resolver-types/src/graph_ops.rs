@@ -139,13 +139,19 @@ pub fn simplify_conflict_markers(
                 set.insert(item);
             }
         }
+        let mut children = graph
+            .neighbors_directed(parent_index, Direction::Outgoing)
+            .peekable();
+        if children.peek().is_none() {
+            continue;
+        }
         let sets = activated
             .get(&parent_index)
             .cloned()
             .unwrap_or_else(|| vec![FxHashSet::default()]);
-        for child_edge in graph.edges_directed(parent_index, Direction::Outgoing) {
+        for child in children {
             let mut change = false;
-            let existing = activated.entry(child_edge.target()).or_default();
+            let existing = activated.entry(child).or_default();
             for set in &sets {
                 if !existing.contains(set) {
                     existing.push(set.clone());
@@ -153,7 +159,7 @@ pub fn simplify_conflict_markers(
                 }
             }
             if change {
-                queue.push(child_edge.target());
+                queue.push(child);
             }
         }
     }
