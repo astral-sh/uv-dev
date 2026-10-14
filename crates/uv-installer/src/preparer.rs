@@ -176,7 +176,7 @@ impl<'a> PendingDownload<'a> {
 impl Drop for PendingDownload<'_> {
     fn drop(&mut self) {
         if let Some(id) = self.id.take() {
-            // Waiters require a terminal result; removing a pending registration cannot wake them.
+            // Cache cancellation so waiters and later requests observe the same preparation failure.
             self.in_flight.downloads.done(
                 id,
                 Err("Distribution preparation was cancelled".to_string()),
