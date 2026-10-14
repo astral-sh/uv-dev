@@ -263,50 +263,33 @@ fn uninstall_duplicate_by_path() -> Result<()> {
 
 /// Uninstall a duplicate package in a virtual environment.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn uninstall_duplicate() -> Result<()> {
-    use uv_fs::copy_dir_all;
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    let package = site_packages.child("demo");
+    package.child("__init__.py").write_str("VALUE = 42\n")?;
+    let first = site_packages.child("demo-1.0.0.dist-info");
+    let second = site_packages.child("demo-2.0.0.dist-info");
+    for (version, distribution) in [("1.0.0", &first), ("2.0.0", &second)] {
+        distribution.child("METADATA").write_str(&format!(
+            "Metadata-Version: 2.1\nName: demo\nVersion: {version}\n"
+        ))?;
+        distribution.child("RECORD").write_str(&format!(
+            "demo/__init__.py,,\ndemo-{version}.dist-info/METADATA,,\ndemo-{version}.dist-info/RECORD,,\n"
+        ))?;
+    }
 
-    // Sync a version of `pip` into a virtual environment.
-    let context1 = uv_test::test_context!("3.12");
-    let requirements_txt = context1.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==21.3.1")?;
-
-    // Run `pip sync`.
-    context1
-        .pip_sync()
-        .arg(requirements_txt.path())
-        .assert()
-        .success();
-
-    // Sync a different version of `pip` into a virtual environment.
-    let context2 = uv_test::test_context!("3.12");
-    let requirements_txt = context2.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==22.1.1")?;
-
-    // Run `pip sync`.
-    context2
-        .pip_sync()
-        .arg(requirements_txt.path())
-        .assert()
-        .success();
-
-    // Copy the virtual environment to a new location.
-    copy_dir_all(
-        context2.site_packages().join("pip-22.1.1.dist-info"),
-        context1.site_packages().join("pip-22.1.1.dist-info"),
-    )?;
-
-    // Run `pip uninstall`.
-    uv_snapshot!(context1.pip_uninstall()
-        .arg("pip"), @"
+    uv_snapshot!(context.pip_uninstall().arg("demo"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 2 packages in [TIME]
-     - pip==21.3.1
-     - pip==22.1.1
-    "
-    );
+     - demo==1.0.0
+     - demo==2.0.0
+    ");
+
+    package.assert(predicates::path::missing());
+    first.assert(predicates::path::missing());
+    second.assert(predicates::path::missing());
 
     Ok(())
 }
