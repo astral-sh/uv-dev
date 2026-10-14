@@ -834,12 +834,17 @@ fn script_interpreter_after_upgrade(
     pin: Option<&str>,
     requires_python: &str,
 ) -> Result<(TestContext, PathBuf)> {
+    let initial_version = "3.10.17";
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
         .with_managed_python_dirs()
         .with_filtered_latest_python_versions();
-    context.python_install().arg("3.10.17").assert().success();
+    context
+        .python_install()
+        .arg(initial_version)
+        .assert()
+        .success();
     if let Some(pin) = pin {
         context.temp_dir.child(".python-version").write_str(pin)?;
     }
@@ -849,6 +854,10 @@ fn script_interpreter_after_upgrade(
 # dependencies = []
 # ///
 import sys
+if sys.prefix == sys.base_prefix:
+    raise RuntimeError("the script did not run in a virtual environment")
+if sys.version.split()[0] != "{initial_version}":
+    raise RuntimeError("unexpected initial Python: " + sys.version)
 print(sys.executable)
 "#,
     ))?;
