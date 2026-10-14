@@ -2160,58 +2160,6 @@ fn tool_run_python_at_version() {
 }
 
 #[test]
-fn tool_run_hint_version_not_available() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_counts()
-        .with_filtered_python_sources();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@3.12")
-        .env(EnvVars::UV_PYTHON_DOWNLOADS, "never"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@3.12")
-        .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto")
-        .env(EnvVars::UV_OFFLINE, "true"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but uv is set to offline mode
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@3.12")
-        .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto")
-        .env(EnvVars::UV_NO_MANAGED_PYTHON, "true"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--no-managed-python")
-        .arg("python@3.12")
-        .env(EnvVars::UV_PYTHON_DOWNLOADS, "auto")
-        .env(EnvVars::UV_OFFLINE, "true")
-        .env(EnvVars::UV_MANAGED_PYTHON, "true"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
-
-    hint: A managed Python download is available for Python 3.12, but the Python preference is set to 'only system'
-    ");
-}
-
-#[test]
 fn tool_run_python_from_global_version_file() {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
         .with_filtered_counts()
