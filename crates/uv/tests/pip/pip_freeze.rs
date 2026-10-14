@@ -5,12 +5,27 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 
 use uv_redacted::SafeUrl;
+use uv_test::packse::PackseServer;
+use uv_test::packse::scenario::{Package, PackageMetadata, Scenario};
 use uv_test::uv_snapshot;
 
+fn package_index() -> Result<PackseServer> {
+    let mut scenario = Scenario::empty();
+    for (name, version) in [("markupsafe", "2.1.3"), ("tomli", "2.0.1")] {
+        scenario.packages.insert(
+            name.parse()?,
+            Package {
+                versions: [(version.parse()?, PackageMetadata::wheel_only())].into(),
+            },
+        );
+    }
+    Ok(PackseServer::from_scenario(&scenario))
+}
+
 #[test]
-#[cfg(feature = "test-pypi")]
 fn freeze_many() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {"
@@ -22,6 +37,8 @@ fn freeze_many() -> Result<()> {
     context
         .pip_sync()
         .arg(requirements_txt.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -380,9 +397,9 @@ Version: 0.22.0
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn freeze_path() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {"
@@ -398,6 +415,8 @@ fn freeze_path() -> Result<()> {
         .arg(requirements_txt.path())
         .arg("--target")
         .arg(target.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -468,9 +487,9 @@ fn freeze_nonexistent_path() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn freeze_with_quiet_flag() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {"
@@ -482,6 +501,8 @@ fn freeze_with_quiet_flag() -> Result<()> {
     context
         .pip_sync()
         .arg(requirements_txt.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -498,9 +519,9 @@ fn freeze_with_quiet_flag() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn freeze_target() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {"
@@ -517,6 +538,8 @@ fn freeze_target() -> Result<()> {
         .arg("requirements.txt")
         .arg("--target")
         .arg(target.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -541,9 +564,9 @@ fn freeze_target() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn freeze_prefix() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc! {"
@@ -560,6 +583,8 @@ fn freeze_prefix() -> Result<()> {
         .arg("requirements.txt")
         .arg("--prefix")
         .arg(prefix.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -584,9 +609,9 @@ fn freeze_prefix() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
-fn freeze_exclude() {
+fn freeze_exclude() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let prefix = context.temp_dir.child("prefix");
 
@@ -597,6 +622,8 @@ fn freeze_exclude() {
         .arg("tomli")
         .arg("--prefix")
         .arg(prefix.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -613,4 +640,6 @@ fn freeze_exclude() {
     exit_code: 0 (success)
     "
     );
+
+    Ok(())
 }
