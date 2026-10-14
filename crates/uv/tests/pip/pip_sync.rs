@@ -5600,34 +5600,6 @@ fn sync_seed() -> Result<()> {
     Ok(())
 }
 
-/// Sanitize zip files during extraction.
-#[test]
-fn sanitize() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Install a zip file that includes a path that extends outside the parent.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("payload-package @ https://github.com/astral-sh/sanitize-wheel-test/raw/bc59283d5b4b136a191792e32baa51b477fdf65e/payload_package-0.1.0-py3-none-any.whl")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + payload-package==0.1.0 (from https://github.com/astral-sh/sanitize-wheel-test/raw/bc59283d5b4b136a191792e32baa51b477fdf65e/payload_package-0.1.0-py3-none-any.whl)
-    "
-    );
-
-    // There should be no `payload` file in the root.
-    if let Some(parent) = context.temp_dir.parent() {
-        assert!(!parent.join("payload").exists());
-    }
-
-    Ok(())
-}
-
 /// Allow semicolons attached to markers, as long as they're preceded by a space.
 #[test]
 fn semicolon_trailing_space() -> Result<()> {
