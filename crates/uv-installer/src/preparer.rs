@@ -1,15 +1,15 @@
 use std::cmp::Reverse;
 use std::sync::Arc;
 
-use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, stream::FuturesUnordered};
+use futures::{FutureExt, TryStreamExt, stream::FuturesUnordered};
 use tracing::{debug, instrument};
 
-use uv_cache::Cache;
 use uv_configuration::BuildOptions;
-use uv_distribution::{DistributionDatabase, LocalWheel};
+use uv_distribution::DistributionDatabase;
+use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
-    BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, Hashed, Identifier, Name,
-    RemoteSource, Resolution,
+    BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, DistributionId, Hashed,
+    Identifier, Name, RemoteSource, Resolution,
 };
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
@@ -21,7 +21,6 @@ use uv_types::{BuildContext, HashStrategy, InFlight};
 /// Downloads, builds, and unzips a set of distributions.
 pub struct Preparer<'a, Context: BuildContext> {
     tags: &'a Tags,
-    cache: &'a Cache,
     hashes: &'a HashStrategy,
     build_options: &'a BuildOptions,
     database: DistributionDatabase<'a, Context>,
@@ -30,7 +29,6 @@ pub struct Preparer<'a, Context: BuildContext> {
 
 impl<'a, Context: BuildContext> Preparer<'a, Context> {
     pub fn new(
-        cache: &'a Cache,
         tags: &'a Tags,
         hashes: &'a HashStrategy,
         build_options: &'a BuildOptions,
@@ -38,7 +36,6 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     ) -> Self {
         Self {
             tags,
-            cache,
             hashes,
             build_options,
             database,
@@ -50,37 +47,12 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     #[must_use]
     pub fn with_reporter(self, reporter: Arc<dyn Reporter>) -> Self {
         Self {
-            tags: self.tags,
-            cache: self.cache,
-            hashes: self.hashes,
-            build_options: self.build_options,
             database: self
                 .database
                 .with_reporter(reporter.clone().into_distribution_reporter()),
             reporter: Some(reporter),
+            ..self
         }
-    }
-
-    /// Fetch, build, and unzip the distributions in parallel.
-    fn prepare_stream<'stream>(
-        &'stream self,
-        distributions: Vec<Arc<Dist>>,
-        in_flight: &'stream InFlight,
-        resolution: &'stream Resolution,
-    ) -> impl Stream<Item = Result<CachedDist, Error>> + 'stream {
-        distributions
-            .into_iter()
-            .map(async |dist| {
-                let wheel = self
-                    .get_wheel((*dist).clone(), in_flight, resolution)
-                    .boxed_local()
-                    .await?;
-                if let Some(reporter) = self.reporter.as_ref() {
-                    reporter.on_progress(&wheel);
-                }
-                Ok::<CachedDist, Error>(wheel)
-            })
-            .collect::<FuturesUnordered<_>>()
     }
 
     /// Download, build, and unzip a set of distributions.
@@ -95,8 +67,19 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
         distributions
             .sort_unstable_by_key(|distribution| Reverse(distribution.size().unwrap_or(u64::MAX)));
 
-        let wheels = self
-            .prepare_stream(distributions, in_flight, resolution)
+        let wheels = distributions
+            .into_iter()
+            .map(async |dist| {
+                let wheel = self
+                    .get_wheel(Arc::unwrap_or_clone(dist), in_flight, resolution)
+                    .boxed_local()
+                    .await?;
+                if let Some(reporter) = self.reporter.as_ref() {
+                    reporter.on_progress(&wheel);
+                }
+                Ok::<CachedDist, Error>(wheel)
+            })
+            .collect::<FuturesUnordered<_>>()
             .try_collect()
             .await?;
 
@@ -106,6 +89,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
 
         Ok(wheels)
     }
+
     /// Download, build, and unzip a single wheel.
     #[instrument(skip_all, fields(name = % dist, size = ? dist.size(), url = dist.file().map(| file | file.url.to_string()).unwrap_or_default()))]
     async fn get_wheel(
@@ -135,75 +119,96 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
         }
 
         let id = dist.distribution_id();
-        if let Some(result) = in_flight.downloads.register_or_wait(&id).await {
-            match result.as_ref() {
-                Ok(cached) => {
-                    // Validate that the wheel is compatible with the distribution.
-                    //
-                    // `get_or_build_wheel` is guaranteed to return a wheel that matches the
-                    // distribution. But there could be multiple requested distributions that share
-                    // a cache entry in `in_flight`, so we need to double-check here.
-                    //
-                    // For example, if two requirements are based on the same local path, but use
-                    // different names, then they'll share an `in_flight` entry, but one of the two
-                    // should be rejected (since at least one of the names will not match the
-                    // package name).
-                    if *dist.name() != cached.filename().name {
-                        let err = uv_distribution::Error::WheelMetadataNameMismatch {
-                            given: dist.name().clone(),
-                            metadata: cached.filename().name.clone(),
-                        };
-                        return Err(Error::from_dist(dist, err, resolution));
-                    }
-                    if let Some(version) = dist.version() {
-                        if *version != cached.filename().version
-                            && *version != cached.filename().version.clone().without_local()
-                        {
-                            let err = uv_distribution::Error::WheelMetadataVersionMismatch {
-                                given: version.clone(),
-                                metadata: cached.filename().version.clone(),
-                            };
-                            return Err(Error::from_dist(dist, err, resolution));
-                        }
-                    }
-                    Ok(cached.clone())
-                }
-                Err(err) => Err(Error::Thread(err.to_owned())),
+        let download = match in_flight.downloads.register_or_wait(&id).await {
+            Some(result) => {
+                let cached = result.map_err(Error::Thread)?;
+                validate_in_flight_wheel(&dist, cached.filename())
+                    .map_err(|err| Error::from_dist(dist, err, resolution))?;
+                return Ok(cached);
             }
-        } else {
-            let policy = self.hashes.archive_policy(&dist);
+            None => PendingDownload::new(in_flight, id),
+        };
 
-            let result = self
-                .database
-                .get_or_build_wheel(&dist, self.tags, policy)
-                .boxed_local()
-                .map_err(|err| Error::from_dist(dist.clone(), err, resolution))
-                .await
-                .and_then(|wheel: LocalWheel| {
-                    if wheel.satisfies(policy) {
-                        Ok(wheel)
-                    } else {
-                        let err = uv_distribution::Error::hash_mismatch(
-                            dist.to_string(),
-                            policy.digests(),
-                            wheel.hashes(),
-                        );
-                        Err(Error::from_dist(dist, err, resolution))
-                    }
-                })
-                .map(CachedDist::from);
-            match result {
-                Ok(cached) => {
-                    in_flight.downloads.done(id, Ok(cached.clone()));
-                    Ok(cached)
+        let policy = self.hashes.archive_policy(&dist);
+        let result = self
+            .database
+            .get_or_build_wheel(&dist, self.tags, policy)
+            .boxed_local()
+            .await
+            .and_then(|wheel| {
+                if wheel.satisfies(policy) {
+                    Ok(CachedDist::from(wheel))
+                } else {
+                    Err(uv_distribution::Error::hash_mismatch(
+                        dist.to_string(),
+                        policy.digests(),
+                        wheel.hashes(),
+                    ))
                 }
-                Err(err) => {
-                    in_flight.downloads.done(id, Err(err.to_string()));
-                    Err(err)
-                }
-            }
+            })
+            .map_err(|err| Error::from_dist(dist, err, resolution));
+
+        download.complete(result.as_ref().cloned().map_err(ToString::to_string));
+        result
+    }
+}
+
+/// Publish a result for a registered download, including when its owner is cancelled.
+struct PendingDownload<'a> {
+    in_flight: &'a InFlight,
+    id: Option<DistributionId>,
+}
+
+impl<'a> PendingDownload<'a> {
+    fn new(in_flight: &'a InFlight, id: DistributionId) -> Self {
+        Self {
+            in_flight,
+            id: Some(id),
         }
     }
+
+    fn complete(mut self, result: Result<CachedDist, String>) {
+        let id = self.id.take().expect("download has not been completed");
+        self.in_flight.downloads.done(id, result);
+    }
+}
+
+impl Drop for PendingDownload<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = self.id.take() {
+            // Waiters require a terminal result; removing a pending registration cannot wake them.
+            self.in_flight.downloads.done(
+                id,
+                Err("Distribution preparation was cancelled".to_string()),
+            );
+        }
+    }
+}
+
+/// Validate that a wheel shared by an in-flight download matches the requested distribution.
+///
+/// The wheel matches the distribution that started the download, but other requests can share the
+/// same in-flight entry, such as requirements using the same local path with different names.
+fn validate_in_flight_wheel(
+    dist: &Dist,
+    filename: &WheelFilename,
+) -> Result<(), uv_distribution::Error> {
+    if *dist.name() != filename.name {
+        return Err(uv_distribution::Error::WheelMetadataNameMismatch {
+            given: dist.name().clone(),
+            metadata: filename.name.clone(),
+        });
+    }
+    if let Some(version) = dist.version()
+        && *version != filename.version
+        && *version != filename.version.clone().without_local()
+    {
+        return Err(uv_distribution::Error::WheelMetadataVersionMismatch {
+            given: version.clone(),
+            metadata: filename.version.clone(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -282,9 +287,7 @@ pub trait Reporter: Send + Sync {
 impl dyn Reporter {
     /// Converts this reporter to a [`uv_distribution::Reporter`].
     fn into_distribution_reporter(self: Arc<dyn Reporter>) -> Arc<dyn uv_distribution::Reporter> {
-        Arc::new(Facade {
-            reporter: self.clone(),
-        })
+        Arc::new(Facade { reporter: self })
     }
 }
 
@@ -320,5 +323,37 @@ impl uv_distribution::Reporter for Facade {
 
     fn on_download_complete(&self, name: &PackageName, index: usize) {
         self.reporter.on_download_complete(name, index);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use uv_distribution_types::DistributionId;
+    use uv_types::InFlight;
+
+    use super::PendingDownload;
+
+    #[tokio::test]
+    async fn cancelled_download_wakes_waiters() {
+        let in_flight = InFlight::default();
+        let id = DistributionId::PathBuf("example.whl".into());
+        assert!(in_flight.downloads.register_or_wait(&id).await.is_none());
+        let download = PendingDownload::new(&in_flight, id.clone());
+
+        let (registration, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(biased; in_flight.downloads.register_or_wait(&id), async {
+                drop(download);
+            })
+        })
+        .await
+        .expect("cancelled download left a waiter blocked");
+
+        assert!(matches!(
+            registration,
+            Some(Err(message))
+                if message == "Distribution preparation was cancelled"
+        ));
     }
 }

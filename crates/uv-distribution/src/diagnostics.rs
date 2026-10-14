@@ -1,4 +1,5 @@
-use std::str::FromStr;
+use std::borrow::Cow;
+use std::fmt::Write;
 use std::sync::LazyLock;
 
 use owo_colors::OwoColorize;
@@ -11,17 +12,9 @@ use uv_normalize::PackageName;
 use uv_pep440::{Version, strip_local_version_sentinels};
 
 static SUGGESTIONS: LazyLock<FxHashMap<PackageName, PackageName>> = LazyLock::new(|| {
-    let suggestions: Vec<(String, String)> =
+    let suggestions: Vec<(PackageName, PackageName)> =
         serde_json::from_str(include_str!("suggestions.json")).unwrap();
-    suggestions
-        .iter()
-        .map(|(k, v)| {
-            (
-                PackageName::from_str(k).unwrap(),
-                PackageName::from_str(v).unwrap(),
-            )
-        })
-        .collect()
+    suggestions.into_iter().collect()
 });
 
 /// Format package context that should follow a distribution error as hints.
@@ -50,91 +43,26 @@ pub fn dist_hints(
 fn format_chain(name: &PackageName, version: Option<&Version>, chain: &DerivationChain) -> String {
     /// Format a step in the [`DerivationChain`] as a human-readable error message.
     fn format_step(step: &DerivationStep, range: Option<Ranges<Version>>) -> String {
-        if let Some(range) =
-            range.filter(|range| *range != Ranges::empty() && *range != Ranges::full())
-        {
-            if let Some(extra) = &step.extra {
-                if let Some(version) = step.version.as_ref() {
-                    // Ex) `flask[dotenv]>=1.0.0` (v1.2.3)
-                    format!(
-                        "`{}{}` ({})",
-                        format!("{}[{}]", step.name, extra).cyan(),
-                        range.cyan(),
-                        format!("v{version}").cyan(),
-                    )
-                } else {
-                    // Ex) `flask[dotenv]>=1.0.0`
-                    format!(
-                        "`{}{}`",
-                        format!("{}[{}]", step.name, extra).cyan(),
-                        range.cyan(),
-                    )
-                }
-            } else if let Some(group) = &step.group {
-                if let Some(version) = step.version.as_ref() {
-                    // Ex) `flask:dev>=1.0.0` (v1.2.3)
-                    format!(
-                        "`{}{}` ({})",
-                        format!("{}:{}", step.name, group).cyan(),
-                        range.cyan(),
-                        format!("v{version}").cyan(),
-                    )
-                } else {
-                    // Ex) `flask:dev>=1.0.0`
-                    format!(
-                        "`{}{}`",
-                        format!("{}:{}", step.name, group).cyan(),
-                        range.cyan(),
-                    )
-                }
-            } else {
-                if let Some(version) = step.version.as_ref() {
-                    // Ex) `flask>=1.0.0` (v1.2.3)
-                    format!(
-                        "`{}{}` ({})",
-                        step.name.cyan(),
-                        range.cyan(),
-                        format!("v{version}").cyan(),
-                    )
-                } else {
-                    // Ex) `flask>=1.0.0`
-                    format!("`{}{}`", step.name.cyan(), range.cyan())
-                }
-            }
+        let name = if let Some(extra) = &step.extra {
+            Cow::Owned(format!("{}[{extra}]", step.name))
+        } else if let Some(group) = &step.group {
+            Cow::Owned(format!("{}:{group}", step.name))
         } else {
-            if let Some(extra) = &step.extra {
-                if let Some(version) = step.version.as_ref() {
-                    // Ex) `flask[dotenv]` (v1.2.3)
-                    format!(
-                        "`{}` ({})",
-                        format!("{}[{}]", step.name, extra).cyan(),
-                        format!("v{version}").cyan(),
-                    )
-                } else {
-                    // Ex) `flask[dotenv]`
-                    format!("`{}`", format!("{}[{}]", step.name, extra).cyan())
-                }
-            } else if let Some(group) = &step.group {
-                if let Some(version) = step.version.as_ref() {
-                    // Ex) `flask:dev` (v1.2.3)
-                    format!(
-                        "`{}` ({})",
-                        format!("{}:{}", step.name, group).cyan(),
-                        format!("v{version}").cyan(),
-                    )
-                } else {
-                    // Ex) `flask:dev`
-                    format!("`{}`", format!("{}:{}", step.name, group).cyan())
-                }
-            } else {
-                if let Some(version) = step.version.as_ref() {
-                    // Ex) `flask` (v1.2.3)
-                    format!("`{}` ({})", step.name.cyan(), format!("v{version}").cyan())
-                } else {
-                    // Ex) `flask`
-                    format!("`{}`", step.name.cyan())
-                }
+            Cow::Borrowed(step.name.as_ref())
+        };
+        let range = range.filter(|range| *range != Ranges::empty() && *range != Ranges::full());
+        match (range, &step.version) {
+            (Some(range), Some(version)) => format!(
+                "`{}{}` ({})",
+                name.cyan(),
+                range.cyan(),
+                format!("v{version}").cyan(),
+            ),
+            (Some(range), None) => format!("`{}{}`", name.cyan(), range.cyan()),
+            (None, Some(version)) => {
+                format!("`{}` ({})", name.cyan(), format!("v{version}").cyan())
             }
+            (None, None) => format!("`{}`", name.cyan()),
         }
     }
 
@@ -149,18 +77,20 @@ fn format_chain(name: &PackageName, version: Option<&Version>, chain: &Derivatio
     };
     let mut range: Option<Ranges<Version>> = None;
     for (i, step) in chain.iter().enumerate() {
-        if i > 0 {
-            message = format!("{message} {} which depends on", format_step(step, range));
+        message.push(' ');
+        message.push_str(&format_step(step, range));
+        message.push_str(if i > 0 {
+            " which depends on"
         } else {
-            message = format!("{message} {} depends on", format_step(step, range));
-        }
+            " depends on"
+        });
         range = Some(strip_local_version_sentinels(&step.range));
     }
     if let Some(range) = range.filter(|range| *range != Ranges::empty() && *range != Ranges::full())
     {
-        message = format!("{message} `{}{}`", name.cyan(), range.cyan());
+        let _ = write!(message, " `{}{}`", name.cyan(), range.cyan());
     } else {
-        message = format!("{message} `{}`", name.cyan());
+        let _ = write!(message, " `{}`", name.cyan());
     }
     message
 }

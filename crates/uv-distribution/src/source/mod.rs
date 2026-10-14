@@ -1,13 +1,5 @@
 //! Fetch and build source distributions from remote sources.
 
-// This is to squash warnings about `|r| r.into_git_reporter()`. Clippy wants
-// me to eta-reduce that and write it as
-// `<(dyn reporter::Reporter + 'static)>::into_git_reporter`
-// instead. But that's a monster. On the other hand, applying this suppression
-// instruction more granularly is annoying. So we just slap it on the module
-// for now. ---AG
-#![expect(clippy::redundant_closure_for_method_calls)]
-
 use std::borrow::Cow;
 use std::ops::Bound;
 use std::path::Path;
@@ -738,14 +730,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             }
         }
 
-        let task = self
-            .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
-
         // Build the source distribution.
         let (disk_filename, wheel_filename, metadata) = self
-            .build_distribution(
+            .build_distribution_with_reporting(
                 source,
                 source_dist_entry.path(),
                 subdirectory,
@@ -753,12 +740,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
-
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
-        }
 
         // Store the metadata.
         let metadata_entry = cache_shard.entry(METADATA);
@@ -921,14 +902,9 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             });
         }
 
-        let task = self
-            .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
-
         // Build the source distribution.
         let (_disk_filename, _wheel_filename, metadata) = self
-            .build_distribution(
+            .build_distribution_with_reporting(
                 source,
                 source_dist_entry.path(),
                 subdirectory,
@@ -936,12 +912,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
-
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
-        }
 
         // If necessary, mark the metadata as dynamic.
         let metadata = if dynamic {
@@ -1143,13 +1113,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 .await?
         };
 
-        let task = self
-            .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
-
         let (disk_filename, filename, metadata) = self
-            .build_distribution(
+            .build_distribution_with_reporting(
                 source,
                 source_entry.path(),
                 None,
@@ -1157,12 +1122,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
-
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
-        }
 
         // Store the metadata.
         let metadata_entry = cache_shard.entry(METADATA);
@@ -1296,13 +1255,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
-            .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
-
         let (_disk_filename, _filename, metadata) = self
-            .build_distribution(
+            .build_distribution_with_reporting(
                 source,
                 source_entry.path(),
                 None,
@@ -1310,12 +1264,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
-
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
-        }
 
         // If necessary, mark the metadata as dynamic.
         let metadata = if dynamic {
@@ -1464,13 +1412,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
-            .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
-
         let (disk_filename, filename, metadata) = self
-            .build_distribution(
+            .build_distribution_with_reporting(
                 source,
                 resource.install_path,
                 None,
@@ -1478,12 +1421,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.build_context.sources().clone(),
             )
             .await?;
-
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
-        }
 
         // Store the metadata.
         let metadata_entry = cache_shard.entry(METADATA);
@@ -1668,13 +1605,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
-            .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
-
         let (_disk_filename, _filename, metadata) = self
-            .build_distribution(
+            .build_distribution_with_reporting(
                 source,
                 resource.install_path,
                 None,
@@ -1682,12 +1614,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.build_context.sources().clone(),
             )
             .await?;
-
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
-        }
 
         // Store the metadata.
         write_atomic(metadata_entry.path(), rmp_serde::to_vec(&metadata)?)
@@ -1893,9 +1819,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 resource.git,
                 client.unmanaged.git_http_settings(resource.git.url()),
                 self.build_context.cache().bucket(CacheBucket::Git),
-                self.reporter
-                    .clone()
-                    .map(|reporter| reporter.into_git_reporter()),
+                self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
             )
             .await?;
 
@@ -1950,13 +1874,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
-            .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
-
         let (disk_filename, filename, metadata) = self
-            .build_distribution(
+            .build_distribution_with_reporting(
                 source,
                 source_entry.path(),
                 None,
@@ -1964,12 +1883,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
-
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
-        }
 
         // Store the metadata.
         let metadata_entry = cache_shard.entry(METADATA);
@@ -2003,9 +1916,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 resource.git,
                 client.unmanaged.git_http_settings(resource.git.url()),
                 self.build_context.cache().bucket(CacheBucket::Git),
-                self.reporter
-                    .clone()
-                    .map(|reporter| reporter.into_git_reporter()),
+                self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
             )
             .await?;
 
@@ -2107,13 +2018,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
-            .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
-
         let (_disk_filename, _filename, metadata) = self
-            .build_distribution(
+            .build_distribution_with_reporting(
                 source,
                 source_entry.path(),
                 None,
@@ -2121,12 +2027,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 NoSources::None,
             )
             .await?;
-
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
-        }
 
         // If necessary, mark the metadata as dynamic.
         let metadata = if dynamic {
@@ -2170,9 +2070,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             resource.subdirectory,
             client.unmanaged.git_http_settings(resource.git.url()),
             self.build_context.cache(),
-            self.reporter
-                .clone()
-                .map(|reporter| reporter.into_git_reporter()),
+            self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
         )
         .await?;
 
@@ -2218,13 +2116,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             ));
         }
 
-        let task = self
-            .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
-
         let (disk_filename, filename, metadata) = self
-            .build_distribution(
+            .build_distribution_with_reporting(
                 source,
                 fetch.path(),
                 resource.subdirectory,
@@ -2232,12 +2125,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.build_context.sources().clone(),
             )
             .await?;
-
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
-        }
 
         // Store the metadata.
         let metadata_entry = cache_shard.entry(METADATA);
@@ -2285,10 +2172,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     WheelCache::Git(resource.url, oid.as_short_str()).root(),
                 )
             });
-        if cache_shard
-            .as_ref()
-            .is_some_and(|cache_shard| cache_shard.is_dir())
-        {
+        if cache_shard.as_deref().is_some_and(Path::is_dir) {
             debug!("Skipping GitHub fast path for: {source} (shard exists)");
         } else {
             debug!("Attempting GitHub fast path for: {source}");
@@ -2362,9 +2246,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             resource.subdirectory,
             client.unmanaged.git_http_settings(resource.git.url()),
             self.build_context.cache(),
-            self.reporter
-                .clone()
-                .map(|reporter| reporter.into_git_reporter()),
+            self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
         )
         .await?;
 
@@ -2521,13 +2403,8 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         }
 
         // Otherwise, we need to build a wheel.
-        let task = self
-            .reporter
-            .as_ref()
-            .map(|reporter| reporter.on_build_start(source));
-
         let (_disk_filename, _filename, metadata) = self
-            .build_distribution(
+            .build_distribution_with_reporting(
                 source,
                 fetch.path(),
                 resource.subdirectory,
@@ -2535,12 +2412,6 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 self.build_context.sources().clone(),
             )
             .await?;
-
-        if let Some(task) = task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_build_complete(source, task);
-            }
-        }
 
         // If necessary, mark the metadata as dynamic.
         let metadata = if dynamic {
@@ -2619,9 +2490,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 git,
                 client.unmanaged.git_http_settings(git.url()),
                 self.build_context.cache().bucket(CacheBucket::Git),
-                self.reporter
-                    .clone()
-                    .map(|reporter| reporter.into_git_reporter()),
+                self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
             )
             .await?;
 
@@ -2917,6 +2786,28 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         } else {
             None
         }
+    }
+
+    /// Build a source distribution and report successful completion.
+    async fn build_distribution_with_reporting(
+        &self,
+        source: &BuildableSource<'_>,
+        source_root: &Path,
+        subdirectory: Option<&Path>,
+        cache_shard: &CacheShard,
+        no_sources: NoSources,
+    ) -> Result<(String, WheelFilename, ResolutionMetadata), Error> {
+        let task = self
+            .reporter
+            .as_ref()
+            .map(|reporter| (reporter, reporter.on_build_start(source)));
+        let built = self
+            .build_distribution(source, source_root, subdirectory, cache_shard, no_sources)
+            .await?;
+        if let Some((reporter, task)) = task {
+            reporter.on_build_complete(source, task);
+        }
+        Ok(built)
     }
 
     /// Build a source distribution, storing the built wheel in the cache.

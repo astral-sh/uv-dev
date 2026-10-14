@@ -41,6 +41,17 @@ pub struct Installer<'a> {
     preview: Preview,
 }
 
+/// Owned installation settings that can be moved to a worker thread.
+struct InstallContext {
+    layout: Layout,
+    relocatable: bool,
+    link_mode: LinkMode,
+    reporter: Option<Arc<dyn Reporter>>,
+    name: Option<String>,
+    metadata: bool,
+    preview: Preview,
+}
+
 impl<'a> Installer<'a> {
     /// Initialize a new installer.
     pub fn new(venv: &'a PythonEnvironment, preview: Preview) -> Self {
@@ -100,39 +111,11 @@ impl<'a> Installer<'a> {
     /// Install a set of wheels into a Python virtual environment.
     #[instrument(skip_all, fields(num_wheels = %wheels.len()))]
     pub async fn install(self, wheels: Vec<CachedDist>) -> Result<Vec<CachedDist>, InstallError> {
-        let Self {
-            venv,
-            cache,
-            link_mode,
-            reporter,
-            name: installer_name,
-            metadata: installer_metadata,
-            preview,
-        } = self;
-
-        if cache.is_some_and(Cache::is_temporary) {
-            if link_mode.is_symlink() {
-                return Err(InstallError::SymlinkWithoutCache);
-            }
-        }
-
+        let context = self.prepare_install()?;
         let (tx, rx) = oneshot::channel();
 
-        let layout = venv.interpreter().layout();
-        let relocatable = venv.relocatable();
-        // Initialize the threadpool with the user settings.
-        initialize_rayon_once();
         rayon::spawn(move || {
-            let result = install(
-                wheels,
-                &layout,
-                installer_name.as_deref(),
-                link_mode,
-                reporter.as_ref(),
-                relocatable,
-                installer_metadata,
-                preview,
-            );
+            let result = context.install(wheels);
 
             // This may fail if the main task was cancelled.
             let _ = tx.send(result);
@@ -147,77 +130,72 @@ impl<'a> Installer<'a> {
         self,
         wheels: Vec<CachedDist>,
     ) -> Result<Vec<CachedDist>, InstallError> {
-        if self.cache.is_some_and(Cache::is_temporary) {
-            if self.link_mode.is_symlink() {
-                return Err(InstallError::SymlinkWithoutCache);
-            }
+        self.prepare_install()?.install(wheels)
+    }
+
+    /// Prepare owned installation settings and initialize the worker pool.
+    fn prepare_install(self) -> Result<InstallContext, InstallError> {
+        if self.cache.is_some_and(Cache::is_temporary) && self.link_mode.is_symlink() {
+            return Err(InstallError::SymlinkWithoutCache);
         }
 
-        install(
-            wheels,
-            &self.venv.interpreter().layout(),
-            self.name.as_deref(),
-            self.link_mode,
-            self.reporter.as_ref(),
-            self.venv.relocatable(),
-            self.metadata,
-            self.preview,
-        )
+        let context = InstallContext {
+            layout: self.venv.interpreter().layout(),
+            relocatable: self.venv.relocatable(),
+            link_mode: self.link_mode,
+            reporter: self.reporter,
+            name: self.name,
+            metadata: self.metadata,
+            preview: self.preview,
+        };
+        initialize_rayon_once();
+        Ok(context)
     }
 }
 
-/// Install a set of wheels into a Python virtual environment synchronously.
-#[instrument(skip_all, fields(num_wheels = %wheels.len()))]
-fn install(
-    wheels: Vec<CachedDist>,
-    layout: &Layout,
-    installer_name: Option<&str>,
-    link_mode: LinkMode,
-    reporter: Option<&Arc<dyn Reporter>>,
-    relocatable: bool,
-    installer_metadata: bool,
-    preview: Preview,
-) -> Result<Vec<CachedDist>, InstallError> {
-    // Initialize the threadpool with the user settings.
-    initialize_rayon_once();
-    let state = uv_install_wheel::InstallState::new(preview);
-    wheels.par_iter().try_for_each(|wheel| {
-        uv_install_wheel::install_wheel(
-            layout,
-            relocatable,
-            wheel.path(),
-            wheel.filename(),
-            wheel
-                .parsed_url()
-                .map(uv_pypi_types::DirectUrl::from)
-                .as_ref(),
-            if wheel.cache_info().is_empty() {
-                None
-            } else {
-                Some(wheel.cache_info())
-            },
-            wheel.build_info(),
-            installer_name,
-            installer_metadata,
-            link_mode,
-            &state,
-        )
-        .map_err(|source| InstallError::Wheel {
-            wheel: Box::new(wheel.clone()),
-            source,
-        })?;
+impl InstallContext {
+    /// Install a set of wheels into a Python virtual environment synchronously.
+    #[instrument(skip_all, fields(num_wheels = %wheels.len()))]
+    fn install(&self, wheels: Vec<CachedDist>) -> Result<Vec<CachedDist>, InstallError> {
+        let state = uv_install_wheel::InstallState::new(self.preview);
+        wheels.par_iter().try_for_each(|wheel| {
+            uv_install_wheel::install_wheel(
+                &self.layout,
+                self.relocatable,
+                wheel.path(),
+                wheel.filename(),
+                wheel
+                    .parsed_url()
+                    .map(uv_pypi_types::DirectUrl::from)
+                    .as_ref(),
+                if wheel.cache_info().is_empty() {
+                    None
+                } else {
+                    Some(wheel.cache_info())
+                },
+                wheel.build_info(),
+                self.name.as_deref(),
+                self.metadata,
+                self.link_mode,
+                &state,
+            )
+            .map_err(|source| InstallError::Wheel {
+                wheel: Box::new(wheel.clone()),
+                source,
+            })?;
 
-        if let Some(reporter) = reporter.as_ref() {
-            reporter.on_install_progress(wheel);
+            if let Some(reporter) = &self.reporter {
+                reporter.on_install_progress(wheel);
+            }
+
+            Ok::<(), InstallError>(())
+        })?;
+        if let Err(err) = state.warn_package_conflicts() {
+            warn!("Checking for conflicts between packages failed: {err}");
         }
 
-        Ok::<(), InstallError>(())
-    })?;
-    if let Err(err) = state.warn_package_conflicts() {
-        warn!("Checking for conflicts between packages failed: {err}");
+        Ok(wheels)
     }
-
-    Ok(wheels)
 }
 
 pub trait Reporter: Send + Sync {

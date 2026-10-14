@@ -289,7 +289,7 @@ pub async fn pip_list(
         let markers = environment.interpreter().to_resolver_marker_environment();
         let tags = environment.interpreter().tags()?;
 
-        for diagnostic in site_packages.diagnostics(&markers, tags, dependency_metadata)? {
+        for diagnostic in site_packages.diagnostics(&markers, tags, dependency_metadata) {
             writeln!(
                 printer.stderr(),
                 "{}{} {}",

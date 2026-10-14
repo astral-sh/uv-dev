@@ -182,7 +182,7 @@ pub async fn pip_tree(
 
     // Validate that the environment is consistent.
     if strict {
-        for diagnostic in site_packages.diagnostics(&markers, tags, dependency_metadata)? {
+        for diagnostic in site_packages.diagnostics(&markers, tags, dependency_metadata) {
             writeln!(
                 printer.stderr(),
                 "{}{} {}",

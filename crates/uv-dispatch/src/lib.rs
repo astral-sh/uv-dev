@@ -520,7 +520,6 @@ impl BuildContext for BuildDispatch<'_> {
             vec![]
         } else {
             let preparer = Preparer::new(
-                self.cache,
                 tags,
                 hasher,
                 self.build_options,

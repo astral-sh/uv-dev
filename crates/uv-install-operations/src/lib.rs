@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
+use itertools::Either;
 use owo_colors::OwoColorize;
 use tracing::debug;
 use uv_cache::Cache;
@@ -21,7 +22,7 @@ use uv_distribution_types::{
     InstalledVersion, LocalDist, Name, PackageConfigSettings, Resolution, VersionOrUrlRef,
 };
 use uv_fs::{CWD, Simplified, normalize_path_under};
-use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};
+use uv_install_wheel::{Layout, LinkMode, installed_dist_info_path, read_record_into_iter};
 use uv_installer::{InstallationStrategy, Plan, Planner, Preparer, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -78,14 +79,14 @@ impl Name for ChangedDist {
     }
 }
 
-/// The [`Version`] or [`VerbatimUrl`] for a changed dist.
+/// The version or source URL for a changed distribution.
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-enum ShortSpecifier<'a> {
-    Version(&'a Version),
+enum ChangeSpecifier<'a, V> {
+    Version(V),
     Url(&'a VerbatimUrl),
 }
 
-impl std::fmt::Display for ShortSpecifier<'_> {
+impl<V: std::fmt::Display> std::fmt::Display for ChangeSpecifier<'_, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Version(version) => version.fmt(f),
@@ -94,39 +95,23 @@ impl std::fmt::Display for ShortSpecifier<'_> {
     }
 }
 
-/// The [`InstalledVersion`] or [`VerbatimUrl`] for a changed dist.
-#[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-enum LongSpecifier<'a> {
-    InstalledVersion(InstalledVersion<'a>),
-    Url(&'a VerbatimUrl),
-}
-
-impl std::fmt::Display for LongSpecifier<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InstalledVersion(version) => version.fmt(f),
-            Self::Url(url) => write!(f, " @ {url}"),
-        }
-    }
-}
+type ShortSpecifier<'a> = ChangeSpecifier<'a, &'a Version>;
+type LongSpecifier<'a> = ChangeSpecifier<'a, InstalledVersion<'a>>;
 
 impl ChangedDist {
     fn short_specifier(&self) -> ShortSpecifier<'_> {
-        match self {
-            Self::Local(dist) => ShortSpecifier::Version(dist.installed_version().version()),
-            Self::Remote(dist) => match dist.version_or_url() {
-                VersionOrUrlRef::Version(version) => ShortSpecifier::Version(version),
-                VersionOrUrlRef::Url(url) => ShortSpecifier::Url(url),
-            },
+        match self.long_specifier() {
+            LongSpecifier::Version(version) => ShortSpecifier::Version(version.version()),
+            LongSpecifier::Url(url) => ShortSpecifier::Url(url),
         }
     }
 
     fn long_specifier(&self) -> LongSpecifier<'_> {
         match self {
-            Self::Local(dist) => LongSpecifier::InstalledVersion(dist.installed_version()),
+            Self::Local(dist) => LongSpecifier::Version(dist.installed_version()),
             Self::Remote(dist) => match dist.version_or_url() {
                 VersionOrUrlRef::Version(version) => {
-                    LongSpecifier::InstalledVersion(InstalledVersion::Version(version))
+                    LongSpecifier::Version(InstalledVersion::Version(version))
                 }
                 VersionOrUrlRef::Url(url) => LongSpecifier::Url(url),
             },
@@ -286,27 +271,26 @@ impl InstallationPlan {
     ) -> Result<Changelog, Error> {
         debug_assert!(self.is_noop(modifications, compile, dry_run));
 
-        let (plan, start) = self.into_parts();
+        let (plan, start) = self.into_execution_parts(modifications);
         if dry_run.enabled() {
-            report_dry_run(
-                dry_run,
-                resolution,
-                plan,
-                modifications,
-                start,
-                logger,
-                printer,
-            )
+            report_dry_run(dry_run, resolution, plan, start, logger, printer)
         } else {
             logger.on_check(resolution.len(), start, printer, dry_run)?;
             Ok(Changelog::default())
         }
     }
 
-    fn into_parts(self) -> (Plan, Instant) {
+    fn into_execution_parts(self, modifications: Modifications) -> (Plan, Instant) {
         let now = Instant::now();
         let start = now.checked_sub(self.elapsed).unwrap_or(now);
-        (self.plan, start)
+        let plan = match modifications {
+            Modifications::Sufficient => Plan {
+                extraneous: Vec::new(),
+                ..self.plan
+            },
+            Modifications::Exact => self.plan,
+        };
+        (plan, start)
     }
 }
 
@@ -399,40 +383,14 @@ impl InstallationPlan {
         printer: Printer,
         preview: Preview,
     ) -> Result<Changelog, Error> {
-        let (plan, start) = self.into_parts();
+        let (plan, start) = self.into_execution_parts(modifications);
 
         if dry_run.enabled() {
-            return report_dry_run(
-                dry_run,
-                resolution,
-                plan,
-                modifications,
-                start,
-                logger.as_ref(),
-                printer,
-            );
+            return report_dry_run(dry_run, resolution, plan, start, logger.as_ref(), printer);
         }
 
-        let Plan {
-            cached,
-            remote,
-            reinstalls,
-            extraneous,
-        } = plan;
-
-        // If we're in `install` mode, ignore any extraneous distributions.
-        let extraneous = match modifications {
-            Modifications::Sufficient => vec![],
-            Modifications::Exact => extraneous,
-        };
-
         // Nothing to do.
-        if remote.is_empty()
-            && cached.is_empty()
-            && reinstalls.is_empty()
-            && extraneous.is_empty()
-            && compile.is_none()
-        {
+        if plan.is_empty() && compile.is_none() {
             logger.on_check(resolution.len(), start, printer, dry_run)?;
             return Ok(Changelog::default());
         }
@@ -440,25 +398,21 @@ impl InstallationPlan {
         // Partition into two sets: those that require build isolation, and those that disable it. This
         // is effectively a heuristic to make `--no-build-isolation` work "more often" by way of giving
         // `--no-build-isolation` packages "access" to the rest of the environment.
-        let (isolated_phase, shared_phase) = Plan {
-            cached,
-            remote,
-            reinstalls,
-            extraneous,
-        }
-        .partition(|name| build_dispatch.build_isolation().is_isolated(Some(name)));
+        let (isolated_phase, shared_phase) =
+            plan.partition(|name| build_dispatch.build_isolation().is_isolated(Some(name)));
 
-        let has_isolated_phase = !isolated_phase.is_empty();
-        let has_shared_phase = !shared_phase.is_empty();
+        let shared_phase_label = (!isolated_phase.is_empty()).then_some(InstallPhase::Shared);
 
         let mut installs = vec![];
         let mut uninstalls = vec![];
 
-        // Execute the isolated-build phase.
-        if has_isolated_phase {
-            let (isolated_installs, isolated_uninstalls) = execute_plan(
-                isolated_phase,
-                None,
+        for (plan, phase) in [(isolated_phase, None), (shared_phase, shared_phase_label)] {
+            if plan.is_empty() {
+                continue;
+            }
+            let (phase_installs, phase_uninstalls) = execute_plan(
+                plan,
+                phase,
                 resolution,
                 build_options,
                 link_mode,
@@ -476,37 +430,8 @@ impl InstallationPlan {
                 preview,
             )
             .await?;
-            installs.extend(isolated_installs);
-            uninstalls.extend(isolated_uninstalls);
-        }
-
-        if has_shared_phase {
-            let (shared_installs, shared_uninstalls) = execute_plan(
-                shared_phase,
-                if has_isolated_phase {
-                    Some(InstallPhase::Shared)
-                } else {
-                    None
-                },
-                resolution,
-                build_options,
-                link_mode,
-                hasher,
-                tags,
-                client,
-                in_flight,
-                concurrency,
-                build_dispatch,
-                cache,
-                venv,
-                logger.as_ref(),
-                installer_metadata,
-                printer,
-                preview,
-            )
-            .await?;
-            installs.extend(shared_installs);
-            uninstalls.extend(shared_uninstalls);
+            installs.extend(phase_installs);
+            uninstalls.extend(phase_uninstalls);
         }
 
         if let Some(compile) = compile {
@@ -515,8 +440,8 @@ impl InstallationPlan {
                     compile_bytecode(venv, concurrency, cache, printer).await?;
                 }
                 BytecodeCompilation::Installed => {
-                    let files = python_source_files_for_installs(venv, &installs);
-                    compile_bytecode_files(files, venv, concurrency, cache, printer).await?;
+                    compile_bytecode_for_installs(venv, &installs, concurrency, cache, printer)
+                        .await?;
                 }
             }
         }
@@ -531,59 +456,80 @@ impl InstallationPlan {
     }
 }
 
-type PythonSourceFileIterator = Box<dyn Iterator<Item = anyhow::Result<PathBuf>>>;
-
-/// Return the Python source files owned by the distributions installed by this operation.
-fn python_source_files_for_installs<'a>(
-    venv: &'a PythonEnvironment,
-    installs: &'a [CachedDist],
-) -> impl Iterator<Item = anyhow::Result<PathBuf>> + 'a {
+/// Compile the Python source files owned by the distributions installed by this operation.
+async fn compile_bytecode_for_installs(
+    venv: &PythonEnvironment,
+    installs: &[CachedDist],
+    concurrency: &Concurrency,
+    cache: &Cache,
+    printer: Printer,
+) -> Result<(), Error> {
     let layout = venv.interpreter().layout();
     let site_packages = [
         CWD.join(&layout.scheme.purelib),
         CWD.join(&layout.scheme.platlib),
     ];
-    installs.iter().flat_map(move |install| {
-        let dist_info = match installed_dist_info_path(&layout, install.path()).with_context(|| {
-            format!("Failed to locate installed distribution for bytecode compilation: {install}")
-        }) {
-            Ok(dist_info) => dist_info,
-            Err(err) => return Box::new(std::iter::once(Err(err))) as PythonSourceFileIterator,
-        };
-        let Some(record_root) = dist_info.parent().map(|path| CWD.join(path)) else {
-            return Box::new(std::iter::once(Err(anyhow!(
-                "Invalid installed distribution path: {}",
-                dist_info.user_display()
-            ))));
-        };
-        let record_path = dist_info.join("RECORD");
-        let record_file = match fs_err::File::open(&record_path) {
-            Ok(record_file) => record_file,
-            // Another process may have removed the installed distribution.
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Box::new(std::iter::empty());
-            }
-            Err(err) => {
-                return Box::new(std::iter::once(Err(err).with_context(|| {
-                    format!("Failed to read `{}`", record_path.user_display())
-                })));
-            }
-        };
-        let site_packages = site_packages.clone();
+    let files = installs
+        .iter()
+        .filter_map(|install| InstalledRecord::open(&layout, install).transpose())
+        .flat_map(|record| match record {
+            Ok(record) => Either::Left(record.python_sources(&site_packages)),
+            Err(err) => Either::Right(std::iter::once(Err(err))),
+        });
+    compile_bytecode_files(files, venv, concurrency, cache, printer).await
+}
 
-        Box::new(read_record_into_iter(record_file).filter_map(move |entry| {
+/// An installed distribution's `RECORD` file and the paths needed to interpret it.
+struct InstalledRecord {
+    root: PathBuf,
+    path: PathBuf,
+    file: fs_err::File,
+}
+
+impl InstalledRecord {
+    fn open(layout: &Layout, install: &CachedDist) -> anyhow::Result<Option<Self>> {
+        let dist_info = installed_dist_info_path(layout, install.path()).with_context(|| {
+            format!("Failed to locate installed distribution for bytecode compilation: {install}")
+        })?;
+        let root = dist_info
+            .parent()
+            .map(|path| CWD.join(path))
+            .ok_or_else(|| {
+                anyhow!(
+                    "Invalid installed distribution path: {}",
+                    dist_info.user_display()
+                )
+            })?;
+        let path = dist_info.join("RECORD");
+        let file = match fs_err::File::open(&path) {
+            // Another process may have removed the installed distribution.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            result => {
+                result.with_context(|| format!("Failed to read `{}`", path.user_display()))?
+            }
+        };
+        Ok(Some(Self { root, path, file }))
+    }
+
+    fn python_sources(
+        self,
+        site_packages: &[PathBuf],
+    ) -> impl Iterator<Item = anyhow::Result<PathBuf>> {
+        let Self { root, path, file } = self;
+        read_record_into_iter(file).filter_map(move |entry| {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
-                    return Some(Err(err).with_context(|| {
-                        format!("Failed to read `{}`", record_path.user_display())
-                    }));
+                    return Some(
+                        Err(err)
+                            .with_context(|| format!("Failed to read `{}`", path.user_display())),
+                    );
                 }
             };
-            let path = python_source_path_from_record(&record_root, &entry.path, &site_packages)?;
-            path.is_file().then_some(Ok(path))
-        }))
-    })
+            let source = python_source_path_from_record(&root, &entry.path, site_packages)?;
+            source.is_file().then_some(Ok(source))
+        })
+    }
 }
 
 /// Resolve a Python source path from an installed `RECORD` entry.
@@ -699,7 +645,6 @@ async fn execute_plan(
         let start = std::time::Instant::now();
 
         let preparer = Preparer::new(
-            cache,
             tags,
             hasher,
             build_options,
@@ -727,7 +672,8 @@ async fn execute_plan(
     };
 
     // Remove any upgraded or extraneous installations.
-    let uninstalls = extraneous.into_iter().chain(reinstalls).collect::<Vec<_>>();
+    let mut uninstalls = extraneous;
+    uninstalls.extend(reinstalls);
     if !uninstalls.is_empty() {
         let start = std::time::Instant::now();
 
@@ -744,23 +690,21 @@ async fn execute_plan(
                         if summary.dir_count == 1 { "y" } else { "ies" },
                     );
                 }
-                Err(uv_installer::UninstallError::Uninstall(
-                    uv_install_wheel::Error::MissingRecord(_),
-                )) => {
+                Err(error) => {
+                    let missing_file = match error {
+                        uv_installer::UninstallError::Uninstall(
+                            uv_install_wheel::Error::MissingRecord(_),
+                        ) => "RECORD",
+                        uv_installer::UninstallError::Uninstall(
+                            uv_install_wheel::Error::MissingTopLevel(_),
+                        ) => "top_level.txt",
+                        error => return Err(error.into()),
+                    };
                     warn_user!(
-                        "Failed to uninstall package at `{}` due to missing `RECORD` file. Installation may result in an incomplete environment.",
+                        "Failed to uninstall package at `{}` due to missing `{missing_file}` file. Installation may result in an incomplete environment.",
                         dist_info.install_path().user_display().cyan(),
                     );
                 }
-                Err(uv_installer::UninstallError::Uninstall(
-                    uv_install_wheel::Error::MissingTopLevel(_),
-                )) => {
-                    warn_user!(
-                        "Failed to uninstall package at `{}` due to missing `top_level.txt` file. Installation may result in an incomplete environment.",
-                        dist_info.install_path().user_display().cyan(),
-                    );
-                }
-                Err(err) => return Err(err.into()),
             }
         }
 
@@ -768,7 +712,8 @@ async fn execute_plan(
     }
 
     // Install the resolved distributions.
-    let mut installs = wheels.into_iter().chain(cached).collect::<Vec<_>>();
+    let mut installs = wheels;
+    installs.extend(cached);
     if !installs.is_empty() {
         let start = std::time::Instant::now();
         installs = uv_installer::Installer::new(venv, preview)
@@ -794,11 +739,16 @@ fn report_dry_run(
     dry_run: DryRun,
     resolution: &Resolution,
     plan: Plan,
-    modifications: Modifications,
     start: std::time::Instant,
     logger: &dyn InstallLogger,
     printer: Printer,
 ) -> Result<Changelog, Error> {
+    // Nothing to do.
+    if plan.is_empty() {
+        logger.on_check(resolution.len(), start, printer, dry_run)?;
+        return Ok(Changelog::default());
+    }
+
     let Plan {
         cached,
         remote,
@@ -806,25 +756,10 @@ fn report_dry_run(
         extraneous,
     } = plan;
 
-    // If we're in `install` mode, ignore any extraneous distributions.
-    let extraneous = match modifications {
-        Modifications::Sufficient => vec![],
-        Modifications::Exact => extraneous,
-    };
-
-    // Nothing to do.
-    if remote.is_empty() && cached.is_empty() && reinstalls.is_empty() && extraneous.is_empty() {
-        logger.on_check(resolution.len(), start, printer, dry_run)?;
-        return Ok(Changelog::default());
-    }
-
-    // Download, build, and unzip any missing distributions.
-    let wheels = if remote.is_empty() {
-        vec![]
-    } else {
+    // Report any distributions that would need to be prepared.
+    if !remote.is_empty() {
         logger.on_prepare(remote.len(), None, start, printer, dry_run)?;
-        remote
-    };
+    }
 
     // Remove any upgraded or extraneous installations.
     let uninstalls = extraneous.len() + reinstalls.len();
@@ -834,7 +769,7 @@ fn report_dry_run(
     }
 
     // Install the resolved distributions.
-    let installs = wheels.len() + cached.len();
+    let installs = remote.len() + cached.len();
 
     if installs > 0 {
         logger.on_install(installs, start, printer, dry_run)?;
@@ -844,7 +779,7 @@ fn report_dry_run(
         .into_iter()
         .chain(extraneous)
         .map(|dist| ChangedDist::Local(dist.into()));
-    let installed = wheels.into_iter().map(ChangedDist::Remote).chain(
+    let installed = remote.into_iter().map(ChangedDist::Remote).chain(
         cached
             .into_iter()
             .map(|dist| ChangedDist::Local(dist.into())),
@@ -872,12 +807,9 @@ pub fn diagnose_environment<'a>(
 ) -> Result<(), Error> {
     let site_packages = SitePackages::from_environment(venv)?;
     let relevant_packages = relevant_packages.collect::<HashSet<_>>();
-    for diagnostic in site_packages.diagnostics(markers, tags, dependency_metadata)? {
+    for diagnostic in site_packages.diagnostics(markers, tags, dependency_metadata) {
         // Only surface diagnostics that are "relevant" to the current resolution.
-        if relevant_packages
-            .iter()
-            .any(|name| diagnostic.includes(name))
-        {
+        if diagnostic.includes_any(|name| relevant_packages.contains(name)) {
             writeln!(
                 printer.stderr(),
                 "{}{} {}",
