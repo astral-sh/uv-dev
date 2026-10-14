@@ -450,15 +450,6 @@ fn pip_sync_empty() -> Result<()> {
     requirements_txt.touch()?;
 
     uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    warning: Requirements file `requirements.txt` does not contain any dependencies
-    No requirements found (hint: use `--allow-empty-requirements` to clear the environment)
-    "
-    );
-
-    uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
         .arg("--allow-empty-requirements"), @"
     exit_code: 0 (success)
@@ -477,8 +468,18 @@ fn pip_sync_empty() -> Result<()> {
         .assert()
         .success();
 
-    // Now, syncing should remove the package.
+    // An empty requirements file must not clear the environment without explicit opt-in.
     requirements_txt.write_str("")?;
+    uv_snapshot!(context.pip_sync()
+        .arg("requirements.txt"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Requirements file `requirements.txt` does not contain any dependencies
+    No requirements found (hint: use `--allow-empty-requirements` to clear the environment)
+    "
+    );
+    context.assert_command("import iniconfig").success();
+
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
         .arg("--allow-empty-requirements"), @"
@@ -490,6 +491,7 @@ fn pip_sync_empty() -> Result<()> {
      - iniconfig==2.0.0
     "
     );
+    context.assert_not_installed("iniconfig");
 
     Ok(())
 }
