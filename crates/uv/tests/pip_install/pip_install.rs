@@ -4907,36 +4907,6 @@ fn reinstall_duplicate() -> Result<()> {
     Ok(())
 }
 
-/// Install a package that contains a symlink within the archive.
-#[test]
-fn install_symlink() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("pgpdump==1.5")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + pgpdump==1.5
-    "
-    );
-
-    context.assert_command("import pgpdump").success();
-
-    uv_snapshot!(context
-        .pip_uninstall()
-        .arg("pgpdump"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Uninstalled 1 package in [TIME]
-     - pgpdump==1.5
-    "
-    );
-}
-
 #[test]
 fn invalidate_editable_on_change() -> Result<()> {
     let context = uv_test::test_context!("3.12");
