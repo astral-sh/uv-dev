@@ -211,7 +211,7 @@ impl Pep517Backend {
             .backend_path
             .iter()
             .flat_map(BackendPath::iter)
-            .map(|path| format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\"")))
+            .map(|path| path.escape_for_python())
             .format(", ");
 
         // > Projects can specify that their backend code is hosted in-tree by including the
