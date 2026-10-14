@@ -415,14 +415,9 @@ impl TextCredentialStore {
     }
 
     /// Remove credentials for a given service.
-    pub fn remove(&mut self, service: Service, username: Username) -> Option<Credentials> {
-        let mut key = (service, username);
-        // Older stores can contain credentials in the service URL.
-        if let Some(credentials) = self.credentials.remove(&key) {
-            return Some(credentials);
-        }
-        key.0.remove_credentials();
-        self.credentials.remove(&key)
+    pub fn remove(&mut self, mut service: Service, username: Username) -> Option<Credentials> {
+        service.remove_credentials();
+        self.credentials.remove(&(service, username))
     }
 }
 
@@ -573,12 +568,7 @@ mod tests {
         assert_eq!(store.credentials.keys().next().unwrap().0, clean_service);
         assert!(store.remove(clean_service, username.clone()).is_some());
 
-        store.insert(service.clone(), credentials.clone());
-        assert!(store.remove(service.clone(), username.clone()).is_some());
-
-        store
-            .credentials
-            .insert((service.clone(), username.clone()), credentials);
+        store.insert(service.clone(), credentials);
         assert!(store.remove(service, username).is_some());
     }
 
