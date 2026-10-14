@@ -348,10 +348,11 @@ impl TestContext {
     /// Add extra standard filtering for executable suffixes on the current platform e.g.
     /// drops `.exe` on Windows.
     #[must_use]
-    pub fn with_filtered_exe_suffix(mut self) -> Self {
-        self.filters
-            .push((regex::escape(env::consts::EXE_SUFFIX), String::new()));
-        self
+    pub fn with_filtered_exe_suffix(self) -> Self {
+        match env::consts::EXE_SUFFIX {
+            "" => self,
+            suffix => self.with_filter((regex::escape(suffix), String::new())),
+        }
     }
 
     /// Add extra standard filtering for Python interpreter sources
