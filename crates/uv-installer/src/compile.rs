@@ -410,6 +410,8 @@ async fn launch_bytecode_compiler(
         .current_dir(dir)
         // Otherwise stdout is buffered and we'll wait forever for a response
         .env(EnvVars::PYTHONUNBUFFERED, "1")
+        // Startup can time out before the worker takes ownership of the child.
+        .kill_on_drop(true)
         .spawn()
         .map_err(CompileError::PythonSubcommand)?;
 
@@ -421,22 +423,23 @@ async fn launch_bytecode_compiler(
 
     // Check if the launch was successful.
     let mut out_line = String::new();
-    stdout
-        .read_line(&mut out_line)
-        .await
-        .map_err(|err| CompileError::ChildStdio {
-            device: "stdout",
-            err,
-        })?;
-
-    if out_line.trim_end() == "Ready" {
-        Ok(Some(BytecodeCompiler {
+    let read_result = stdout.read_line(&mut out_line).await;
+    if read_result.is_ok() && out_line.trim_end() == "Ready" {
+        return Ok(Some(BytecodeCompiler {
             child,
             stdin,
             stdout,
             stderr,
-        }))
-    } else if out_line.is_empty() {
+        }));
+    }
+
+    // Reap a failed startup before retrying or reporting the error.
+    let _ = child.kill().await;
+    read_result.map_err(|err| CompileError::ChildStdio {
+        device: "stdout",
+        err,
+    })?;
+    if out_line.is_empty() {
         // Failed to launch, try again
         Ok(None)
     } else {
@@ -510,4 +513,58 @@ async fn worker_main_loop(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::ErrorKind;
+    use std::net::Ipv4Addr;
+    use std::time::Duration;
+
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+    use uv_cache::Cache;
+    use uv_python_discovery::find_environment;
+    use uv_python_types::{EnvironmentPreference, PythonPreference, PythonRequest};
+
+    use super::launch_bytecode_compiler;
+
+    /// Cancelling startup must terminate the interpreter before it reports readiness.
+    #[tokio::test]
+    async fn cancelled_bytecode_compiler_startup_terminates_child() -> anyhow::Result<()> {
+        let _preview = uv_preview::test::with_features(&[]);
+        let cache = Cache::temp()?;
+        let environment = find_environment(
+            &PythonRequest::Any,
+            EnvironmentPreference::Any,
+            PythonPreference::System,
+            None,
+            &cache,
+        )?;
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let script = cache.root().join("startup.py");
+        fs_err::write(
+            &script,
+            format!(
+                "import socket\nsocket.create_connection(('127.0.0.1', {})).recv(1)\n",
+                listener.local_addr()?.port()
+            ),
+        )?;
+
+        let (mut connection, _) = tokio::select! {
+            result = listener.accept() => result?,
+            _ = launch_bytecode_compiler(cache.root(), environment.python_executable(), &script) => {
+                anyhow::bail!("bytecode compiler exited before startup was cancelled")
+            }
+            _ = tokio::time::sleep(Duration::from_secs(30)) => {
+                anyhow::bail!("bytecode compiler did not start")
+            }
+        };
+        match tokio::time::timeout(Duration::from_secs(5), connection.read(&mut [0])).await? {
+            Ok(0) => {}
+            Err(err) if err.kind() == ErrorKind::ConnectionReset => {}
+            result => anyhow::bail!("unexpected compiler connection result: {result:?}"),
+        }
+        Ok(())
+    }
 }
