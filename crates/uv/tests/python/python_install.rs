@@ -2569,11 +2569,11 @@ fn python_install_prerelease() -> anyhow::Result<()> {
     ");
 
     // If we install a stable version, that should be preferred though
-    uv_snapshot!(context.filters(), context.python_install().arg("3.13.1"), @"
+    uv_snapshot!(context.filters(), context.python_install().arg("3.13.15"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed Python 3.13.1 in [TIME]
-     + cpython-3.13.1-[PLATFORM] (python3.13)
+    Installed Python 3.13.15 in [TIME]
+     + cpython-3.13.15-[PLATFORM] (python3.13)
     ");
 
     uv_snapshot!(context.filters(), context.python_find().arg("3"), @"
