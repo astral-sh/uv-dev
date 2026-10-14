@@ -34,7 +34,7 @@ use crate::satisfies::{BuildSettings, RequirementSatisfaction};
 
 /// An index over the packages installed in an environment.
 ///
-/// Packages are indexed by both name and (for editable installs) URL.
+/// Packages are indexed by name and, when installed from a direct URL, by URL.
 #[derive(Debug, Clone)]
 pub struct SitePackages {
     interpreter: Interpreter,
@@ -45,7 +45,8 @@ pub struct SitePackages {
     /// The remaining installed distributions, keyed by name. Although the Python runtime does not
     /// support it, multiple distributions with the same name can be present in the environment.
     by_name: FxHashMap<PackageName, Vec<usize>>,
-    /// The installed editable distributions, keyed by URL.
+    /// Distributions installed from direct URLs, keyed by URL. This index can retain positions of
+    /// removed distributions, which are skipped by `indexed_distributions`.
     by_url: FxHashMap<DisplaySafeUrl, Vec<usize>>,
 }
 
