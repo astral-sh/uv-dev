@@ -9,11 +9,8 @@ use indoc::{formatdoc, indoc};
 use std::path::Path;
 use tempfile::TempDir;
 use uv_static::EnvVars;
-#[cfg(feature = "test-pypi")]
-use uv_test::copy_dir_ignore;
-use uv_test::{TestContext, uv_snapshot};
+use uv_test::{TestContext, copy_dir_ignore, uv_snapshot};
 
-#[cfg(feature = "test-pypi")]
 const BUILT_BY_UV_TEST_SCRIPT: &str = indoc! {r#"
     from built_by_uv import greet
     from built_by_uv.arithmetic.circle import area
@@ -163,12 +160,8 @@ fn built_by_uv_direct() -> Result<()> {
     Ok(())
 }
 
-/// Test that editables work.
-///
-/// We can't test end-to-end here including the PEP 517 bridge code since we don't have a uv wheel,
-/// so we call the build backend directly.
+/// An installed editable wheel imports the source tree, including changes made after installation.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn built_by_uv_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let built_by_uv = context.temp_dir.child("built-by-uv");
@@ -177,22 +170,11 @@ fn built_by_uv_editable() -> Result<()> {
         &built_by_uv,
     )?;
 
-    // Without the editable, pytest fails.
-    context.pip_install().arg("pytest").assert().success();
-    context
-        .python_command()
-        .arg("-m")
-        .arg("pytest")
-        .current_dir(&built_by_uv)
-        .assert()
-        .failure();
-
-    // Build and install the editable. Normally, this should be one step with the editable never
-    // been seen, but we have to split it for the test.
-    let wheel_dir = TempDir::new()?;
+    let wheel_dir = context.temp_dir.child("dist");
+    wheel_dir.create_dir_all()?;
     uv_snapshot!(context
         .build_backend()
-        .arg("build-wheel")
+        .arg("build-editable")
         .arg(wheel_dir.path())
         .current_dir(&built_by_uv), @"
     exit_code: 0 (success)
@@ -201,24 +183,21 @@ fn built_by_uv_editable() -> Result<()> {
     ");
     context
         .pip_install()
-        .arg(wheel_dir.path().join("built_by_uv-0.1.0-py3-none-any.whl"))
+        .arg(wheel_dir.child("built_by_uv-0.1.0-py3-none-any.whl").path())
+        .args(["--no-deps", "--no-index"])
         .assert()
         .success();
 
-    drop(wheel_dir);
-
-    // Now, pytest passes.
+    built_by_uv
+        .child("src/built_by_uv/__init__.py")
+        .write_str("def greet():\n    return 'Hello from the source tree'\n")?;
     uv_snapshot!(context.python_command()
-        .arg("-m")
-        .arg("pytest")
-        // Avoid showing absolute paths and column dependent layout
-        .arg("--quiet")
-        .arg("--capture=no")
-        .current_dir(&built_by_uv), @"
+        .arg("-c")
+        .arg(BUILT_BY_UV_TEST_SCRIPT), @"
     exit_code: 0 (success)
     ----- stdout -----
-    ..
-    2 passed in [TIME]
+    Hello from the source tree
+    Area of a circle with r=2: 12.56636
     ");
 
     Ok(())
