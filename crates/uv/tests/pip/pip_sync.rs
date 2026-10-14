@@ -2063,15 +2063,16 @@ fn sync_editable() -> Result<()> {
     "
     );
 
-    // Modify the `pyproject.toml` file.
-    let pyproject_toml = poetry_editable.path().join("pyproject.toml");
+    // Updating metadata without changing the version must also trigger a rebuild.
     let pyproject_toml_contents = context.read("poetry_editable/pyproject.toml");
     fs_err::write(
         &pyproject_toml,
-        pyproject_toml_contents.replace("0.1.0", "0.1.1"),
+        pyproject_toml_contents.replace(
+            "description = \"\"",
+            "description = \"Updated editable metadata\"",
+        ),
     )?;
 
-    // Reinstall the editable package. This will trigger a rebuild and reinstall.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg(requirements_txt.path()), @"
     exit_code: 0 (success)
@@ -2083,6 +2084,12 @@ fn sync_editable() -> Result<()> {
      ~ poetry-editable==0.1.1 (from file://[TEMP_DIR]/poetry_editable)
     "
     );
+    context
+        .assert_command(
+            "from importlib.metadata import metadata; print(metadata('poetry-editable')['Summary'])",
+        )
+        .success()
+        .stdout(predicates::str::contains("Updated editable metadata"));
 
     Ok(())
 }
