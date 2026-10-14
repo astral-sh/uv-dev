@@ -128,11 +128,11 @@ impl CredentialApi for WinCredential {
     /// credential in the store.
     async fn get_attributes(&self) -> Result<HashMap<String, String>> {
         let cred = self.extract_from_platform(Self::extract_credential).await?;
-        let mut attributes: HashMap<String, String> = HashMap::new();
-        attributes.insert("comment".to_string(), cred.comment.clone());
-        attributes.insert("target_alias".to_string(), cred.target_alias.clone());
-        attributes.insert("username".to_string(), cred.username.clone());
-        Ok(attributes)
+        Ok(HashMap::from([
+            ("comment".to_string(), cred.comment),
+            ("target_alias".to_string(), cred.target_alias),
+            ("username".to_string(), cred.username),
+        ]))
     }
 
     /// Update the attributes on the credential for this entry, if it exists.
