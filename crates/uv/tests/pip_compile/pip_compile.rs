@@ -19488,33 +19488,44 @@ fn pep_751_compile_no_emit_package() -> Result<()> {
     Ok(())
 }
 
+/// Serve wheels whose `Requires-Python` metadata is absent from the index page.
+async fn index_without_requires_python() -> Result<MockServer> {
+    let server = MockServer::start().await;
+    let mut links = Vec::new();
+    for (version, requires_python) in [("3.2.1", ">=3.9"), ("3.3", ">=3.10")] {
+        let (filename, wheel) = generate_wheel(
+            &"networkx".parse()?,
+            &version.parse()?,
+            &[],
+            &BTreeMap::new(),
+            Some(&requires_python.parse()?),
+            "py3-none-any",
+            &[],
+        );
+        links.push(format!(r#"<a href="/files/{filename}">{filename}</a>"#));
+        Mock::given(method("GET"))
+            .and(path(format!("/files/{filename}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/networkx/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(links.join("\n"), "text/html"))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Ok(server)
+}
+
 /// Check that we honor `Requires-Python` when it is missing from the index page.
 #[tokio::test]
 async fn index_has_no_requires_python() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
-    let server = MockServer::start().await;
-
-    // Unlike PyPI, https://download.pytorch.org/whl/cpu/networkx/ does not contain the
-    // `data-requires-python` key.
-    let networkx_page = r#"
-    <!DOCTYPE html>
-    <html>
-        <body>
-        <h1>Links for networkx</h1>
-        <a href="https://download.pytorch.org/whl/networkx-3.0-py3-none-any.whl#sha256=58058d66b1818043527244fab9d41a51fcd7dcc271748015f3c181b8a90c8e2e">networkx-3.0-py3-none-any.whl</a><br/>
-        <a href="https://download.pytorch.org/whl/networkx-3.2.1-py3-none-any.whl#sha256=f18c69adc97877c42332c170849c96cefa91881c99a7cb3e95b7c659ebdc1ec2">networkx-3.2.1-py3-none-any.whl</a><br/>
-        <a href="https://download.pytorch.org/whl/networkx-3.3-py3-none-any.whl#sha256=28575580c6ebdaf4505b22c6256a2b9de86b316dc63ba9e93abde3d78dfdbcf2">networkx-3.3-py3-none-any.whl</a><br/>
-    </body>
-    </html>
-    "#;
-    Mock::given(method("GET"))
-        .and(path("/networkx/"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(networkx_page, "text/html"))
-        .mount(&server)
-        .await;
+    let server = index_without_requires_python().await?;
 
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("networkx >3.0,<=3.3")?;
+    requirements_in.write_str("networkx")?;
 
     uv_snapshot!(context
         .pip_compile()
@@ -19554,7 +19565,19 @@ async fn index_has_no_requires_python() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    // Check that a universal resolution produces a fork.
+    Ok(())
+}
+
+/// A universal resolution must revisit candidates after discovering their Python compatibility.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn index_has_no_requires_python_universal() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.9"]);
+    let server = index_without_requires_python().await?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("networkx")?;
 
     // Add `ok` to prove that uv revisited `networkx==3.3` in the `>=3.10` fork.
     context.temp_dir.child("pyproject.toml").write_str(
