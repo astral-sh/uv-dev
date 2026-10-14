@@ -649,11 +649,10 @@ pub(crate) fn fork_version_by_python_requirement(
     };
 
     let mut envs = vec![];
-    if !env_marker.is_disjoint(lower.to_marker_tree()) {
-        envs.push(env.narrow_environment(lower.to_marker_tree()));
-    }
-    if !env_marker.is_disjoint(upper.to_marker_tree()) {
-        envs.push(env.narrow_environment(upper.to_marker_tree()));
+    for marker in [lower.to_marker_tree(), upper.to_marker_tree()] {
+        if !env_marker.is_disjoint(marker) {
+            envs.push(env.narrow_environment(marker));
+        }
     }
     debug_assert!(!envs.is_empty(), "at least one fork should be produced");
     envs
