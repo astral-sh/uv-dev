@@ -33,7 +33,7 @@ pub(crate) struct ExtractionDirectories {
 }
 
 impl ExtractionDirectories {
-    pub(crate) fn create(&mut self, path: &Path) -> Result<(), Error> {
+    fn create(&mut self, path: &Path) -> Result<(), Error> {
         if !self.attempted.contains(path) {
             self.attempted.insert(path.to_path_buf());
             fs_err::create_dir_all(path).map_err(Error::Io)?;
@@ -86,7 +86,7 @@ pub(crate) fn validate_zip_directory_entry(
 
 /// Set executable permissions according to pip's wheel extraction behavior.
 #[cfg(unix)]
-pub(crate) fn set_executable_bits(path: &Path) -> Result<(), Error> {
+fn set_executable_bits(path: &Path) -> Result<(), Error> {
     use std::fs::Permissions;
     use std::os::unix::fs::PermissionsExt;
 
