@@ -151,88 +151,90 @@ impl Removal {
     ) -> io::Result<()> {
         let path = uv_fs::verbatim_path(path);
 
-        let metadata = match fs_err::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(err),
-        };
+        'retry: loop {
+            let metadata = match fs_err::symlink_metadata(&path) {
+                Ok(metadata) => metadata,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(err) => return Err(err),
+            };
 
-        if !metadata.is_dir() {
-            self.num_files += 1;
+            if !metadata.is_dir() {
+                self.num_files += 1;
 
-            // Remove the file.
-            self.add_file(&path, &metadata);
-            if is_directory_symlink(metadata.file_type()) {
-                remove_dir(&path)?;
-            } else {
-                remove_file(&path)?;
+                // Remove the file.
+                self.add_file(&path, &metadata);
+                if is_directory_symlink(metadata.file_type()) {
+                    remove_dir(&path)?;
+                } else {
+                    remove_file(&path)?;
+                }
+
+                if let Some(reporter) = reporter {
+                    reporter.on_clean();
+                }
+
+                return Ok(());
+            }
+
+            for entry in walkdir::WalkDir::new(&path).contents_first(true) {
+                // If we hit a directory that lacks read permissions, try to make it readable.
+                if let Err(ref err) = entry
+                    && err
+                        .io_error()
+                        .is_some_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
+                    && let Some(dir) = err.path()
+                    && set_readable(dir).unwrap_or(false)
+                {
+                    // Restart the traversal after changing permissions so the walker does not yield
+                    // duplicate entries for the directory.
+                    continue 'retry;
+                }
+
+                let entry = entry?;
+
+                // Keep the root lock in place for other uv processes.
+                if skip_locked_file && entry.depth() == 1 && entry.file_name() == ".lock" {
+                    continue;
+                }
+
+                if is_directory_symlink(entry.file_type()) {
+                    self.num_files += 1;
+                    remove_dir(entry.path())?;
+                } else if entry.file_type().is_dir() {
+                    // Keep the root directory containing the lock, too.
+                    if skip_locked_file && entry.depth() == 0 {
+                        continue;
+                    }
+
+                    self.num_dirs += 1;
+
+                    // The contents should have been removed by now, but sometimes a race condition is
+                    // hit where other files have been added by the OS. Fall back to `remove_dir_all`,
+                    // which will remove the directory robustly across platforms.
+                    remove_dir_all(entry.path())?;
+                } else {
+                    self.num_files += 1;
+
+                    // Remove the file.
+                    if let Ok(metadata) = entry.metadata() {
+                        self.add_file(entry.path(), &metadata);
+                    } else if self.fine_bytes.is_some() {
+                        self.fine_bytes_incomplete = true;
+                    }
+                    remove_file(entry.path())?;
+                }
+
+                if let Some(reporter) = reporter {
+                    reporter.on_clean();
+                }
             }
 
             if let Some(reporter) = reporter {
-                reporter.on_clean();
+                reporter.on_complete();
             }
 
             return Ok(());
         }
-
-        for entry in walkdir::WalkDir::new(&path).contents_first(true) {
-            // If we hit a directory that lacks read permissions, try to make it readable.
-            if let Err(ref err) = entry
-                && err
-                    .io_error()
-                    .is_some_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
-                && let Some(dir) = err.path()
-                && set_readable(dir).unwrap_or(false)
-            {
-                // Retry the operation; if we _just_ `self.rm_rf(dir)` and continue,
-                // `walkdir` may give us duplicate entries for the directory.
-                return self.rm_rf(&path, reporter, skip_locked_file);
-            }
-
-            let entry = entry?;
-
-            // Keep the root lock in place for other uv processes.
-            if skip_locked_file && entry.depth() == 1 && entry.file_name() == ".lock" {
-                continue;
-            }
-
-            if is_directory_symlink(entry.file_type()) {
-                self.num_files += 1;
-                remove_dir(entry.path())?;
-            } else if entry.file_type().is_dir() {
-                // Keep the root directory containing the lock, too.
-                if skip_locked_file && entry.depth() == 0 {
-                    continue;
-                }
-
-                self.num_dirs += 1;
-
-                // The contents should have been removed by now, but sometimes a race condition is
-                // hit where other files have been added by the OS. Fall back to `remove_dir_all`,
-                // which will remove the directory robustly across platforms.
-                remove_dir_all(entry.path())?;
-            } else {
-                self.num_files += 1;
-
-                // Remove the file.
-                if let Ok(metadata) = entry.metadata() {
-                    self.add_file(entry.path(), &metadata);
-                } else if self.fine_bytes.is_some() {
-                    self.fine_bytes_incomplete = true;
-                }
-                remove_file(entry.path())?;
-            }
-
-            if let Some(reporter) = reporter {
-                reporter.on_clean();
-            }
-        }
-
-        if let Some(reporter) = reporter {
-            reporter.on_complete();
-        }
-
-        Ok(())
     }
 }
 
