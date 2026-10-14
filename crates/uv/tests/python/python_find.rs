@@ -504,135 +504,78 @@ fn python_find_project() {
 }
 
 #[test]
-fn virtual_empty() {
-    // testing how `uv python find` reacts to a pyproject with no `[project]` and nothing useful to it
-    let context = uv_test::test_context_with_versions!(&["3.10", "3.11", "3.12"]);
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
+fn virtual_empty() -> Result<()> {
+    assert_virtual_project_discovery(indoc! {r#"
         [tool.mycooltool]
         wow = "someconfig"
     "#})
-        .unwrap();
-
-    // Ask for the python
-    uv_snapshot!(context.filters(), context.python_find(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.10]
-    ");
-
-    // Ask for the python (--no-project)
-    uv_snapshot!(context.filters(), context.python_find()
-        .arg("--no-project"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.10]
-    ");
-
-    // Ask for specific python (3.11)
-    uv_snapshot!(context.filters(), context.python_find().arg("3.11"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.11]
-    ");
-
-    // Create a pin
-    uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Pinned `.python-version` to `3.12`
-    ");
-
-    // Ask for the python
-    uv_snapshot!(context.filters(), context.python_find(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.12]
-    ");
-
-    // Ask for specific python (3.11)
-    uv_snapshot!(context.filters(), context.python_find().arg("3.11"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.11]
-    ");
-
-    // The version pin is still respected with project discovery disabled.
-    uv_snapshot!(context.filters(), context.python_find().arg("--no-project"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.12]
-    ");
 }
 
 #[test]
-fn virtual_dependency_group() {
-    // testing basic `uv python find` functionality
-    // when the pyproject.toml is fully virtual (no `[project]`, but `[dependency-groups]` defined,
-    // which really shouldn't matter)
-    let context = uv_test::test_context_with_versions!(&["3.10", "3.11", "3.12"]);
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
+fn virtual_dependency_group() -> Result<()> {
+    assert_virtual_project_discovery(indoc! {r#"
         [dependency-groups]
         foo = ["sortedcontainers"]
         bar = ["iniconfig"]
         dev = ["sniffio"]
     "#})
-        .unwrap();
+}
 
-    // Ask for the python
-    uv_snapshot!(context.filters(), context.python_find(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.10]
-    ");
+/// Exercise default, explicit, and pinned interpreter selection for a virtual project.
+fn assert_virtual_project_discovery(pyproject: &str) -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.10", "3.11", "3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(pyproject)?;
 
-    // Ask for the python (--no-project)
-    uv_snapshot!(context.filters(), context.python_find()
-        .arg("--no-project"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.10]
-    ");
+    insta::allow_duplicates! {
+        uv_snapshot!(context.filters(), context.python_find(), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        [PYTHON-3.10]
+        ");
 
-    // Ask for specific python (3.11)
-    uv_snapshot!(context.filters(), context.python_find().arg("3.11"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.11]
-    ");
+        uv_snapshot!(context.filters(), context.python_find()
+            .arg("--no-project"), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        [PYTHON-3.10]
+        ");
 
-    // Create a pin
-    uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Pinned `.python-version` to `3.12`
-    ");
+        uv_snapshot!(context.filters(), context.python_find().arg("3.11"), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        [PYTHON-3.11]
+        ");
 
-    // Ask for the python
-    uv_snapshot!(context.filters(), context.python_find(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.12]
-    ");
+        // The pin takes precedence over default discovery, but not an explicit request.
+        uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        Pinned `.python-version` to `3.12`
+        ");
 
-    // Ask for specific python (3.11)
-    uv_snapshot!(context.filters(), context.python_find().arg("3.11"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.11]
-    ");
+        uv_snapshot!(context.filters(), context.python_find(), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        [PYTHON-3.12]
+        ");
 
-    // The version pin is still respected with project discovery disabled.
-    uv_snapshot!(context.filters(), context.python_find().arg("--no-project"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [PYTHON-3.12]
-    ");
+        uv_snapshot!(context.filters(), context.python_find().arg("3.11"), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        [PYTHON-3.11]
+        ");
+
+        // The version pin is still respected with project discovery disabled.
+        uv_snapshot!(context.filters(), context.python_find().arg("--no-project"), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        [PYTHON-3.12]
+        ");
+    }
+    Ok(())
 }
 
 /// Assert that discovery returned the Python executable inside the expected environment.
