@@ -86,31 +86,31 @@ impl uv_resolver::ResolverReporter for ResolverReporter {
 
 impl uv_distribution::Reporter for ResolverReporter {
     fn on_build_start(&self, source: &BuildableSource) -> usize {
-        self.reporter.on_build_start(&source.color_display())
+        uv_resolver::ResolverReporter::on_build_start(self, source)
     }
 
     fn on_build_complete(&self, source: &BuildableSource, id: usize) {
-        self.reporter.on_build_complete(&source.color_display(), id);
+        uv_resolver::ResolverReporter::on_build_complete(self, source, id);
     }
 
     fn on_download_start(&self, name: &PackageName, size: Option<u64>) -> usize {
-        self.reporter.on_download_start(name.to_string(), size)
+        uv_resolver::ResolverReporter::on_download_start(self, name, size)
     }
 
     fn on_download_progress(&self, id: usize, bytes: u64) {
-        self.reporter.on_download_progress(id, bytes);
+        uv_resolver::ResolverReporter::on_download_progress(self, id, bytes);
     }
 
-    fn on_download_complete(&self, _name: &PackageName, id: usize) {
-        self.reporter.on_download_complete(id);
+    fn on_download_complete(&self, name: &PackageName, id: usize) {
+        uv_resolver::ResolverReporter::on_download_complete(self, name, id);
     }
 
     fn on_checkout_start(&self, url: &DisplaySafeUrl, rev: &str) -> usize {
-        self.reporter.on_checkout_start(url, rev)
+        uv_resolver::ResolverReporter::on_checkout_start(self, url, rev)
     }
 
     fn on_checkout_complete(&self, url: &DisplaySafeUrl, rev: &str, id: usize) {
-        self.reporter.on_checkout_complete(url, rev, id);
+        uv_resolver::ResolverReporter::on_checkout_complete(self, url, rev, id);
     }
 }
 
