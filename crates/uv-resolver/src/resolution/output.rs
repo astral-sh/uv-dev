@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeSet, hash_map::Entry};
 
 use petgraph::{
-    Directed, Direction,
+    Direction,
     graph::{Graph, NodeIndex},
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
@@ -29,7 +29,7 @@ use crate::{InMemoryIndex, MetadataResponse, Options, ResolveError, VersionsResp
 
 /// Create a new [`ResolverOutput`] from the resolved PubGrub state.
 pub(crate) fn from_state(
-    mut resolutions: Vec<ResolvedFork>,
+    resolutions: Vec<ResolvedFork>,
     project: Option<&PackageName>,
     workspace_members: &BTreeSet<PackageName>,
     requirements: Vec<Requirement>,
@@ -43,74 +43,14 @@ pub(crate) fn from_state(
     resolution_strategy: &ResolutionStrategy,
     options: Options,
 ) -> Result<ResolverOutput, ResolveError> {
-    let size_guess = resolutions[0].nodes.len();
-    let mut graph: Graph<ResolutionGraphNode, UniversalMarker, Directed> =
-        Graph::with_capacity(size_guess, size_guess);
-    let mut inverse: FxHashMap<ResolutionNode, NodeIndex<u32>> =
-        FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher);
-    let mut diagnostics = Vec::new();
-
-    // Add the root node.
-    let root_index = graph.add_node(ResolutionGraphNode::Root);
-
-    for resolution in &mut resolutions {
-        // Add every package to the graph.
-        for (package, selected) in resolution.nodes.drain(..) {
-            let node = ResolutionNode {
-                package,
-                version: selected.version().clone(),
-            };
-            let Entry::Vacant(entry) = inverse.entry(node) else {
-                // Insert each node only once.
-                continue;
-            };
-            let package = &entry.key().package;
-            let node = add_version(
-                &mut graph,
-                &mut diagnostics,
-                preferences,
-                hasher,
-                index,
-                package,
-                selected,
-                project == Some(&package.name) || workspace_members.contains(&package.name),
-            );
-            entry.insert(node);
-        }
-    }
-
-    let mut seen = FxHashSet::default();
-    for resolution in &resolutions {
-        let marker = resolution.env.try_universal_markers().unwrap_or_default();
-
-        // Add every edge to the graph, propagating the marker for the current fork, if
-        // necessary.
-        for edge in &resolution.edges {
-            if !seen.insert((edge, marker)) {
-                // Insert each node only once.
-                continue;
-            }
-
-            add_edge(&mut graph, &inverse, root_index, edge, marker);
-        }
-    }
-
-    let fork_markers: Vec<UniversalMarker> = if let [resolution] = resolutions.as_slice() {
-        // In the case of a singleton marker, we only include it if it's not
-        // always true. Otherwise, we keep our `fork_markers` empty as there
-        // are no forks.
-        resolution
-            .env
-            .try_universal_markers()
-            .into_iter()
-            .filter(|marker| !marker.is_true())
-            .collect()
-    } else {
-        resolutions
-            .iter()
-            .map(|resolution| resolution.env.try_universal_markers().unwrap_or_default())
-            .collect()
-    };
+    let (mut graph, fork_markers, mut diagnostics) = build_graph(
+        resolutions,
+        project,
+        workspace_members,
+        preferences,
+        hasher,
+        index,
+    );
 
     // Compute and apply the marker reachability.
     let mut reachability = marker_reachability(&graph, &fork_markers);
@@ -189,6 +129,83 @@ pub(crate) fn from_state(
     Ok(output)
 }
 
+/// Build the graph and release the resolved forks and temporary indexes before marker propagation.
+fn build_graph(
+    mut resolutions: Vec<ResolvedFork>,
+    project: Option<&PackageName>,
+    workspace_members: &BTreeSet<PackageName>,
+    preferences: &Preferences,
+    hasher: &HashStrategy,
+    index: &InMemoryIndex,
+) -> (
+    Graph<ResolutionGraphNode, UniversalMarker>,
+    Vec<UniversalMarker>,
+    Vec<ResolutionDiagnostic>,
+) {
+    let size_guess = resolutions[0].nodes.len();
+    let mut graph = Graph::with_capacity(size_guess, size_guess);
+    let mut inverse: FxHashMap<ResolutionNode, NodeIndex> =
+        FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher);
+    let mut diagnostics = Vec::new();
+
+    // Add the root node.
+    let root_index = graph.add_node(ResolutionGraphNode::Root);
+
+    for resolution in &mut resolutions {
+        // Add every package to the graph and release the fork's node buffer before processing edges.
+        for (package, selected) in std::mem::take(&mut resolution.nodes) {
+            let node = ResolutionNode {
+                package,
+                version: selected.version().clone(),
+            };
+            let Entry::Vacant(entry) = inverse.entry(node) else {
+                // Insert each node only once.
+                continue;
+            };
+            let package = &entry.key().package;
+            let node = add_version(
+                &mut graph,
+                &mut diagnostics,
+                preferences,
+                hasher,
+                index,
+                package,
+                selected,
+                project == Some(&package.name) || workspace_members.contains(&package.name),
+            );
+            entry.insert(node);
+        }
+    }
+
+    let multiple_forks = resolutions.len() > 1;
+    let mut fork_markers = if multiple_forks {
+        Vec::with_capacity(resolutions.len())
+    } else {
+        Vec::new()
+    };
+    let mut seen = FxHashSet::default();
+    for resolution in &resolutions {
+        let marker = resolution.env.try_universal_markers().unwrap_or_default();
+        // A single unconditional environment does not represent a fork.
+        if multiple_forks || !marker.is_true() {
+            fork_markers.push(marker);
+        }
+
+        // Add every edge to the graph, propagating the marker for the current fork, if
+        // necessary.
+        for edge in &resolution.edges {
+            if !seen.insert((edge, marker)) {
+                // Insert each edge only once.
+                continue;
+            }
+
+            add_edge(&mut graph, &inverse, root_index, edge, marker);
+        }
+    }
+
+    (graph, fork_markers, diagnostics)
+}
+
 fn add_edge(
     graph: &mut Graph<ResolutionGraphNode, UniversalMarker>,
     inverse: &FxHashMap<ResolutionNode, NodeIndex>,
@@ -205,15 +222,11 @@ fn add_edge(
         edge_marker
     };
 
-    if let Some(weight) = graph
-        .find_edge(from_index, to_index)
-        .and_then(|edge| graph.edge_weight_mut(edge))
-    {
-        // If either the existing marker or new marker is `true`, then the dependency is
-        // included unconditionally, and so the combined marker is `true`.
-        weight.or(edge_marker);
+    if let Some(edge_index) = graph.find_edge(from_index, to_index) {
+        // The dependency is active under the union of the markers that reach it.
+        graph[edge_index].or(edge_marker);
     } else {
-        graph.update_edge(from_index, to_index, edge_marker);
+        graph.add_edge(from_index, to_index, edge_marker);
     }
 }
 
@@ -325,21 +338,19 @@ fn get_hashes(
     // hash the archive, so installation still needs the original hashes to verify its contents.
     if let Some(url) = url {
         let policy = hasher.archive_policy_for_url(&url.verbatim);
-        if !policy.digests().is_empty() {
-            return HashDigests::from(policy.digests());
+        let digests = policy.digests();
+        if !digests.is_empty() {
+            return HashDigests::from(digests);
         }
-    }
 
-    // 3. Reuse a direct URL's declared hash when collecting hashes without validation.
-    if let Some(url) = url
-        && let ParsedUrl::Archive(_) = &url.parsed_url
-        && hasher.collection() != HashCollection::None
-        && !hasher
-            .archive_policy_for_url(&url.verbatim)
-            .requires_validation()
-        && let Some(hashes) = parse_url_hashes(&url.verbatim)
-    {
-        return hashes;
+        // 3. Reuse a direct URL's declared hash when collecting hashes without validation.
+        if matches!(&url.parsed_url, ParsedUrl::Archive(_))
+            && hasher.collection() != HashCollection::None
+            && !policy.requires_validation()
+            && let Some(hashes) = parse_url_hashes(&url.verbatim)
+        {
+            return hashes;
+        }
     }
 
     // 4. Look for hashes computed for the specific wheel or source distribution.
@@ -355,45 +366,28 @@ fn get_hashes(
 
     // 5. Look for hashes from the registry, which are served at the package level.
     if url.is_none() {
-        // Query the implicit and explicit indexes (lazily) for the hashes.
-        let implicit_response = in_memory.implicit().get(name);
-        let mut explicit_response = None;
+        let find_hashes = |response: &VersionsResponse| {
+            let VersionsResponse::Found(version_maps) = response else {
+                return None;
+            };
+            version_maps
+                .iter()
+                .filter(|version_map| version_map.index() == index)
+                .find_map(|version_map| version_map.hashes(version))
+                .map(HashDigests::from)
+        };
 
-        // Search in the implicit indexes.
-        let hashes = implicit_response
-            .as_ref()
-            .and_then(|response| {
-                if let VersionsResponse::Found(version_maps) = &**response {
-                    Some(version_maps)
-                } else {
-                    None
-                }
-            })
-            .into_iter()
-            .flatten()
-            .filter(|version_map| version_map.index() == index)
-            .find_map(|version_map| version_map.hashes(version))
+        let digests = in_memory
+            .implicit()
+            .get(name)
+            .and_then(|response| find_hashes(&response))
             .or_else(|| {
-                // Search in the explicit indexes.
-                explicit_response = index
-                    .and_then(|index| in_memory.explicit().get(&(name.clone(), index.clone())));
-                explicit_response
-                    .as_ref()
-                    .and_then(|response| {
-                        if let VersionsResponse::Found(version_maps) = &**response {
-                            Some(version_maps)
-                        } else {
-                            None
-                        }
-                    })
-                    .into_iter()
-                    .flatten()
-                    .filter(|version_map| version_map.index() == index)
-                    .find_map(|version_map| version_map.hashes(version))
+                let index = index?;
+                let response = in_memory.explicit().get(&(name.clone(), index.clone()))?;
+                find_hashes(&response)
             });
 
-        if let Some(hashes) = hashes {
-            let mut digests = HashDigests::from(hashes);
+        if let Some(mut digests) = digests {
             digests.sort_unstable();
             if !digests.is_empty() {
                 return digests;
@@ -437,6 +431,8 @@ fn has_lower_bound(
     constraints: &Constraints,
     modifiers: &DependencyModifiers,
 ) -> bool {
+    // Constraints are not graph edges and apply equally to every incoming dependency.
+    let mut constraint_requirements = constraints.requirements().map(Cow::Borrowed);
     for neighbor_index in graph.neighbors_directed(node_index, Direction::Incoming) {
         let neighbor_dist = match graph.node_weight(neighbor_index).unwrap() {
             ResolutionGraphNode::Root => {
@@ -468,8 +464,7 @@ fn has_lower_bound(
                 DependencyModifierScope::Global,
                 metadata.dependency_groups.values().flatten(),
             ))
-            // Constraints are missing from the graph.
-            .chain(constraints.requirements().map(Cow::Borrowed))
+            .chain(&mut constraint_requirements)
         {
             if requirement.name != *package_name {
                 continue;

@@ -12,6 +12,12 @@ use uv_pypi_types::{ConflictItem, ConflictItemRef, Conflicts, Inference};
 use crate::ResolutionGraphNode;
 use crate::universal_marker::UniversalMarker;
 
+/// Collect all nodes without incoming edges, including the virtual root and virtual dev
+/// dependency packages, since the graph's edges don't cover dev dependencies.
+fn root_nodes<Node, Edge>(graph: &Graph<Node, Edge>) -> Vec<NodeIndex> {
+    graph.externals(Direction::Incoming).collect()
+}
+
 /// Determine the markers under which a package is reachable in the dependency tree.
 ///
 /// The algorithm is a variant of Dijkstra's algorithm for not totally ordered distances:
@@ -27,32 +33,18 @@ pub fn marker_reachability<Marker: Boolean + Copy + PartialEq, Node, Edge: Reach
     // the graph, even though we then only read the markers for base packages.
     let mut reachability = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
 
-    // Collect the root nodes.
-    //
-    // Besides the actual virtual root node, virtual dev dependencies packages are also root
-    // nodes since the edges don't cover dev dependencies.
-    let mut queue: Vec<_> = graph
-        .node_indices()
-        .filter(|node_index| {
-            graph
-                .edges_directed(*node_index, Direction::Incoming)
-                .next()
-                .is_none()
-        })
-        .collect();
+    let mut queue = root_nodes(graph);
 
     // The root nodes are always applicable, unless the user has restricted resolver
     // environments with `tool.uv.environments`.
-    let root_markers = if fork_markers.is_empty() {
-        Edge::true_marker()
-    } else {
-        fork_markers
-            .iter()
-            .fold(Edge::false_marker(), |mut acc, edge| {
-                acc.or(edge.marker());
-                acc
-            })
-    };
+    let root_markers = fork_markers
+        .iter()
+        .map(Reachable::marker)
+        .reduce(|mut combined, marker| {
+            combined.or(marker);
+            combined
+        })
+        .unwrap_or_else(Edge::true_marker);
     for root_index in &queue {
         reachability.insert(*root_index, root_markers);
     }
@@ -65,21 +57,21 @@ pub fn marker_reachability<Marker: Boolean + Copy + PartialEq, Node, Edge: Reach
             // The marker for all paths to the child through the parent.
             let mut child_marker = child_edge.weight().marker();
             child_marker.and(marker);
-            match reachability.entry(child_edge.target()) {
+            let child_index = child_edge.target();
+            match reachability.entry(child_index) {
                 Entry::Occupied(mut existing) => {
-                    // If the marker is a subset of the existing marker (A ⊆ B exactly if
-                    // A ∪ B = A), updating the child wouldn't change child's marker.
                     child_marker.or(*existing.get());
-                    if &child_marker != existing.get() {
-                        existing.insert(child_marker);
-                        queue.push(child_edge.target());
+                    // Re-queue only if this path expands the child's marker.
+                    if child_marker == *existing.get() {
+                        continue;
                     }
+                    existing.insert(child_marker);
                 }
                 Entry::Vacant(vacant) => {
                     vacant.insert(child_marker);
-                    queue.push(child_edge.target());
                 }
             }
+            queue.push(child_index);
         }
     }
 
@@ -115,31 +107,13 @@ pub fn simplify_conflict_markers(
     // don't have any extras/groups activated.
     let mut activated: FxHashMap<NodeIndex, Vec<FxHashSet<ConflictItemRef<'_>>>> =
         FxHashMap::default();
+    let unactivated = [FxHashSet::default()];
 
-    // Collect the root nodes.
-    //
-    // Besides the actual virtual root node, virtual dev dependencies packages are also root
-    // nodes since the edges don't cover dev dependencies.
-    let mut queue: Vec<_> = graph
-        .node_indices()
-        .filter(|node_index| {
-            graph
-                .edges_directed(*node_index, Direction::Incoming)
-                .next()
-                .is_none()
-        })
-        .collect();
+    let mut queue = root_nodes(graph);
 
     while let Some(parent_index) = queue.pop() {
-        let extra = graph[parent_index]
-            .package_extra_names()
-            .map(ConflictItemRef::from);
-        let group = graph[parent_index]
-            .package_group_names()
-            .map(ConflictItemRef::from);
-        for item in extra
-            .into_iter()
-            .chain(group)
+        if let Some(item) = graph[parent_index]
+            .activated_conflict_item()
             .filter(|item| relevant.contains(item))
         {
             for set in activated
@@ -149,74 +123,49 @@ pub fn simplify_conflict_markers(
                 set.insert(item);
             }
         }
-        let sets = activated
-            .get(&parent_index)
-            .cloned()
-            .unwrap_or_else(|| vec![FxHashSet::default()]);
-        for child_edge in graph.edges_directed(parent_index, Direction::Outgoing) {
+        for child in graph.neighbors_directed(parent_index, Direction::Outgoing) {
+            // A self-edge cannot add anything to the node's own activation state.
+            if child == parent_index {
+                continue;
+            }
+            activated.entry(child).or_default();
+            let [source, Some(existing)] = activated.get_disjoint_mut([&parent_index, &child])
+            else {
+                unreachable!("Child activation state was initialized");
+            };
             let mut change = false;
-            let existing = activated.entry(child_edge.target()).or_default();
-            for set in &sets {
+            for set in source.map_or(unactivated.as_slice(), |sets| sets.as_slice()) {
                 if !existing.contains(set) {
                     existing.push(set.clone());
                     change = true;
                 }
             }
             if change {
-                queue.push(child_edge.target());
+                queue.push(child);
             }
         }
     }
 
     let mut inferences: FxHashMap<NodeIndex, Vec<BTreeSet<Inference>>> = FxHashMap::default();
     for (node_id, sets) in activated {
-        let mut new_sets = Vec::with_capacity(sets.len());
-        for set in sets {
-            let mut new_set = BTreeSet::default();
-            for item in set {
-                for conflict_set in conflicts.iter() {
-                    if !conflict_set.contains(item.package(), item.kind()) {
-                        continue;
-                    }
-                    for conflict_item in conflict_set.iter() {
-                        if conflict_item.as_ref() == item {
-                            continue;
-                        }
-                        new_set.insert(Inference {
-                            item: conflict_item.clone(),
-                            included: false,
-                        });
-                    }
-                }
-                new_set.insert(Inference {
-                    item: item.to_owned(),
-                    included: true,
-                });
-            }
-            new_sets.push(new_set);
-        }
-        inferences.insert(node_id, new_sets);
+        inferences.insert(
+            node_id,
+            sets.into_iter()
+                .map(|set| infer_conflicts(conflicts, set))
+                .collect(),
+        );
     }
 
+    // Inferences are not always sufficient to disambiguate edges to packages with the same name.
+    let ambiguous_edges = find_ambiguous_edges(graph, inferences.keys().copied());
     for edge_index in (0..graph.edge_count()).map(EdgeIndex::new) {
-        let (from_index, to_index) = graph.edge_endpoints(edge_index).unwrap();
-        // If there are ambiguous edges (i.e., two or more edges
-        // with the same package name), then we specifically skip
-        // conflict marker simplification. It seems that in some
-        // cases, the logic encoded in `inferences` isn't quite enough
-        // to perfectly disambiguate between them. It's plausible we
-        // could do better here, but it requires smarter simplification
-        // logic. ---AG
-        let ambiguous_edges = graph
-            .edges_directed(from_index, Direction::Outgoing)
-            .filter(|edge| graph[to_index].package_name() == graph[edge.target()].package_name())
-            .count();
-        if ambiguous_edges > 1 {
-            continue;
-        }
+        let (from_index, _) = graph.edge_endpoints(edge_index).unwrap();
         let Some(inference_sets) = inferences.get(&from_index) else {
             continue;
         };
+        if ambiguous_edges.contains(&edge_index) {
+            continue;
+        }
         // If not all possible paths (represented by our inferences)
         // satisfy the conflict marker on this edge, then we can't make any
         // simplifications. Namely, because it follows that out inferences
@@ -243,12 +192,68 @@ pub fn simplify_conflict_markers(
     }
 }
 
+/// Infer included and excluded conflict items from the items activated on a path.
+fn infer_conflicts(
+    conflicts: &Conflicts,
+    activated: FxHashSet<ConflictItemRef<'_>>,
+) -> BTreeSet<Inference> {
+    if activated.is_empty() {
+        return BTreeSet::new();
+    }
+
+    let mut inferences = BTreeSet::new();
+    for conflict_set in conflicts.iter() {
+        let mut active = conflict_set
+            .iter()
+            .filter(|item| activated.contains(&item.as_ref()));
+        let Some(first) = active.next() else {
+            continue;
+        };
+        // When multiple items are active, each is excluded by another active item.
+        let multiple_active = active.next().is_some();
+        inferences.extend(
+            conflict_set
+                .iter()
+                .filter(|item| multiple_active || *item != first)
+                .map(|item| Inference {
+                    item: item.clone(),
+                    included: false,
+                }),
+        );
+    }
+    inferences.extend(activated.into_iter().map(|item| Inference {
+        item: item.to_owned(),
+        included: true,
+    }));
+    inferences
+}
+
+/// Find edges from each source whose target package name is shared by another outgoing edge.
+fn find_ambiguous_edges(
+    graph: &Graph<ResolutionGraphNode, UniversalMarker>,
+    sources: impl Iterator<Item = NodeIndex>,
+) -> FxHashSet<EdgeIndex> {
+    let mut ambiguous = FxHashSet::default();
+    for source in sources {
+        let mut edges = graph.edges_directed(source, Direction::Outgoing);
+        let (Some(first), Some(second)) = (edges.next(), edges.next()) else {
+            continue;
+        };
+        let mut seen = FxHashMap::default();
+        seen.insert(graph[first.target()].package_name(), first.id());
+        for edge in std::iter::once(second).chain(edges) {
+            if let Some(previous) = seen.insert(graph[edge.target()].package_name(), edge.id()) {
+                ambiguous.insert(previous);
+                ambiguous.insert(edge.id());
+            }
+        }
+    }
+    ambiguous
+}
+
 pub trait Reachable<T> {
     /// The marker representing the "true" value.
     fn true_marker() -> T;
-
-    /// The marker representing the "false" value.
-    fn false_marker() -> T;
 
     /// The marker attached to the edge.
     fn marker(&self) -> T;
@@ -259,10 +264,6 @@ impl Reachable<Self> for MarkerTree {
         Self::TRUE
     }
 
-    fn false_marker() -> Self {
-        Self::FALSE
-    }
-
     fn marker(&self) -> Self {
         *self
     }
@@ -271,10 +272,6 @@ impl Reachable<Self> for MarkerTree {
 impl Reachable<Self> for UniversalMarker {
     fn true_marker() -> Self {
         Self::TRUE
-    }
-
-    fn false_marker() -> Self {
-        Self::FALSE
     }
 
     fn marker(&self) -> Self {

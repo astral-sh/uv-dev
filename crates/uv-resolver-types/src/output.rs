@@ -1,21 +1,24 @@
-use crate::{AnnotatedDist, DistributionMetadataIndex, MetadataResponse, Options, UniversalMarker};
+use crate::{
+    AnnotatedDist, DistributionMetadataIndex, MetadataResponse, Options, PackageNodeKind,
+    UniversalMarker,
+};
 use indexmap::IndexSet;
+use itertools::Itertools;
 use petgraph::{
     Directed,
     graph::{Graph, NodeIndex},
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
-use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use uv_configuration::{BuildOptions, Constraints, DependencyModifierScope, DependencyModifiers};
 use uv_distribution_types::{
     BuiltDist, Dist, Edge, Identifier, Name, Node, Requirement, RequiresPython,
     ResolutionDiagnostic, ResolvedDist, SourceDist,
 };
-use uv_normalize::{ExtraName, GroupName, PackageName};
+use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier};
 use uv_pep508::{MarkerEnvironment, MarkerTree, MarkerTreeKind};
-use uv_pypi_types::{HashDigests, ParsedUrlError};
+use uv_pypi_types::{ConflictItemRef, HashDigests, ParsedUrlError};
 /// The output of a successful resolution.
 ///
 /// Includes a complete resolution graph in which every node represents a pinned package and every
@@ -56,23 +59,15 @@ impl ResolutionGraphNode {
         }
     }
 
-    pub(crate) fn package_extra_names(&self) -> Option<(&PackageName, &ExtraName)> {
+    /// Return the extra or dependency-group conflict item activated by this node.
+    pub(crate) fn activated_conflict_item(&self) -> Option<ConflictItemRef<'_>> {
         match self {
             Self::Root => None,
-            Self::Dist(dist) => {
-                let extra = dist.kind.extra()?;
-                Some((&dist.name, extra))
-            }
-        }
-    }
-
-    pub(crate) fn package_group_names(&self) -> Option<(&PackageName, &GroupName)> {
-        match self {
-            Self::Root => None,
-            Self::Dist(dist) => {
-                let group = dist.kind.group()?;
-                Some((&dist.name, group))
-            }
+            Self::Dist(dist) => match &dist.kind {
+                PackageNodeKind::Base => None,
+                PackageNodeKind::Group(group) => Some((&dist.name, group).into()),
+                PackageNodeKind::Extra(extra) => Some((&dist.name, extra).into()),
+            },
         }
     }
 
@@ -94,14 +89,12 @@ impl Display for ResolutionGraphNode {
 }
 
 impl ResolverOutput {
-    /// Returns an iterator over the distinct packages in the graph.
+    /// Returns an iterator over the distributions in the graph.
     fn dists(&self) -> impl Iterator<Item = &AnnotatedDist> {
-        self.graph
-            .node_indices()
-            .filter_map(move |index| match &self.graph[index] {
-                ResolutionGraphNode::Root => None,
-                ResolutionGraphNode::Dist(dist) => Some(dist),
-            })
+        self.graph.node_weights().filter_map(|node| match node {
+            ResolutionGraphNode::Root => None,
+            ResolutionGraphNode::Dist(dist) => Some(dist),
+        })
     }
 
     /// Returns an iterator over the base distributions in the graph.
@@ -133,6 +126,11 @@ impl ResolverOutput {
             let ResolutionGraphNode::Dist(distribution) = node else {
                 continue;
             };
+            // Filtering retains the original hashes when none are allowed, so it can only
+            // change a distribution with multiple hashes.
+            if distribution.hashes.as_slice().len() < 2 {
+                continue;
+            }
             let ResolvedDist::Installable { dist, .. } = &distribution.dist else {
                 continue;
             };
@@ -156,15 +154,20 @@ impl ResolverOutput {
                 continue;
             }
 
-            let hashes = distribution
+            // Keep all original hashes if none correspond to an allowed artifact.
+            let Some(first_allowed) = distribution
                 .hashes
                 .iter()
+                .position(|hash| allowed_hashes.contains(hash))
+            else {
+                continue;
+            };
+            let hashes = std::mem::replace(&mut distribution.hashes, HashDigests::empty());
+            distribution.hashes = hashes
+                .into_iter()
+                .skip(first_allowed)
                 .filter(|hash| allowed_hashes.contains(hash))
-                .cloned()
-                .collect::<Vec<_>>();
-            if !hashes.is_empty() {
-                distribution.hashes = HashDigests::from(hashes);
-            }
+                .collect();
         }
     }
 
@@ -273,10 +276,7 @@ impl ResolverOutput {
         }
 
         let mut seen_marker_values = IndexSet::default();
-        for i in self.graph.node_indices() {
-            let ResolutionGraphNode::Dist(dist) = &self.graph[i] else {
-                continue;
-            };
+        for dist in self.dists() {
             let metadata_id = dist.dist.distribution_id();
             let res = index
                 .get(&metadata_id)
@@ -335,38 +335,25 @@ impl ResolverOutput {
     /// an installation in that marker environment could wind up trying to
     /// install different versions of the same package, which is not allowed.
     pub fn find_conflicting_distributions(&self) -> Vec<ConflictingDistributionError> {
-        let mut name_to_markers: BTreeMap<&PackageName, Vec<(&Version, &UniversalMarker)>> =
-            BTreeMap::new();
-        for node in self.graph.node_weights() {
-            let annotated_dist = match node {
-                ResolutionGraphNode::Root => continue,
-                ResolutionGraphNode::Dist(annotated_dist) => annotated_dist,
-            };
-            name_to_markers
-                .entry(&annotated_dist.name)
-                .or_default()
-                .push((&annotated_dist.version, &annotated_dist.marker));
-        }
-        let mut dupes = vec![];
-        for (name, marker_trees) in name_to_markers {
-            for (i, (version1, marker1)) in marker_trees.iter().enumerate() {
-                for (version2, marker2) in &marker_trees[i + 1..] {
-                    if version1 == version2 {
-                        continue;
-                    }
-                    if !marker1.is_disjoint(**marker2) {
-                        dupes.push(ConflictingDistributionError {
-                            name: name.clone(),
-                            version1: (*version1).clone(),
-                            version2: (*version2).clone(),
-                            marker1: **marker1,
-                            marker2: **marker2,
-                        });
-                    }
+        let mut by_name = self.dists().collect::<Vec<_>>();
+        // Retain graph order within each package so conflict diagnostics stay deterministic.
+        by_name.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut conflicts = Vec::new();
+        for dists in by_name.chunk_by(|left, right| left.name == right.name) {
+            for (dist1, dist2) in dists.iter().copied().tuple_combinations() {
+                if dist1.version == dist2.version || dist1.marker.is_disjoint(dist2.marker) {
+                    continue;
                 }
+                conflicts.push(ConflictingDistributionError {
+                    name: dist1.name.clone(),
+                    version1: dist1.version.clone(),
+                    version2: dist2.version.clone(),
+                    marker1: dist1.marker,
+                    marker2: dist2.marker,
+                });
             }
         }
-        dupes
+        conflicts
     }
 }
 
@@ -418,6 +405,12 @@ impl Display for ConflictingDistributionError {
 /// single version of each package to be present in the graph.
 impl From<ResolverOutput> for uv_distribution_types::Resolution {
     fn from(output: ResolverOutput) -> Self {
+        struct SourceNode {
+            name: PackageName,
+            kind: PackageNodeKind,
+            base_index: Option<NodeIndex>,
+        }
+
         let ResolverOutput {
             graph,
             diagnostics,
@@ -431,50 +424,61 @@ impl From<ResolverOutput> for uv_distribution_types::Resolution {
         );
 
         let mut transformed = Graph::with_capacity(graph.node_count(), graph.edge_count());
-        let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
-
         // Create the root node.
         let root = transformed.add_node(Node::Root);
 
-        // Re-add the nodes to the reduced graph.
-        for index in graph.node_indices() {
-            let ResolutionGraphNode::Dist(dist) = &graph[index] else {
-                continue;
-            };
-            if dist.is_base() {
-                inverse.insert(
-                    &dist.name,
-                    transformed.add_node(Node::Dist {
-                        dist: dist.dist.clone(),
-                        hashes: dist.hashes.clone(),
-                        install: true,
-                    }),
-                );
-            }
-        }
+        // Move base distributions into the reduced graph, retaining source-node identities in
+        // index order to translate edges.
+        let (nodes, edges) = graph.into_nodes_edges();
+        let nodes: Vec<_> = nodes
+            .into_iter()
+            .map(|node| match node.weight {
+                ResolutionGraphNode::Root => None,
+                ResolutionGraphNode::Dist(AnnotatedDist {
+                    dist,
+                    hashes,
+                    name,
+                    kind,
+                    ..
+                }) => {
+                    let base_index = kind.is_base().then(|| {
+                        transformed.add_node(Node::Dist {
+                            dist,
+                            hashes,
+                            install: true,
+                        })
+                    });
+                    Some(SourceNode {
+                        name,
+                        kind,
+                        base_index,
+                    })
+                }
+            })
+            .collect();
+        let mut inverse = FxHashMap::with_capacity_and_hasher(nodes.len(), FxBuildHasher);
+        inverse.extend(
+            nodes
+                .iter()
+                .flatten()
+                .filter_map(|node| node.base_index.map(|index| (&node.name, index))),
+        );
 
         // Re-add the edges to the reduced graph.
-        for edge in graph.edge_indices() {
-            let (source, target) = graph.edge_endpoints(edge).unwrap();
-
-            match (&graph[source], &graph[target]) {
-                (ResolutionGraphNode::Root, ResolutionGraphNode::Dist(target_dist)) => {
-                    let target = inverse[&target_dist.name()];
+        for edge in edges {
+            match (&nodes[edge.source().index()], &nodes[edge.target().index()]) {
+                (None, Some(target_dist)) => {
+                    let target = inverse[&target_dist.name];
                     transformed.update_edge(root, target, Edge::Prod);
                 }
-                (
-                    ResolutionGraphNode::Dist(source_dist),
-                    ResolutionGraphNode::Dist(target_dist),
-                ) => {
-                    let source = inverse[&source_dist.name()];
-                    let target = inverse[&target_dist.name()];
+                (Some(source_dist), Some(target_dist)) => {
+                    let source = inverse[&source_dist.name];
+                    let target = inverse[&target_dist.name];
 
-                    let edge = if let Some(extra) = source_dist.kind.extra() {
-                        Edge::Optional(extra.clone())
-                    } else if let Some(group) = source_dist.kind.group() {
-                        Edge::Dev(group.clone())
-                    } else {
-                        Edge::Prod
+                    let edge = match &source_dist.kind {
+                        PackageNodeKind::Base => Edge::Prod,
+                        PackageNodeKind::Group(group) => Edge::Dev(group.clone()),
+                        PackageNodeKind::Extra(extra) => Edge::Optional(extra.clone()),
                     };
 
                     transformed.add_edge(source, target, edge);
