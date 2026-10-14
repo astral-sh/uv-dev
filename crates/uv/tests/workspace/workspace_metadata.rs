@@ -1385,9 +1385,11 @@ dependencies = [
         "#);
     });
 
-    context
-        .assert_command("import installed_module; import importlib.util; assert importlib.util.find_spec('missing_module') is None")
-        .success();
+    let assert_environment_unchanged = || {
+        context.assert_command("import installed_module").success();
+        context.assert_not_installed("missing_module");
+    };
+    assert_environment_unchanged();
 
     // Remove the manifest to discover the workspace and its environment from the lockfile.
     fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
@@ -1402,9 +1404,7 @@ dependencies = [
         lockfile_metadata["module_owners"],
         metadata["module_owners"]
     );
-    context
-        .assert_command("import installed_module; import importlib.util; assert importlib.util.find_spec('missing_module') is None")
-        .success();
+    assert_environment_unchanged();
 
     let override_env = context.temp_dir.child("override-env");
     context.venv().arg(override_env.path()).assert().success();
