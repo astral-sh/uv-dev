@@ -35980,35 +35980,37 @@ fn assert_lock_derivation_chain(context: &uv_test::TestContext, chain: &str) {
         output.contains(&expected_hint),
         "expected derivation hint:\n{expected_hint}\n\nactual output:\n{output}"
     );
-    assert_snapshot!(output.replacen(&expected_hint, "hint: [DERIVATION]", 1), @r#"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to build `wsgiref==0.1.2`
-      cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
+    insta::allow_duplicates! {
+        assert_snapshot!(output.replacen(&expected_hint, "hint: [DERIVATION]", 1), @r#"
+        exit_code: 1 (failure)
+        ----- stderr -----
+        error: Failed to build `wsgiref==0.1.2`
+          cause: The build backend returned an error
+          cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
 
-             [stderr]
-             Traceback (most recent call last):
-               File "<string>", line 14, in <module>
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 325, in get_requires_for_build_wheel
-                 return self._get_build_requires(config_settings, requirements=['wheel'])
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 295, in _get_build_requires
-                 self.run_setup()
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 487, in run_setup
-                 super().run_setup(setup_script=setup_script)
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 311, in run_setup
-                 exec(code, locals())
-               File "<string>", line 5, in <module>
-               File "[CACHE_DIR]/[TMP]/src/ez_setup/__init__.py", line 170
-                 print "Setuptools version",version,"or greater has been installed."
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-             SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
+                 [stderr]
+                 Traceback (most recent call last):
+                   File "<string>", line 14, in <module>
+                   File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 325, in get_requires_for_build_wheel
+                     return self._get_build_requires(config_settings, requirements=['wheel'])
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                   File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 295, in _get_build_requires
+                     self.run_setup()
+                   File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 487, in run_setup
+                     super().run_setup(setup_script=setup_script)
+                   File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 311, in run_setup
+                     exec(code, locals())
+                   File "<string>", line 5, in <module>
+                   File "[CACHE_DIR]/[TMP]/src/ez_setup/__init__.py", line 170
+                     print "Setuptools version",version,"or greater has been installed."
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                 SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
 
-    hint: [DERIVATION]
+        hint: [DERIVATION]
 
-    hint: Build failures usually indicate a problem with the package or the build environment
-    "#);
+        hint: Build failures usually indicate a problem with the package or the build environment
+        "#);
+    }
 }
 
 #[cfg(feature = "test-universal")]
