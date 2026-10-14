@@ -1089,7 +1089,7 @@ fn python_find_script_no_such_version() {
     script
         .write_str(indoc! {r#"
             # /// script
-            # requires-python = ">=3.16"
+            # requires-python = ">=3.100"
             # dependencies = []
             # ///
         "#})
@@ -1098,7 +1098,7 @@ fn python_find_script_no_such_version() {
     uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: No interpreter found for Python >=3.16 in [PYTHON SOURCES]
+    error: No interpreter found for Python >=3.100 in [PYTHON SOURCES]
     ");
 }
 
