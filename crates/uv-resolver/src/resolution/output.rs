@@ -353,45 +353,28 @@ fn get_hashes(
 
     // 5. Look for hashes from the registry, which are served at the package level.
     if url.is_none() {
-        // Query the implicit and explicit indexes (lazily) for the hashes.
-        let implicit_response = in_memory.implicit().get(name);
-        let mut explicit_response = None;
+        let find_hashes = |response: &VersionsResponse| {
+            let VersionsResponse::Found(version_maps) = response else {
+                return None;
+            };
+            version_maps
+                .iter()
+                .filter(|version_map| version_map.index() == index)
+                .find_map(|version_map| version_map.hashes(version))
+                .map(HashDigests::from)
+        };
 
-        // Search in the implicit indexes.
-        let hashes = implicit_response
-            .as_ref()
-            .and_then(|response| {
-                if let VersionsResponse::Found(version_maps) = &**response {
-                    Some(version_maps)
-                } else {
-                    None
-                }
-            })
-            .into_iter()
-            .flatten()
-            .filter(|version_map| version_map.index() == index)
-            .find_map(|version_map| version_map.hashes(version))
+        let digests = in_memory
+            .implicit()
+            .get(name)
+            .and_then(|response| find_hashes(&response))
             .or_else(|| {
-                // Search in the explicit indexes.
-                explicit_response = index
-                    .and_then(|index| in_memory.explicit().get(&(name.clone(), index.clone())));
-                explicit_response
-                    .as_ref()
-                    .and_then(|response| {
-                        if let VersionsResponse::Found(version_maps) = &**response {
-                            Some(version_maps)
-                        } else {
-                            None
-                        }
-                    })
-                    .into_iter()
-                    .flatten()
-                    .filter(|version_map| version_map.index() == index)
-                    .find_map(|version_map| version_map.hashes(version))
+                let index = index?;
+                let response = in_memory.explicit().get(&(name.clone(), index.clone()))?;
+                find_hashes(&response)
             });
 
-        if let Some(hashes) = hashes {
-            let mut digests = HashDigests::from(hashes);
+        if let Some(mut digests) = digests {
             digests.sort_unstable();
             if !digests.is_empty() {
                 return digests;
