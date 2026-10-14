@@ -9014,27 +9014,19 @@ fn sync_active_project_environment_with_relative_managed_python_dir() -> Result<
         .child(".python-installs")
         .assert(predicate::path::is_dir());
 
-    for _ in 0..2 {
-        let assert = context
-            .sync()
-            .env(EnvVars::UV_PYTHON_INSTALL_DIR, ".python-installs")
-            .env(EnvVars::UV_PYTHON_PREFERENCE, "only-managed")
-            .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic")
-            .env(EnvVars::VIRTUAL_ENV, "foobar")
-            .arg("--active")
-            .assert()
-            .success();
+    let sentinel = context.temp_dir.child("foobar/reuse-sentinel");
+    sentinel.touch()?;
+    let mut sync = context.sync();
+    sync.env(EnvVars::UV_PYTHON_INSTALL_DIR, ".python-installs")
+        .env(EnvVars::UV_PYTHON_PREFERENCE, "only-managed")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic")
+        .env(EnvVars::VIRTUAL_ENV, "foobar")
+        .arg("--active");
 
-        let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
-        assert!(
-            !stderr.contains("Removed virtual environment at: foobar"),
-            "expected `uv sync --active` to reuse the active environment, stderr was:\n{stderr}"
-        );
-        assert!(
-            !stderr.contains("Creating virtual environment at: foobar"),
-            "expected `uv sync --active` to reuse the active environment, stderr was:\n{stderr}"
-        );
-    }
+    sync.assert().success();
+    sentinel.assert(predicate::path::exists());
+    sync.assert().success();
+    sentinel.assert(predicate::path::exists());
 
     context
         .temp_dir
