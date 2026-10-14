@@ -755,18 +755,15 @@ async fn get_or_create_environment(
         _ => None,
     };
 
-    // Determine explicit Python version requests
-    let explicit_python_request = python.map(PythonRequest::parse);
-    let tool_python_request = match request {
-        ToolRequest::Python { request, .. } => Some(request.clone()),
-        ToolRequest::Package { .. } => None,
-    };
-
     // Resolve an argument-derived Python request, if any.
-    let python_request = match (explicit_python_request, tool_python_request) {
-        // e.g., `uvx --python 3.10 python3.12`
-        (Some(explicit), Some(tool_request)) if tool_request != PythonRequest::Default => {
-            // Conflict: both --python flag and versioned tool name
+    let explicit_python_request = python.map(PythonRequest::parse);
+    let python_request = if let ToolRequest::Python {
+        request: tool_request,
+        ..
+    } = request
+        && *tool_request != PythonRequest::Default
+    {
+        if let Some(explicit) = explicit_python_request {
             return Err(anyhow::anyhow!(
                 "Received multiple Python version requests: `{}` and `{}`",
                 explicit.to_canonical_string().cyan(),
@@ -774,12 +771,9 @@ async fn get_or_create_environment(
             )
             .into());
         }
-        // e.g, `uvx --python 3.10 ...`
-        (Some(explicit), _) => Some(explicit),
-        // e.g., `uvx python` or `uvx <tool>`
-        (None, Some(PythonRequest::Default) | None) => None,
-        // e.g., `uvx python3.12`
-        (None, Some(tool_request)) => Some(tool_request),
+        Some(tool_request.clone())
+    } else {
+        explicit_python_request
     };
     let python_request = ToolPython::from_request(
         python_request,
