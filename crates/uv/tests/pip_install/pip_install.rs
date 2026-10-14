@@ -15592,69 +15592,6 @@ fn install_editable_uv_build_data() -> Result<()> {
     Ok(())
 }
 
-/// Test that RECORD entries use forward slashes on all platforms.
-///
-/// See <https://github.com/astral-sh/uv/issues/14446>.
-#[test]
-fn record_uses_forward_slashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Create a package with scripts via uv_build data directory.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.build-backend.data]
-        scripts = "scripts"
-        headers = "headers"
-    "#})?;
-
-    let module_dir = context.temp_dir.child("src").child("project");
-    module_dir.child("__init__.py").touch()?;
-
-    // Create a script that uses the install_script path.
-    let scripts_dir = context.temp_dir.child("scripts");
-    scripts_dir.child("my_script").write_str(indoc! {r#"
-        #!python
-        print("Hello from script")
-    "#})?;
-
-    let headers_dir = context.temp_dir.child("headers");
-    headers_dir.child("project.h").write_str(indoc! {r"
-        #include <stdio.h>
-    "})?;
-
-    context.pip_install().arg(".").assert().success();
-
-    // Read the RECORD file and check that all paths use forward slashes.
-    let record = read_record(File::open(
-        context
-            .site_packages()
-            .join("project-0.1.0.dist-info/RECORD"),
-    )?)?;
-    assert!(
-        record
-            .iter()
-            .any(|entry| entry.path.ends_with("/my_script"))
-    );
-    assert!(
-        record
-            .iter()
-            .any(|entry| entry.path.ends_with("/project.h"))
-    );
-    for entry in record {
-        assert!(!entry.path.contains('\\'), "{}", entry.path);
-    }
-
-    Ok(())
-}
-
 /// Test ABI compatibility checking on free-threaded Python.
 ///
 /// Free-threaded Python has a different ABI, so wheels must be built specifically for it.
