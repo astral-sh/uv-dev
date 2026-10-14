@@ -1,38 +1,68 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::PathChild, prelude::FileWriteStr};
-use insta::allow_duplicates;
 use uv_static::EnvVars;
 
 use uv_test::uv_snapshot;
 
+#[cfg(feature = "test-python")]
 #[tokio::test]
-async fn invalid_cloud_endpoint_urls() {
+async fn invalid_s3_endpoint_url() {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let proxy = crate::pypi_proxy::start().await;
-    let mut filters = context.filters();
-    filters.push((r"UV_(S3|GCS|AZURE)_ENDPOINT_URL", "UV_[CLOUD]_ENDPOINT_URL"));
 
-    allow_duplicates! {
-        for env_var in [
-            EnvVars::UV_S3_ENDPOINT_URL,
-            EnvVars::UV_GCS_ENDPOINT_URL,
-            EnvVars::UV_AZURE_ENDPOINT_URL,
-        ] {
-            uv_snapshot!(filters, context.pip_install()
-                .arg("--dry-run")
-                .arg("--default-index")
-                .arg(proxy.url("/basic-auth/simple"))
-                .arg("iniconfig")
-                .env(env_var, "not-a-url"), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: Failed to fetch: http://[LOCALHOST]/basic-auth/simple/iniconfig/
-              cause: Invalid `UV_[CLOUD]_ENDPOINT_URL`
-              cause: relative URL without a base
-            ");
-        }
-    }
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--dry-run")
+        .arg("--default-index")
+        .arg(proxy.url("/basic-auth/simple"))
+        .arg("iniconfig")
+        .env(EnvVars::UV_S3_ENDPOINT_URL, "not-a-url"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/basic-auth/simple/iniconfig/
+      cause: Invalid `UV_S3_ENDPOINT_URL`
+      cause: relative URL without a base
+    ");
+}
+
+#[cfg(feature = "test-python")]
+#[tokio::test]
+async fn invalid_gcs_endpoint_url() {
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let proxy = crate::pypi_proxy::start().await;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--dry-run")
+        .arg("--default-index")
+        .arg(proxy.url("/basic-auth/simple"))
+        .arg("iniconfig")
+        .env(EnvVars::UV_GCS_ENDPOINT_URL, "not-a-url"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/basic-auth/simple/iniconfig/
+      cause: Invalid `UV_GCS_ENDPOINT_URL`
+      cause: relative URL without a base
+    ");
+}
+
+#[cfg(feature = "test-python")]
+#[tokio::test]
+async fn invalid_azure_endpoint_url() {
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let proxy = crate::pypi_proxy::start().await;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--dry-run")
+        .arg("--default-index")
+        .arg(proxy.url("/basic-auth/simple"))
+        .arg("iniconfig")
+        .env(EnvVars::UV_AZURE_ENDPOINT_URL, "not-a-url"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/basic-auth/simple/iniconfig/
+      cause: Invalid `UV_AZURE_ENDPOINT_URL`
+      cause: relative URL without a base
+    ");
 }
 
 #[tokio::test]
