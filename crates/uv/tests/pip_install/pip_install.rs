@@ -14655,75 +14655,45 @@ fn reject_reserved_wheel_prefix_data_name() -> Result<()> {
     Ok(())
 }
 
-fn repacked_wheel_with_entrypoint(
+/// Create entry point metadata directly so the installer receives names a build backend may reject.
+fn wheel_with_entrypoint(
     context: &TestContext,
     section: &str,
     entrypoint_name: &str,
 ) -> Result<PathBuf> {
-    let built_wheel = context.temp_dir.join("foo/dist/foo-0.1.0-py3-none-any.whl");
-    let (_, wheel) = generate_wheel(
+    let entry_points = format!("[{section}]\n{entrypoint_name} = foo.cli:main\n");
+    let (filename, wheel) = generate_wheel_with_files(
         &"foo".parse()?,
         &"0.1.0".parse()?,
         &[],
         &BTreeMap::new(),
-        Some(&">=3.12".parse()?),
+        None,
         "py3-none-any",
-        &[],
+        &[
+            ("foo-0.1.0.dist-info/entry_points.txt", &entry_points),
+            (
+                "foo/cli.py",
+                "def main():\n    print('entry point executed', end='')\n",
+            ),
+        ],
     );
-    fs::create_dir_all(context.temp_dir.join("foo/dist"))?;
-    fs::write(&built_wheel, wheel)?;
-
-    let unpacked = context.temp_dir.join("foo-unpacked");
-    uv_extract::unzip(File::open(&built_wheel)?, &unpacked)?;
-
-    fs::write(
-        unpacked.join("foo-0.1.0.dist-info/entry_points.txt"),
-        formatdoc! {"
-            [{section}]
-            {entrypoint_name} = foo:main
-            ",
-        },
-    )?;
-
-    let repacked_wheel = context.temp_dir.join("foo-0.1.0-py3-none-any.whl");
-    let mut writer = ZipFileWriter::new(Vec::new());
-    for entry in WalkDir::new(&unpacked) {
-        let entry = entry?;
-        let path = entry.path();
-        let name = path.strip_prefix(&unpacked)?;
-        if name.as_os_str().is_empty() {
-            continue;
-        }
-        // Zip entries must use forward slashes, even on Windows.
-        let mut name = PortablePath::from(name).to_string();
-        if path.is_dir() {
-            name.push('/');
-            let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-            block_on(writer.write_entry_whole(entry, &[]))?;
-        } else {
-            let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-            block_on(writer.write_entry_whole(entry, &context.read_bytes(path)))?;
-        }
-    }
-    fs_err::write(&repacked_wheel, block_on(writer.close())?)?;
-
-    Ok(repacked_wheel)
+    let path = context.temp_dir.join(filename);
+    fs::write(&path, wheel)?;
+    Ok(path)
 }
 
 #[test]
 fn reject_wheel_entrypoint_paths() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Build a normal wheel, then rewrite its entry-point metadata to exercise the installer
-    // directly, rather than relying on backend-side validation.
     let escaped_entrypoint = context.temp_dir.child("escaped-entrypoint");
-    let repacked_wheel = repacked_wheel_with_entrypoint(
+    let wheel = wheel_with_entrypoint(
         &context,
         "console_scripts",
         &escaped_entrypoint.path().portable_display().to_string(),
     )?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14741,10 +14711,9 @@ fn reject_wheel_entrypoint_paths() -> Result<()> {
 #[test]
 fn reject_normalized_reserved_wheel_entrypoint_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "nested/../python")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "nested/../python")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14760,9 +14729,9 @@ fn reject_normalized_reserved_wheel_entrypoint_name() -> Result<()> {
 #[test]
 fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "Python")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "Python")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14772,9 +14741,9 @@ fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
     ");
 
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "Python.PY")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "Python.PY")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14784,9 +14753,9 @@ fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
     ");
 
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "python.Py")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "python.Py")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14801,10 +14770,9 @@ fn reject_case_variant_reserved_wheel_entrypoint_name() -> Result<()> {
 #[test]
 fn reject_normalized_reserved_gui_wheel_entrypoint_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "gui_scripts", "nested/../python")?;
+    let wheel = wheel_with_entrypoint(&context, "gui_scripts", "nested/../python")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14820,10 +14788,9 @@ fn reject_normalized_reserved_gui_wheel_entrypoint_name() -> Result<()> {
 #[test]
 fn reject_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "python3.13t")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "python3.13t")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14839,10 +14806,9 @@ fn reject_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
 #[test]
 fn reject_windowed_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "pythonw3.13t")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "pythonw3.13t")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14858,9 +14824,9 @@ fn reject_windowed_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
 #[test]
 fn reject_windows_rewritten_python_wheel_entrypoint_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "python.py")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "python.py")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14876,10 +14842,9 @@ fn reject_windows_rewritten_python_wheel_entrypoint_name() -> Result<()> {
 #[test]
 fn reject_windows_rewritten_free_threaded_python_wheel_entrypoint_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "pythonw3.13t.py")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "pythonw3.13t.py")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14895,9 +14860,9 @@ fn reject_windows_rewritten_free_threaded_python_wheel_entrypoint_name() -> Resu
 #[test]
 fn reject_pypy_major_wheel_entrypoint_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "pypy3")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "pypy3")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14913,9 +14878,9 @@ fn reject_pypy_major_wheel_entrypoint_name() -> Result<()> {
 #[test]
 fn reject_windows_rewritten_pypy_wheel_entrypoint_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel = repacked_wheel_with_entrypoint(&context, "console_scripts", "pypy.py")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "pypy.py")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14931,10 +14896,9 @@ fn reject_windows_rewritten_pypy_wheel_entrypoint_name() -> Result<()> {
 #[test]
 fn warn_normalized_activation_wheel_entrypoint_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "nested/../activate.bash")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "nested/../activate.bash")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14951,10 +14915,9 @@ fn warn_normalized_activation_wheel_entrypoint_name() -> Result<()> {
 #[test]
 fn accept_normalized_gui_wheel_entrypoint_paths() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "gui_scripts", "nested/../normalized-gui")?;
+    let wheel = wheel_with_entrypoint(&context, "gui_scripts", "nested/../normalized-gui")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14978,10 +14941,9 @@ fn accept_normalized_gui_wheel_entrypoint_paths() -> Result<()> {
 #[test]
 fn accept_normalized_wheel_entrypoint_paths() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let repacked_wheel =
-        repacked_wheel_with_entrypoint(&context, "console_scripts", "nested/../normalized-script")?;
+    let wheel = wheel_with_entrypoint(&context, "console_scripts", "nested/../normalized-script")?;
 
-    uv_snapshot!(context.filters(), context.pip_install().arg(&repacked_wheel), @"
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -14997,7 +14959,10 @@ fn accept_normalized_wheel_entrypoint_paths() -> Result<()> {
         "normalized-script"
     };
     let normalized_script = venv_bin_path(&context.venv).join(script_name);
-    assert!(normalized_script.exists());
+    Command::new(normalized_script)
+        .assert()
+        .success()
+        .stdout("entry point executed");
 
     Ok(())
 }
