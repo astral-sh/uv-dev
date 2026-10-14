@@ -163,21 +163,34 @@ fn pep_751_compile_git_preferences() -> Result<()> {
         .child("pylock.toml")
         .write_str(&lockfile(&pinned))?;
 
-    for (upgrade, revision) in [(false, &pinned), (true, &latest)] {
-        let mut command = context.pip_compile();
-        command.args(["requirements.in", "--universal", "-o", "pylock.toml"]);
-        if upgrade {
-            command.arg("--upgrade");
-        }
-        let output = command.assert().success();
-        let contents = context.read("pylock.toml");
-        output.stdout(contents.clone());
-        let actual: toml::Value = toml::from_str(&contents)?;
-        let expected: toml::Value = toml::from_str(&lockfile(revision))?;
-        assert_eq!(
-            actual, expected,
-            "unexpected lockfile with upgrade={upgrade}"
-        );
-    }
+    let unchanged = context
+        .pip_compile()
+        .args(["requirements.in", "--universal", "-o", "pylock.toml"])
+        .assert()
+        .success();
+    let unchanged_file = context.read("pylock.toml");
+    unchanged.stdout(unchanged_file.clone());
+    assert_eq!(
+        toml::from_str::<toml::Value>(&unchanged_file)?,
+        toml::from_str::<toml::Value>(&lockfile(&pinned))?
+    );
+
+    let upgraded = context
+        .pip_compile()
+        .args([
+            "requirements.in",
+            "--universal",
+            "-o",
+            "pylock.toml",
+            "--upgrade",
+        ])
+        .assert()
+        .success();
+    let upgraded_file = context.read("pylock.toml");
+    upgraded.stdout(upgraded_file.clone());
+    assert_eq!(
+        toml::from_str::<toml::Value>(&upgraded_file)?,
+        toml::from_str::<toml::Value>(&lockfile(&latest))?
+    );
     Ok(())
 }
