@@ -19,7 +19,7 @@ use crate::resolution::AnnotatedDist;
 /// A pinned package with its resolved distribution and all the extras that were pinned for it.
 pub(crate) struct RequirementsTxtDist<'dist> {
     pub(super) dist: &'dist ResolvedDist,
-    pub(super) version: &'dist Version,
+    version: &'dist Version,
     pub(super) hashes: &'dist [HashDigest],
     pub(super) markers: MarkerTree,
     /// The extras for this distribution, sorted and deduplicated.
