@@ -114,14 +114,7 @@ pub async fn check(
         };
 
         match discovery {
-            Ok(project) => {
-                for name in &package {
-                    if !project.workspace().packages().contains_key(name) {
-                        anyhow::bail!("Package `{name}` not found in workspace");
-                    }
-                }
-                Some(project)
-            }
+            Ok(project) => Some(project),
             Err(err) => {
                 if let WorkspaceErrorKind::NoSuchMember(name, _) = err.as_ref() {
                     anyhow::bail!("Package `{name}` not found in workspace");
