@@ -240,7 +240,7 @@ impl ProjectPythonRequest {
 
 /// Compute the `Requires-Python` bound for the [`Workspace`].
 ///
-/// For a [`Workspace`] with multiple packages, the `Requires-Python` bound is the union of the
+/// For a [`Workspace`] with multiple packages, the `Requires-Python` bound is the intersection of the
 /// `Requires-Python` bounds of all the packages.
 pub fn find_requires_python(
     workspace: &Workspace,
