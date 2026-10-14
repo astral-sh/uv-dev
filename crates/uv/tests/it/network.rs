@@ -30,18 +30,21 @@ use uv_test::{TestContext, uv_snapshot};
 
 /// Creates a CONNECT tunnel proxy that forwards connections to the target.
 ///
-/// Returns the proxy address. The proxy runs in a background thread.
-fn start_connect_tunnel_proxy() -> std::net::SocketAddr {
+/// Returns the proxy address and the number of established tunnels.
+fn start_connect_tunnel_proxy() -> (std::net::SocketAddr, Arc<AtomicUsize>) {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let proxy_connections = Arc::clone(&connections);
 
     // Spawn a real OS thread for the proxy server
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut client) = stream else { break };
+            let proxy_connections = Arc::clone(&proxy_connections);
 
             // Handle each connection in its own thread
             std::thread::spawn(move || {
@@ -87,6 +90,7 @@ fn start_connect_tunnel_proxy() -> std::net::SocketAddr {
                 {
                     return;
                 }
+                proxy_connections.fetch_add(1, Ordering::Relaxed);
 
                 // Bidirectionally forward data using two threads
                 let mut client_read = client.try_clone().unwrap();
@@ -101,7 +105,7 @@ fn start_connect_tunnel_proxy() -> std::net::SocketAddr {
         }
     });
 
-    addr
+    (addr, connections)
 }
 
 /// Creates a mock that serves a Simple API index page for iniconfig.
@@ -898,7 +902,7 @@ async fn proxy_valid_url_in_uv_toml() {
 fn proxy_https_proxy_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
 
-    let proxy_addr = start_connect_tunnel_proxy();
+    let (proxy_addr, connections) = start_connect_tunnel_proxy();
     let proxy_uri = format!("http://{proxy_addr}");
 
     let context = context.with_filter((proxy_uri.clone(), "[PROXY]"));
@@ -924,6 +928,10 @@ fn proxy_https_proxy_in_uv_toml() {
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
+    assert!(
+        connections.load(Ordering::Relaxed) > 0,
+        "the configured HTTPS proxy should establish a CONNECT tunnel"
+    );
 }
 
 /// Test that no-proxy in uv.toml bypasses the proxy for specified hosts.
