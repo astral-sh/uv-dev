@@ -68,25 +68,8 @@ impl CacheInfo {
         let mut directories = BTreeMap::new();
         let mut env = BTreeMap::new();
 
-        // Read the cache keys.
-        let pyproject_path = directory.join("pyproject.toml");
-        let cache_keys = if let Ok(contents) = fs_err::read_to_string(&pyproject_path) {
-            let result = info_span!("toml::from_str cache keys", path = %pyproject_path.display())
-                .in_scope(|| toml::from_str::<PyProjectToml>(&contents));
-            if let Ok(pyproject_toml) = result {
-                pyproject_toml
-                    .tool
-                    .and_then(|tool| tool.uv)
-                    .and_then(|tool_uv| tool_uv.cache_keys)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
         // If no cache keys were defined, use the defaults.
-        let cache_keys = cache_keys.unwrap_or_else(|| {
+        let cache_keys = read_cache_keys(directory).unwrap_or_else(|| {
             vec![
                 CacheKey::Path(Cow::Borrowed("pyproject.toml")),
                 CacheKey::Path(Cow::Borrowed("setup.py")),
@@ -306,6 +289,16 @@ impl CacheInfo {
             && self.env.is_empty()
             && self.directories.is_empty()
     }
+}
+
+/// Read configured cache keys, treating an unreadable or invalid project file as unconfigured.
+fn read_cache_keys(directory: &Path) -> Option<Vec<CacheKey>> {
+    let path = directory.join("pyproject.toml");
+    let contents = fs_err::read_to_string(&path).ok()?;
+    let project = info_span!("toml::from_str cache keys", path = %path.display())
+        .in_scope(|| toml::from_str::<PyProjectToml>(&contents))
+        .ok()?;
+    project.tool?.uv?.cache_keys
 }
 
 /// A `pyproject.toml` with an (optional) `[tool.uv]` section.
