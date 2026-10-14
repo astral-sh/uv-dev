@@ -12,7 +12,8 @@ use uv_distribution_types::{
     IndexCapabilities, Requirement, RequirementScope, RequirementSource, UnresolvedRequirement,
     UnresolvedRequirementSpecification,
 };
-use uv_pep440::{VersionSpecifier, VersionSpecifiers};
+use uv_normalize::{ExtraName, PackageName};
+use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 use uv_pep508::MarkerTree;
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
@@ -27,6 +28,29 @@ use uv_workspace::WorkspaceCache;
 
 use crate::error::ToolError;
 use crate::{Target, ToolRequest};
+
+/// Create a global registry requirement for a tool, optionally pinned to an exact version.
+pub(super) fn registry_requirement(
+    name: PackageName,
+    extras: Box<[ExtraName]>,
+    version: Option<Version>,
+) -> Requirement {
+    Requirement {
+        name,
+        extras,
+        groups: Box::new([]),
+        marker: MarkerTree::default(),
+        source: RequirementSource::Registry {
+            specifier: version.map_or_else(VersionSpecifiers::empty, |version| {
+                VersionSpecifiers::from(VersionSpecifier::equals_version(version))
+            }),
+            index: None,
+            conflict: None,
+        },
+        scope: RequirementScope::Global,
+        origin: None,
+    }
+}
 
 /// Resolve any [`UnresolvedRequirementSpecification`] into a fully-qualified [`Requirement`].
 pub(super) async fn resolve_names(
@@ -228,17 +252,9 @@ where
     };
 
     let version = filename.version().clone();
-    Ok(Some(Requirement {
-        name: name.clone(),
-        extras: Box::new([]),
-        groups: Box::new([]),
-        marker: MarkerTree::default(),
-        source: RequirementSource::Registry {
-            specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
-            index: None,
-            conflict: None,
-        },
-        scope: RequirementScope::Global,
-        origin: None,
-    }))
+    Ok(Some(registry_requirement(
+        name.clone(),
+        Box::new([]),
+        Some(version),
+    )))
 }

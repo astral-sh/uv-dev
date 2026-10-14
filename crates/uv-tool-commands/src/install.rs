@@ -1,7 +1,6 @@
 use std::fmt::Write;
 use std::str::FromStr;
 use uv_dispatch::PlatformState;
-use uv_distribution_types::RequirementScope;
 use uv_python_discovery::PythonDownloadReporter;
 
 use anyhow::{Result, bail};
@@ -17,13 +16,11 @@ use uv_configuration::{
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ExtraBuildRequires, NameRequirementSpecification, Requirement, RequirementSource,
+    ExtraBuildRequires, NameRequirementSpecification, RequirementSource,
     UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
-use uv_pep440::{VersionSpecifier, VersionSpecifiers};
-use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
@@ -45,7 +42,7 @@ use crate::common::{
     tool_environment_spec,
 };
 use crate::error::ToolLockError;
-use crate::requirements::{resolve_latest, resolve_names};
+use crate::requirements::{registry_requirement, resolve_latest, resolve_names};
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
@@ -225,54 +222,20 @@ pub async fn install(
 
             requirement
         }
+        ToolRequest::Package {
+            target: Target::Version(..) | Target::Latest(..),
+            ..
+        } if editable => bail!("`--editable` is only supported for local packages"),
         // Ex) `ruff@0.6.0`
         ToolRequest::Package {
             target: Target::Version(.., name, extras, version),
             ..
-        } => {
-            if editable {
-                bail!("`--editable` is only supported for local packages");
-            }
-
-            Requirement {
-                name: name.clone(),
-                extras: extras.clone(),
-                groups: Box::new([]),
-                marker: MarkerTree::default(),
-                source: RequirementSource::Registry {
-                    specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(
-                        version.clone(),
-                    )),
-                    index: None,
-                    conflict: None,
-                },
-                scope: RequirementScope::Global,
-                origin: None,
-            }
-        }
+        } => registry_requirement(name.clone(), extras.clone(), Some(version.clone())),
         // Ex) `ruff@latest`
         ToolRequest::Package {
             target: Target::Latest(.., name, extras),
             ..
-        } => {
-            if editable {
-                bail!("`--editable` is only supported for local packages");
-            }
-
-            Requirement {
-                name: name.clone(),
-                extras: extras.clone(),
-                groups: Box::new([]),
-                marker: MarkerTree::default(),
-                source: RequirementSource::Registry {
-                    specifier: VersionSpecifiers::empty(),
-                    index: None,
-                    conflict: None,
-                },
-                scope: RequirementScope::Global,
-                origin: None,
-            }
-        }
+        } => registry_requirement(name.clone(), extras.clone(), None),
         // Ex) `python`
         ToolRequest::Python { .. } => {
             bail!(
