@@ -638,12 +638,10 @@ impl GitCheckout {
 /// remotes. Instead, callers pass these values via `git -c`, using a credential-stripped origin URL
 /// for resolution and a transient `url.*.insteadOf` rewrite when credentials are needed for
 /// transport.
-fn submodule_update_config(original_remote_url: &DisplaySafeUrl) -> Vec<String> {
+fn submodule_update_config(original_remote_url: &DisplaySafeUrl) -> impl Iterator<Item = String> {
     let remote_url = original_remote_url.without_credentials();
-    let mut config = vec![format!("remote.origin.url={}", remote_url.as_str())];
-
-    config.extend(submodule_auth_config(original_remote_url));
-    config
+    std::iter::once(format!("remote.origin.url={}", remote_url.as_str()))
+        .chain(submodule_auth_config(original_remote_url))
 }
 
 /// Return command-local Git authentication configuration for updating submodules.
@@ -950,7 +948,7 @@ mod tests {
         let url = DisplaySafeUrl::parse("https://user:password@example.com/org/repo.git").unwrap();
 
         assert_eq!(
-            submodule_update_config(&url),
+            submodule_update_config(&url).collect::<Vec<_>>(),
             vec![
                 "remote.origin.url=https://example.com/org/repo.git".to_string(),
                 "url.https://user:password@example.com/.insteadOf=https://example.com/".to_string(),
@@ -963,7 +961,7 @@ mod tests {
         let url = DisplaySafeUrl::parse("ssh://git@example.com/org/repo.git").unwrap();
 
         assert_eq!(
-            submodule_update_config(&url),
+            submodule_update_config(&url).collect::<Vec<_>>(),
             vec!["remote.origin.url=ssh://git@example.com/org/repo.git".to_string()]
         );
     }
