@@ -173,8 +173,6 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
         "#
     })?;
 
-    context.lock().arg("--offline").assert().success();
-
     let noncanonical_lock = indoc! {
         r"
         version = 1
@@ -195,12 +193,11 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
         .child("uv.lock")
         .write_str(noncanonical_lock)?;
 
-    context
-        .lock()
-        .arg("--locked")
-        .arg("--offline")
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
     assert_eq!(context.read("uv.lock"), noncanonical_lock);
 
     Ok(())
