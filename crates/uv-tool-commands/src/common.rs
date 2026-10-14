@@ -898,7 +898,7 @@ pub(super) fn finalize_tool_install(
                 fs_err::copy(src, &target).context("Failed to install entrypoint")?;
             }
 
-            let tool_entry = ToolEntrypoint::new(&name, target, package.to_string());
+            let tool_entry = ToolEntrypoint::new(name, target, package.to_string());
             names.insert(tool_entry.name.clone());
             installed_entrypoints.push(tool_entry);
         }
