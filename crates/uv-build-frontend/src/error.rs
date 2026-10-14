@@ -111,7 +111,17 @@ impl Hinted for Error {
             Self::MissingHeader(err) => Hints::from(err.cause.to_string()),
             Self::Lowering(err) => err.hints(),
             Self::RequirementsResolve(_, err) | Self::RequirementsInstall(_, err) => err.hints(),
-            _ => Hints::none(),
+            Self::Io(_)
+            | Self::InvalidSourceDist(_)
+            | Self::InvalidPyprojectTomlSyntax(_)
+            | Self::InvalidPyprojectTomlSchema(_)
+            | Self::InvalidBackendPath(_)
+            | Self::BackendPathOutsideSourceTree(_)
+            | Self::Virtualenv(_)
+            | Self::CommandFailed(_, _)
+            | Self::BuildScriptPath(_)
+            | Self::CyclicBuildDependency(_)
+            | Self::UnmatchedRuntime(_, _) => Hints::none(),
         }
     }
 }
