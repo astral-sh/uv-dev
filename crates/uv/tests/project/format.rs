@@ -467,29 +467,26 @@ fn format_with_ruff_args() -> Result<()> {
         dependencies = []
     "#})?;
 
-    // Create a Python file with a long line
+    // This call fits the default line length but wraps at the forwarded limit.
     let main_py = context.temp_dir.child("main.py");
-    main_py.write_str(indoc! {r#"
-        def hello():
-            print("This is a very long line that should normally be wrapped by the formatter but we will configure it to have a longer line length")
-    "#})?;
+    main_py.write_str("result = combine(first_argument, second_argument, third_argument)\n")?;
 
-    // Run format with custom line length
-    uv_snapshot!(context.filters(), context.format().arg("--").arg("main.py").arg("--line-length").arg("200"), @"
+    uv_snapshot!(context.filters(), context.format().arg("--").arg("main.py").arg("--line-length").arg("40"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    1 file left unchanged
+    1 file reformatted
 
     ----- stderr -----
     warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
     ");
 
-    // Check that the line wasn't wrapped (since we set a long line length)
-    let formatted_content = context.read("main.py");
-    assert_snapshot!(formatted_content, @r#"
-    def hello():
-        print("This is a very long line that should normally be wrapped by the formatter but we will configure it to have a longer line length")
-    "#);
+    assert_snapshot!(context.read("main.py"), @"
+    result = combine(
+        first_argument,
+        second_argument,
+        third_argument,
+    )
+    ");
 
     Ok(())
 }
