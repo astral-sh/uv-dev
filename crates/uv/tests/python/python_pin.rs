@@ -87,7 +87,8 @@ fn python_pin_warning_chain() -> Result<()> {
 
 #[test]
 fn python_pin() {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let context =
+        uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_filtered_python_sources();
 
     // Without arguments, we attempt to read the current pin (which does not exist yet)
     uv_snapshot!(context.filters(), context.python_pin(), @"
@@ -187,39 +188,31 @@ fn python_pin() {
         assert_snapshot!(python_version, @"[PYTHON-3.11]");
     });
 
-    // Request an implementation that is not installed
-    // (skip on Windows because the snapshot is different and the behavior is not platform dependent)
-    #[cfg(unix)]
-    {
-        uv_snapshot!(context.filters(), context.python_pin().arg("pypy"), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        Updated `.python-version` from `[PYTHON-3.11]` -> `pypy`
+    // A missing implementation can still be pinned without resolving it.
+    uv_snapshot!(context.filters(), context.python_pin().arg("pypy"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `[PYTHON-3.11]` -> `pypy`
 
-        ----- stderr -----
-        warning: No interpreter found for PyPy in managed installations or search path
-        ");
+    ----- stderr -----
+    warning: No interpreter found for PyPy in [PYTHON SOURCES]
+    ");
 
-        let python_version = context.read(PYTHON_VERSION_FILENAME);
-        assert_snapshot!(python_version, @"pypy");
-    }
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"pypy");
 
-    // Request a version that is not installed
-    // (skip on Windows because the snapshot is different and the behavior is not platform dependent)
-    #[cfg(unix)]
-    {
-        uv_snapshot!(context.filters(), context.python_pin().arg("3.7"), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        Updated `.python-version` from `pypy` -> `3.7`
+    // Request a version that is not installed.
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.7"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `pypy` -> `3.7`
 
-        ----- stderr -----
-        warning: No interpreter found for Python 3.7 in managed installations or search path
-        ");
+    ----- stderr -----
+    warning: No interpreter found for Python 3.7 in [PYTHON SOURCES]
+    ");
 
-        let python_version = context.read(PYTHON_VERSION_FILENAME);
-        assert_snapshot!(python_version, @"3.7");
-    }
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.7");
 }
 
 #[test]
@@ -398,12 +391,10 @@ fn python_pin_global_creates_parent_dirs() {
     assert_path_missing(context.temp_dir.child(PYTHON_VERSION_FILENAME));
 }
 
-/// We do not need a Python interpreter to pin without `--resolved`
-/// (skip on Windows because the snapshot is different and the behavior is not platform dependent)
-#[cfg(unix)]
+/// We do not need a Python interpreter to pin without `--resolved`.
 #[test]
 fn python_pin_no_python() {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
 
     uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
     exit_code: 0 (success)
@@ -411,7 +402,7 @@ fn python_pin_no_python() {
     Pinned `.python-version` to `3.12`
 
     ----- stderr -----
-    warning: No interpreter found for Python 3.12 in managed installations or search path
+    warning: No interpreter found for Python 3.12 in [PYTHON SOURCES]
     ");
 }
 
@@ -619,7 +610,8 @@ fn python_pin_resolve_no_python() {
 
 #[test]
 fn python_pin_resolve() {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    let context =
+        uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_filtered_python_sources();
 
     // We pin the first interpreter on the path
     uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("any"), @"
@@ -724,31 +716,30 @@ fn python_pin_resolve() {
         assert_snapshot!(python_version, @"[PYTHON-3.13]");
     });
 
-    // Request an implementation that is not installed
-    // (skip on Windows because the snapshot is different and the behavior is not platform dependent)
+    // Missing PyPy also reports a download hint on platforms where one is available.
     #[cfg(unix)]
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("pypy"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for PyPy in managed installations or search path
+    {
+        uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("pypy"), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        error: No interpreter found for PyPy in [PYTHON SOURCES]
 
-    hint: A managed Python download is available for PyPy, but Python downloads are set to 'never'
-    ");
+        hint: A managed Python download is available for PyPy, but Python downloads are set to 'never'
+        ");
 
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
+        let python_version = context.read(PYTHON_VERSION_FILENAME);
+        insta::with_settings!({
+            filters => context.filters(),
+        }, {
+            assert_snapshot!(python_version, @"[PYTHON-3.13]");
+        });
+    }
 
-    // Request a version that is not installed
-    // (skip on Windows because the snapshot is different and the behavior is not platform dependent)
-    #[cfg(unix)]
+    // A failed resolved request must leave the existing pin unchanged.
     uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("3.7"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: No interpreter found for Python 3.7 in managed installations or search path
+    error: No interpreter found for Python 3.7 in [PYTHON SOURCES]
     ");
 
     let python_version = context.read(PYTHON_VERSION_FILENAME);
