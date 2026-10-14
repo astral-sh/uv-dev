@@ -37,13 +37,7 @@ pub(crate) struct CloneableSeekableReader {
 
 impl Clone for CloneableSeekableReader {
     fn clone(&self) -> Self {
-        Self {
-            file: self.file.clone(),
-            pos: self.pos,
-            file_length: self.file_length,
-            buffer: Box::new([0; BUFFER_SIZE]),
-            buffered: 0..0,
-        }
+        Self::at_position(Arc::clone(&self.file), self.pos, self.file_length)
     }
 }
 
@@ -54,10 +48,15 @@ impl CloneableSeekableReader {
     /// of the stream changes; any subsequent seeks will not take account
     /// of the changed stream length.
     pub(crate) fn new(file: fs_err::File) -> Self {
+        Self::at_position(Arc::new(file), 0, None)
+    }
+
+    /// Create an independently buffered reader at the given file position.
+    fn at_position(file: Arc<fs_err::File>, pos: u64, file_length: Option<u64>) -> Self {
         Self {
-            file: Arc::new(file),
-            pos: 0u64,
-            file_length: None,
+            file,
+            pos,
+            file_length,
             buffer: Box::new([0; BUFFER_SIZE]),
             buffered: 0..0,
         }
