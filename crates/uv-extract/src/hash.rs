@@ -1,7 +1,7 @@
 use sha2::{Digest as _, digest::consts::U32};
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
-use tokio::io::{AsyncReadExt, ReadBuf};
+use tokio::io::ReadBuf;
 
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
 
@@ -78,9 +78,7 @@ where
 
     /// Exhaust the underlying reader.
     pub async fn finish(&mut self) -> Result<(), std::io::Error> {
-        let mut buffer = vec![0; 8192];
-        while self.read(&mut buffer).await? > 0 {}
-
+        tokio::io::copy(self, &mut tokio::io::sink()).await?;
         Ok(())
     }
 }
