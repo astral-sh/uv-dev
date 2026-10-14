@@ -1,6 +1,6 @@
 //! Project Python requests and compatibility validation.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::ConfigDiscovery;
 use crate::PythonInstallation;
@@ -50,7 +50,7 @@ pub enum PythonRequestSource {
     /// The request was provided by the user.
     UserRequest,
     /// The request was inferred from a `.python-version` or `.python-versions` file.
-    DotPythonVersion(PythonVersionFile),
+    DotPythonVersion(PathBuf),
     /// The request was inferred from a `pyproject.toml` file.
     RequiresPython,
 }
@@ -59,8 +59,8 @@ impl std::fmt::Display for PythonRequestSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UserRequest => write!(f, "explicit request"),
-            Self::DotPythonVersion(file) => {
-                write!(f, "version file at `{}`", file.path().user_display())
+            Self::DotPythonVersion(path) => {
+                write!(f, "version file at `{}`", path.user_display())
             }
             Self::RequiresPython => write!(f, "`requires-python` metadata"),
         }
@@ -144,8 +144,7 @@ impl ProjectPythonRequest {
             }
         }) {
             // (2) Request from `.python-version`
-            let request = file.version().cloned();
-            (PythonRequestSource::DotPythonVersion(file), request)
+            file.into_sourced_request()
         } else {
             // (3) `requires-python` in `pyproject.toml`
             let request = requirement.as_ref().and_then(|requirement| {
@@ -442,9 +441,9 @@ fn validate_python_requirement(
                 requires_python_sources,
             )
         }
-        PythonRequestSource::DotPythonVersion(file) => {
+        PythonRequestSource::DotPythonVersion(path) => {
             PythonSelectionError::DotPythonVersionProjectIncompatibility {
-                python_request: file.path().user_display().to_string(),
+                python_request: path.user_display().to_string(),
                 version,
                 requires_python,
                 requires_python_sources,
