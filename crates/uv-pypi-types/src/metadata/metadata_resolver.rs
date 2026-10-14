@@ -42,53 +42,7 @@ pub struct ResolutionMetadata {
 impl ResolutionMetadata {
     /// Parse the [`ResolutionMetadata`] from a `METADATA` file, as included in a built distribution (wheel).
     pub fn parse_metadata(content: &[u8]) -> Result<Self, MetadataError> {
-        let headers = Headers::parse(content);
-
-        let name = PackageName::from_owned(
-            headers
-                .get_first_value("Name")?
-                .ok_or(MetadataError::FieldNotFound("Name"))?,
-        )?;
-        let version = Version::from_str(
-            &headers
-                .get_first_value("Version")?
-                .ok_or(MetadataError::FieldNotFound("Version"))?,
-        )
-        .map_err(MetadataError::Pep440VersionError)?;
-        let requires_dist = headers
-            .get_all_values("Requires-Dist")?
-            .map(|requires_dist| LenientRequirement::from_str(&requires_dist))
-            .map_ok(Requirement::from)
-            .collect::<Result<Box<_>, _>>()?;
-        let requires_python = headers
-            .get_first_value("Requires-Python")?
-            .map(|requires_python| LenientVersionSpecifiers::from_str(&requires_python))
-            .transpose()?
-            .map(VersionSpecifiers::from);
-        let provides_extra = headers
-            .get_all_values("Provides-Extra")?
-            .filter_map(
-                |provides_extra| match ExtraName::from_owned(provides_extra) {
-                    Ok(extra_name) => Some(extra_name),
-                    Err(err) => {
-                        warn!("Ignoring invalid extra: {err}");
-                        None
-                    }
-                },
-            )
-            .collect::<Box<_>>();
-        let dynamic = headers
-            .get_all_values("Dynamic")?
-            .any(|field| field == "Version");
-
-        Ok(Self {
-            name,
-            version,
-            requires_dist,
-            requires_python,
-            provides_extra,
-            dynamic,
-        })
+        Self::from_headers(&Headers::parse(content), None)
     }
 
     /// Read the [`ResolutionMetadata`] from a source distribution's `PKG-INFO` file, if it uses Metadata 2.2
@@ -121,7 +75,14 @@ impl ResolutionMetadata {
             }
         }
 
-        // The `Name` and `Version` fields are required, and can't be dynamic.
+        Self::from_headers(&headers, Some(dynamic))
+    }
+
+    /// Parse the shared resolution fields, reusing the result of any source metadata validation.
+    fn from_headers(
+        headers: &Headers<'_>,
+        validated_dynamic_version: Option<bool>,
+    ) -> Result<Self, MetadataError> {
         let name = PackageName::from_owned(
             headers
                 .get_first_value("Name")?
@@ -134,7 +95,6 @@ impl ResolutionMetadata {
         )
         .map_err(MetadataError::Pep440VersionError)?;
 
-        // The remaining fields are required to be present.
         let requires_dist = headers
             .get_all_values("Requires-Dist")?
             .map(|requires_dist| LenientRequirement::from_str(&requires_dist))
@@ -157,6 +117,12 @@ impl ResolutionMetadata {
                 },
             )
             .collect::<Box<_>>();
+        let dynamic = match validated_dynamic_version {
+            Some(dynamic) => dynamic,
+            None => headers
+                .get_all_values("Dynamic")?
+                .any(|field| field == "Version"),
+        };
 
         Ok(Self {
             name,
