@@ -23,7 +23,7 @@ use uv_normalize::PackageName;
 use uv_pep440::VersionSpecifiers;
 
 use crate::http_server::{FileData, HttpServer, content_type_for_filename};
-use crate::vendor::vendor_artifacts;
+use crate::vendor::{VendorArtifact, vendor_artifacts};
 
 use super::scenario::{ArtifactMetadata, PackageMetadata, Scenario, WheelTag};
 use super::scenarios_dir;
@@ -93,7 +93,7 @@ impl PackseServer {
     }
 
     fn start(scenario: &Scenario, hashes: bool) -> Self {
-        let index = Arc::new(ServerIndex::new(scenario));
+        let index = Arc::new(ServerIndex::new(scenario, vendor_artifacts()));
         let server_index = Arc::clone(&index);
         let server = HttpServer::start(move |request, server_uri| {
             handle_request(request, server_uri, &server_index, hashes)
@@ -125,7 +125,7 @@ impl PackseServer {
 
 impl ServerIndex {
     /// Build the index from scenario packages and cached build dependencies.
-    fn new(scenario: &Scenario) -> Self {
+    fn new(scenario: &Scenario, vendor_artifacts: &'static [VendorArtifact]) -> Self {
         let mut index = Self::default();
 
         for (package_name, package) in &scenario.packages {
@@ -165,7 +165,7 @@ impl ServerIndex {
             }
         }
 
-        for artifact in vendor_artifacts() {
+        for artifact in vendor_artifacts {
             if !Path::new(artifact.filename)
                 .extension()
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("whl"))
@@ -418,7 +418,7 @@ mod tests {
     use reqwest::{Client, StatusCode};
     use wiremock::MockServer;
 
-    use crate::vendor::vendor_artifacts;
+    use crate::vendor::VendorArtifact;
 
     use super::{
         PackseServer, Scenario, ServerIndex, extract_package_name, mount_mismatched_distribution,
@@ -444,13 +444,11 @@ mod tests {
 
     #[test]
     fn server_index_construction_does_not_load_vendor_artifacts() {
-        let _index = ServerIndex::new(&Scenario::empty());
+        static ARTIFACTS: [VendorArtifact; 1] = [VendorArtifact::test_fixture()];
+        let index = ServerIndex::new(&Scenario::empty(), &ARTIFACTS);
 
-        assert!(
-            vendor_artifacts()
-                .iter()
-                .all(|artifact| !artifact.is_loaded())
-        );
+        assert!(index.files.contains_key(ARTIFACTS[0].filename));
+        assert!(!ARTIFACTS[0].is_loaded());
     }
 
     #[tokio::test]

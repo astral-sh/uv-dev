@@ -9,7 +9,7 @@ use indoc::formatdoc;
 use wiremock::{Request, ResponseTemplate};
 
 use crate::http_server::{FileData, HttpServer, content_type_for_filename};
-use crate::vendor::vendor_artifacts;
+use crate::vendor::{VendorArtifact, vendor_artifacts};
 
 /// A running HTTP server that serves files from a directory as a flat links page.
 pub struct FindLinksServer {
@@ -38,7 +38,11 @@ impl FindLinksServer {
 
     /// Start a server that serves the pinned registry artifacts used by tests.
     pub fn vendor() -> Self {
-        let files = vendor_artifacts()
+        Self::from_vendor_artifacts(vendor_artifacts())
+    }
+
+    fn from_vendor_artifacts(artifacts: &'static [VendorArtifact]) -> Self {
+        let files = artifacts
             .iter()
             .map(|artifact| (artifact.filename.to_string(), FileData::Vendor(artifact)))
             .collect();
@@ -95,16 +99,24 @@ fn handle_request(
 #[cfg(test)]
 mod tests {
     use super::FindLinksServer;
-    use crate::vendor::vendor_artifacts;
+    use crate::vendor::VendorArtifact;
 
-    #[test]
-    fn vendor_server_construction_does_not_load_artifacts() {
-        let _server = FindLinksServer::vendor();
+    #[tokio::test]
+    async fn vendor_index_does_not_load_artifacts() -> anyhow::Result<()> {
+        static ARTIFACTS: [VendorArtifact; 1] = [VendorArtifact::test_fixture()];
+        let server = FindLinksServer::from_vendor_artifacts(&ARTIFACTS);
+        let index = reqwest::Client::builder()
+            .no_proxy()
+            .build()?
+            .get(server.url())
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
 
-        assert!(
-            vendor_artifacts()
-                .iter()
-                .all(|artifact| !artifact.is_loaded())
-        );
+        assert!(index.contains(ARTIFACTS[0].filename));
+        assert!(!ARTIFACTS[0].is_loaded());
+        Ok(())
     }
 }
