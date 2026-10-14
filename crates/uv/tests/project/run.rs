@@ -862,35 +862,37 @@ fn run_pep723_script_git_archive() -> Result<()> {
 #[test]
 fn run_pep723_script_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = PackseServer::new("simple/single-package.toml");
+    let fallback = PackseServer::empty();
 
     let test_script = context.temp_dir.child("main.py");
-    test_script.write_str(indoc! { r#"
+    test_script.write_str(&formatdoc! { r#"
         # /// script
         # requires-python = ">=3.11"
         # dependencies = [
-        #   "idna>=2",
+        #   "a>=1",
         # ]
         #
         # [[tool.uv.index]]
         # name = "test"
-        # url = "https://test.pypi.org/simple"
+        # url = "{}"
         # explicit = true
         #
         # [tool.uv.sources]
-        # idna = { index = "test" }
+        # a = {{ index = "test" }}
         # ///
 
-        import idna
-       "#
+        import a
+       "#, index.index_url()
     })?;
 
-    uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
+    uv_snapshot!(context.filters(), context.run().arg("--default-index").arg(fallback.index_url()).arg("main.py"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + idna==2.7
+     + a==2.0.0
     ");
 
     Ok(())
