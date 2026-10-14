@@ -11859,40 +11859,30 @@ fn lock_pep508_urls_with_vars() -> Result<()> {
         dependencies = ["b @ file://${PWD}/b", "c @ file:///${PROJECT_ROOT}/c"]
         "#,
     })?;
-    context.temp_dir.child("src/a/__init__.py").touch()?;
-    context
-        .temp_dir
-        .child("b/pyproject.toml")
-        .write_str(indoc! {r#"
+    let package_b = context.temp_dir.child("b");
+    package_b.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "b"
         version = "0.1.0"
-        dependencies = []
         requires-python = ">=3.11,<3.13"
-        license = {text = "MIT"}
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-
     "#})?;
-    context.temp_dir.child("src/b/__init__.py").touch()?;
-    context
-        .temp_dir
-        .child("c/pyproject.toml")
-        .write_str(indoc! {r#"
+    package_b.child("src/b/__init__.py").touch()?;
+    let package_c = context.temp_dir.child("c");
+    package_c.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "c"
         version = "0.1.0"
-        dependencies = []
         requires-python = ">=3.11,<3.13"
-        license = {text = "MIT"}
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
-    context.temp_dir.child("src/c/__init__.py").touch()?;
+    package_c.child("src/c/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.lock().env("PWD", context.temp_dir.path()), @"
     exit_code: 0 (success)
@@ -11947,6 +11937,15 @@ fn lock_pep508_urls_with_vars() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--offline"]).env("PWD", context.temp_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + b==0.1.0 (from file://[TEMP_DIR]/b)
+     + c==0.1.0 (from file://[TEMP_DIR]/c)
     ");
 
     Ok(())
