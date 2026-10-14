@@ -26,8 +26,10 @@ fn python_install_invalid_request() {
     ");
 
     // Resolve every request before installing; an unavailable later request must not leave the
-    // earlier valid request installed.
-    uv_snapshot!(context.filters(), context.python_install().arg("3.12").arg("3.8.0"), @"
+    // earlier valid request installed. The explicit platform makes the first request available
+    // independently of the host.
+    let available = "cpython-3.12.9-linux-x86_64-gnu";
+    uv_snapshot!(context.filters(), context.python_install().arg(available).arg("3.8.0"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No download found for request: cpython-3.8.0-[PLATFORM]
@@ -38,6 +40,7 @@ fn python_install_invalid_request() {
         .assert()
         .success()
         .stdout("");
+    assert_path_missing(context.temp_dir.child("managed").child(available));
     assert_path_missing(
         context
             .bin_dir
