@@ -85,8 +85,8 @@ pub enum TomlCredentialError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     LockedFile(#[from] LockedFileError),
-    #[error("Failed to parse TOML credential file: {0}")]
-    ParseError(#[from] toml::de::Error),
+    #[error("Failed to parse TOML credential file{0}")]
+    ParseError(String),
     #[error("Failed to serialize credentials to TOML")]
     SerializeError(#[from] toml::ser::Error),
     #[error(transparent)]
@@ -97,6 +97,26 @@ pub enum TomlCredentialError {
     CredentialsDirError,
     #[error("Token is not valid unicode")]
     TokenNotUnicode(#[from] std::string::FromUtf8Error),
+}
+
+impl TomlCredentialError {
+    fn from_parse_error(error: toml::de::Error, content: &str) -> Self {
+        // Parser diagnostics can contain credential values in both source excerpts and messages.
+        let location = error
+            .span()
+            .and_then(|span| content.get(..span.start))
+            .map_or_else(String::new, |prefix| {
+                let line = prefix.bytes().filter(|&byte| byte == b'\n').count() + 1;
+                let column = prefix
+                    .rsplit_once('\n')
+                    .map_or(prefix, |(_, line)| line)
+                    .chars()
+                    .count()
+                    + 1;
+                format!(" at line {line}, column {column}")
+            });
+        Self::ParseError(location)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -268,7 +288,8 @@ impl TextCredentialStore {
     /// Read credentials from a file.
     fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, TomlCredentialError> {
         let content = fs::read_to_string(path)?;
-        let mut credentials: TomlCredentials<TomlCredential> = toml::from_str(&content)?;
+        let mut credentials: TomlCredentials<TomlCredential> = toml::from_str(&content)
+            .map_err(|error| TomlCredentialError::from_parse_error(error, &content))?;
 
         // A canonical entry takes precedence over a legacy key left in the same store after login.
         credentials.credentials.sort_by_key(|credential| {
@@ -509,6 +530,22 @@ mod tests {
                 .to_string()
                 .contains("HTTPS is required for non-local hosts")
         );
+    }
+
+    #[test]
+    fn credential_parse_error_does_not_retain_file_contents() {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(
+            file.path(),
+            "[[credential]]\nservice = 'http://user:private@example.com'\nusername = 'user'\n",
+        )
+        .unwrap();
+        let error = TextCredentialStore::from_file(file.path()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Failed to parse TOML credential file at line 2, column 11"
+        );
+        assert!(std::error::Error::source(&error).is_none());
     }
 
     #[test]
