@@ -294,13 +294,19 @@ impl<'lock> InstallTarget<'lock> {
         let lock = self.lock();
         let mut group_requirements = RequiresPythonSources::new();
 
-        if let Some(members) = lock.member_group_metadata() {
+        // Resolve installation roots only when a member has group metadata.
+        let mut members = lock
+            .member_group_metadata()
+            .into_iter()
+            .flatten()
+            .peekable();
+        if members.peek().is_some() {
             let group_root = self.group_root(groups);
+            let roots = self.roots().collect::<FxHashSet<_>>();
 
             for (member, member_groups) in members {
                 // The group root can contribute groups without being an install root.
-                let is_install_root = self.roots().any(|root| root == member);
-                if !is_install_root && group_root != Some(member) {
+                if !roots.contains(member) && group_root != Some(member) {
                     continue;
                 }
 
