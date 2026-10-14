@@ -123,19 +123,6 @@ pub(crate) trait CredentialBuilderApi {
     /// This typically has no effect on the content of the underlying store.
     /// A credential need not be persisted until its password is set.
     fn build(&self, target: Option<&str>, service: &str, user: &str) -> Result<Box<Credential>>;
-
-    /// Return the underlying concrete object cast to [Any].
-    ///
-    /// Because credential builders need not have any internal structure,
-    /// this call is not so much for clients
-    /// as it is to allow automatic derivation of a Debug trait for builders.
-    fn as_any(&self) -> &dyn Any;
-}
-
-impl std::fmt::Debug for CredentialBuilder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.as_any().fmt(f)
-    }
 }
 
 /// A thread-safe implementation of the [`CredentialBuilder` API](CredentialBuilderApi).
@@ -156,10 +143,6 @@ pub(crate) fn nop_credential_builder() -> Box<CredentialBuilder> {
     impl CredentialBuilderApi for NopCredentialBuilder {
         fn build(&self, _: Option<&str>, _: &str, _: &str) -> Result<Box<Credential>> {
             Err(crate::Error::NoDefaultCredentialBuilder)
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
 
