@@ -4,29 +4,18 @@ use std::sync::LazyLock;
 use rustc_hash::FxHashMap;
 use uv_normalize::PackageName;
 
-/// A mapping from module name to PyPI package name.
-pub(crate) struct ModuleMap<'a>(FxHashMap<&'a str, PackageName>);
-
-impl<'a> ModuleMap<'a> {
-    /// Generate a [`ModuleMap`] from a string representation, encoded in `${module}:{package}` format.
-    fn from_str(source: &'a str) -> Self {
+/// Look up the PyPI package name for a Python module.
+pub(crate) fn lookup_package(module: &str) -> Option<&'static PackageName> {
+    static MODULE_MAPPING: LazyLock<FxHashMap<&str, PackageName>> = LazyLock::new(|| {
         let mut mapping = FxHashMap::default();
-        for line in source.lines() {
+        for line in include_str!("pipreqs/mapping").lines() {
             if let Some((module, package)) = line.split_once(':') {
                 let module = module.trim();
                 let package = PackageName::from_str(package.trim()).unwrap();
                 mapping.insert(module, package);
             }
         }
-        Self(mapping)
-    }
-
-    /// Look up a PyPI package name for a given module name.
-    pub(crate) fn lookup(&self, module: &str) -> Option<&PackageName> {
-        self.0.get(module)
-    }
+        mapping
+    });
+    MODULE_MAPPING.get(module)
 }
-
-/// A mapping from module name to PyPI package name.
-pub(crate) static MODULE_MAPPING: LazyLock<ModuleMap> =
-    LazyLock::new(|| ModuleMap::from_str(include_str!("pipreqs/mapping")));
