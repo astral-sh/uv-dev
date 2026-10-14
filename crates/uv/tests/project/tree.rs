@@ -2969,7 +2969,19 @@ fn package() -> Result<()> {
     "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.tree(), @"
+    uv_snapshot!(context.filters(), context.tree().arg("--package").arg("scipy"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    scipy v1.12.0
+    └── numpy v1.26.4
+
+    ----- stderr -----
+    Resolved 11 packages in [TIME]
+    "
+    );
+
+    // A filtered tree still persists the complete resolution for frozen consumers.
+    uv_snapshot!(context.filters(), context.tree().arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project v0.1.0
@@ -2985,20 +2997,6 @@ fn package() -> Result<()> {
         ├── scipy v1.12.0
         │   └── numpy v1.26.4
         └── threadpoolctl v3.4.0
-
-    ----- stderr -----
-    Resolved 11 packages in [TIME]
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.tree().arg("--package").arg("scipy"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    scipy v1.12.0
-    └── numpy v1.26.4
-
-    ----- stderr -----
-    Resolved 11 packages in [TIME]
     "
     );
 
@@ -3018,10 +3016,6 @@ fn package() -> Result<()> {
     Resolved 11 packages in [TIME]
     "
     );
-
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
 
     Ok(())
 }
