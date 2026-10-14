@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fmt;
 use std::io::Write;
 use std::str::{FromStr, Utf8Error};
@@ -57,6 +56,9 @@ pub(crate) enum CredentialsFromRequestError {
 pub struct Username(Option<String>);
 
 impl Username {
+    /// A shared reference for authentication methods without a username.
+    const NONE: &Self = &Self(None);
+
     /// Create a new username.
     ///
     /// Unlike `reqwest`, empty usernames are encoded as `None` instead of an empty string.
@@ -170,21 +172,18 @@ impl Credentials {
     }
 
     pub fn username(&self) -> Option<&str> {
-        match self {
-            Self::Basic { username, .. } => username.as_deref(),
-            Self::Bearer { .. } => None,
-        }
+        self.as_username().as_deref()
     }
 
     /// Return the username as an owned value.
     pub(crate) fn to_username(&self) -> Username {
-        self.as_username().into_owned()
+        self.as_username().clone()
     }
 
-    fn as_username(&self) -> Cow<'_, Username> {
+    fn as_username(&self) -> &Username {
         match self {
-            Self::Basic { username, .. } => Cow::Borrowed(username),
-            Self::Bearer { .. } => Cow::Owned(Username::none()),
+            Self::Basic { username, .. } => username,
+            Self::Bearer { .. } => Username::NONE,
         }
     }
 
@@ -476,25 +475,20 @@ impl Authentication {
 
     /// Return the username used for authentication, if any.
     pub(crate) fn username(&self) -> Option<&str> {
-        match self {
-            Self::Credentials(credentials) => credentials.username(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => None,
-        }
+        self.as_username().as_deref()
     }
 
     /// Return the username used for authentication, if any.
-    pub(crate) fn as_username(&self) -> Cow<'_, Username> {
+    pub(crate) fn as_username(&self) -> &Username {
         match self {
             Self::Credentials(credentials) => credentials.as_username(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => {
-                Cow::Owned(Username::none())
-            }
+            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => Username::NONE,
         }
     }
 
     /// Return the username used for authentication, if any.
     pub(crate) fn to_username(&self) -> Username {
-        self.as_username().into_owned()
+        self.as_username().clone()
     }
 
     /// Return `true` if the object contains a means of authenticating.
