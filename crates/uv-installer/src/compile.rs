@@ -178,6 +178,23 @@ impl BytecodeWorkers {
         Ok(())
     }
 
+    /// Submit discovered source files to workers in order.
+    async fn submit_files(
+        &mut self,
+        files: impl IntoIterator<Item = anyhow::Result<PathBuf>>,
+    ) -> Result<(), CompileError> {
+        for file in files {
+            let file = file.map_err(CompileError::SourceFiles)?;
+            debug_assert!(
+                file.is_absolute(),
+                "compileall doesn't work with relative paths: `{}`",
+                file.display()
+            );
+            self.submit(file).await?;
+        }
+        Ok(())
+    }
+
     /// Wait for all workers to exit, prioritizing worker failures over producer failures.
     async fn finish(
         self,
@@ -288,25 +305,9 @@ pub async fn compile_files(
 
     let mut workers = spawn_workers(cache, python_executable, cache, initial_files.len())?;
 
-    let mut producer_result = Ok(());
-    for file in initial_files.into_iter().map(Ok).chain(files) {
-        let file = match file {
-            Ok(file) => file,
-            Err(err) => {
-                producer_result = Err(CompileError::SourceFiles(err));
-                break;
-            }
-        };
-        debug_assert!(
-            file.is_absolute(),
-            "compileall doesn't work with relative paths: `{}`",
-            file.display()
-        );
-        if let Err(err) = workers.submit(file).await {
-            producer_result = Err(err);
-            break;
-        }
-    }
+    let producer_result = workers
+        .submit_files(initial_files.into_iter().map(Ok).chain(files))
+        .await;
     workers.finish(producer_result).await
 }
 
