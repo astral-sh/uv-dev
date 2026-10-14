@@ -250,6 +250,8 @@ pub async fn compile_tree(
                     // The directory was removed, just ignore it
                     continue;
                 }
+                // A walk failure takes precedence, but workers must exit before the tree walk does.
+                let _ = workers.finish(Ok(())).await;
                 return Err(err.into());
             }
         };
