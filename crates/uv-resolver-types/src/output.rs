@@ -94,14 +94,12 @@ impl Display for ResolutionGraphNode {
 }
 
 impl ResolverOutput {
-    /// Returns an iterator over the distinct packages in the graph.
+    /// Returns an iterator over the distributions in the graph.
     fn dists(&self) -> impl Iterator<Item = &AnnotatedDist> {
-        self.graph
-            .node_indices()
-            .filter_map(move |index| match &self.graph[index] {
-                ResolutionGraphNode::Root => None,
-                ResolutionGraphNode::Dist(dist) => Some(dist),
-            })
+        self.graph.node_weights().filter_map(|node| match node {
+            ResolutionGraphNode::Root => None,
+            ResolutionGraphNode::Dist(dist) => Some(dist),
+        })
     }
 
     /// Returns an iterator over the base distributions in the graph.
@@ -273,10 +271,7 @@ impl ResolverOutput {
         }
 
         let mut seen_marker_values = IndexSet::default();
-        for i in self.graph.node_indices() {
-            let ResolutionGraphNode::Dist(dist) = &self.graph[i] else {
-                continue;
-            };
+        for dist in self.dists() {
             let metadata_id = dist.dist.distribution_id();
             let res = index
                 .get(&metadata_id)
@@ -337,11 +332,7 @@ impl ResolverOutput {
     pub fn find_conflicting_distributions(&self) -> Vec<ConflictingDistributionError> {
         let mut name_to_markers: BTreeMap<&PackageName, Vec<(&Version, &UniversalMarker)>> =
             BTreeMap::new();
-        for node in self.graph.node_weights() {
-            let annotated_dist = match node {
-                ResolutionGraphNode::Root => continue,
-                ResolutionGraphNode::Dist(annotated_dist) => annotated_dist,
-            };
+        for annotated_dist in self.dists() {
             name_to_markers
                 .entry(&annotated_dist.name)
                 .or_default()
