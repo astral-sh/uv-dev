@@ -10,7 +10,7 @@ use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
 use uv_pep508::VerbatimUrl;
 use uv_requirements_txt::RequirementsTxt;
-use uv_resolver::{Preference, PreferenceError};
+use uv_resolver::Preference;
 
 #[derive(Debug, Default)]
 pub struct LockedRequirements {
@@ -43,17 +43,14 @@ pub async fn read_requirements_txt(
     // Parse the requirements from the lockfile.
     let requirements_txt = RequirementsTxt::parse(output_file, &*CWD).await?;
 
-    // Map each entry in the lockfile to a preference.
-    let mut preferences = requirements_txt
-        .requirements
-        .into_iter()
-        .map(Preference::from_entry)
-        .filter_map(Result::transpose)
-        .collect::<Result<Vec<_>, PreferenceError>>()?;
-
-    if let Some(upgrade_packages) = upgrade.packages() {
-        // Ignore all pinned versions for packages that should be upgraded.
-        preferences.retain(|preference| !upgrade_packages.contains(preference.name()));
+    let upgrade_packages = upgrade.packages();
+    let mut preferences = Vec::new();
+    for entry in requirements_txt.requirements {
+        if let Some(preference) = Preference::from_entry(entry)?
+            && upgrade_packages.is_none_or(|packages| !packages.contains(preference.name()))
+        {
+            preferences.push(preference);
+        }
     }
 
     Ok(preferences)
