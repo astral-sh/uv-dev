@@ -101,6 +101,13 @@ impl WheelFilename {
         }
     }
 
+    /// Return whether the filename matches the expected version. A local version label in the
+    /// filename may be omitted from the expected version; a label in the expected version must
+    /// match exactly.
+    pub fn matches_version(&self, expected: &Version) -> bool {
+        self.version == *expected || self.version.clone().without_local() == *expected
+    }
+
     /// Returns `true` if the wheel is compatible with the given tags.
     pub fn is_compatible(&self, compatible_tags: &Tags) -> bool {
         // TODO(konsti): Check variant compatibility.
