@@ -72,7 +72,7 @@ fn write_wheel_with_metadata(
 
 /// Test basic metadata output for a simple workspace with one member.
 #[test]
-fn workspace_metadata_simple() {
+fn workspace_metadata_simple() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     // Initialize a workspace with one member
@@ -130,14 +130,21 @@ fn workspace_metadata_simple() {
 
     assert!(!workspace.child(".venv").exists());
 
+    // Both invocations must resolve from scratch to compare quiet mode's output.
+    let lockfile = workspace.child("uv.lock");
+    let original_lock = context.read(&lockfile);
+    fs_err::remove_file(&lockfile)?;
+
     let quiet = context
         .workspace_metadata()
         .current_dir(&workspace)
         .arg("--quiet")
         .assert()
-        .success();
+        .success()
+        .stderr("");
     assert_eq!(quiet.get_output().stdout, metadata.stdout);
-    assert!(quiet.get_output().stderr.is_empty());
+    assert_eq!(context.read(&lockfile), original_lock);
+    Ok(())
 }
 #[test]
 fn workspace_metadata_extra_quiet() {
