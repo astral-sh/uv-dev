@@ -59,6 +59,7 @@ mod exclude_newer;
 mod excludes;
 mod export_format;
 mod extras;
+mod flags;
 mod fork_strategy;
 mod hash;
 mod init;

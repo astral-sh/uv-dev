@@ -2,6 +2,8 @@ use std::{borrow::Cow, sync::Arc};
 
 use uv_normalize::{DefaultExtras, ExtraName};
 
+use crate::flags::format_repeated_flag;
+
 /// Manager of all extra decisions and settings history.
 ///
 /// This is an Arc mostly just to avoid size bloat on things that contain these.
@@ -190,21 +192,15 @@ impl ExtrasSpecificationHistory {
         if *no_default_extras {
             flags.push(Cow::Borrowed("--no-default-extras"));
         }
-        match &**extra {
-            [] => {}
-            [extra] => flags.push(Cow::Owned(format!("--extra {extra}"))),
-            [..] => flags.push(Cow::Borrowed("--extra")),
-        }
-        match &**only_extra {
-            [] => {}
-            [extra] => flags.push(Cow::Owned(format!("--only-extra {extra}"))),
-            [..] => flags.push(Cow::Borrowed("--only-extra")),
-        }
-        match &**no_extra {
-            [] => {}
-            [extra] => flags.push(Cow::Owned(format!("--no-extra {extra}"))),
-            [..] => flags.push(Cow::Borrowed("--no-extra")),
-        }
+        flags.extend(
+            [
+                ("--extra", extra),
+                ("--only-extra", only_extra),
+                ("--no-extra", no_extra),
+            ]
+            .into_iter()
+            .filter_map(|(flag, values)| format_repeated_flag(flag, values)),
+        );
         flags
     }
 }
