@@ -271,19 +271,17 @@ fn dirhash_path_inner_resolved(
         // Sort the directory contents by name, in lexicographic/UTF-8 order.
         dir_contents.sort_unstable();
         // Iterate over the contents in parallel using Rayon, hashing each one recursively.
-        let hashes = dir_contents
-            .par_iter()
+        let entries = dir_contents
+            .into_par_iter()
             // Recurse back to `dirhash_path_inner` for symlink handling.
-            .map(|(_, path)| dirhash_path_inner(path, seen_symlinks))
-            .collect::<Result<Vec<blake3::Hash>, _>>()?;
-        let dirhash_entries = dir_contents
-            .iter()
-            .zip(hashes)
-            .map(|((name, _), hash)| (name.as_str(), hash));
-        Ok(hash_dir_entries(dirhash_entries))
+            .map(|(name, path)| dirhash_path_inner(&path, seen_symlinks).map(|hash| (name, hash)))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(hash_dir_entries(
+            entries.iter().map(|(name, hash)| (name.as_str(), *hash)),
+        ))
     } else {
         // This is not a directory, so treat it like a file and hash it. `update_mmap_rayon` shares
-        // the same thread pool as `par_iter` above.
+        // the same thread pool as the parallel traversal above.
         Ok(blake3::Hasher::new().update_mmap_rayon(path)?.finalize())
     }
 }
