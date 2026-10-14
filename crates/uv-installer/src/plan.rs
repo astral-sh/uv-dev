@@ -603,7 +603,7 @@ impl<'a> Planner<'a> {
                     // the filename in advance.
                     match built_index.url(sdist) {
                         Ok(Some(wheel)) => {
-                            if wheel.filename().name == sdist.name {
+                            if cached_wheel_matches_source(wheel.filename(), sdist) {
                                 let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
                                     parsed_url: sdist.to_parsed_url(),
                                     verbatim: sdist.url.clone(),
@@ -612,12 +612,6 @@ impl<'a> Planner<'a> {
                                 cached.push(CachedDist::Url(cached_dist));
                                 continue;
                             }
-
-                            warn!(
-                                "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
-                                sdist,
-                                wheel.filename()
-                            );
                         }
                         Ok(None) => {}
                         Err(err) => {
@@ -630,43 +624,31 @@ impl<'a> Planner<'a> {
                 Dist::Source(SourceDist::GitPath(sdist)) => {
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    if let Some(wheel) = built_index.git_path(sdist)? {
-                        if wheel.filename().name == sdist.name {
-                            let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
-                                parsed_url: sdist.to_parsed_url(),
-                                verbatim: sdist.url.clone(),
-                            });
-                            debug!("Git source requirement already cached: {cached_dist}");
-                            cached.push(CachedDist::Url(cached_dist));
-                            continue;
-                        }
-
-                        warn!(
-                            "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
-                            sdist,
-                            wheel.filename()
-                        );
+                    if let Some(wheel) = built_index.git_path(sdist)?
+                        && cached_wheel_matches_source(wheel.filename(), sdist)
+                    {
+                        let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                            parsed_url: sdist.to_parsed_url(),
+                            verbatim: sdist.url.clone(),
+                        });
+                        debug!("Git source requirement already cached: {cached_dist}");
+                        cached.push(CachedDist::Url(cached_dist));
+                        continue;
                     }
                 }
                 Dist::Source(SourceDist::GitDirectory(sdist)) => {
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    if let Some(wheel) = built_index.git_directory(sdist) {
-                        if wheel.filename().name == sdist.name {
-                            let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
-                                parsed_url: sdist.to_parsed_url(),
-                                verbatim: sdist.url.clone(),
-                            });
-                            debug!("Git source requirement already cached: {cached_dist}");
-                            cached.push(CachedDist::Url(cached_dist));
-                            continue;
-                        }
-
-                        warn!(
-                            "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
-                            sdist,
-                            wheel.filename()
-                        );
+                    if let Some(wheel) = built_index.git_directory(sdist)
+                        && cached_wheel_matches_source(wheel.filename(), sdist)
+                    {
+                        let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                            parsed_url: sdist.to_parsed_url(),
+                            verbatim: sdist.url.clone(),
+                        });
+                        debug!("Git source requirement already cached: {cached_dist}");
+                        cached.push(CachedDist::Url(cached_dist));
+                        continue;
                     }
                 }
                 Dist::Source(SourceDist::Path(sdist)) => {
@@ -679,7 +661,7 @@ impl<'a> Planner<'a> {
                     // the filename in advance.
                     match built_index.path(sdist) {
                         Ok(Some(wheel)) => {
-                            if wheel.filename().name == sdist.name {
+                            if cached_wheel_matches_source(wheel.filename(), sdist) {
                                 let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
                                     parsed_url: sdist.to_parsed_url(),
                                     verbatim: sdist.url.clone(),
@@ -688,12 +670,6 @@ impl<'a> Planner<'a> {
                                 cached.push(CachedDist::Url(cached_dist));
                                 continue;
                             }
-
-                            warn!(
-                                "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
-                                sdist,
-                                wheel.filename()
-                            );
                         }
                         Ok(None) => {}
                         Err(err) => {
@@ -713,7 +689,7 @@ impl<'a> Planner<'a> {
                     // the filename in advance.
                     match built_index.directory(sdist) {
                         Ok(Some(wheel)) => {
-                            if wheel.filename().name == sdist.name {
+                            if cached_wheel_matches_source(wheel.filename(), sdist) {
                                 let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
                                     parsed_url: sdist.to_parsed_url(),
                                     verbatim: sdist.url.clone(),
@@ -724,12 +700,6 @@ impl<'a> Planner<'a> {
                                 cached.push(CachedDist::Url(cached_dist));
                                 continue;
                             }
-
-                            warn!(
-                                "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
-                                sdist,
-                                wheel.filename()
-                            );
                         }
                         Ok(None) => {}
                         Err(err) => {
@@ -767,6 +737,21 @@ impl<'a> Planner<'a> {
             reinstalls,
             extraneous,
         })
+    }
+}
+
+/// Check that a cached wheel belongs to the requested source distribution, warning on mismatch.
+fn cached_wheel_matches_source(
+    filename: &WheelFilename,
+    source: &(impl Name + fmt::Display),
+) -> bool {
+    if &filename.name == source.name() {
+        true
+    } else {
+        warn!(
+            "Cached wheel filename does not match requested distribution `{source}` (found `{filename}`)"
+        );
+        false
     }
 }
 
