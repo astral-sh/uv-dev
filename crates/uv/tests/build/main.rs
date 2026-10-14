@@ -36,6 +36,9 @@ mod cache_prune_archives;
 
 mod cache_prune_local;
 
+#[cfg(feature = "test-python")]
+mod cache_prune_revisions;
+
 mod cache_size;
 
 mod extract;
