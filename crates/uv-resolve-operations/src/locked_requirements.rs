@@ -73,8 +73,7 @@ pub fn read_lock_requirements(
 
     let upgrade_packages = lock.upgrade_packages(upgrade);
 
-    let mut preferences = Vec::new();
-    let mut git = Vec::new();
+    let mut requirements = LockedRequirements::default();
 
     for package in lock.packages() {
         // Skip the distribution if it's included in the upgrade strategy (either by explicit
@@ -85,7 +84,7 @@ pub fn read_lock_requirements(
 
         // Map each entry in the lockfile to a preference.
         if let Some(version) = package.version() {
-            preferences.push(Preference::from_locked(
+            requirements.preferences.push(Preference::from_locked(
                 package.name().clone(),
                 version.clone(),
                 package.index(install_path)?,
@@ -95,11 +94,11 @@ pub fn read_lock_requirements(
 
         // Map each entry in the lockfile to a Git SHA.
         if let Some(git_ref) = package.as_git_ref()? {
-            git.push(git_ref);
+            requirements.git.push(git_ref);
         }
     }
 
-    Ok(LockedRequirements { preferences, git })
+    Ok(requirements)
 }
 
 /// Load the preferred requirements from an existing `pylock.toml` file, applying the upgrade strategy.
@@ -119,8 +118,7 @@ pub async fn read_pylock_toml_requirements(
 
     let upgrade_packages = UpgradePackages::for_non_project(upgrade);
 
-    let mut preferences = Vec::new();
-    let mut git = Vec::new();
+    let mut requirements = LockedRequirements::default();
 
     for package in lock.packages {
         // Skip the distribution if it's included in the upgrade strategy.
@@ -130,12 +128,12 @@ pub async fn read_pylock_toml_requirements(
 
         // Map each entry in the lockfile to a Git SHA.
         if let Some(git_ref) = package.as_git_ref()? {
-            git.push(git_ref);
+            requirements.git.push(git_ref);
         }
 
         // Map each entry in the lockfile to a preference.
         if let Some(version) = package.version {
-            preferences.push(Preference::from_locked(
+            requirements.preferences.push(Preference::from_locked(
                 package.name,
                 version,
                 package
@@ -146,5 +144,5 @@ pub async fn read_pylock_toml_requirements(
         }
     }
 
-    Ok(LockedRequirements { preferences, git })
+    Ok(requirements)
 }
