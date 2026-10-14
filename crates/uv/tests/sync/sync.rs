@@ -1288,8 +1288,8 @@ fn sync_reuses_pip_install_wheel_cache() -> Result<()> {
         "#,
     )?;
 
-    // Create a lockfile with hashes, but populate the wheel cache via `uv pip install`.
-    context.lock().assert().success();
+    // Generate the hashed lock without populating the cache shared by `uv pip install` and sync.
+    context.lock().arg("--no-cache").assert().success();
     context
         .pip_install()
         .arg("iniconfig==2.0.0")
@@ -1326,9 +1326,8 @@ fn sync_reuses_pip_install_sdist_cache() -> Result<()> {
         "#,
     )?;
 
-    // Create a lockfile with hashes, but populate the source distribution cache via `uv pip
-    // install`.
-    context.lock().assert().success();
+    // Generate the hashed lock without populating the cache shared by `uv pip install` and sync.
+    context.lock().arg("--no-cache").assert().success();
     context
         .pip_install()
         .arg("iniconfig==2.0.0")
