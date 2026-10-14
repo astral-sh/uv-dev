@@ -17,6 +17,18 @@ struct ArtifactMarkers {
     wheel_installed: ChildPath,
 }
 
+impl ArtifactMarkers {
+    fn assert_source_selected(&self) {
+        self.source_built.assert(predicates::path::is_file());
+        self.wheel_installed.assert(predicates::path::missing());
+    }
+
+    fn assert_wheel_selected(&self) {
+        self.wheel_installed.assert("wheel\n");
+        self.source_built.assert(predicates::path::missing());
+    }
+}
+
 fn write_wheel(context: &TestContext, name: &str, requires: &[Requirement]) -> Result<ChildPath> {
     let package_name = name.parse::<uv_normalize::PackageName>()?;
     let marker = format!("{}/wheel-marker.txt", package_name.as_dist_info_name());
@@ -85,8 +97,7 @@ fn no_binary_package_overrides_only_binary_all() -> Result<()> {
      + parent==1.0.0
     ");
 
-    markers.source_built.assert(predicates::path::is_file());
-    markers.wheel_installed.assert(predicates::path::missing());
+    markers.assert_source_selected();
     context.assert_installed("parent", "1.0.0");
     Ok(())
 }
@@ -112,7 +123,33 @@ fn only_binary_package_overrides_no_binary_all() -> Result<()> {
      + example==1.0.0
     ");
 
-    markers.wheel_installed.assert("wheel\n");
-    markers.source_built.assert(predicates::path::missing());
+    markers.assert_wheel_selected();
+    Ok(())
+}
+
+/// Each comma-separated package name applies the source policy to a dependency.
+#[test]
+fn no_binary_comma_separated() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    write_wheel(&context, "parent", &["alpha".parse()?, "beta".parse()?])?;
+    let alpha = wheel_and_sdist(&context, "alpha")?;
+    let beta = wheel_and_sdist(&context, "beta")?;
+
+    uv_snapshot!(context.filters(), install(&context)
+        .arg("parent")
+        .arg("--no-binary=alpha,beta")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + alpha==1.0.0
+     + beta==1.0.0
+     + parent==1.0.0
+    ");
+
+    alpha.assert_source_selected();
+    beta.assert_source_selected();
     Ok(())
 }

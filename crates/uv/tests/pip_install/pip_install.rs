@@ -4187,34 +4187,6 @@ fn reinstall_no_binary() {
     context.assert_command("import a").success();
 }
 
-/// Accept comma-separated values for `--no-binary` (pip compatibility)
-#[test]
-fn install_no_binary_comma_separated() {
-    let context = uv_test::test_context!("3.12");
-
-    // Use comma-separated format for `--no-binary`
-    let mut command = context.pip_install();
-    command
-        .arg("anyio")
-        .arg("--no-binary=idna,sniffio")
-        .arg("--strict");
-    uv_snapshot!(
-        command,
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    context.assert_command("import anyio").success();
-}
-
 /// Disable binaries with an environment variable
 /// TODO(zanieb): This is not yet implemented
 #[test]
