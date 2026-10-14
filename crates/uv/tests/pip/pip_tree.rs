@@ -1,8 +1,7 @@
 #![cfg(not(windows))]
 
-use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
-use indoc::indoc;
+#[cfg(any(feature = "test-pypi", feature = "test-python"))]
+use assert_fs::fixture::{FileWriteStr, PathChild};
 
 use uv_test::uv_snapshot;
 
@@ -847,6 +846,10 @@ fn outdated() {
 #[test]
 #[cfg(feature = "test-pypi")]
 fn no_duplicate_dependencies_with_markers() -> anyhow::Result<()> {
+    use assert_cmd::assert::OutputAssertExt;
+    use assert_fs::fixture::FileTouch;
+    use indoc::indoc;
+
     let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
     let project = context.temp_dir.child("debug");
     project.child("pyproject.toml").write_str(indoc! {r#"

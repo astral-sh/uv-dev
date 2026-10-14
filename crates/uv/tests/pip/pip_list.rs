@@ -1,5 +1,6 @@
 use anyhow::Result;
-use assert_cmd::prelude::*;
+#[cfg(feature = "test-pypi")]
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::ChildPath;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
