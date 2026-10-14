@@ -782,72 +782,41 @@ impl RequirementSource {
     }
 
     /// Convert the source to a [`RequirementSource`] relative to the given path.
-    fn relative_to(self, path: &Path) -> Result<Self, io::Error> {
-        match self {
+    fn relative_to(mut self, path: &Path) -> Result<Self, io::Error> {
+        match &mut self {
             Self::Registry { .. }
             | Self::Url { .. }
             | Self::GitPath { .. }
-            | Self::GitDirectory { .. } => Ok(self),
+            | Self::GitDirectory { .. } => {}
             Self::Path {
-                install_path,
-                ext,
-                url,
-            } => Ok(Self::Path {
-                install_path: try_relative_to_if(&install_path, path, url.prefers_relative())?
-                    .into_boxed_path(),
-                ext,
-                url,
-            }),
-            Self::Directory {
-                install_path,
-                editable,
-                r#virtual,
-                url,
-                ..
-            } => Ok(Self::Directory {
-                install_path: try_relative_to_if(&install_path, path, url.prefers_relative())?
-                    .into_boxed_path(),
-                editable,
-                r#virtual,
-                url,
-            }),
+                install_path, url, ..
+            }
+            | Self::Directory {
+                install_path, url, ..
+            } => {
+                *install_path =
+                    try_relative_to_if(install_path.as_ref(), path, url.prefers_relative())?
+                        .into_boxed_path();
+            }
         }
+        Ok(self)
     }
 
     /// Convert the source to a [`RequirementSource`] with an absolute path based on the given root.
     #[must_use]
-    fn into_absolute(self, root: &Path) -> Self {
-        match self {
+    fn into_absolute(mut self, root: &Path) -> Self {
+        match &mut self {
             Self::Registry { .. }
             | Self::Url { .. }
             | Self::GitPath { .. }
-            | Self::GitDirectory { .. } => self,
-            Self::Path {
-                install_path,
-                ext,
-                url,
-            } => Self::Path {
-                install_path: normalize_path(root.join(install_path))
+            | Self::GitDirectory { .. } => {}
+            Self::Path { install_path, .. } | Self::Directory { install_path, .. } => {
+                *install_path = normalize_path(root.join(&*install_path))
                     .into_owned()
-                    .into_boxed_path(),
-                ext,
-                url,
-            },
-            Self::Directory {
-                install_path,
-                editable,
-                r#virtual,
-                url,
-                ..
-            } => Self::Directory {
-                install_path: normalize_path(root.join(install_path))
-                    .into_owned()
-                    .into_boxed_path(),
-                editable,
-                r#virtual,
-                url,
-            },
+                    .into_boxed_path();
+            }
         }
+        self
     }
 }
 
