@@ -2,7 +2,9 @@ use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 #[cfg(unix)]
 use assert_fs::fixture::SymlinkToFile;
-use assert_fs::fixture::{FileTouch, FileWriteBin, FileWriteStr, PathChild, PathCreateDir};
+use assert_fs::fixture::{
+    ChildPath, FileTouch, FileWriteBin, FileWriteStr, PathChild, PathCreateDir,
+};
 use fs_err::File;
 use indoc::{formatdoc, indoc};
 #[cfg(feature = "test-pypi")]
@@ -11,7 +13,7 @@ use tempfile::TempDir;
 use uv_static::EnvVars;
 #[cfg(feature = "test-pypi")]
 use uv_test::copy_dir_ignore;
-use uv_test::uv_snapshot;
+use uv_test::{TestContext, uv_snapshot};
 
 #[cfg(feature = "test-pypi")]
 const BUILT_BY_UV_TEST_SCRIPT: &str = indoc! {r#"
@@ -609,7 +611,22 @@ fn build_sdist_with_hard_link() -> Result<()> {
 /// See <https://github.com/astral-sh/uv/issues/22510>.
 #[test]
 fn build_sdist_with_full_group_name() -> Result<()> {
-    build_sdist_with_group_name(32)
+    let context = uv_test::test_context!("3.12");
+    let sdist = sdist_with_group_name(&context, 32)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env_remove(EnvVars::UV_LEGACY_TAR_BACKEND)
+        .arg("--offline")
+        .arg(sdist.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + foo==1.0.0 (from file://[TEMP_DIR]/foo-1.0.0.tar.gz)
+    ");
+
+    Ok(())
 }
 
 /// Group names longer than 32 bytes also have a PAX record overriding the unterminated header field.
@@ -617,11 +634,25 @@ fn build_sdist_with_full_group_name() -> Result<()> {
 /// See <https://github.com/astral-sh/uv/issues/22510>.
 #[test]
 fn build_sdist_with_long_group_name() -> Result<()> {
-    build_sdist_with_group_name(40)
+    let context = uv_test::test_context!("3.12");
+    let sdist = sdist_with_group_name(&context, 40)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env_remove(EnvVars::UV_LEGACY_TAR_BACKEND)
+        .arg("--offline")
+        .arg(sdist.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + foo==1.0.0 (from file://[TEMP_DIR]/foo-1.0.0.tar.gz)
+    ");
+
+    Ok(())
 }
 
-fn build_sdist_with_group_name(length: usize) -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+fn sdist_with_group_name(context: &TestContext, length: usize) -> Result<ChildPath> {
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -659,21 +690,7 @@ fn build_sdist_with_group_name(length: usize) -> Result<()> {
         .assert()
         .success();
 
-    insta::allow_duplicates! {
-        uv_snapshot!(context.filters(), context.pip_install()
-            .env_remove(EnvVars::UV_LEGACY_TAR_BACKEND)
-            .arg("--offline")
-            .arg(sdist.path()), @"
-        exit_code: 0 (success)
-        ----- stderr -----
-        Resolved 1 package in [TIME]
-        Prepared 1 package in [TIME]
-        Installed 1 package in [TIME]
-         + foo==1.0.0 (from file://[TEMP_DIR]/foo-1.0.0.tar.gz)
-        ");
-    }
-
-    Ok(())
+    Ok(sdist)
 }
 
 #[test]
