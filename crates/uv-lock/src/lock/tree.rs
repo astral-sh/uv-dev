@@ -45,6 +45,21 @@ impl<'a> TreeJsonTarget<'a> {
     }
 }
 
+/// Return every locked package for workspace members in lockfile order.
+///
+/// A single-project lockfile can omit its root from the member list.
+fn workspace_member_packages(lock: &Lock) -> impl Iterator<Item = &Package> {
+    if lock.members().is_empty() {
+        Either::Left(lock.root().into_iter())
+    } else {
+        Either::Right(
+            lock.members()
+                .iter()
+                .flat_map(|name| lock.packages_for_name(name)),
+        )
+    }
+}
+
 #[derive(Debug)]
 pub struct TreeDisplay<'env> {
     /// The constructed dependency graph.
@@ -85,27 +100,9 @@ impl<'env> TreeDisplay<'env> {
         invert: bool,
         show_sizes: bool,
     ) -> Self {
-        // Identify any workspace members.
-        //
-        // These include:
-        // - The members listed in the lockfile.
-        // - The root package, if it's not in the list of members. (The root package is omitted from
-        //   the list of workspace members for single-member workspaces with a `[project]` section,
-        //   to avoid cluttering the lockfile.
-        let members: BTreeSet<&PackageId> = if lock.members().is_empty() {
-            lock.root().into_iter().map(|package| &package.id).collect()
-        } else {
-            lock.packages
-                .iter()
-                .filter_map(|package| {
-                    if lock.members().contains(&package.id.name) {
-                        Some(&package.id)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
+        let members: BTreeSet<&PackageId> = workspace_member_packages(lock)
+            .map(|package| &package.id)
+            .collect();
 
         // Conflict extras and groups are encoded as marker expressions. Include the declared
         // mutual-exclusion constraints when checking whether a universal path is satisfiable.
@@ -554,21 +551,17 @@ impl<'env> TreeDisplay<'env> {
             marker: self.invert.then_some(cursor.marker()),
         };
 
-        let line = {
-            let mut line = format!("{}", package_id.name);
+        let mut line = {
+            let mut line = package_id.name.to_string();
 
-            if let Some(extras) = edge.and_then(Edge::extras) {
-                if !extras.is_empty() {
-                    line.push('[');
-                    line.push_str(extras.iter().join(", ").as_str());
-                    line.push(']');
-                }
+            if let Some(extras) = edge.and_then(Edge::extras)
+                && !extras.is_empty()
+            {
+                let _ = write!(line, "[{}]", extras.iter().format(", "));
             }
 
             if let Some(version) = package_id.version.as_ref() {
-                line.push(' ');
-                line.push('v');
-                let _ = write!(line, "{version}");
+                let _ = write!(line, " v{version}");
             }
 
             if let Some(edge) = edge {
@@ -585,12 +578,11 @@ impl<'env> TreeDisplay<'env> {
 
             // Append compressed wheel size, if available in the lockfile.
             // Keep it simple: use the first wheel entry that includes a size.
-            if self.show_sizes {
-                if let Some(size_bytes) = package.wheels.iter().find_map(|wheel| wheel.size) {
-                    let bytes = human_readable_bytes(size_bytes);
-                    line.push(' ');
-                    line.push_str(format!("{}", format!("({bytes:.1})").dimmed()).as_str());
-                }
+            if self.show_sizes
+                && let Some(size_bytes) = package.wheels.iter().find_map(|wheel| wheel.size)
+            {
+                let bytes = human_readable_bytes(size_bytes);
+                let _ = write!(line, " {}", format_args!("({bytes:.1})").dimmed());
             }
 
             line
@@ -600,24 +592,26 @@ impl<'env> TreeDisplay<'env> {
         // 1. The package is in the current traversal path (i.e., a dependency cycle).
         // 2. The package has been visited and de-duplication is enabled (default).
         if path.contains(&visited_node) {
-            return vec![format!("{line} (*)")];
+            line.push_str(" (*)");
+            return vec![line];
         }
         if !self.no_dedupe
             && let Some(requirements) = visited.get(&visited_node)
         {
-            return if requirements.is_empty() {
-                vec![line]
-            } else {
-                vec![format!("{line} (*)")]
-            };
+            if !requirements.is_empty() {
+                line.push_str(" (*)");
+            }
+            return vec![line];
         }
 
         // Incorporate the latest version of the package, if known.
-        let line = if let Some(version) = self.latest.get(package_id) {
-            format!("{line} {}", format!("(latest: v{version})").bold().cyan())
-        } else {
-            line
-        };
+        if let Some(version) = self.latest.get(package_id) {
+            let _ = write!(
+                line,
+                " {}",
+                format_args!("(latest: v{version})").bold().cyan()
+            );
+        }
 
         let mut dependencies = if self.invert && edge.is_some_and(Edge::is_dev) {
             // A member's dependency group is activated for the root member. It is not part of the
@@ -1412,19 +1406,7 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
             return Vec::new();
         }
 
-        let packages = if self.tree.lock.members().is_empty() {
-            self.tree.lock.root().into_iter().collect::<Vec<_>>()
-        } else {
-            self.tree
-                .lock
-                .packages()
-                .iter()
-                .filter(|package| self.tree.lock.members().contains(&package.id.name))
-                .collect::<Vec<_>>()
-        };
-
-        packages
-            .into_iter()
+        workspace_member_packages(self.tree.lock)
             .filter(|package| {
                 let id = MetadataNodeId::from_package_id(
                     &self.workspace_root,

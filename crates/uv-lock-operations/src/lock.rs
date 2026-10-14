@@ -52,16 +52,14 @@ impl LockResult {
     /// Return the resolved lockfile.
     pub fn lock(&self) -> &Lock {
         match self {
-            Self::Unchanged(lock) => lock,
-            Self::Changed(_, lock) => lock,
+            Self::Unchanged(lock) | Self::Changed(_, lock) => lock,
         }
     }
 
     /// Consume the result and return the resolved lockfile.
     pub fn into_lock(self) -> Lock {
         match self {
-            Self::Unchanged(lock) => lock,
-            Self::Changed(_, lock) => lock,
+            Self::Unchanged(lock) | Self::Changed(_, lock) => lock,
         }
     }
 }
@@ -283,10 +281,10 @@ impl<'env> LockOperation<'env> {
                 .await?;
 
                 // If the lockfile changed, write it to disk.
-                if !matches!(self.mode, LockMode::DryRun(_)) {
-                    if let LockResult::Changed(_, lock) = &result {
-                        target.commit(lock).await?;
-                    }
+                if !matches!(self.mode, LockMode::DryRun(_))
+                    && let LockResult::Changed(_, lock) = &result
+                {
+                    target.commit(lock).await?;
                 }
 
                 Ok(result)
@@ -477,12 +475,11 @@ async fn do_lock(
 
     // Collect the conflicts.
     let mut conflicts = target.conflicts()?;
-    if let LockTarget::Workspace(workspace) = target {
-        if let Some(groups) = &workspace.pyproject_toml().dependency_groups {
-            if let Some(project) = &workspace.pyproject_toml().project {
-                conflicts.expand_transitive_group_includes(&project.name, groups);
-            }
-        }
+    if let LockTarget::Workspace(workspace) = target
+        && let Some(groups) = &workspace.pyproject_toml().dependency_groups
+        && let Some(project) = &workspace.pyproject_toml().project
+    {
+        conflicts.expand_transitive_group_includes(&project.name, groups);
     }
 
     // Check if any conflicts contain project-level conflicts
@@ -499,65 +496,16 @@ async fn do_lock(
     }
 
     // Collect the list of supported environments.
-    let environments = {
-        let environments = target.environments();
-
-        // Ensure that the environments are disjoint.
-        if let Some(environments) = &environments {
-            for [lhs, rhs] in environments.as_markers().array_windows() {
-                if !lhs.is_disjoint(*rhs) {
-                    let hint = lhs.negate().and(*rhs);
-
-                    let lhs = lhs
-                        .contents()
-                        .map(|contents| contents.to_string())
-                        .unwrap_or_else(|| "true".to_string());
-                    let rhs = rhs
-                        .contents()
-                        .map(|contents| contents.to_string())
-                        .unwrap_or_else(|| "true".to_string());
-                    let hint = hint
-                        .contents()
-                        .map(|contents| contents.to_string())
-                        .unwrap_or_else(|| "true".to_string());
-
-                    return Err(LockError::OverlappingMarkers(lhs, rhs, hint));
-                }
-            }
-        }
-
-        environments
-    };
+    let environments = target.environments();
+    if let Some(environments) = environments {
+        validate_environment_markers(environments)?;
+    }
 
     // Collect the list of required platforms.
-    let required_environments = if let Some(required_environments) = target.required_environments()
-    {
-        // Ensure that the environments are disjoint.
-        for [lhs, rhs] in required_environments.as_markers().array_windows() {
-            if !lhs.is_disjoint(*rhs) {
-                let hint = lhs.negate().and(*rhs);
-
-                let lhs = lhs
-                    .contents()
-                    .map(|contents| contents.to_string())
-                    .unwrap_or_else(|| "true".to_string());
-                let rhs = rhs
-                    .contents()
-                    .map(|contents| contents.to_string())
-                    .unwrap_or_else(|| "true".to_string());
-                let hint = hint
-                    .contents()
-                    .map(|contents| contents.to_string())
-                    .unwrap_or_else(|| "true".to_string());
-
-                return Err(LockError::OverlappingMarkers(lhs, rhs, hint));
-            }
-        }
-
-        Some(required_environments)
-    } else {
-        None
-    };
+    let required_environments = target.required_environments();
+    if let Some(required_environments) = required_environments {
+        validate_environment_markers(required_environments)?;
+    }
 
     let minimum_libc_version = target.minimum_libc_version();
     if minimum_libc_version.is_some() && !preview.is_enabled(PreviewFeature::MinimumLibcVersion) {
@@ -1052,4 +1000,20 @@ async fn do_lock(
             }
         }
     }
+}
+
+/// Ensure that adjacent environment markers are disjoint.
+fn validate_environment_markers(environments: &SupportedEnvironments) -> Result<(), LockError> {
+    for [lhs, rhs] in environments.as_markers().array_windows() {
+        if !lhs.is_disjoint(*rhs) {
+            let hint = lhs.negate().and(*rhs);
+            let [lhs, rhs, hint] = [*lhs, *rhs, hint].map(|marker| {
+                marker
+                    .contents()
+                    .map_or_else(|| "true".to_string(), |contents| contents.to_string())
+            });
+            return Err(LockError::OverlappingMarkers(lhs, rhs, hint));
+        }
+    }
+    Ok(())
 }
