@@ -14996,9 +14996,44 @@ fn sync_build_constraints() -> Result<()> {
 #[test]
 fn sync_workspace_member_build_constraints() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_exclude_newer("2025-03-24T19:00:00Z")
-        .with_filtered_counts();
+    let context = uv_test::test_context!("3.12");
+
+    // The index offers a==1 and a==2. The archive can only build with a==1.
+    let archive = context.temp_dir.child("leaf-0.1.0.tar.gz");
+    uv_test::archive::write_tar_gz(
+        fs_err::File::create(archive.path())?,
+        &[
+            (
+                "leaf-0.1.0/pyproject.toml",
+                indoc! {r#"
+                    [project]
+                    name = "leaf"
+                    version = "0.1.0"
+
+                    [build-system]
+                    requires = ["a", "hatchling"]
+                    build-backend = "backend"
+                    backend-path = ["."]
+                "#},
+            ),
+            (
+                "leaf-0.1.0/backend.py",
+                indoc! {r#"
+                    from importlib.metadata import version as installed_version
+                    from hatchling.build import *
+
+                    build_version = installed_version("a")
+                    if build_version != "1.0.0":
+                        raise RuntimeError(f"build constraint ignored: a=={build_version}")
+                "#},
+            ),
+            (
+                "leaf-0.1.0/PKG-INFO",
+                "Metadata-Version: 2.3\nName: leaf\nVersion: 0.1.0\n\n",
+            ),
+            ("leaf-0.1.0/src/leaf/__init__.py", ""),
+        ],
+    )?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -15010,7 +15045,7 @@ fn sync_workspace_member_build_constraints() -> Result<()> {
         dependencies = ["child"]
 
         [tool.uv]
-        build-constraint-dependencies = ["setuptools<78"]
+        build-constraint-dependencies = ["a<2"]
 
         [tool.uv.sources]
         child = { workspace = true }
@@ -15019,12 +15054,6 @@ fn sync_workspace_member_build_constraints() -> Result<()> {
         members = ["child"]
         "#,
     )?;
-    context
-        .temp_dir
-        .child("src")
-        .child("root")
-        .child("__init__.py")
-        .touch()?;
 
     let child = context.temp_dir.child("child");
     child.child("pyproject.toml").write_str(
@@ -15033,7 +15062,10 @@ fn sync_workspace_member_build_constraints() -> Result<()> {
         name = "child"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["a"]
+        dependencies = ["leaf"]
+
+        [tool.uv.sources]
+        leaf = { path = "../leaf-0.1.0.tar.gz" }
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -15046,35 +15078,35 @@ fn sync_workspace_member_build_constraints() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--package").arg("child").arg("--no-binary-package").arg("a"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--package").arg("child"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + a==2.0.0
+    Resolved 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
      + child==0.1.0 (from file://[TEMP_DIR]/child)
+     + leaf==0.1.0 (from file://[TEMP_DIR]/leaf-0.1.0.tar.gz)
     ");
 
     let lock = context.read("uv.lock");
     assert!(
-        lock.contains(r#"build-constraints = [{ name = "setuptools", specifier = "<78" }]"#),
+        lock.contains(r#"build-constraints = [{ name = "a", specifier = "<2" }]"#),
         "expected workspace build constraints to be recorded in the lockfile:\n{lock}"
     );
 
     fs_err::remove_dir_all(&context.cache_dir)?;
     fs_err::remove_dir_all(&context.venv)?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--package").arg("child").arg("--locked").arg("--no-binary-package").arg("a"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--package").arg("child").arg("--locked"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + a==2.0.0
+    Resolved 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
      + child==0.1.0 (from file://[TEMP_DIR]/child)
+     + leaf==0.1.0 (from file://[TEMP_DIR]/leaf-0.1.0.tar.gz)
     ");
 
     Ok(())
