@@ -11,7 +11,9 @@ use insta::assert_json_snapshot;
 use insta::assert_snapshot;
 use serde::{Deserialize, Serialize};
 
-use uv_test::{copy_dir_ignore, make_project, uv_snapshot};
+#[cfg(feature = "test-pypi")]
+use uv_test::copy_dir_ignore;
+use uv_test::{make_project, uv_snapshot};
 
 #[cfg(feature = "test-pypi")]
 fn assert_workspace_installation(root: &std::path::Path, script: &std::path::Path) {

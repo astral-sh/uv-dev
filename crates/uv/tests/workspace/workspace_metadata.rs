@@ -11,7 +11,9 @@ use indoc::{formatdoc, indoc};
 use uv_normalize::PackageName;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
-use uv_test::{copy_dir_ignore, uv_snapshot};
+#[cfg(feature = "test-pypi")]
+use uv_test::copy_dir_ignore;
+use uv_test::uv_snapshot;
 
 fn write_wheel(path: &Path, name: &str, files: &[(&str, &str)]) -> Result<()> {
     write_wheel_with_metadata(path, name, "0.1.0", "", files)
