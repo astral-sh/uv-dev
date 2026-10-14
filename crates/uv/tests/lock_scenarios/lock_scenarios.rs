@@ -5484,7 +5484,7 @@ fn unreachable_wheels() -> Result<()> {
         source = { registry = "http://[LOCALHOST]/simple/" }
         sdist = { url = "http://[LOCALHOST]/files/b-1.0.0.tar.gz", hash = "sha256:9b42692ac74b4da0eed1ef248b9be6bb0557c49507ba3b38f862b191a06d959c", upload-time = "2024-03-24T00:00:00Z" }
         wheels = [
-            { url = "http://[LOCALHOST]/files/b-1.0.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4d0fc532c5d6e2f11ca522dfd3684b50b132dd1db78fba3ad510023f4d5830b7", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/b-1.0.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:545acd8264c1adb2106d4336c0077666ae297d93a90234c39db5161e3f909091", upload-time = "2024-03-24T00:00:00Z" },
             { url = "http://[LOCALHOST]/files/b-1.0.0-cp312-cp312-musllinux_1_1_armv7l.whl", hash = "sha256:8f328487f947ee5119d348f2c73ab9119dd29349b840f6f26e0d351245d6084b", upload-time = "2024-03-24T00:00:00Z" },
         ]
 
