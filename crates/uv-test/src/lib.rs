@@ -2235,9 +2235,12 @@ fn python_installations_for_versions(
         .collect()
 }
 
-/// Recursively copy a directory and its contents, skipping gitignored files and Git metadata.
+/// Recursively copy a directory, respecting project ignore files and skipping Git metadata.
+/// Machine-specific Git exclusions do not define the contents of a test fixture.
 pub fn copy_dir_ignore(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> anyhow::Result<()> {
     let walker = ignore::WalkBuilder::new(&src)
+        .git_global(false)
+        .git_exclude(false)
         .hidden(false)
         .filter_entry(|entry| entry.file_name() != ".git")
         .build();
@@ -2522,6 +2525,20 @@ mod copy_dir_ignore_tests {
 
         destination.child("module.py").assert("VALUE = 1\n");
         destination.child("existing.txt").assert("existing file");
+        Ok(())
+    }
+
+    #[test]
+    fn checkout_local_exclusions_do_not_change_fixture_contents() -> Result<()> {
+        let root = assert_fs::TempDir::new()?;
+        let source = root.child("source");
+        source.child(".git/info/exclude").write_str("module.py\n")?;
+        source.child("module.py").write_str("VALUE = 1\n")?;
+
+        let destination = root.child("destination");
+        copy_dir_ignore(&source, &destination)?;
+
+        destination.child("module.py").assert("VALUE = 1\n");
         Ok(())
     }
 
