@@ -19610,95 +19610,81 @@ fn unconditional_overlapping_marker_disjoint_version_constraints() -> Result<()>
     Ok(())
 }
 
-/// Checks the output of `uv lock --check` when there isn't a lock
+/// `--check` rejects a missing lockfile before selecting an interpreter.
 #[cfg(feature = "test-universal")]
 #[test]
 fn check_no_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "myproject"
-        version = "0.1.0"
-        requires-python = ">=3.11"
-        dependencies = ["sortedcollections"]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock()
-        .arg("--check"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Unable to find lockfile at `uv.lock`, but `--check` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
-    ");
-    Ok(())
-}
-
-/// Checks the output of `uv lock --check` when the lock is outdated
-#[cfg(feature = "test-universal")]
-#[test]
-fn check_outdated_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "myproject"
-        version = "0.1.0"
-        requires-python = ">=3.11"
-        dependencies = ["sortedcollections"]
-        "#,
-    )?;
-
-    // Generate the lock
-    uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    ");
-
-    // Check the --check returns fine
-    uv_snapshot!(context.filters(), context.lock()
-        .arg("--check"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    ");
-
-    // Edit dependencies so the lock is invalid
-    pyproject_toml.write_str(
-        r#"
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.11"
-        dependencies = ["iniconfig"]
-        "#,
-    )?;
+    "#})?;
 
-    uv_snapshot!(context.filters(), context.lock()
-        .arg("--check"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
+    error: Unable to find lockfile at `uv.lock`, but `--check` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
+    ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicates::path::missing());
+
+    Ok(())
+}
+
+/// `--check` accepts a current lockfile and rejects a stale one without updating it.
+#[cfg(feature = "test-universal")]
+#[test]
+fn check_outdated_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let original_lock = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.2.0"
+        requires-python = ">=3.11"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
     hint: To update the lockfile, run `uv lock`.
     ");
+    assert_eq!(context.read("uv.lock"), original_lock);
 
-    // Providing both `--check` and `--locked` is okay
-    uv_snapshot!(context.filters(), context.lock()
-        .arg("--check").arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--locked", "--offline"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
+    Resolved 1 package in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
     hint: To update the lockfile, run `uv lock`.
     ");
+    assert_eq!(context.read("uv.lock"), original_lock);
 
     Ok(())
 }
