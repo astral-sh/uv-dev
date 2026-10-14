@@ -220,44 +220,36 @@ impl Preferences {
                     continue;
                 }
 
-                if !preference.fork_markers.is_empty() {
-                    if !preference
+                if !preference.fork_markers.is_empty()
+                    && !preference
                         .fork_markers
                         .iter()
                         .any(|marker| marker.evaluate_no_extras(markers))
-                    {
-                        trace!(
-                            "Excluding {preference} from preferences due to unmatched fork markers"
-                        );
-                        continue;
-                    }
+                {
+                    trace!("Excluding {preference} from preferences due to unmatched fork markers");
+                    continue;
                 }
             }
 
-            // Flatten the list of markers into individual entries.
-            if preference.fork_markers.is_empty() {
-                map.entry(preference.name).or_default().push(Entry {
-                    marker: UniversalMarker::TRUE,
-                    index: preference.index,
-                    pin: Pin {
-                        version: preference.version,
-                        hashes: preference.hashes,
-                    },
-                    source: preference.source,
+            // Move the preference into the last entry, cloning only for preceding fork markers.
+            let mut fork_markers = preference.fork_markers;
+            let entry = Entry {
+                marker: fork_markers.pop().unwrap_or(UniversalMarker::TRUE),
+                index: preference.index,
+                pin: Pin {
+                    version: preference.version,
+                    hashes: preference.hashes,
+                },
+                source: preference.source,
+            };
+            let entries = map.entry(preference.name).or_default();
+            for marker in fork_markers {
+                entries.push(Entry {
+                    marker,
+                    ..entry.clone()
                 });
-            } else {
-                for fork_marker in preference.fork_markers {
-                    map.entry(preference.name.clone()).or_default().push(Entry {
-                        marker: fork_marker,
-                        index: preference.index.clone(),
-                        pin: Pin {
-                            version: preference.version.clone(),
-                            hashes: preference.hashes.clone(),
-                        },
-                        source: preference.source,
-                    });
-                }
             }
+            entries.push(entry);
         }
 
         Self(map)
@@ -313,10 +305,8 @@ impl Preferences {
         package_name: &PackageName,
         version: &Version,
     ) -> Option<&[HashDigest]> {
-        self.0
-            .get(package_name)
-            .into_iter()
-            .flatten()
+        self.get(package_name)
+            .iter()
             .find(|entry| entry.pin.version() == version)
             .map(|entry| entry.pin.hashes())
     }
