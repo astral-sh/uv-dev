@@ -95,9 +95,7 @@ impl<T> ForkMap<T> {
     /// Returns `true` if the map contains any values for a package that are compatible with the
     /// given fork.
     pub(crate) fn contains(&self, package_name: &PackageName, env: &ResolverEnvironment) -> bool {
-        self.0
-            .get(package_name)
-            .is_some_and(|values| values.iter().any(|entry| entry.scope.matches(env)))
+        self.get(package_name, env).next().is_some()
     }
 
     /// Returns `true` if the map contains any values for a package.
@@ -105,20 +103,22 @@ impl<T> ForkMap<T> {
         self.0.contains_key(package_name)
     }
 
-    /// Returns a list of values associated with a package that are compatible with the given fork.
+    /// Returns the values associated with a package that are compatible with the given fork.
     ///
     /// Compatibility implies that the markers on the requirement that contained this value
     /// are not disjoint with the given fork. Note that this does not imply that the requirement
     /// diverged in the given fork - values from overlapping forks may be combined.
-    pub(crate) fn get(&self, package_name: &PackageName, env: &ResolverEnvironment) -> Vec<&T> {
-        let Some(values) = self.0.get(package_name) else {
-            return Vec::new();
-        };
-        values
-            .iter()
-            .filter(|entry| entry.scope.matches(env))
+    pub(crate) fn get(
+        &self,
+        package_name: &PackageName,
+        env: &ResolverEnvironment,
+    ) -> impl Iterator<Item = &T> {
+        self.0
+            .get(package_name)
+            .into_iter()
+            .flatten()
+            .filter(move |entry| entry.scope.matches(env))
             .map(|entry| &entry.value)
-            .collect()
     }
 }
 
