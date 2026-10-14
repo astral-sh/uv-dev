@@ -246,7 +246,10 @@ impl<'wheel> ValidatedWheel<'wheel> {
                     continue;
                 }
 
-                let relative = relative_to(entry.path(), &source)?;
+                let relative = entry
+                    .path()
+                    .strip_prefix(&source)
+                    .expect("walkdir prefix must not change");
                 validate_data_script_destination(
                     &destination.join(relative),
                     &layout.scheme.scripts,
