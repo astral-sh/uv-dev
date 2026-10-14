@@ -193,12 +193,10 @@ impl Cache {
     /// Create a temporary cache directory.
     pub fn temp() -> Result<Self, io::Error> {
         let temp_dir = tempfile::tempdir()?;
+        let cache = Self::from_path(temp_dir.path());
         Ok(Self {
-            root: temp_dir.path().to_path_buf(),
-            refresh: Refresh::None(Timestamp::now()),
             temp_dir: Some(Arc::new(temp_dir)),
-            lock_file: None,
-            removal_accounting: RemovalAccounting::Coarse,
+            ..cache
         })
     }
 
