@@ -45,6 +45,12 @@ impl<'dist> RequirementsTxtDist<'dist> {
             }
         }
 
+        let markers = if include_markers {
+            SimplifiedMarkerTree::new(requires_python, self.markers).try_to_string()
+        } else {
+            None
+        };
+
         // If the URL is not _definitively_ a `file://` URL, write it as a relative path.
         if self.dist.is_local() {
             if let VersionOrUrlRef::Url(url) = self.dist.version_or_url() {
@@ -93,11 +99,7 @@ impl<'dist> RequirementsTxtDist<'dist> {
                     }
                 };
                 if let Some(given) = given {
-                    return if let Some(markers) =
-                        SimplifiedMarkerTree::new(requires_python, self.markers)
-                            .try_to_string()
-                            .filter(|_| include_markers)
-                    {
+                    return if let Some(markers) = markers {
                         Cow::Owned(format!("{given} ; {markers}"))
                     } else {
                         given
@@ -107,10 +109,7 @@ impl<'dist> RequirementsTxtDist<'dist> {
         }
 
         if self.extras.is_empty() {
-            if let Some(markers) = SimplifiedMarkerTree::new(requires_python, self.markers)
-                .try_to_string()
-                .filter(|_| include_markers)
-            {
+            if let Some(markers) = markers {
                 Cow::Owned(format!("{} ; {}", self.dist.verbatim(), markers))
             } else {
                 self.dist.verbatim()
@@ -119,25 +118,15 @@ impl<'dist> RequirementsTxtDist<'dist> {
             let mut extras = self.extras.clone();
             extras.sort_unstable();
             extras.dedup();
-            if let Some(markers) = SimplifiedMarkerTree::new(requires_python, self.markers)
-                .try_to_string()
-                .filter(|_| include_markers)
-            {
-                Cow::Owned(format!(
-                    "{}[{}]{} ; {}",
-                    self.name(),
-                    extras.into_iter().join(", "),
-                    self.version_or_url().verbatim(),
-                    markers,
-                ))
-            } else {
-                Cow::Owned(format!(
-                    "{}[{}]{}",
-                    self.name(),
-                    extras.into_iter().join(", "),
-                    self.version_or_url().verbatim()
-                ))
-            }
+            let (separator, marker) = markers
+                .as_deref()
+                .map_or(("", ""), |marker| (" ; ", marker));
+            Cow::Owned(format!(
+                "{}[{}]{}{separator}{marker}",
+                self.name(),
+                extras.into_iter().format(", "),
+                self.version_or_url().verbatim(),
+            ))
         }
     }
 
@@ -150,20 +139,15 @@ impl<'dist> RequirementsTxtDist<'dist> {
             }
         }
 
-        if let VersionOrUrlRef::Url(url) = self.version_or_url() {
-            RequirementsTxtComparator::Name {
-                name: self.name(),
-                version: self.version,
-                url: Some(url.verbatim()),
-                extras: &self.extras,
-            }
-        } else {
-            RequirementsTxtComparator::Name {
-                name: self.name(),
-                version: self.version,
-                url: None,
-                extras: &self.extras,
-            }
+        let version_or_url = self.version_or_url();
+        RequirementsTxtComparator::Name {
+            name: self.name(),
+            version: self.version,
+            url: match version_or_url {
+                VersionOrUrlRef::Version(_) => None,
+                VersionOrUrlRef::Url(url) => Some(url.verbatim()),
+            },
+            extras: &self.extras,
         }
     }
 
