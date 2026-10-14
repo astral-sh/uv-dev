@@ -821,7 +821,7 @@ fn add_git_lfs() -> Result<()> {
     ");
 
     // Remove the LFS entries from the checkout.
-    fs_err::remove_file(&ok_checkout_file)?;
+    assert!(ok_checkout_file.is_file());
     fs_err::remove_dir_all(&lfs_checkout_objects)?;
 
     // Test LFS recovery from an incomplete checkout.
