@@ -127,6 +127,11 @@ impl ResolverOutput {
             let ResolutionGraphNode::Dist(distribution) = node else {
                 continue;
             };
+            // Filtering retains the original hashes when none are allowed, so it can only
+            // change a distribution with multiple hashes.
+            if distribution.hashes.as_slice().len() < 2 {
+                continue;
+            }
             let ResolvedDist::Installable { dist, .. } = &distribution.dist else {
                 continue;
             };
