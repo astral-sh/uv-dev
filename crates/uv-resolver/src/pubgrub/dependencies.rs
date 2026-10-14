@@ -111,35 +111,35 @@ impl PubGrubDependency {
     pub(crate) fn from_requirements<'a>(
         conflicts: &Conflicts,
         requirements: impl IntoIterator<Item = Cow<'a, Requirement>>,
-        group_name: Option<&'a GroupName>,
-        parent_package: Option<&'a PubGrubPackage>,
+        group_name: Option<&GroupName>,
+        parent_package: Option<&PubGrubPackage>,
     ) -> Result<Vec<Self>, UnsatisfiableRequirement> {
         let mut dependencies = Vec::new();
         for requirement in requirements {
-            dependencies.extend(Self::from_requirement(
+            Self::append_requirement(
+                &mut dependencies,
                 conflicts,
-                requirement,
+                &requirement,
                 group_name,
                 parent_package,
-            )?);
+            )?;
         }
         Ok(dependencies)
     }
 
-    fn from_requirement<'a>(
+    fn append_requirement(
+        dependencies: &mut Vec<Self>,
         conflicts: &Conflicts,
-        requirement: Cow<'a, Requirement>,
-        group_name: Option<&'a GroupName>,
-        parent_package: Option<&'a PubGrubPackage>,
-    ) -> Result<impl Iterator<Item = Self> + 'a, UnsatisfiableRequirement> {
-        if let Some(requirement) = UnsatisfiableRequirement::from_requirement(&requirement) {
-            return Err(requirement);
-        }
+        requirement: &Requirement,
+        group_name: Option<&GroupName>,
+        parent_package: Option<&PubGrubPackage>,
+    ) -> Result<(), UnsatisfiableRequirement> {
+        let version = Self::requirement_version_range(requirement)?;
 
         let parent_name = parent_package.and_then(|package| package.name_no_root());
         let is_normal_parent = parent_package
             .is_some_and(|parent| parent.extra().is_none() && parent.group().is_none());
-        let iter = if !requirement.extras.is_empty() {
+        let (include_base, variants) = if !requirement.extras.is_empty() {
             // This is crazy subtle, but if any of the extras in the
             // requirement are part of a declared conflict, then we
             // specifically need (at time of writing) to include the
@@ -156,43 +156,43 @@ impl PubGrubDependency {
             // place? Well, that's part of an optimization[1].
             //
             // [1]: https://github.com/astral-sh/uv/pull/9540
-            let base = if requirement
+            let base = requirement
                 .extras
                 .iter()
-                .any(|extra| conflicts.contains(&requirement.name, extra))
-            {
-                Either::Left(iter::once(PackageNodeKind::Base))
-            } else {
-                Either::Right(iter::empty())
-            };
-            Either::Left(Either::Left(base.chain(
-                Box::into_iter(requirement.extras.clone()).map(PackageNodeKind::Extra),
-            )))
-        } else if !requirement.groups.is_empty() {
-            let base = if requirement
+                .any(|extra| conflicts.contains(&requirement.name, extra));
+            let variants = requirement
+                .extras
+                .iter()
+                .cloned()
+                .map(PackageNodeKind::Extra);
+            (base, Either::Left(variants))
+        } else {
+            let base = requirement.groups.is_empty()
+                || requirement
+                    .groups
+                    .iter()
+                    .any(|group| conflicts.contains(&requirement.name, group));
+            let variants = requirement
                 .groups
                 .iter()
-                .any(|group| conflicts.contains(&requirement.name, group))
-            {
-                Either::Left(iter::once(PackageNodeKind::Base))
-            } else {
-                Either::Right(iter::empty())
-            };
-            Either::Left(Either::Right(base.chain(
-                Box::into_iter(requirement.groups.clone()).map(PackageNodeKind::Group),
-            )))
-        } else {
-            Either::Right(iter::once(PackageNodeKind::Base))
+                .cloned()
+                .map(PackageNodeKind::Group);
+            (base, Either::Right(variants))
         };
 
-        // Add the package, plus any extra variants.
-        Ok(iter.map(move |kind| {
-            let pubgrub_requirement = PubGrubRequirement::from_requirement(&requirement, kind);
-            let PubGrubRequirement {
-                package,
-                version,
-                source,
-            } = pubgrub_requirement;
+        // Reuse the checked range and source for every edge, moving them into the final edge.
+        let source = DependencySource::from_requirement(requirement);
+        let shared = iter::repeat_n(
+            (version, source),
+            usize::from(include_base) + variants.len(),
+        );
+        let kinds = include_base
+            .then_some(PackageNodeKind::Base)
+            .into_iter()
+            .chain(variants);
+        dependencies.extend(kinds.zip(shared).map(|(kind, (version, source))| {
+            let package =
+                PubGrubPackage::from_package(requirement.name.clone(), kind, requirement.marker);
             let parent = match &*package {
                 PubGrubPackageInner::Package { .. } | PubGrubPackageInner::Marker { .. } => {
                     if is_normal_parent {
@@ -231,7 +231,26 @@ impl PubGrubDependency {
                 parent,
                 source,
             }
-        }))
+        }));
+        Ok(())
+    }
+
+    /// Resolve a requirement's version range while retaining the original specifiers on failure.
+    fn requirement_version_range(
+        requirement: &Requirement,
+    ) -> Result<Range<Version>, UnsatisfiableRequirement> {
+        let Some(specifiers) = requirement.source.version_specifiers() else {
+            return Ok(Range::full());
+        };
+        let range = Range::from(specifiers.clone());
+        if range == Range::empty() {
+            return Err(UnsatisfiableRequirement::new(
+                requirement.name.clone(),
+                requirement.extras.clone(),
+                specifiers.clone(),
+            ));
+        }
+        Ok(range)
     }
 
     /// Extracts a possible conflicting item from this dependency.
@@ -240,32 +259,5 @@ impl PubGrubDependency {
     /// returns `None`.
     pub(crate) fn conflicting_item(&self) -> Option<ConflictItemRef<'_>> {
         self.package.conflicting_item()
-    }
-}
-
-/// A PubGrub-compatible package and version range.
-#[derive(Debug, Clone)]
-struct PubGrubRequirement {
-    package: PubGrubPackage,
-    version: Range<Version>,
-    source: DependencySource,
-}
-
-impl PubGrubRequirement {
-    /// Convert a requirement into its PubGrub package, source constraint, and version range.
-    fn from_requirement(requirement: &Requirement, kind: PackageNodeKind) -> Self {
-        Self {
-            package: PubGrubPackage::from_package(
-                requirement.name.clone(),
-                kind,
-                requirement.marker,
-            ),
-            source: DependencySource::from_requirement(requirement),
-            version: requirement
-                .source
-                .version_specifiers()
-                .cloned()
-                .map_or_else(Range::full, Range::from),
-        }
     }
 }
