@@ -1,15 +1,14 @@
-use std::collections::hash_map::Entry;
-
-use rustc_hash::FxHashMap;
+use hashbrown::Equivalent;
+use hashbrown::hash_map::EntryRef;
 
 use uv_distribution_types::{DistributionId, Identifier, ResolvedDist};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 
-use crate::ResolveError;
 use crate::candidate_selector::Candidate;
 use crate::prioritized_distribution::CompatibleDist;
 use crate::resolver::RegisteredMetadata;
+use crate::{FxHashbrownMap, ResolveError};
 
 #[derive(Clone, Debug)]
 enum FilePin<'index> {
@@ -29,9 +28,26 @@ enum PinMetadata<'index> {
     Registered(RegisteredMetadata<'index>),
 }
 
+/// A borrowed pin key. Wrapping the tuple makes its derived hash match the stored tuple's hash.
+#[derive(Hash)]
+struct PinKeyRef<'a>((&'a PackageName, &'a Version));
+
+impl PinKeyRef<'_> {
+    fn to_owned(&self) -> (PackageName, Version) {
+        let (name, version) = self.0;
+        (name.clone(), version.clone())
+    }
+}
+
+impl Equivalent<(PackageName, Version)> for PinKeyRef<'_> {
+    fn equivalent(&self, (name, version): &(PackageName, Version)) -> bool {
+        self.0 == (name, version)
+    }
+}
+
 /// The artifacts and metadata selected for package versions within a fork.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct FilePins<'index>(FxHashMap<(PackageName, Version), FilePin<'index>>);
+pub(crate) struct FilePins<'index>(FxHashbrownMap<(PackageName, Version), FilePin<'index>>);
 
 impl<'index> FilePins<'index> {
     /// Pin a registry candidate, registering its metadata at most once in this fork.
@@ -44,11 +60,9 @@ impl<'index> FilePins<'index> {
         dist: &CompatibleDist,
         request: Option<impl FnOnce() -> Result<RegisteredMetadata<'index>, ResolveError>>,
     ) -> Result<(), ResolveError> {
-        match self
-            .0
-            .entry((candidate.name().clone(), candidate.version().clone()))
-        {
-            Entry::Occupied(mut entry) => {
+        let key = PinKeyRef((candidate.name(), candidate.version()));
+        match self.0.entry_ref(&key) {
+            EntryRef::Occupied(mut entry) => {
                 if let Some(request) = request
                     && let FilePin::Registry {
                         metadata: metadata @ PinMetadata::Unrequested(_),
@@ -58,16 +72,19 @@ impl<'index> FilePins<'index> {
                     *metadata = PinMetadata::Registered(request()?);
                 }
             }
-            Entry::Vacant(entry) => {
+            EntryRef::Vacant(entry) => {
                 let metadata = if let Some(request) = request {
                     PinMetadata::Registered(request()?)
                 } else {
                     PinMetadata::Unrequested(dist.for_resolution().distribution_id())
                 };
-                entry.insert(FilePin::Registry {
-                    dist: dist.for_installation().to_owned(),
-                    metadata,
-                });
+                entry.insert_with_key(
+                    key.to_owned(),
+                    FilePin::Registry {
+                        dist: dist.for_installation().to_owned(),
+                        metadata,
+                    },
+                );
             }
         }
         Ok(())
@@ -80,14 +97,15 @@ impl<'index> FilePins<'index> {
         version: &Version,
         metadata: RegisteredMetadata<'index>,
     ) {
-        self.0
-            .entry((name.clone(), version.clone()))
-            .or_insert(FilePin::Url(metadata));
+        let key = PinKeyRef((name, version));
+        if let EntryRef::Vacant(entry) = self.0.entry_ref(&key) {
+            entry.insert_with_key(key.to_owned(), FilePin::Url(metadata));
+        }
     }
 
     /// Return the pinned registry artifact, if one exists.
     pub(crate) fn get(&self, name: &PackageName, version: &Version) -> Option<&ResolvedDist> {
-        match self.0.get(&(name.clone(), version.clone()))? {
+        match self.0.get(&PinKeyRef((name, version)))? {
             FilePin::Registry { dist, .. } => Some(dist),
             FilePin::Url(_) => None,
         }
@@ -99,7 +117,7 @@ impl<'index> FilePins<'index> {
         name: &PackageName,
         version: &Version,
     ) -> Option<&RegisteredMetadata<'index>> {
-        match self.0.get(&(name.clone(), version.clone()))? {
+        match self.0.get(&PinKeyRef((name, version)))? {
             FilePin::Registry {
                 metadata: PinMetadata::Registered(metadata),
                 ..
@@ -118,7 +136,7 @@ impl<'index> FilePins<'index> {
         name: &PackageName,
         version: &Version,
     ) -> Option<(&ResolvedDist, &DistributionId)> {
-        match self.0.get(&(name.clone(), version.clone()))? {
+        match self.0.get(&PinKeyRef((name, version)))? {
             FilePin::Registry { dist, metadata } => Some((
                 dist,
                 match metadata {
