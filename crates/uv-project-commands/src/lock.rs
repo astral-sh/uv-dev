@@ -280,12 +280,20 @@ impl std::fmt::Display for LockEventVersion<'_> {
 pub(super) enum LockEvent<'lock> {
     Update(
         DryRun,
-        PackageName,
+        &'lock PackageName,
         BTreeSet<LockEventVersion<'lock>>,
         BTreeSet<LockEventVersion<'lock>>,
     ),
-    Add(DryRun, PackageName, BTreeSet<LockEventVersion<'lock>>),
-    Remove(DryRun, PackageName, BTreeSet<LockEventVersion<'lock>>),
+    Add(
+        DryRun,
+        &'lock PackageName,
+        BTreeSet<LockEventVersion<'lock>>,
+    ),
+    Remove(
+        DryRun,
+        &'lock PackageName,
+        BTreeSet<LockEventVersion<'lock>>,
+    ),
 }
 
 impl<'lock> LockEvent<'lock> {
@@ -303,46 +311,33 @@ impl<'lock> LockEvent<'lock> {
         versions
     }
 
-    /// Detect the change events between an (optional) existing and updated lockfile.
+    /// Detect change events between an optional existing and updated lockfile, ordered by package name.
     pub(super) fn detect_changes(
         existing_lock: Option<&'lock Lock>,
         new_lock: &'lock Lock,
         dry_run: DryRun,
     ) -> impl Iterator<Item = Self> {
-        let mut existing_packages = existing_lock
+        let existing_packages = existing_lock
             .map(Self::package_versions)
             .unwrap_or_default();
         let mut new_packages = Self::package_versions(new_lock);
 
-        let names = existing_packages
-            .keys()
-            .chain(new_packages.keys())
-            .copied()
-            .collect::<BTreeSet<_>>();
-
-        names.into_iter().filter_map(move |name| {
-            match (existing_packages.remove(name), new_packages.remove(name)) {
-                (Some(existing_versions), Some(new_versions)) => {
-                    if existing_versions != new_versions {
-                        Some(Self::Update(
-                            dry_run,
-                            name.clone(),
-                            existing_versions,
-                            new_versions,
-                        ))
-                    } else {
-                        None
-                    }
-                }
-                (Some(existing_versions), None) => {
-                    Some(Self::Remove(dry_run, name.clone(), existing_versions))
-                }
-                (None, Some(new_versions)) => Some(Self::Add(dry_run, name.clone(), new_versions)),
-                (None, None) => {
-                    unreachable!("The key `{name}` should exist in at least one of the maps");
-                }
-            }
-        })
+        let mut events = Vec::new();
+        for (name, existing_versions) in existing_packages {
+            let event = match new_packages.remove(name) {
+                Some(new_versions) if existing_versions == new_versions => continue,
+                Some(new_versions) => Self::Update(dry_run, name, existing_versions, new_versions),
+                None => Self::Remove(dry_run, name, existing_versions),
+            };
+            events.push(event);
+        }
+        events.extend(
+            new_packages
+                .into_iter()
+                .map(|(name, versions)| Self::Add(dry_run, name, versions)),
+        );
+        events.sort_unstable_by(|left, right| left.package().cmp(right.package()));
+        events.into_iter()
     }
 
     pub(super) fn package(&self) -> &PackageName {
