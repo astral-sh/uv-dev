@@ -26,7 +26,8 @@ struct Package {
 
 /// A running audit service that returns one clean result for every queried PyPI package.
 ///
-/// The service requires at least one batch request before it is dropped.
+/// The service rejects empty query batches and requires at least one batch request before it is
+/// dropped.
 pub struct CleanAuditService {
     server: MockServer,
 }
@@ -39,6 +40,8 @@ impl CleanAuditService {
             .and(path(QUERY_BATCH_PATH))
             .respond_with(
                 |request: &Request| match request.body_json::<QueryBatch>() {
+                    Ok(batch) if batch.queries.is_empty() => ResponseTemplate::new(400)
+                        .set_body_string("expected at least one PyPI package query"),
                     Ok(batch) => {
                         if let Some(query) = batch
                             .queries
@@ -160,17 +163,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_a_batch_with_non_pypi_query() {
+    async fn rejects_empty_or_non_pypi_batches() {
         let service = CleanAuditService::start().await;
-        let response = reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .unwrap()
-            .post(format!("{}{QUERY_BATCH_PATH}", service.uri()))
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let url = format!("{}{QUERY_BATCH_PATH}", service.uri());
+        let response = client
+            .post(&url)
             .json(&json!({ "queries": [
                 { "package": { "name": "first", "ecosystem": "PyPI" }, "version": "1" },
                 { "package": { "name": "second", "ecosystem": "npm" }, "version": "2" }
             ] }))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+
+        let response = client
+            .post(&url)
+            .json(&json!({ "queries": [] }))
             .send()
             .await
             .unwrap();
