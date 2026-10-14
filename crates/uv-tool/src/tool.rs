@@ -204,8 +204,6 @@ impl Tool {
         entrypoints: impl IntoIterator<Item = ToolEntrypoint>,
         options: ToolOptions,
     ) -> Self {
-        let mut entrypoints: Vec<_> = entrypoints.into_iter().collect();
-        entrypoints.sort();
         Self {
             requirements,
             constraints,
@@ -213,8 +211,19 @@ impl Tool {
             excludes,
             build_constraints,
             python,
-            entrypoints,
+            entrypoints: Vec::new(),
             options,
+        }
+        .with_entrypoints(entrypoints.into_iter().collect())
+    }
+
+    /// Replace the tool's installed entrypoints.
+    #[must_use]
+    pub fn with_entrypoints(self, mut entrypoints: Vec<ToolEntrypoint>) -> Self {
+        entrypoints.sort();
+        Self {
+            entrypoints,
+            ..self
         }
     }
 

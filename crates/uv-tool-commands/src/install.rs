@@ -909,19 +909,22 @@ pub async fn install(
         package_name,
         entrypoints,
         &installed_tools,
-        &options,
         force || invalid_tool_receipt,
-        // Only persist the Python request if it was explicitly provided
-        if explicit_python_request {
-            python_request
-        } else {
-            None
-        },
-        requirements,
-        receipt_constraints,
-        receipt_overrides,
-        receipt_excludes,
-        receipt_build_constraints,
+        Tool::new(
+            requirements,
+            receipt_constraints,
+            receipt_overrides,
+            receipt_excludes,
+            receipt_build_constraints,
+            // Only persist the Python request if it was explicitly provided.
+            if explicit_python_request {
+                python_request
+            } else {
+                None
+            },
+            [],
+            options,
+        ),
         tool_lock.as_ref(),
         printer,
     )?;
