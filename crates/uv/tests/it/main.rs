@@ -16,6 +16,9 @@ mod ecosystem;
 
 mod help;
 
+#[cfg(feature = "native-auth")]
+mod native_auth_fixture;
+
 #[cfg(feature = "test-python")]
 mod network;
 mod network_configuration;
