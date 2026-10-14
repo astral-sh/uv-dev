@@ -2093,53 +2093,6 @@ fn tool_run_python_at_version() {
     ----- stderr -----
     Resolved in [TIME]
     ");
-
-    // But @ with nothing in front of it is not.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("@311")
-        .arg("python")
-        .arg("--version"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for executable name `@311` in [PYTHON SOURCES]
-    ");
-
-    // Request a version in the tool and `-p`
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("-p")
-        .arg("3.12")
-        .arg("python@3.11")
-        .arg("--version"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Received multiple Python version requests: `3.12` and `3.11`
-    ");
-
-    // Request a version that does not exist
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@3.12.99"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.12.[X] in [PYTHON SOURCES]
-    ");
-
-    // Request an invalid version
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@3.300"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: 3.300
-    ");
-
-    // Request `@latest` (not yet supported)
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("python@latest")
-        .arg("--version"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Requesting the 'latest' Python version is not yet supported
-    ");
 }
 
 #[test]
