@@ -5,10 +5,13 @@ use std::path::Path;
 use anyhow::Result;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
-use uv_redacted::SafeUrl;
+use sha2::{Digest, Sha256};
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
+use uv_redacted::SafeUrl;
+use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
+use uv_test::package_server::PackageServer;
 use uv_test::packse::{generate_wheel, generate_wheel_with_files};
 use uv_test::uv_snapshot;
 
@@ -32,6 +35,81 @@ async fn artifact_downloads(server: &MockServer, filename: &str) -> usize {
         .iter()
         .filter(|request| request.method.as_str() == "GET" && request.url.path() == artifact_path)
         .count()
+}
+
+/// Enabling hash verification must not trust a wheel cached without verifying its digest.
+#[tokio::test]
+async fn require_hashes_re_download() -> Result<()> {
+    let name = "anyio".parse()?;
+    let (filename, wheel) = generate_wheel(
+        &name,
+        &"4.0.0".parse()?,
+        &[],
+        &Default::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let actual_hash = hex::encode(Sha256::digest(&wheel));
+    let wrong_hash = "0".repeat(64);
+    assert_ne!(actual_hash, wrong_hash);
+    let server = PackageServer::new(&name).await;
+    server.serve(&filename, &wheel, None).await;
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_http_retries()
+        .with_env(EnvVars::UV_DEFAULT_INDEX, server.index_url())
+        .with_filter((actual_hash.clone(), "[WHEEL_SHA256]"))
+        .with_filter((wrong_hash.clone(), "[WRONG_SHA256]"));
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str("anyio==4.0.0")?;
+
+    uv_snapshot!(context.pip_sync().arg("requirements.txt"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + anyio==4.0.0
+    ");
+    let original_downloads = artifact_downloads(server.mock_server(), &filename).await;
+    assert!(
+        original_downloads > 0,
+        "initial install did not fetch the wheel"
+    );
+
+    requirements.write_str(&format!("anyio==4.0.0 --hash=sha256:{wrong_hash}"))?;
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--reinstall", "--require-hashes"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to download `anyio==4.0.0`
+      cause: Hash mismatch for `anyio==4.0.0`
+
+             Expected:
+               sha256:[WRONG_SHA256]
+
+             Computed:
+               sha256:[WHEEL_SHA256]
+    ");
+    assert!(
+        artifact_downloads(server.mock_server(), &filename).await > original_downloads,
+        "enabling hash verification did not re-download the wheel"
+    );
+    context.assert_installed("anyio", "4.0.0");
+
+    requirements.write_str(&format!("anyio==4.0.0 --hash=sha256:{actual_hash}"))?;
+    uv_snapshot!(context.pip_sync()
+        .args(["requirements.txt", "--reinstall", "--require-hashes"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ anyio==4.0.0
+    ");
+    Ok(())
 }
 
 async fn serve_index_wheel(server: &MockServer, package: &str, version: &str) -> Result<String> {
