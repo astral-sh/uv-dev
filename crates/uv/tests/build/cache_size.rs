@@ -1,4 +1,3 @@
-use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteBin, PathChild};
 
 use uv_test::{assert_path_missing, uv_snapshot};
@@ -21,25 +20,27 @@ fn cache_size_missing_cache_remains_missing() {
 /// Files added to the cache contribute to its reported disk usage.
 #[test]
 fn cache_size_populated_raw() -> anyhow::Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
-    let read_cache_size = || -> anyhow::Result<u64> {
-        let output = context
-            .cache_size()
-            .arg("--preview")
-            .assert()
-            .success()
-            .stderr("");
-        Ok(std::str::from_utf8(&output.get_output().stdout)?
-            .trim()
-            .parse()?)
-    };
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_cache_size();
 
-    let empty_size = read_cache_size()?;
+    let empty = uv_snapshot!(context.filters(), context.cache_size().arg("--preview"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [SIZE]
+    ");
+    let empty_size = std::str::from_utf8(&empty.stdout)?.trim().parse::<u64>()?;
+
     context
         .cache_dir
         .child("payload.bin")
         .write_binary(&[42; 8192])?;
-    let populated_size = read_cache_size()?;
+    let populated = uv_snapshot!(context.filters(), context.cache_size().arg("--preview"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [SIZE]
+    ");
+    let populated_size = std::str::from_utf8(&populated.stdout)?
+        .trim()
+        .parse::<u64>()?;
     assert!(
         populated_size > empty_size,
         "adding a file should increase cache usage (empty: {empty_size}, populated: {populated_size})"
