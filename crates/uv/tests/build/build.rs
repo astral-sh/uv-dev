@@ -3927,6 +3927,7 @@ fn build_clear_preserves_source() -> Result<()> {
     let project = sources.child("project");
     context.init().arg(project.path()).assert().success();
     project.child("marker.txt").write_str("marker")?;
+    let original_pyproject = context.read(project.child("pyproject.toml"));
 
     uv_snapshot!(context.filters(), context.build().arg("sources/project").arg("--clear").arg("--out-dir").arg("sources/project"), @"
     exit_code: 2 (failure)
@@ -3934,12 +3935,11 @@ fn build_clear_preserves_source() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/sources/project`
       cause: Refusing to clear output directory `[TEMP_DIR]/sources/project` because it contains the build source `[TEMP_DIR]/sources/project`
     ");
-    project
-        .child("pyproject.toml")
-        .assert(predicate::path::is_file());
-    project
-        .child("marker.txt")
-        .assert(predicate::path::is_file());
+    assert_eq!(
+        context.read(project.child("pyproject.toml")),
+        original_pyproject
+    );
+    assert_eq!(context.read(project.child("marker.txt")), "marker");
 
     uv_snapshot!(context.filters(), context.build().arg("sources/project").arg("--clear").arg("--out-dir").arg("sources"), @"
     exit_code: 2 (failure)
@@ -3947,12 +3947,11 @@ fn build_clear_preserves_source() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/sources/project`
       cause: Refusing to clear output directory `[TEMP_DIR]/sources` because it contains the build source `[TEMP_DIR]/sources/project`
     ");
-    project
-        .child("pyproject.toml")
-        .assert(predicate::path::is_file());
-    project
-        .child("marker.txt")
-        .assert(predicate::path::is_file());
+    assert_eq!(
+        context.read(project.child("pyproject.toml")),
+        original_pyproject
+    );
+    assert_eq!(context.read(project.child("marker.txt")), "marker");
 
     Ok(())
 }
@@ -3991,6 +3990,8 @@ fn build_clear_preserves_workspace_member() -> Result<()> {
     "#})?;
     second.child("src/second/__init__.py").touch()?;
     second.child("marker.txt").write_str("marker")?;
+    let first_pyproject = context.read(first.child("pyproject.toml"));
+    let second_pyproject = context.read(second.child("pyproject.toml"));
 
     uv_snapshot!(context.filters(), context.build().arg("--all").arg("--clear").arg("--out-dir").arg(second.path()).current_dir(workspace.path()), @"
     exit_code: 2 (failure)
@@ -3998,15 +3999,12 @@ fn build_clear_preserves_workspace_member() -> Result<()> {
     error: Failed to build `second @ [TEMP_DIR]/workspace/packages/second`
       cause: Refusing to clear output directory `[TEMP_DIR]/workspace/packages/second` because it contains the build source `[TEMP_DIR]/workspace/packages/second`
     ");
-    first
-        .child("pyproject.toml")
-        .assert(predicate::path::is_file());
-    second
-        .child("pyproject.toml")
-        .assert(predicate::path::is_file());
-    second
-        .child("marker.txt")
-        .assert(predicate::path::is_file());
+    assert_eq!(context.read(first.child("pyproject.toml")), first_pyproject);
+    assert_eq!(
+        context.read(second.child("pyproject.toml")),
+        second_pyproject
+    );
+    assert_eq!(context.read(second.child("marker.txt")), "marker");
 
     Ok(())
 }
@@ -4021,6 +4019,7 @@ fn build_clear_preserves_symlinked_source() -> Result<()> {
     let project = sources.child("project");
     context.init().arg(project.path()).assert().success();
     project.child("marker.txt").write_str("marker")?;
+    let original_pyproject = context.read(project.child("pyproject.toml"));
     fs_err::os::unix::fs::symlink(project.path(), context.temp_dir.child("project-link"))?;
 
     uv_snapshot!(context.filters(), context.build().arg("project-link").arg("--clear").arg("--out-dir").arg("sources"), @"
@@ -4029,12 +4028,11 @@ fn build_clear_preserves_symlinked_source() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/project-link`
       cause: Refusing to clear output directory `[TEMP_DIR]/sources` because it contains the build source `[TEMP_DIR]/project-link`
     ");
-    project
-        .child("pyproject.toml")
-        .assert(predicate::path::is_file());
-    project
-        .child("marker.txt")
-        .assert(predicate::path::is_file());
+    assert_eq!(
+        context.read(project.child("pyproject.toml")),
+        original_pyproject
+    );
+    assert_eq!(context.read(project.child("marker.txt")), "marker");
 
     Ok(())
 }
@@ -4058,7 +4056,7 @@ fn build_clear_rejects_output_containing_input_sdist() -> Result<()> {
     let artifacts = context.temp_dir.child("artifacts");
     artifacts.child("marker.txt").write_str("marker")?;
     let sdist = artifacts.child("project-0.1.0.tar.gz");
-    sdist.assert(predicate::path::is_file());
+    let original_sdist = context.read_bytes(&sdist);
 
     // Without `--out-dir`, the wheel is written beside the input sdist. Clearing that directory
     // would remove the input before it is read.
@@ -4068,10 +4066,8 @@ fn build_clear_rejects_output_containing_input_sdist() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/artifacts/project-0.1.0.tar.gz`
       cause: Refusing to clear output directory `[TEMP_DIR]/artifacts` because it contains the build source `[TEMP_DIR]/artifacts/project-0.1.0.tar.gz`
     ");
-    sdist.assert(predicate::path::is_file());
-    artifacts
-        .child("marker.txt")
-        .assert(predicate::path::is_file());
+    assert_eq!(context.read_bytes(&sdist), original_sdist);
+    assert_eq!(context.read(artifacts.child("marker.txt")), "marker");
 
     Ok(())
 }
