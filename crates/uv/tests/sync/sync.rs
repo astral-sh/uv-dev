@@ -18834,6 +18834,8 @@ fn build_hash_project() -> Result<(TestContext, String)> {
             return json.loads(os.environ.get("UV_TEST_DYNAMIC_BUILD_REQUIRES", "[]"))
 
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            if os.environ.get("UV_TEST_DYNAMIC_BUILD_REQUIRES"):
+                import dynamic_dependency
             wheel = Path(__file__).parent / "wheels" / "project-0.1.0-py3-none-any.whl"
             shutil.copyfile(wheel, Path(wheel_directory) / wheel.name)
             return wheel.name
