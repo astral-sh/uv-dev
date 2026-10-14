@@ -65,8 +65,7 @@ impl CredentialApi for MacCredential {
                 .set_generic_password(&service, &account, &secret)
                 .map_err(decode_error)
         })
-        .await?;
-        Ok(())
+        .await
     }
 
     /// Look up the secret for this entry, if any.
@@ -78,15 +77,13 @@ impl CredentialApi for MacCredential {
         let account = self.account.clone();
         let domain = self.domain;
 
-        let password_bytes = crate::blocking::spawn_blocking(move || -> Result<Vec<u8>> {
+        crate::blocking::spawn_blocking(move || {
             let keychain = get_keychain(domain)?;
             let (password_bytes, _) = find_generic_password(Some(&[keychain]), &service, &account)
                 .map_err(decode_error)?;
             Ok(password_bytes.to_owned())
         })
-        .await?;
-
-        Ok(password_bytes)
+        .await
     }
 
     /// Delete the underlying generic credential for this entry, if any.
@@ -105,8 +102,7 @@ impl CredentialApi for MacCredential {
             item.delete();
             Ok(())
         })
-        .await?;
-        Ok(())
+        .await
     }
 
     /// Return the underlying concrete object with an `Any` type so that it can
