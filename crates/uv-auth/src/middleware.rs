@@ -714,11 +714,10 @@ impl AuthMiddleware {
         } else if let Some(credentials) = {
             if self.preview.is_enabled(PreviewFeature::NativeAuth) {
                 let native_store = KeyringProvider::native();
-                let display_username = if let Some(username) = username {
-                    format!("{username}@")
-                } else {
-                    String::new()
-                };
+                let display_username = std::fmt::from_fn(|f| match username {
+                    Some(username) => write!(f, "{username}@"),
+                    None => Ok(()),
+                });
                 let lookup_url = if let Some(index) = index {
                     // N.B. The native store performs an exact look up right now, so we use the root
                     // URL of the index instead of relying on prefix-matching.
