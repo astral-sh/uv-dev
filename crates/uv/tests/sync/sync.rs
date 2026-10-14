@@ -19,6 +19,7 @@ use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
 use uv_test::package_server::PackageServer;
+use uv_test::packse::scenario::{Package, PackageMetadata, Scenario};
 use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
 use uv_test::subdirectory_archive::SubdirectoryArchive;
 
@@ -12035,11 +12036,30 @@ fn sync_all_groups() -> Result<()> {
 
 #[test]
 fn sync_multiple_sources_index_disjoint_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00Z");
+    let context = uv_test::test_context!("3.12");
+    let index = |name: &str, version: &str, requires| -> Result<PackseServer> {
+        Ok(PackseServer::from_scenario(&Scenario {
+            packages: BTreeMap::from([(
+                name.parse()?,
+                Package {
+                    versions: BTreeMap::from([(
+                        version.parse()?,
+                        PackageMetadata {
+                            requires,
+                            ..PackageMetadata::wheel_only()
+                        },
+                    )]),
+                },
+            )]),
+            ..Scenario::empty()
+        }))
+    };
+    let cu118 = index("jinja2", "3.1.2", vec!["markupsafe>=2".parse()?])?;
+    let cu124 = index("jinja2", "3.1.3", vec!["markupsafe>=2".parse()?])?;
+    let default = index("markupsafe", "2.1.5", vec![])?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -12051,31 +12071,37 @@ fn sync_multiple_sources_index_disjoint_extras() -> Result<()> {
         cu124 = ["jinja2==3.1.3"]
 
         [tool.uv]
-        constraint-dependencies = ["markupsafe<3"]
         conflicts = [
             [
-                { extra = "cu118" },
-                { extra = "cu124" },
+                {{ extra = "cu118" }},
+                {{ extra = "cu124" }},
             ],
         ]
 
         [tool.uv.sources]
         jinja2 = [
-            { index = "torch-cu118", extra = "cu118" },
-            { index = "torch-cu124", extra = "cu124" },
+            {{ index = "torch-cu118", extra = "cu118" }},
+            {{ index = "torch-cu124", extra = "cu124" }},
         ]
 
         [[tool.uv.index]]
         name = "torch-cu118"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118"
+        url = "{cu118}"
         explicit = true
 
         [[tool.uv.index]]
         name = "torch-cu124"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124"
+        url = "{cu124}"
         explicit = true
+
+        [[tool.uv.index]]
+        url = "{default}"
+        default = true
         "#,
-    )?;
+        cu118 = cu118.index_url(),
+        cu124 = cu124.index_url(),
+        default = default.index_url(),
+    })?;
 
     // Generate a lockfile.
     context.lock().assert().success();
@@ -12088,6 +12114,17 @@ fn sync_multiple_sources_index_disjoint_extras() -> Result<()> {
     Installed 2 packages in [TIME]
      + jinja2==3.1.3
      + markupsafe==2.1.5
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--extra").arg("cu118"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - jinja2==3.1.3
+     + jinja2==3.1.2
     ");
 
     Ok(())
