@@ -128,12 +128,6 @@ pub fn username(prompt: &str, term: &Term) -> std::io::Result<String> {
 /// Prompt the user for input text in the given [`Term`].
 ///
 /// This is a slimmed-down version of `dialoguer::Input`.
-#[allow(
-    // Suppress Clippy lints triggered by `dialoguer::Input`.
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss
-)]
 pub fn input(prompt: &str, term: &Term) -> std::io::Result<String> {
     term.write_str(prompt)?;
     term.show_cursor()?;
@@ -148,7 +142,7 @@ pub fn input(prompt: &str, term: &Term) -> std::io::Result<String> {
             Key::Backspace if position > 0 => {
                 position -= 1;
                 chars.remove(position);
-                let line_size = term.size().1 as usize;
+                let line_size = usize::from(term.size().1);
                 // Case we want to delete last char of a line so the cursor is at the beginning of the next line
                 if (position + prompt_len).is_multiple_of(line_size - 1) {
                     term.clear_line()?;
@@ -183,9 +177,9 @@ pub fn input(prompt: &str, term: &Term) -> std::io::Result<String> {
                 term.flush()?;
             }
             Key::ArrowLeft if position > 0 => {
-                if (position + prompt_len).is_multiple_of(term.size().1 as usize) {
+                if (position + prompt_len).is_multiple_of(usize::from(term.size().1)) {
                     term.move_cursor_up(1)?;
-                    term.move_cursor_right(term.size().1 as usize)?;
+                    term.move_cursor_right(usize::from(term.size().1))?;
                 } else {
                     term.move_cursor_left(1)?;
                 }
@@ -193,17 +187,17 @@ pub fn input(prompt: &str, term: &Term) -> std::io::Result<String> {
                 term.flush()?;
             }
             Key::ArrowRight if position < chars.len() => {
-                if (position + prompt_len).is_multiple_of(term.size().1 as usize - 1) {
+                if (position + prompt_len).is_multiple_of(usize::from(term.size().1) - 1) {
                     term.move_cursor_down(1)?;
-                    term.move_cursor_left(term.size().1 as usize)?;
+                    term.move_cursor_left(usize::from(term.size().1))?;
                 } else {
                     term.move_cursor_right(1)?;
                 }
                 position += 1;
                 term.flush()?;
             }
-            Key::UnknownEscSeq(seq) if seq == vec!['b'] => {
-                let line_size = term.size().1 as usize;
+            Key::UnknownEscSeq(seq) if seq.as_slice() == ['b'] => {
+                let line_size = usize::from(term.size().1);
                 let nb_space = chars[..position]
                     .iter()
                     .rev()
@@ -226,12 +220,7 @@ pub fn input(prompt: &str, term: &Term) -> std::io::Result<String> {
 
                         let new_pos_x = (prompt_len + last_space) % line_size;
                         let old_pos_x = (prompt_len + position) % line_size;
-                        let diff_pos_x = new_pos_x as i64 - old_pos_x as i64;
-                        if diff_pos_x < 0 {
-                            term.move_cursor_left(-diff_pos_x as usize)?;
-                        } else {
-                            term.move_cursor_right((diff_pos_x) as usize)?;
-                        }
+                        move_cursor_to_column(term, old_pos_x, new_pos_x)?;
                         position = last_space;
                     }
                 } else {
@@ -241,8 +230,8 @@ pub fn input(prompt: &str, term: &Term) -> std::io::Result<String> {
 
                 term.flush()?;
             }
-            Key::UnknownEscSeq(seq) if seq == vec!['f'] => {
-                let line_size = term.size().1 as usize;
+            Key::UnknownEscSeq(seq) if seq.as_slice() == ['f'] => {
+                let line_size = usize::from(term.size().1);
                 let find_next_space = chars[position..].iter().position(|c| c.is_whitespace());
 
                 // If we find a space we set the cursor to the next char else we set it to the beginning of the input
@@ -258,12 +247,7 @@ pub fn input(prompt: &str, term: &Term) -> std::io::Result<String> {
 
                     let new_pos_x = (prompt_len + position + next_space) % line_size;
                     let old_pos_x = (prompt_len + position) % line_size;
-                    let diff_pos_x = new_pos_x as i64 - old_pos_x as i64;
-                    if diff_pos_x < 0 {
-                        term.move_cursor_left(-diff_pos_x as usize)?;
-                    } else {
-                        term.move_cursor_right((diff_pos_x) as usize)?;
-                    }
+                    move_cursor_to_column(term, old_pos_x, new_pos_x)?;
                     position += next_space;
                 } else {
                     let new_line = (prompt_len + chars.len()) / line_size;
@@ -272,14 +256,13 @@ pub fn input(prompt: &str, term: &Term) -> std::io::Result<String> {
 
                     let new_pos_x = (prompt_len + chars.len()) % line_size;
                     let old_pos_x = (prompt_len + position) % line_size;
-                    let diff_pos_x = new_pos_x as i64 - old_pos_x as i64;
-                    match diff_pos_x.cmp(&0) {
+                    match new_pos_x.cmp(&old_pos_x) {
                         Ordering::Less => {
-                            term.move_cursor_left((-diff_pos_x - 1) as usize)?;
+                            term.move_cursor_left(old_pos_x - new_pos_x - 1)?;
                         }
                         Ordering::Equal => {}
                         Ordering::Greater => {
-                            term.move_cursor_right((diff_pos_x) as usize)?;
+                            term.move_cursor_right(new_pos_x - old_pos_x)?;
                         }
                     }
                     position = chars.len();
@@ -295,6 +278,14 @@ pub fn input(prompt: &str, term: &Term) -> std::io::Result<String> {
     term.write_line("")?;
 
     Ok(input)
+}
+
+fn move_cursor_to_column(term: &Term, current: usize, target: usize) -> std::io::Result<()> {
+    if target < current {
+        term.move_cursor_left(current - target)
+    } else {
+        term.move_cursor_right(target - current)
+    }
 }
 
 /// Formats a number of bytes into a human readable IEC-prefixed size (binary units).
