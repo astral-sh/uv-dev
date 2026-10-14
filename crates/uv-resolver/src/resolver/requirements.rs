@@ -135,22 +135,15 @@ impl<'a> RequirementExpander<'a> {
                     extra,
                 },
             ) {
-                let requirement = match requirement {
-                    Cow::Owned(mut requirement) => {
-                        requirement.marker = requirement.marker.and(marker);
-                        requirement
-                    }
-                    Cow::Borrowed(requirement) => {
-                        let marker = marker.and(requirement.marker);
-                        let mut requirement = requirement.clone();
-                        requirement.marker = marker.simplify_extras(slice::from_ref(extra));
-                        requirement
-                    }
+                let dependency_marker = match &requirement {
+                    Cow::Owned(requirement) => requirement.marker.and(marker),
+                    Cow::Borrowed(requirement) => marker
+                        .and(requirement.marker)
+                        .simplify_extras(slice::from_ref(extra)),
                 };
                 // Filter out unreachable unsatisfiable requirements before they reach the
                 // unsatisfiability check.
-                let applicable_marker = requirement
-                    .marker
+                let applicable_marker = dependency_marker
                     .simplify_extras(slice::from_ref(extra))
                     .simplify_not_extras_with(|candidate| candidate != extra);
                 if python_marker.is_disjoint(applicable_marker)
@@ -158,6 +151,8 @@ impl<'a> RequirementExpander<'a> {
                 {
                     continue;
                 }
+                let mut requirement = requirement.into_owned();
+                requirement.marker = dependency_marker;
                 if name == &requirement.name {
                     // Add each transitively included extra.
                     queue.extend(
