@@ -494,7 +494,6 @@ pub async fn add(
             .into_inner();
 
             // Create a build dispatch.
-            let extra_build_variables = settings.resolver.extra_build_variables.clone();
             let build_dispatch = BuildDispatch::new(
                 &client,
                 cache,
@@ -509,7 +508,7 @@ pub async fn add(
                 &settings.resolver.config_settings_package,
                 build_isolation,
                 &extra_build_requires,
-                &extra_build_variables,
+                &settings.resolver.extra_build_variables,
                 settings.resolver.link_mode,
                 &settings.resolver.build_options,
                 &build_hasher,
