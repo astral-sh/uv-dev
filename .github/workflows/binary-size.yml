@@ -1,4 +1,4 @@
-name: Binary size
+name: "Binary size"
 
 on:
   push:
@@ -16,7 +16,7 @@ concurrency:
 
 env:
   AWS_LC_SYS_USE_SYSTEM: "0"
-  CARGO_INCREMENTAL: 0
+  CARGO_INCREMENTAL: 1
   CARGO_NET_RETRY: 10
   CARGO_TERM_COLOR: always
   RUSTUP_MAX_RETRIES: 10
@@ -37,11 +37,11 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
-      - name: Plan measurements
+      - name: "Plan measurements"
         id: plan
         env:
           EVENT_NAME: ${{ github.event_name }}
-          RECIPE: ${{ hashFiles('.github/workflows/binary-size.yml', 'scripts/binary_size.py') }}
+          RECIPE: ${{ hashFiles('.github/workflows/binary-size.yml', 'scripts/binary_size.py', 'scripts/prune_cargo_workspace_cache.py') }}
         run: |
           current="$(git rev-parse HEAD)"
           matrix="$(jq -cn --arg sha "$current" '{include: [{name: "current", sha: $sha}]}')"
@@ -54,10 +54,12 @@ jobs:
           echo "recipe=$RECIPE" >> "$GITHUB_OUTPUT"
 
   measure:
-    name: Measure ${{ matrix.name }}
+    name: "Measure ${{ matrix.name }}"
     needs: plan
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-8' || 'ubuntu-latest' }}
     timeout-minutes: 45
+    env:
+      RUSTC_BOOTSTRAP: 1
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -66,7 +68,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Restore baseline measurement
+      - name: "Restore baseline measurement"
         if: ${{ matrix.name == 'base' }}
         id: baseline
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
@@ -74,7 +76,7 @@ jobs:
           path: measurement.json
           key: binary-size-${{ runner.os }}-${{ runner.arch }}-${{ needs.plan.outputs.recipe }}-${{ matrix.sha }}
 
-      - name: Check out measured revision
+      - name: "Check out measured revision"
         if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,7 +84,7 @@ jobs:
           path: source
           persist-credentials: false
 
-      - name: Install Rust toolchains
+      - name: "Install Rust toolchains"
         if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
         working-directory: source
         run: |
@@ -94,35 +96,65 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
+        id: rust-cache
         with:
-          prefix-key: v1-binary-size
-          shared-key: linux-x86_64
+          prefix-key: v1-rust-workspace
+          key: binary-size-${{ matrix.name }}-${{ hashFiles('source/Cargo.toml') }}
           workspaces: source -> target
           cache-workspace-crates: "true"
-          save-if: ${{ matrix.name == 'current' }}
 
-      - name: Build binaries
+      - name: "Record Cargo cache freshness"
+        if: ${{ steps.baseline.outputs.cache-hit != 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: touch "$RUNNER_TEMP/uv-cargo-cache-marker"
+
+      # The Rust cache action removes incremental artifacts when it prunes target directories.
+      - name: "Restore incremental artifacts"
         if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
-        working-directory: source
+        id: incremental-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: source/target/**/incremental
+          key: binary-size-incremental-${{ runner.os }}-${{ runner.arch }}-${{ needs.plan.outputs.recipe }}-${{ hashFiles('source/Cargo.toml', 'source/Cargo.lock', 'source/**/rust-toolchain.toml') }}-${{ matrix.sha }}
+          restore-keys: |
+            binary-size-incremental-${{ runner.os }}-${{ runner.arch }}-${{ needs.plan.outputs.recipe }}-${{ hashFiles('source/Cargo.toml', 'source/Cargo.lock', 'source/**/rust-toolchain.toml') }}-
+
+      - name: "Build binaries"
+        if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
         env:
-          RUSTC_BOOTSTRAP: 1
-        run: |
-          cargo build --locked --release --target "$TARGET" -p uv --bin uv --bin uvx --features self-update -Z checksum-freshness
-          cd crates/uv-build
-          cargo build --locked --profile minimal-size --target "$TARGET" -p uv-build --bin uv-build -Z checksum-freshness
+          # Override the Rust cache action's default for these incremental builds.
+          CARGO_INCREMENTAL: 1
+          CARGO_UNSTABLE_MTIME_ON_USE: ${{ steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: python3 scripts/binary_size.py build --source source --output build-times.json
 
-      - name: Measure binaries
+      - name: "Measure binaries"
         if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
-        run: python3 scripts/binary_size.py measure --source source --output measurement.json
+        env:
+          RUST_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
+          INCREMENTAL_CACHE: ${{ steps.incremental-cache.outputs.cache-hit == 'true' && 'hit' || steps.incremental-cache.outputs.cache-matched-key != '' && 'partial' || 'miss' }}
+        run: python3 scripts/binary_size.py measure --source source --output measurement.json --build-times build-times.json --cache-hit "$RUST_CACHE_HIT" --incremental-cache "$INCREMENTAL_CACHE"
 
-      - name: Save main baseline
+      - name: "Prune superseded workspace artifacts"
+        if: ${{ steps.baseline.outputs.cache-hit != 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        working-directory: source
+        run: |
+          python3 ../scripts/prune_cargo_workspace_cache.py "target/$TARGET/release" "$RUNNER_TEMP/uv-cargo-cache-marker"
+          python3 ../scripts/prune_cargo_workspace_cache.py "target/$TARGET/minimal-size" "$RUNNER_TEMP/uv-cargo-cache-marker"
+
+      - name: "Save incremental artifacts"
+        if: ${{ steps.baseline.outputs.cache-hit != 'true' && steps.incremental-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: source/target/**/incremental
+          key: ${{ steps.incremental-cache.outputs.cache-primary-key }}
+
+      - name: "Save main baseline"
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: measurement.json
           key: binary-size-${{ runner.os }}-${{ runner.arch }}-${{ needs.plan.outputs.recipe }}-${{ matrix.sha }}
 
-      - name: Upload measurement
+      - name: "Upload measurement"
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: binary-size-${{ matrix.name }}
@@ -142,7 +174,8 @@ jobs:
         with:
           pattern: binary-size-*
           path: measurements
-      - name: Summarize binary sizes
+      - name: "Summarize binary sizes"
+        shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
