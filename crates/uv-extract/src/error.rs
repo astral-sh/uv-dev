@@ -169,27 +169,30 @@ impl Error {
 
     /// Returns `true` if the error is due to HTTP streaming request failed.
     pub fn is_http_streaming_failed(&self) -> bool {
-        fn contains_reqwest_error(error: &(dyn std::error::Error + 'static)) -> bool {
-            if error.downcast_ref::<reqwest::Error>().is_some() {
-                return true;
-            }
-            // `std::io::Error::source` forwards to the source of its custom error and can skip the
-            // custom error itself, so inspect `get_ref` before following the standard chain.
-            if let Some(error) = error.downcast_ref::<std::io::Error>()
-                && let Some(inner) = error.get_ref()
-                && contains_reqwest_error(inner)
-            {
-                return true;
-            }
-            error.source().is_some_and(contains_reqwest_error)
-        }
-
         if matches!(
             self,
             Self::AsyncZip(async_zip::error::ZipError::UpstreamReadError(_))
         ) {
             return true;
         }
-        contains_reqwest_error(self)
+
+        let mut error: &(dyn std::error::Error + 'static) = self;
+        loop {
+            if error.is::<reqwest::Error>() {
+                return true;
+            }
+            // `std::io::Error::source` forwards to the source of its custom error and can skip
+            // the custom error itself, so follow `get_ref` instead.
+            if let Some(inner) = error
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+            {
+                error = inner;
+            } else if let Some(source) = error.source() {
+                error = source;
+            } else {
+                return false;
+            }
+        }
     }
 }
