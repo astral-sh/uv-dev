@@ -2,11 +2,11 @@ use assert_fs::fixture::PathChild;
 
 use uv_static::EnvVars;
 
-use uv_test::uv_snapshot;
+use uv_test::{assert_path_missing, uv_snapshot};
 
 #[test]
 fn python_dir() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let python_dir = context.temp_dir.child("python");
     uv_snapshot!(context.filters(), context.python_dir()
@@ -15,4 +15,5 @@ fn python_dir() {
     ----- stdout -----
     [TEMP_DIR]/python
     ");
+    assert_path_missing(&python_dir);
 }
