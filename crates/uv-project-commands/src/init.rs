@@ -336,38 +336,33 @@ async fn init_project(
         )
         .await
         {
-            Ok(workspace) => {
-                // Ignore the current workspace if `--no-workspace` was provided.
-                if no_workspace {
-                    debug!("Ignoring discovered workspace due to `--no-workspace`");
-                    None
-                } else {
-                    Some(workspace)
-                }
+            Ok(_) if no_workspace => {
+                debug!("Ignoring discovered workspace due to `--no-workspace`");
+                None
             }
-            Err(err) => {
+            Ok(workspace) => Some(workspace),
+            Err(err)
                 if matches!(
                     err.as_ref(),
                     WorkspaceErrorKind::MissingPyprojectToml | WorkspaceErrorKind::NonWorkspace(_)
-                ) {
-                    if no_workspace {
-                        warn!("`--no-workspace` was provided, but no workspace was found");
-                    }
-                    None
-                } else {
-                    // If the user runs with `--no-workspace`, ignore the error.
-                    if no_workspace {
-                        warn!("Ignoring workspace discovery error due to `--no-workspace`: {err}");
-                        None
-                    } else {
-                        return Err(err).with_context(|| {
-                            format!(
-                                "Failed to discover parent workspace; use `{}` to ignore",
-                                "uv init --no-workspace".green()
-                            )
-                        });
-                    }
+                ) =>
+            {
+                if no_workspace {
+                    warn!("`--no-workspace` was provided, but no workspace was found");
                 }
+                None
+            }
+            Err(err) if no_workspace => {
+                warn!("Ignoring workspace discovery error due to `--no-workspace`: {err}");
+                None
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Failed to discover parent workspace; use `{}` to ignore",
+                        "uv init --no-workspace".green()
+                    )
+                });
             }
         }
     };
