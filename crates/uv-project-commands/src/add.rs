@@ -141,28 +141,19 @@ pub async fn add(
     malware_settings: &MalwareCheckSettings,
 ) -> Result<ExitStatus> {
     for source in &requirements {
-        match source {
-            RequirementsSource::PyprojectToml(_) => {
-                bail!("Adding requirements from a `pyproject.toml` is not supported in `uv add`");
-            }
-            RequirementsSource::SetupPy(_) => {
-                bail!("Adding requirements from a `setup.py` is not supported in `uv add`");
-            }
-            RequirementsSource::Pep723Script(_) => {
-                bail!("Adding requirements from a PEP 723 script is not supported in `uv add`");
-            }
-            RequirementsSource::SetupCfg(_) => {
-                bail!("Adding requirements from a `setup.cfg` is not supported in `uv add`");
-            }
-            RequirementsSource::PylockToml(_) => {
-                bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
-            }
+        let unsupported_source = match source {
+            RequirementsSource::PyprojectToml(_) => "`pyproject.toml`",
+            RequirementsSource::SetupPy(_) => "`setup.py`",
+            RequirementsSource::Pep723Script(_) => "PEP 723 script",
+            RequirementsSource::SetupCfg(_) => "`setup.cfg`",
+            RequirementsSource::PylockToml(_) => "`pylock.toml`",
             RequirementsSource::Package(_)
             | RequirementsSource::Editable(_)
             | RequirementsSource::RequirementsTxt(_)
             | RequirementsSource::Extensionless(_)
-            | RequirementsSource::EnvironmentYml(_) => {}
-        }
+            | RequirementsSource::EnvironmentYml(_) => continue,
+        };
+        bail!("Adding requirements from a {unsupported_source} is not supported in `uv add`");
     }
 
     let reporter = PythonDownloadReporter::single(printer);
