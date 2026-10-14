@@ -1543,7 +1543,7 @@ fn run_with() -> Result<()> {
 }
 
 #[test]
-fn run_with_local_wheel_refreshes_rebuilt_wheel() -> Result<()> {
+fn run_with_local_wheel_invalidates_cached_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     let package = context.temp_dir.child("foo");
@@ -1579,16 +1579,18 @@ fn run_with_local_wheel_refreshes_rebuilt_wheel() -> Result<()> {
     )
     .unwrap();
 
+    let run_with_wheel = || {
+        let mut command = context.run();
+        command
+            .args(["--isolated", "--with"])
+            .arg(wheel.path())
+            .env_remove(EnvVars::VIRTUAL_ENV);
+        command
+    };
+    let invocation = ["python", "-c", "import foo; print(foo.hello())"];
+
     // First run: install the original wheel.
-    uv_snapshot!(context.filters(), context.run()
-        .arg("--isolated")
-        .arg("--refresh")
-        .arg("--with")
-        .arg(wheel.as_os_str())
-        .arg("python")
-        .arg("-c")
-        .arg("import foo; print(foo.hello())")
-        .env_remove(EnvVars::VIRTUAL_ENV), @r"
+    uv_snapshot!(context.filters(), run_with_wheel().args(invocation), @r"
     exit_code: 0 (success)
     ----- stdout -----
     Hello from foo!
@@ -1598,6 +1600,16 @@ fn run_with_local_wheel_refreshes_rebuilt_wheel() -> Result<()> {
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + foo==0.1.0 (from file://[TEMP_DIR]/foo/dist/foo-0.1.0-py3-none-any.whl)
+    ");
+
+    // An unchanged wheel reuses the cached environment.
+    uv_snapshot!(context.filters(), run_with_wheel().args(invocation), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from foo!
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
     ");
 
     init.write_str(indoc! { r#"
@@ -1620,16 +1632,8 @@ fn run_with_local_wheel_refreshes_rebuilt_wheel() -> Result<()> {
     )
     .unwrap();
 
-    // Second run: should pick up the rebuilt wheel due to `--refresh`.
-    uv_snapshot!(context.filters(), context.run()
-        .arg("--isolated")
-        .arg("--refresh")
-        .arg("--with")
-        .arg(wheel.as_os_str())
-        .arg("python")
-        .arg("-c")
-        .arg("import foo; print(foo.hello())")
-        .env_remove(EnvVars::VIRTUAL_ENV), @r"
+    // Rebuilding the wheel invalidates the cached environment without an explicit refresh.
+    uv_snapshot!(context.filters(), run_with_wheel().args(invocation), @r"
     exit_code: 0 (success)
     ----- stdout -----
     Updated code!
@@ -1643,16 +1647,8 @@ fn run_with_local_wheel_refreshes_rebuilt_wheel() -> Result<()> {
 
     context.prune().assert().success();
 
-    // Third run: after cache prune, should still see the updated code.
-    uv_snapshot!(context.filters(), context.run()
-        .arg("--isolated")
-        .arg("--refresh")
-        .arg("--with")
-        .arg(wheel.as_os_str())
-        .arg("python")
-        .arg("-c")
-        .arg("import foo; print(foo.hello())")
-        .env_remove(EnvVars::VIRTUAL_ENV), @r"
+    // Refresh after cache pruning still sees the updated code.
+    uv_snapshot!(context.filters(), run_with_wheel().arg("--refresh").args(invocation), @r"
     exit_code: 0 (success)
     ----- stdout -----
     Updated code!
