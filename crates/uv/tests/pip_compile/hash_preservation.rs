@@ -1,6 +1,7 @@
 //! Reuse and regeneration of hashes from an existing requirements file.
 
 use anyhow::Result;
+use assert_cmd::assert::Assert;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
@@ -59,7 +60,7 @@ impl HashFixture {
         hashes
     }
 
-    fn compile(&self, requirement: &str, previous: &str, args: &[&str]) -> Result<String> {
+    fn write_inputs(&self, requirement: &str, previous: &str) -> Result<()> {
         self.context
             .temp_dir
             .child("requirements.in")
@@ -68,23 +69,12 @@ impl HashFixture {
             .temp_dir
             .child("requirements.txt")
             .write_str(previous)?;
+        Ok(())
+    }
 
-        let output = self
-            .context
-            .pip_compile()
-            .arg("requirements.in")
-            .arg("--output-file=requirements.txt")
-            .arg("--generate-hashes")
-            .arg("--no-header")
-            .arg("--no-annotate")
-            .arg("--index-url")
-            .arg(self.index.index_url())
-            .args(args)
-            .assert()
-            .success();
-        let contents = self.context.read("requirements.txt");
-        output.stdout(contents.clone());
-        Ok(contents)
+    fn assert_output(&self, output: Assert, expected: &str) {
+        output.stdout(expected.to_owned());
+        assert_eq!(self.context.read("requirements.txt"), expected);
     }
 }
 
@@ -99,8 +89,22 @@ fn preserve_hashes_no_upgrade() -> Result<()> {
     let fixture = HashFixture::new();
     let hashes = fixture.hashes("1.0.0");
     let previous = expected_requirement("1.0.0", &hashes[..2]);
-    let contents = fixture.compile("a", &previous, &[])?;
-    assert_eq!(contents, previous);
+    fixture.write_inputs("a", &previous)?;
+    let output = fixture
+        .context
+        .pip_compile()
+        .args([
+            "requirements.in",
+            "--output-file=requirements.txt",
+            "--generate-hashes",
+            "--no-header",
+            "--no-annotate",
+            "--index-url",
+        ])
+        .arg(fixture.index.index_url())
+        .assert()
+        .success();
+    fixture.assert_output(output, &previous);
     Ok(())
 }
 
@@ -109,8 +113,23 @@ fn preserve_hashes_upgrade() -> Result<()> {
     let fixture = HashFixture::new();
     let hashes = fixture.hashes("1.0.0");
     let previous = expected_requirement("1.0.0", &hashes[..2]);
-    let contents = fixture.compile("a==1.0.0", &previous, &["--upgrade"])?;
-    assert_eq!(contents, expected_requirement("1.0.0", &hashes));
+    fixture.write_inputs("a==1.0.0", &previous)?;
+    let output = fixture
+        .context
+        .pip_compile()
+        .args([
+            "requirements.in",
+            "--output-file=requirements.txt",
+            "--generate-hashes",
+            "--no-header",
+            "--no-annotate",
+            "--index-url",
+        ])
+        .arg(fixture.index.index_url())
+        .arg("--upgrade")
+        .assert()
+        .success();
+    fixture.assert_output(output, &expected_requirement("1.0.0", &hashes));
     Ok(())
 }
 
@@ -118,8 +137,22 @@ fn preserve_hashes_upgrade() -> Result<()> {
 fn preserve_hashes_no_existing_hashes() -> Result<()> {
     let fixture = HashFixture::new();
     let hashes = fixture.hashes("1.0.0");
-    let contents = fixture.compile("a", "a==1.0.0", &[])?;
-    assert_eq!(contents, expected_requirement("1.0.0", &hashes));
+    fixture.write_inputs("a", "a==1.0.0")?;
+    let output = fixture
+        .context
+        .pip_compile()
+        .args([
+            "requirements.in",
+            "--output-file=requirements.txt",
+            "--generate-hashes",
+            "--no-header",
+            "--no-annotate",
+            "--index-url",
+        ])
+        .arg(fixture.index.index_url())
+        .assert()
+        .success();
+    fixture.assert_output(output, &expected_requirement("1.0.0", &hashes));
     Ok(())
 }
 
@@ -129,8 +162,22 @@ fn preserve_hashes_newer_version() -> Result<()> {
     let old_hashes = fixture.hashes("1.0.0");
     let new_hashes = fixture.hashes("2.0.0");
     let previous = expected_requirement("1.0.0", &old_hashes[..2]);
-    let contents = fixture.compile("a==2.0.0", &previous, &[])?;
-    assert_eq!(contents, expected_requirement("2.0.0", &new_hashes));
+    fixture.write_inputs("a==2.0.0", &previous)?;
+    let output = fixture
+        .context
+        .pip_compile()
+        .args([
+            "requirements.in",
+            "--output-file=requirements.txt",
+            "--generate-hashes",
+            "--no-header",
+            "--no-annotate",
+            "--index-url",
+        ])
+        .arg(fixture.index.index_url())
+        .assert()
+        .success();
+    fixture.assert_output(output, &expected_requirement("2.0.0", &new_hashes));
     Ok(())
 }
 
