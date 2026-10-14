@@ -130,21 +130,18 @@ impl From<async_zip::error::ZipError> for Error {
 }
 
 impl Error {
-    /// When reading from a ZIP archive, the error can either be an I/O error from the underlying
-    /// operating system, or an error with the archive. Both get wrapped into an I/O error through
-    /// e.g., `io::copy`. This method extracts ZIP errors to distinguish them from invalid archives.
+    /// Recover a ZIP error wrapped by an I/O operation.
     pub(crate) fn io_or_zip(err: std::io::Error) -> Self {
         Self::io_or_archive::<async_zip::error::ZipError>(err)
     }
 
-    /// When reading a tar archive, the error can either be an I/O error from the underlying
-    /// reader or an error with the archive. Both get wrapped into an I/O error through operations
-    /// such as `io::copy`. This method extracts tar errors to distinguish them from I/O errors.
+    /// Recover a tar error wrapped by an I/O operation.
     pub(crate) fn io_or_tar(err: std::io::Error) -> Self {
         Self::io_or_archive::<tokio_tar::TarError>(err)
     }
 
-    /// Recover a format-specific archive error wrapped by an I/O operation.
+    /// I/O operations such as `io::copy` wrap both reader errors and archive errors as I/O
+    /// errors. Recover the format-specific error so callers can distinguish the two.
     fn io_or_archive<E>(err: std::io::Error) -> Self
     where
         E: std::error::Error + Send + Sync + Into<Self> + 'static,
@@ -155,9 +152,7 @@ impl Error {
         err.downcast::<E>().map_or_else(Self::Io, Into::into)
     }
 
-    /// Returns `true` if the error is due to the server not supporting HTTP streaming. Most
-    /// commonly, this is due to serving ZIP files with features that are incompatible with
-    /// streaming, like data descriptors.
+    /// Returns `true` if the ZIP reader encountered an unsupported archive feature.
     pub fn is_http_streaming_unsupported(&self) -> bool {
         matches!(
             self,
@@ -165,7 +160,7 @@ impl Error {
         )
     }
 
-    /// Returns `true` if the error is due to HTTP streaming request failed.
+    /// Returns `true` for an upstream ZIP read failure or an HTTP client error in the error chain.
     pub fn is_http_streaming_failed(&self) -> bool {
         if matches!(
             self,
