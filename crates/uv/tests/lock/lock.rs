@@ -22266,6 +22266,40 @@ fn lock_removed_empty_extra() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
+const METADATA_FREE_DEPENDENCY_PROJECT: &str = indoc! {r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "six>=2",
+        "urllib3==1.0.0",
+        "anyio==4.3.0 ; sys_platform == 'win32'",
+        "anyio==4.4.0 ; sys_platform != 'win32'",
+        "excluded",
+        "scoped-excluded",
+    ]
+
+    [project.optional-dependencies]
+    empty = []
+    feature = ["six<2", "httpx[http2]>=1 ; sys_platform != 'win32'", "excluded", "scoped-excluded"]
+
+    [dependency-groups]
+    empty = []
+    dev = ["six>=2", "httpx[http2]==1.0.0 ; sys_platform == 'win32'", "excluded", "scoped-excluded"]
+
+    [tool.uv]
+    override-dependencies = [
+        "six>=0",
+        { package = { name = "project", version = "0.1.0" }, dependencies = ["six==1.0.0"] },
+    ]
+    exclude-dependencies = [
+        "excluded",
+        { package = { name = "project", version = "0.1.0" }, dependencies = ["scoped-excluded"] },
+    ]
+    "#};
+
 /// Regenerate registry dependencies and dependency policies when package metadata is omitted.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -22273,38 +22307,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    let original_pyproject = indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = [
-            "six>=2",
-            "urllib3==1.0.0",
-            "anyio==4.3.0 ; sys_platform == 'win32'",
-            "anyio==4.4.0 ; sys_platform != 'win32'",
-            "excluded",
-            "scoped-excluded",
-        ]
-
-        [project.optional-dependencies]
-        empty = []
-        feature = ["six<2", "httpx[http2]>=1 ; sys_platform != 'win32'", "excluded", "scoped-excluded"]
-
-        [dependency-groups]
-        empty = []
-        dev = ["six>=2", "httpx[http2]==1.0.0 ; sys_platform == 'win32'", "excluded", "scoped-excluded"]
-
-        [tool.uv]
-        override-dependencies = [
-            "six>=0",
-            { package = { name = "project", version = "0.1.0" }, dependencies = ["six==1.0.0"] },
-        ]
-        exclude-dependencies = [
-            "excluded",
-            { package = { name = "project", version = "0.1.0" }, dependencies = ["scoped-excluded"] },
-        ]
-        "#};
+    let original_pyproject = METADATA_FREE_DEPENDENCY_PROJECT;
     pyproject_toml.write_str(original_pyproject)?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -22343,37 +22346,6 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     ----- stderr -----
     Resolved 9 packages in [TIME]
     ");
-
-    // Narrow the root and optional dependency markers independently.
-    let original_lock = context.read("uv.lock");
-    for requirement in ["anyio==4.4.0", "httpx[http2]>=1"] {
-        let original_requirement = format!("{requirement} ; sys_platform != 'win32'");
-        assert!(
-            original_pyproject.contains(&original_requirement),
-            "missing conditional requirement {original_requirement} in test fixture"
-        );
-        pyproject_toml.write_str(&original_pyproject.replacen(
-            &original_requirement,
-            &format!("{requirement} ; sys_platform == 'linux'"),
-            1,
-        ))?;
-        insta::allow_duplicates! {
-            uv_snapshot!(context.filters(), context.lock()
-                .arg("--preview-features")
-                .arg("lock-without-metadata")
-                .arg("--locked")
-                .arg("--index-url")
-                .arg(server.index_url()), @"
-            exit_code: 1 (failure)
-            ----- stderr -----
-            Resolved 9 packages in [TIME]
-            error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-            hint: To update the lockfile, run `uv lock`.
-            ");
-        }
-        assert_eq!(context.read("uv.lock"), original_lock, "{requirement}");
-    }
 
     pyproject_toml.write_str(&original_pyproject.replace("urllib3==1.0.0", "urllib3>=2"))?;
     uv_snapshot!(context.filters(), context.lock()
@@ -22442,6 +22414,90 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
 
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_regenerates_root_marker_without_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("extras/lock-without-metadata.toml");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(METADATA_FREE_DEPENDENCY_PROJECT)?;
+    context
+        .lock()
+        .args(["--preview-features", "lock-without-metadata", "--index-url"])
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let original_lock = context.read("uv.lock");
+
+    let requirement = "anyio==4.4.0 ; sys_platform != 'win32'";
+    assert_eq!(
+        METADATA_FREE_DEPENDENCY_PROJECT
+            .matches(requirement)
+            .count(),
+        1,
+        "expected one root dependency {requirement}"
+    );
+    pyproject_toml.write_str(&METADATA_FREE_DEPENDENCY_PROJECT.replacen(
+        requirement,
+        "anyio==4.4.0 ; sys_platform == 'linux'",
+        1,
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "lock-without-metadata", "--locked", "--index-url"])
+        .arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 9 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original_lock);
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_regenerates_optional_marker_without_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("extras/lock-without-metadata.toml");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(METADATA_FREE_DEPENDENCY_PROJECT)?;
+    context
+        .lock()
+        .args(["--preview-features", "lock-without-metadata", "--index-url"])
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let original_lock = context.read("uv.lock");
+
+    let requirement = "httpx[http2]>=1 ; sys_platform != 'win32'";
+    assert_eq!(
+        METADATA_FREE_DEPENDENCY_PROJECT
+            .matches(requirement)
+            .count(),
+        1,
+        "expected one optional dependency {requirement}"
+    );
+    pyproject_toml.write_str(&METADATA_FREE_DEPENDENCY_PROJECT.replacen(
+        requirement,
+        "httpx[http2]>=1 ; sys_platform == 'linux'",
+        1,
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "lock-without-metadata", "--locked", "--index-url"])
+        .arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 9 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original_lock);
     Ok(())
 }
 
