@@ -473,6 +473,7 @@ async fn worker_main_loop(
     child_stdout: &mut BufReader<ChildStdout>,
     timeout: Option<Duration>,
 ) -> Result<(), CompileError> {
+    let mut input_line = String::new();
     let mut out_line = String::new();
     while let Ok(source_file) = receiver.recv().await {
         let source_file = source_file.display().to_string();
@@ -481,11 +482,13 @@ async fn worker_main_loop(
             continue;
         }
         // Luckily, LF alone works on windows too
-        let bytes = format!("{source_file}\n").into_bytes();
+        input_line.clear();
+        input_line.push_str(&source_file);
+        input_line.push('\n');
 
         let python_handle = async {
             child_stdin
-                .write_all(&bytes)
+                .write_all(input_line.as_bytes())
                 .await
                 .map_err(|err| CompileError::ChildStdio {
                     device: "stdin",
