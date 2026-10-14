@@ -4,13 +4,91 @@ use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
-use url::Url;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_cache::CacheBucket;
+use uv_redacted::SafeUrl;
+use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
+use uv_test::packse::generate_wheel;
 use uv_test::uv_snapshot;
+
+fn tomli_2_0_1_wheel() -> Result<Vec<u8>> {
+    Ok(generate_wheel(
+        &"tomli".parse()?,
+        &"2.0.1".parse()?,
+        &[],
+        &Default::default(),
+        None,
+        "py3-none-any",
+        &[],
+    )
+    .1)
+}
+
+/// Reject a mismatched version unless the filename check is explicitly disabled.
+#[test]
+fn mismatched_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let archive = context.temp_dir.child("tomli-3.7.2-py3-none-any.whl");
+    archive.write_binary(&tomli_2_0_1_wheel()?)?;
+    let url = SafeUrl::from_file_path(archive.path()).expect("absolute archive path");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!("tomli @ {url}"))?;
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: tomli-3.7.2-py3-none-any.whl (tomli==3.7.2 (from file://[TEMP_DIR]/tomli-3.7.2-py3-none-any.whl))
+      cause: Wheel version does not match filename (2.0.1 != 3.7.2), which indicates a malformed wheel. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+    ");
+    context.assert_not_installed("tomli");
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"])
+        .env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tomli==3.7.2 (from file://[TEMP_DIR]/tomli-3.7.2-py3-none-any.whl)
+    ");
+    context.assert_installed("tomli", "2.0.1");
+    Ok(())
+}
+
+/// Reject a wheel whose internal package name differs from the filename.
+#[test]
+fn mismatched_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let archive = context.temp_dir.child("foo-2.0.1-py3-none-any.whl");
+    archive.write_binary(&tomli_2_0_1_wheel()?)?;
+    let url = SafeUrl::from_file_path(archive.path()).expect("absolute archive path");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!("foo @ {url}"))?;
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because foo has an invalid package format and you require foo, we can conclude that your requirements are unsatisfiable.
+
+    hint: The structure of `foo` was invalid
+      Caused by: The .dist-info directory `tomli-2.0.1` does not start with the normalized package name: foo
+    ");
+    context.assert_not_installed("foo");
+    context.assert_not_installed("tomli");
+    Ok(())
+}
 
 /// Skip a wheel member that would escape the extraction directory.
 #[tokio::test]
@@ -94,7 +172,7 @@ fn tar_dont_preserve_mtime() -> Result<()> {
         .arg(archive.path())
         .assert()
         .success();
-    let archive_url = Url::from_file_path(archive.path()).expect("absolute archive path");
+    let archive_url = SafeUrl::from_file_path(archive.path()).expect("absolute archive path");
     context
         .temp_dir
         .child("requirements.txt")
