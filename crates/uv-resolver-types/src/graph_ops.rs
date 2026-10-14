@@ -150,32 +150,12 @@ pub fn simplify_conflict_markers(
 
     let mut inferences: FxHashMap<NodeIndex, Vec<BTreeSet<Inference>>> = FxHashMap::default();
     for (node_id, sets) in activated {
-        let mut new_sets = Vec::with_capacity(sets.len());
-        for set in sets {
-            let mut new_set = BTreeSet::default();
-            for item in set {
-                for conflict_set in conflicts.iter() {
-                    if !conflict_set.contains(item.package(), item.kind()) {
-                        continue;
-                    }
-                    for conflict_item in conflict_set.iter() {
-                        if conflict_item.as_ref() == item {
-                            continue;
-                        }
-                        new_set.insert(Inference {
-                            item: conflict_item.clone(),
-                            included: false,
-                        });
-                    }
-                }
-                new_set.insert(Inference {
-                    item: item.to_owned(),
-                    included: true,
-                });
-            }
-            new_sets.push(new_set);
-        }
-        inferences.insert(node_id, new_sets);
+        inferences.insert(
+            node_id,
+            sets.into_iter()
+                .map(|set| infer_conflicts(conflicts, set))
+                .collect(),
+        );
     }
 
     // Inferences are not always sufficient to disambiguate edges to packages with the same name.
@@ -212,6 +192,42 @@ pub fn simplify_conflict_markers(
             graph[edge_index].unify_inference_sets(inference_sets);
         }
     }
+}
+
+/// Infer included and excluded conflict items from the items activated on a path.
+fn infer_conflicts(
+    conflicts: &Conflicts,
+    activated: FxHashSet<ConflictItemRef<'_>>,
+) -> BTreeSet<Inference> {
+    if activated.is_empty() {
+        return BTreeSet::new();
+    }
+
+    let mut inferences = BTreeSet::new();
+    for conflict_set in conflicts.iter() {
+        let mut active = conflict_set
+            .iter()
+            .filter(|item| activated.contains(&item.as_ref()));
+        let Some(first) = active.next() else {
+            continue;
+        };
+        // When multiple items are active, each is excluded by another active item.
+        let multiple_active = active.next().is_some();
+        inferences.extend(
+            conflict_set
+                .iter()
+                .filter(|item| multiple_active || *item != first)
+                .map(|item| Inference {
+                    item: item.clone(),
+                    included: false,
+                }),
+        );
+    }
+    inferences.extend(activated.into_iter().map(|item| Inference {
+        item: item.to_owned(),
+        included: true,
+    }));
+    inferences
 }
 
 /// Find edges from each source whose target package name is shared by another outgoing edge.
