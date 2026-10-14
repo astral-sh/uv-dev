@@ -2745,7 +2745,6 @@ fn python_install_no_cache() {
         .bin_dir
         .child(format!("python3.15{}", std::env::consts::EXE_SUFFIX));
 
-    // The executable should not present in the bin directory
     bin_python.assert(predicate::path::exists());
 
     // Should be a no-op when already installed
@@ -2790,22 +2789,20 @@ fn python_install_no_cache() {
      - cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
     ");
 
-    // 3.12 isn't cached, so it can't be installed
-    let context = context
-        .with_filter((
-            "cpython-3.12.*.tar.gz",
-            "cpython-3.12.[PATCH]-[DATE]-[PLATFORM].tar.gz",
-        ))
-        .with_filter((r"releases/download/\d{8}/", "releases/download/[DATE]/"));
+    // Without the archive cache, even the version just uninstalled cannot be reinstalled offline.
+    let context = context.with_filter((
+        r"https://github\.com/astral-sh/python-build-standalone/releases/download/\d{8}/cpython-3\.15[^`\s]+\.tar\.(?:gz|zst)",
+        "[PYTHON_DOWNLOAD_URL]",
+    ));
     uv_snapshot!(context.filters(), context
         .python_install()
-        .arg("3.12")
+        .arg("3.15")
         .arg("--offline"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to install cpython-3.12.[LATEST]-[PLATFORM]
-      cause: Failed to download `https://github.com/astral-sh/python-build-standalone/releases/download/[DATE]/cpython-3.12.[PATCH]-[DATE]-[PLATFORM].tar.gz`
-      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: https://github.com/astral-sh/python-build-standalone/releases/download/[DATE]/cpython-3.12.[PATCH]-[DATE]-[PLATFORM].tar.gz
+    error: Failed to install cpython-3.15.[LATEST]-[PLATFORM]
+      cause: Failed to download `[PYTHON_DOWNLOAD_URL]`
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: [PYTHON_DOWNLOAD_URL]
     ");
 }
 
