@@ -70,48 +70,49 @@ fn show_requires_multiple() -> Result<()> {
     Ok(())
 }
 
-/// Asserts that the Python version marker in the metadata is correctly evaluated.
-/// `click` v8.1.7 requires `importlib-metadata`, but only when `python_version < "3.8"`.
+/// Show active requirements while omitting requirements for another Python version.
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(feature = "test-python")]
 fn show_python_version_marker() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    use uv_test::packse::{PackseServer, scenario::Scenario};
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("click==8.1.7")?;
+    let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc::indoc! {r#"
+        name = "show-python-marker"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.click.versions."8.1.7"]
+        requires = [
+            "active-dependency ; python_version >= '3.8'",
+            "importlib-metadata ; python_version < '3.8'",
+        ]
+        [packages.active-dependency.versions."1.0.0"]
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
 
     uv_snapshot!(context
         .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
+        .args(["click==8.1.7", "--strict", "--default-index"])
+        .arg(index.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + active-dependency==1.0.0
      + click==8.1.7
-    "
-    );
+    ");
 
-    context.assert_command("import click").success();
-
-    let mut filters = context.filters();
-    if cfg!(windows) {
-        filters.push(("Requires: colorama", "Requires:"));
-    }
-
-    uv_snapshot!(filters, context.pip_show()
-        .arg("click"), @"
+    uv_snapshot!(context.filters(), context.pip_show().arg("click"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: click
     Version: 8.1.7
     Location: [SITE_PACKAGES]/
-    Requires:
+    Requires: active-dependency
     Required-by:
-    "
-    );
+    ");
 
     Ok(())
 }
