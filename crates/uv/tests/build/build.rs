@@ -392,6 +392,49 @@ fn build_sdist_missing_backend_path() -> Result<()> {
     Ok(())
 }
 
+/// In-tree backend paths must remain valid when inserted into Python's import path.
+#[cfg(unix)]
+#[test]
+fn build_backend_path_with_newline() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["backend\nline"]
+    "#})?;
+    project
+        .child("backend\nline/backend.py")
+        .write_str(indoc! {r#"
+            from pathlib import Path
+            from zipfile import ZipFile
+
+            def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                filename = "project-0.1.0-py3-none-any.whl"
+                with ZipFile(Path(wheel_directory) / filename, "w") as wheel:
+                    wheel.writestr("project-0.1.0.dist-info/METADATA", "Metadata-Version: 2.3\nName: project\nVersion: 0.1.0\n")
+                    wheel.writestr("project-0.1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+                    wheel.writestr("project-0.1.0.dist-info/RECORD", "")
+                return filename
+        "#})?;
+
+    context
+        .build()
+        .arg("--wheel")
+        .arg(project.path())
+        .assert()
+        .success();
+    project
+        .child("dist/project-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    Ok(())
+}
+
 /// An in-tree build backend must not be able to escape the source tree via `backend-path`.
 #[test]
 fn build_backend_path_outside_source_tree() -> Result<()> {
