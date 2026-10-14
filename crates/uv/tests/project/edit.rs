@@ -15537,7 +15537,7 @@ fn add_git_lfs_error() -> Result<()> {
 
 /// Ensure that `uv add` aborts when malware is detected in a dependency.
 #[tokio::test]
-async fn add_malware_detected() {
+async fn add_malware_detected() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -15548,8 +15548,8 @@ async fn add_malware_detected() {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = []
-    "#})
-        .unwrap();
+    "#})?;
+    let original_pyproject = context.read("pyproject.toml");
 
     let server = MockServer::start().await;
 
@@ -15574,4 +15574,7 @@ async fn add_malware_detected() {
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
+    assert_edit_rolled_back(&context, &original_pyproject, None);
+
+    Ok(())
 }
