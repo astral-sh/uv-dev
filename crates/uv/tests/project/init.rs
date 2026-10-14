@@ -2854,6 +2854,7 @@ fn init_inside_git_repo() {
     Initialized project `foo` at `[TEMP_DIR]/foo`
     ");
 
+    child.child(".git").assert(predicate::path::missing());
     child.child(".gitignore").assert(predicate::path::missing());
 
     let child = context.temp_dir.child("bar");
@@ -2863,6 +2864,7 @@ fn init_inside_git_repo() {
     Initialized project `bar` at `[TEMP_DIR]/bar`
     ");
 
+    child.child(".git").assert(predicate::path::missing());
     child.child(".gitignore").assert(predicate::path::missing());
 }
 
