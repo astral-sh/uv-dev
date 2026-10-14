@@ -234,18 +234,28 @@ fn sync_centralized_env_avoids_project_name_collisions() -> Result<()> {
         )?;
     }
 
-    for project in [&project_a, &project_b] {
-        context
-            .sync()
-            .arg("--preview-features")
-            .arg("centralized-project-envs")
-            .arg("--project")
-            .arg(project.path())
-            .assert()
-            .success();
-    }
-
+    context
+        .sync()
+        .args([
+            "--preview-features",
+            "centralized-project-envs",
+            "--project",
+        ])
+        .arg(project_a.path())
+        .assert()
+        .success();
     let target_a = fs_err::read_link(project_a.child(".venv").path())?;
+
+    context
+        .sync()
+        .args([
+            "--preview-features",
+            "centralized-project-envs",
+            "--project",
+        ])
+        .arg(project_b.path())
+        .assert()
+        .success();
     let target_b = fs_err::read_link(project_b.child(".venv").path())?;
     // Projects with the same name use different environments.
     assert_ne!(target_a, target_b);
