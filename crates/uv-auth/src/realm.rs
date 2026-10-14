@@ -67,7 +67,7 @@ impl Hash for Realm {
 }
 
 /// A borrowed representation of a [`Realm`] for comparisons and formatting.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct RealmRef<'a> {
     scheme: &'a str,
     host: Option<&'a str>,
@@ -113,22 +113,6 @@ impl<'a> From<&'a Url> for RealmRef<'a> {
 impl<'a> From<&'a DisplaySafeUrl> for RealmRef<'a> {
     fn from(url: &'a DisplaySafeUrl) -> Self {
         Self::from(&**url)
-    }
-}
-
-impl PartialEq for RealmRef<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.scheme == other.scheme && self.host == other.host && self.port == other.port
-    }
-}
-
-impl Eq for RealmRef<'_> {}
-
-impl Hash for RealmRef<'_> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.scheme.hash(state);
-        self.host.hash(state);
-        self.port.hash(state);
     }
 }
 
