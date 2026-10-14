@@ -147,13 +147,7 @@ pub async fn lock(
             .into_interpreter(),
         };
 
-        if let LockCheck::Enabled(lock_check) = lock_check {
-            LockMode::Locked(&interpreter, lock_check)
-        } else if dry_run.enabled() {
-            LockMode::DryRun(&interpreter)
-        } else {
-            LockMode::Write(&interpreter)
-        }
+        LockMode::from_settings(&interpreter, lock_check, dry_run.enabled())
     };
 
     // Initialize any shared state.

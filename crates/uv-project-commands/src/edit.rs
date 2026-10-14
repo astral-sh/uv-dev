@@ -9,6 +9,7 @@ use tracing::{debug, warn};
 
 use uv_fs::Simplified;
 use uv_lock_operations::LockTarget;
+use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_scripts::{Pep723Metadata, Pep723Script};
 use uv_workspace::pyproject::PyProjectToml;
@@ -36,40 +37,44 @@ impl<'lock> From<&'lock EditTarget> for LockTarget<'lock> {
 }
 
 impl EditTarget {
-    /// Write the updated metadata, returning whether the content changed.
-    pub(super) fn write(&self, content: &str) -> Result<bool, io::Error> {
+    /// Parse the target's metadata for dependency editing.
+    pub(super) fn editable_toml(&self) -> Result<PyProjectTomlMut, uv_project_edit::Error> {
+        let (raw, target) = match self {
+            Self::Script(script) => (script.metadata.raw.as_str(), DependencyTarget::Script),
+            Self::Project(project) => (
+                project.pyproject_toml().raw.as_str(),
+                DependencyTarget::PyProjectToml,
+            ),
+        };
+        PyProjectTomlMut::from_toml(raw, target)
+    }
+
+    /// Write the updated metadata if its content changed.
+    pub(super) fn write(&self, content: &str) -> Result<(), io::Error> {
+        let original = match self {
+            Self::Script(script) => script.metadata.raw.as_str(),
+            Self::Project(project) => project.pyproject_toml().raw.as_str(),
+        };
+        if content == original {
+            debug!("No changes to dependencies; skipping update");
+            return Ok(());
+        }
+
         match self {
-            Self::Script(script) => {
-                if content == script.metadata.raw {
-                    debug!("No changes to dependencies; skipping update");
-                    Ok(false)
-                } else {
-                    script.write(content)?;
-                    Ok(true)
-                }
-            }
-            Self::Project(project) => {
-                if content == project.pyproject_toml().raw {
-                    debug!("No changes to dependencies; skipping update");
-                    Ok(false)
-                } else {
-                    let pyproject_path = project.root().join("pyproject.toml");
-                    fs_err::write(pyproject_path, content)?;
-                    Ok(true)
-                }
-            }
+            Self::Script(script) => script.write(content),
+            Self::Project(project) => fs_err::write(project.root().join("pyproject.toml"), content),
         }
     }
 
     /// Update parsed metadata and the workspace cache after writing the target.
     pub(super) fn update(
         self,
-        content: &str,
+        content: String,
         workspace_cache: &WorkspaceCache,
     ) -> Result<Self, ProjectError> {
         match self {
             Self::Script(mut script) => {
-                script.metadata = Pep723Metadata::from_str(content)
+                script.metadata = Pep723Metadata::from_str(&content)
                     .map_err(ProjectError::Pep723ScriptTomlParse)?;
                 Ok(Self::Script(script))
             }
@@ -77,7 +82,7 @@ impl EditTarget {
                 let pyproject_path = project.root().join("pyproject.toml");
                 let project = project
                     .update_member(
-                        PyProjectToml::from_string(content.to_string(), &pyproject_path)
+                        PyProjectToml::from_string(content, &pyproject_path)
                             .map_err(ProjectError::PyprojectTomlParse)?,
                         workspace_cache,
                     )?

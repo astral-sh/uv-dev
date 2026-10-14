@@ -24,7 +24,6 @@ use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
-use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
@@ -98,7 +97,7 @@ pub async fn remove(
                 &DiscoveryOptions::default(),
                 cache,
                 &WorkspaceCache::default(),
-                package.clone(),
+                package,
             )
             .await?
         } else {
@@ -114,78 +113,33 @@ pub async fn remove(
         EditTarget::Project(project)
     };
 
-    let mut toml = match &target {
-        EditTarget::Script(script) => {
-            PyProjectTomlMut::from_toml(&script.metadata.raw, DependencyTarget::Script)
-        }
-        EditTarget::Project(project) => PyProjectTomlMut::from_toml(
-            project.pyproject_toml().raw.as_ref(),
-            DependencyTarget::PyProjectToml,
-        ),
-    }?;
+    let mut toml = target.editable_toml()?;
 
     for package in packages {
-        match dependency_type {
-            DependencyType::Production => {
-                let deps = toml.remove_dependency(&package)?;
-                if deps.is_empty() {
-                    return Err(DependencyNotFoundError {
-                        package: package.clone(),
-                        dependency_type: dependency_type.clone(),
-                        found_in: toml.find_dependency(&package, None),
-                    }
-                    .into());
-                }
+        let missing = match &dependency_type {
+            DependencyType::Production => toml.remove_dependency(&package)?.is_empty(),
+            DependencyType::Optional(extra) => {
+                toml.remove_optional_dependency(&package, extra)?.is_empty()
             }
-            DependencyType::Dev => {
+            DependencyType::Group(group) if group != &*DEV_DEPENDENCIES => toml
+                .remove_dependency_group_requirement(&package, group)?
+                .is_empty(),
+            DependencyType::Dev | DependencyType::Group(_) => {
+                // Both development dependency formats may contain the package.
                 let dev_deps = toml.remove_dev_dependency(&package)?;
                 let group_deps =
                     toml.remove_dependency_group_requirement(&package, &DEV_DEPENDENCIES)?;
-                if dev_deps.is_empty() && group_deps.is_empty() {
-                    return Err(DependencyNotFoundError {
-                        package: package.clone(),
-                        dependency_type: dependency_type.clone(),
-                        found_in: toml.find_dependency(&package, None),
-                    }
-                    .into());
-                }
+                dev_deps.is_empty() && group_deps.is_empty()
             }
-            DependencyType::Optional(ref extra) => {
-                let deps = toml.remove_optional_dependency(&package, extra)?;
-                if deps.is_empty() {
-                    return Err(DependencyNotFoundError {
-                        package: package.clone(),
-                        dependency_type: dependency_type.clone(),
-                        found_in: toml.find_dependency(&package, None),
-                    }
-                    .into());
-                }
+        };
+        if missing {
+            let found_in = toml.find_dependency(&package, None);
+            return Err(DependencyNotFoundError {
+                package,
+                dependency_type,
+                found_in,
             }
-            DependencyType::Group(ref group) => {
-                if group == &*DEV_DEPENDENCIES {
-                    let dev_deps = toml.remove_dev_dependency(&package)?;
-                    let group_deps =
-                        toml.remove_dependency_group_requirement(&package, &DEV_DEPENDENCIES)?;
-                    if dev_deps.is_empty() && group_deps.is_empty() {
-                        return Err(DependencyNotFoundError {
-                            package: package.clone(),
-                            dependency_type: dependency_type.clone(),
-                            found_in: toml.find_dependency(&package, None),
-                        }
-                        .into());
-                    }
-                } else {
-                    let deps = toml.remove_dependency_group_requirement(&package, group)?;
-                    if deps.is_empty() {
-                        return Err(DependencyNotFoundError {
-                            package: package.clone(),
-                            dependency_type: dependency_type.clone(),
-                            found_in: toml.find_dependency(&package, None),
-                        }
-                        .into());
-                    }
-                }
-            }
+            .into());
         }
     }
 
@@ -227,8 +181,7 @@ pub async fn remove(
         }
     }
 
-    // Update the `pypackage.toml` in-memory.
-    let target = target.update(&content, &WorkspaceCache::default())?;
+    let target = target.update(content, &WorkspaceCache::default())?;
 
     // Determine enabled groups and extras
     let default_groups = match &target {
@@ -358,28 +311,23 @@ pub async fn remove(
         Err(err) => return Err(UvError::from(err).into()),
     };
 
-    let EditTarget::Project(project) = target else {
-        // If we're not adding to a project, exit early.
-        edit.commit();
-        return Ok(ExitStatus::Success);
-    };
-
-    let PythonTarget::Environment(venv) = &python_target else {
-        // If we're not syncing, exit early.
+    // Sync only project removals that have an environment.
+    let (EditTarget::Project(project), PythonTarget::Environment(venv)) = (&target, &python_target)
+    else {
         edit.commit();
         return Ok(ExitStatus::Success);
     };
 
     // Identify the installation target.
     let target = InstallTarget::from_project(
-        &project,
+        project,
         &lock,
         PackageSelection::from_args(false, &[], project.project_name()),
     );
 
     let state = state.fork();
 
-    match sync_from_lock(
+    sync_from_lock(
         target,
         venv,
         &extras,
@@ -402,10 +350,7 @@ pub async fn remove(
         MalwareCheckContext::from(&malware_settings),
     )
     .await
-    {
-        Ok(_) => {}
-        Err(err) => return Err(UvError::from(err).into()),
-    }
+    .map_err(UvError::from)?;
 
     edit.commit();
     Ok(ExitStatus::Success)

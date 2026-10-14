@@ -1,4 +1,4 @@
-use std::collections::hash_map::Entry;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::Path;
@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::FxHashSet;
 use tracing::{debug, warn};
 
 use uv_cache::Cache;
@@ -140,28 +140,19 @@ pub async fn add(
     malware_settings: &MalwareCheckSettings,
 ) -> Result<ExitStatus> {
     for source in &requirements {
-        match source {
-            RequirementsSource::PyprojectToml(_) => {
-                bail!("Adding requirements from a `pyproject.toml` is not supported in `uv add`");
-            }
-            RequirementsSource::SetupPy(_) => {
-                bail!("Adding requirements from a `setup.py` is not supported in `uv add`");
-            }
-            RequirementsSource::Pep723Script(_) => {
-                bail!("Adding requirements from a PEP 723 script is not supported in `uv add`");
-            }
-            RequirementsSource::SetupCfg(_) => {
-                bail!("Adding requirements from a `setup.cfg` is not supported in `uv add`");
-            }
-            RequirementsSource::PylockToml(_) => {
-                bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
-            }
+        let unsupported_source = match source {
+            RequirementsSource::PyprojectToml(_) => "`pyproject.toml`",
+            RequirementsSource::SetupPy(_) => "`setup.py`",
+            RequirementsSource::Pep723Script(_) => "PEP 723 script",
+            RequirementsSource::SetupCfg(_) => "`setup.cfg`",
+            RequirementsSource::PylockToml(_) => "`pylock.toml`",
             RequirementsSource::Package(_)
             | RequirementsSource::Editable(_)
             | RequirementsSource::RequirementsTxt(_)
             | RequirementsSource::Extensionless(_)
-            | RequirementsSource::EnvironmentYml(_) => {}
-        }
+            | RequirementsSource::EnvironmentYml(_) => continue,
+        };
+        bail!("Adding requirements from a {unsupported_source} is not supported in `uv add`");
     }
 
     let reporter = PythonDownloadReporter::single(printer);
@@ -493,7 +484,6 @@ pub async fn add(
             .into_inner();
 
             // Create a build dispatch.
-            let extra_build_variables = settings.resolver.extra_build_variables.clone();
             let build_dispatch = BuildDispatch::new(
                 &client,
                 cache,
@@ -508,7 +498,7 @@ pub async fn add(
                 &settings.resolver.config_settings_package,
                 build_isolation,
                 &extra_build_requires,
-                &extra_build_variables,
+                &settings.resolver.extra_build_variables,
                 settings.resolver.link_mode,
                 &settings.resolver.build_options,
                 &build_hasher,
@@ -575,124 +565,35 @@ pub async fn add(
     )?;
 
     // If the user provides a single, named index, pin all requirements to that index.
-    let index = indexes
-        .first()
-        .as_ref()
-        .and_then(|index| index.name.as_ref())
-        .filter(|_| indexes.len() == 1)
-        .inspect(|index| {
-            debug!("Pinning all requirements to index: `{index}`");
-        });
+    let index = match indexes.as_slice() {
+        [index] => index.name.as_ref(),
+        _ => None,
+    }
+    .inspect(|index| {
+        debug!("Pinning all requirements to index: `{index}`");
+    });
 
-    // Determine whether to use workspace mode.
-    let use_workspace = match workspace {
-        Some(workspace) => workspace,
-        None => {
-            // Check if we're in a project (not a script), and if any requirements are path
-            // dependencies within the workspace.
-            if let EditTarget::Project(ref project) = target {
-                let workspace_root = project.workspace().install_path();
-                requirements.iter().any(|req| {
-                    if let RequirementSource::Directory { install_path, .. } = &req.source {
-                        let absolute_path = if install_path.is_absolute() {
-                            install_path.to_path_buf()
-                        } else {
-                            project.root().join(install_path)
-                        };
-                        absolute_path.starts_with(workspace_root)
-                    } else {
-                        false
-                    }
-                })
-            } else {
-                false
-            }
-        }
-    };
-
-    // If workspace mode is enabled, add any members to the `workspace` section of the
-    // `pyproject.toml` file.
-    if use_workspace {
-        let mut modified = false;
-        let EditTarget::Project(project) = target else {
-            unreachable!("`--workspace` and `--script` are conflicting options");
-        };
-
-        let mut toml = PyProjectTomlMut::from_toml(
-            &project.workspace().pyproject_toml().raw,
-            DependencyTarget::PyProjectToml,
-        )?;
-
-        // Check each requirement to see if it's a path dependency
-        for requirement in &requirements {
-            if let RequirementSource::Directory { install_path, .. } = &requirement.source {
-                let absolute_path = if install_path.is_absolute() {
-                    install_path.to_path_buf()
-                } else {
-                    project.root().join(install_path)
-                };
-
-                // Either `--workspace` was provided explicitly, or it was omitted but the path is
-                // within the workspace root.
-                let use_workspace = workspace.unwrap_or_else(|| {
-                    absolute_path.starts_with(project.workspace().install_path())
-                });
-                if !use_workspace {
-                    continue;
-                }
-
-                // If the project is already a member of the workspace, skip it.
-                if project.workspace().includes(&absolute_path)? {
-                    continue;
-                }
-
-                let relative_path = absolute_path
-                    .strip_prefix(project.workspace().install_path())
-                    .unwrap_or(&absolute_path);
-
-                toml.add_workspace(relative_path)?;
-                modified |= true;
-
-                writeln!(
-                    printer.stderr(),
-                    "Added `{}` to workspace members",
-                    relative_path.user_display().cyan()
-                )?;
-            }
-        }
-
-        // If we modified the workspace root, we need to reload it entirely, since this can impact
-        // the discovered members, etc.
-        target = if modified {
-            let workspace_content = toml.to_string();
-            fs_err::write(
-                project.workspace().install_path().join("pyproject.toml"),
-                &workspace_content,
-            )?;
-
-            EditTarget::Project(
-                VirtualProject::discover(
-                    project.root(),
-                    &DiscoveryOptions::default(),
-                    cache,
-                    &WorkspaceCache::default(),
-                )
-                .await?,
+    match (&target, workspace) {
+        (EditTarget::Project(project), None | Some(true)) => {
+            if let Some(project) = add_workspace_members(
+                project,
+                &requirements,
+                workspace == Some(true),
+                cache,
+                printer,
             )
-        } else {
-            EditTarget::Project(project)
+            .await?
+            {
+                target = EditTarget::Project(project);
+            }
         }
+        (EditTarget::Script(_), Some(true)) => {
+            unreachable!("`--workspace` and `--script` are conflicting options");
+        }
+        (EditTarget::Project(_), Some(false)) | (EditTarget::Script(_), None | Some(false)) => {}
     }
 
-    let mut toml = match &target {
-        EditTarget::Script(script) => {
-            PyProjectTomlMut::from_toml(&script.metadata.raw, DependencyTarget::Script)
-        }
-        EditTarget::Project(project) => PyProjectTomlMut::from_toml(
-            &project.pyproject_toml().raw,
-            DependencyTarget::PyProjectToml,
-        ),
-    }?;
+    let mut toml = target.editable_toml()?;
 
     let edits = edits(
         requirements,
@@ -780,8 +681,7 @@ pub async fn add(
         false
     };
 
-    // Update the `pypackage.toml` in-memory.
-    let target = target.update(&content, &WorkspaceCache::default())?;
+    let target = target.update(content, &WorkspaceCache::default())?;
 
     // Use separate state for locking and syncing.
     let lock_state = state.fork();
@@ -851,28 +751,93 @@ pub async fn add(
     }
 }
 
+/// Add eligible directory requirements to the workspace and reload it when membership changes.
+async fn add_workspace_members(
+    project: &VirtualProject,
+    requirements: &[Requirement],
+    explicit_workspace: bool,
+    cache: &Cache,
+    printer: Printer,
+) -> Result<Option<VirtualProject>> {
+    let workspace_root = project.workspace().install_path();
+    let mut candidate_paths = requirements
+        .iter()
+        .filter_map(|requirement| {
+            let RequirementSource::Directory { install_path, .. } = &requirement.source else {
+                return None;
+            };
+            let absolute_path = if install_path.is_absolute() {
+                Cow::Borrowed(install_path.as_ref())
+            } else {
+                Cow::Owned(project.root().join(install_path))
+            };
+            (explicit_workspace || absolute_path.starts_with(workspace_root))
+                .then_some(absolute_path)
+        })
+        .peekable();
+
+    if !explicit_workspace && candidate_paths.peek().is_none() {
+        return Ok(None);
+    }
+
+    let mut toml = PyProjectTomlMut::from_toml(
+        &project.workspace().pyproject_toml().raw,
+        DependencyTarget::PyProjectToml,
+    )?;
+    let mut modified = false;
+    for absolute_path in candidate_paths {
+        if project.workspace().includes(&absolute_path)? {
+            continue;
+        }
+
+        let relative_path = absolute_path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&absolute_path);
+        toml.add_workspace(relative_path)?;
+        modified = true;
+        writeln!(
+            printer.stderr(),
+            "Added `{}` to workspace members",
+            relative_path.user_display().cyan()
+        )?;
+    }
+    if !modified {
+        return Ok(None);
+    }
+
+    let workspace_content = toml.to_string();
+    fs_err::write(workspace_root.join("pyproject.toml"), &workspace_content)?;
+    Ok(Some(
+        VirtualProject::discover(
+            project.root(),
+            &DiscoveryOptions::default(),
+            cache,
+            &WorkspaceCache::default(),
+        )
+        .await?,
+    ))
+}
+
 fn standard_library_package(
     operation_error: &ResolveError,
     edits: &[DependencyEdit],
     python_minor: u8,
 ) -> Option<PackageName> {
     let no_solution_error = operation_error.as_no_solution()?;
+    let mut implicated_packages = None;
 
-    edits.iter().find_map(|edit| {
-        if edit
-            .source
-            .as_ref()
-            .is_none_or(|source| matches!(source, Source::Registry { .. }))
-            && is_known_standard_library_package(python_minor, edit.requirement.name.as_ref())
-            && no_solution_error
-                .packages()
-                .any(|package| package == &edit.requirement.name)
-        {
-            Some(edit.requirement.name.clone())
-        } else {
-            None
-        }
-    })
+    edits
+        .iter()
+        .find(|edit| {
+            edit.source
+                .as_ref()
+                .is_none_or(|source| matches!(source, Source::Registry { .. }))
+                && is_known_standard_library_package(python_minor, edit.requirement.name.as_ref())
+                && implicated_packages
+                    .get_or_insert_with(|| no_solution_error.packages().collect::<FxHashSet<_>>())
+                    .contains(&edit.requirement.name)
+        })
+        .map(|edit| edit.requirement.name.clone())
 }
 
 fn edits(
@@ -889,51 +854,52 @@ fn edits(
     index: Option<&IndexName>,
     toml: &mut PyProjectTomlMut,
 ) -> Result<Vec<DependencyEdit>> {
-    let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
-    for mut requirement in requirements {
-        let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
+    if requirements.is_empty() {
+        return Ok(Vec::new());
+    }
 
-        // Add the specified extras.
-        let mut ex = requirement.extras.to_vec();
-        ex.extend(extras.iter().cloned());
-        ex.sort_unstable();
-        ex.dedup();
-        requirement.extras = ex.into_boxed_slice();
-
-        let (requirement, source) = match target {
-            EditTarget::Script(_) | EditTarget::Project(_) if raw => {
-                (uv_pep508::Requirement::from(requirement), None)
-            }
+    let script_path;
+    let source_context = if raw {
+        None
+    } else {
+        Some(match target {
             EditTarget::Script(script) => {
-                let script_path = std::path::absolute(&script.path)?;
-                let script_dir = script_path.parent().expect("script path has no parent");
-
-                let existing_sources = Some(script.sources());
-                resolve_requirement(
-                    requirement,
-                    false,
-                    editable,
-                    index.cloned(),
-                    rev.map(ToString::to_string),
-                    tag.map(ToString::to_string),
-                    branch.map(ToString::to_string),
-                    lfs,
-                    script_dir,
-                    existing_sources,
-                )?
+                script_path = std::path::absolute(&script.path)?;
+                (
+                    script_path.parent().expect("script path has no parent"),
+                    Some(script.sources()),
+                    None,
+                )
             }
-            EditTarget::Project(project) => {
-                let existing_sources = project
+            EditTarget::Project(project) => (
+                project.root(),
+                project
                     .pyproject_toml()
                     .tool
                     .as_ref()
                     .and_then(|tool| tool.uv.as_ref())
                     .and_then(|uv| uv.sources.as_ref())
-                    .map(ToolUvSources::inner);
-                let is_workspace_member = project
-                    .workspace()
-                    .packages()
-                    .contains_key(&requirement.name);
+                    .map(ToolUvSources::inner),
+                Some(project.workspace()),
+            ),
+        })
+    };
+
+    let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
+    for mut requirement in requirements {
+        let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
+
+        // Add the specified extras.
+        let mut merged_extras = requirement.extras.into_vec();
+        merged_extras.extend(extras.iter().cloned());
+        merged_extras.sort_unstable();
+        merged_extras.dedup();
+        requirement.extras = merged_extras.into_boxed_slice();
+
+        let (requirement, mut source) =
+            if let Some((root, existing_sources, workspace)) = source_context {
+                let is_workspace_member = workspace
+                    .is_some_and(|workspace| workspace.packages().contains_key(&requirement.name));
                 resolve_requirement(
                     requirement,
                     is_workspace_member,
@@ -943,90 +909,53 @@ fn edits(
                     tag.map(ToString::to_string),
                     branch.map(ToString::to_string),
                     lfs,
-                    project.root(),
+                    root,
                     existing_sources,
                 )?
-            }
-        };
+            } else {
+                (uv_pep508::Requirement::from(requirement), None)
+            };
 
         // Remove any credentials. By default, we avoid writing sensitive credentials to files that
         // will be checked into version control (e.g., `pyproject.toml` and `uv.lock`). Instead,
         // we store the credentials in a global store, and reuse them during resolution. The
         // expectation is that subsequent resolutions steps will succeed by reading from (e.g.) the
         // user's credentials store, rather than by reading from the `pyproject.toml` file.
-        let source = match source {
-            Some(Source::Git {
-                mut git,
-                subdirectory,
-                path,
-                rev,
-                tag,
-                branch,
-                lfs,
-                marker,
-                extra,
-                group,
-            }) => {
-                let credentials = uv_auth::Credentials::from_url(&git)?;
-                if let Some(credentials) = credentials {
-                    debug!("Caching credentials for: {git}");
-                    store_credentials(RepositoryUrl::new(git.clone()), credentials);
+        if let Some(Source::Git { git, .. }) = &mut source
+            && let Some(credentials) = uv_auth::Credentials::from_url(git)?
+        {
+            debug!("Caching credentials for: {git}");
+            store_credentials(RepositoryUrl::new(git.clone()), credentials);
 
-                    // Redact the credentials.
-                    git.remove_credentials();
-                }
-                Some(Source::Git {
-                    git,
-                    subdirectory,
-                    path,
-                    rev,
-                    tag,
-                    branch,
-                    lfs,
-                    marker,
-                    extra,
-                    group,
-                })
-            }
-            _ => source,
-        };
+            // Redact the credentials.
+            git.remove_credentials();
+        }
 
         // Determine the dependency type.
-        let dependency_type = match &dependency_type {
-            DependencyType::Dev => {
-                let existing = toml.find_dependency(&requirement.name, None);
-                if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)) {
-                    // If the dependency already exists in `dependency-groups.dev`, use that.
-                    DependencyType::Group(DEV_DEPENDENCIES.clone())
-                } else if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Dev)) {
-                    // If the dependency already exists in `dev-dependencies`, use that.
-                    DependencyType::Dev
-                } else {
-                    // Otherwise, use `dependency-groups.dev`, unless it would introduce a separate table.
-                    match (toml.has_dev_dependencies(), toml.has_dependency_group(&DEV_DEPENDENCIES)) {
-                        (true, false) => DependencyType::Dev,
-                        (false, true) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                        (true, true) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                        (false, false) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                    }
-                }
+        let dependency_type = match dependency_type {
+            DependencyType::Group(group) if group != &*DEV_DEPENDENCIES => {
+                DependencyType::Group(group.clone())
             }
-            DependencyType::Group(group) if group == &*DEV_DEPENDENCIES => {
+            DependencyType::Dev | DependencyType::Group(_) => {
                 let existing = toml.find_dependency(&requirement.name, None);
-                if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)) {
-                    // If the dependency already exists in `dependency-groups.dev`, use that.
-                    DependencyType::Group(DEV_DEPENDENCIES.clone())
-                } else if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Dev)) {
-                    // If the dependency already exists in `dev-dependencies`, use that.
+
+                // Prefer the dev group when the dependency exists in both places. For a new
+                // dependency, `--dev` reuses the legacy table if there is no dev group.
+                let use_legacy = !existing.iter().any(|existing| {
+                    matches!(existing, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)
+                }) && (existing.contains(&DependencyType::Dev)
+                    || (matches!(dependency_type, DependencyType::Dev)
+                        && toml.has_dev_dependencies()
+                        && !toml.has_dependency_group(&DEV_DEPENDENCIES)));
+
+                if use_legacy {
                     DependencyType::Dev
                 } else {
-                    // Otherwise, use `dependency-groups.dev`.
                     DependencyType::Group(DEV_DEPENDENCIES.clone())
                 }
             }
             DependencyType::Production => DependencyType::Production,
             DependencyType::Optional(extra) => DependencyType::Optional(extra.clone()),
-            DependencyType::Group(group) => DependencyType::Group(group.clone()),
         };
 
         // Update the `pyproject.toml`.
@@ -1048,12 +977,7 @@ fn edits(
             for edit in &mut edits {
                 if edit.dependency_type == dependency_type {
                     match &mut edit.edit {
-                        ArrayEdit::Add(existing) => {
-                            if *existing >= *index {
-                                *existing += 1;
-                            }
-                        }
-                        ArrayEdit::Update(existing) => {
+                        ArrayEdit::Add(existing) | ArrayEdit::Update(existing) => {
                             if *existing >= *index {
                                 *existing += 1;
                             }
@@ -1126,15 +1050,10 @@ async fn lock_and_sync(
         }
         EditTarget::Script(..) => BTreeSet::new(),
     };
+    let mode = LockMode::from_settings(python_target.interpreter(), lock_check, dry_run);
     let mut lock = Box::pin(
         LockOperation::new(
-            if let LockCheck::Enabled(lock_check) = lock_check {
-                LockMode::Locked(python_target.interpreter(), lock_check)
-            } else if dry_run {
-                LockMode::DryRun(python_target.interpreter())
-            } else {
-                LockMode::Write(python_target.interpreter())
-            },
+            mode,
             &settings.resolver,
             client_builder,
             &lock_state,
@@ -1154,26 +1073,6 @@ async fn lock_and_sync(
 
     // Avoid modifying the user request further if `--raw-sources` is set.
     if !raw {
-        // Extract the minimum-supported version for each dependency.
-        let mut minimum_version =
-            FxHashMap::with_capacity_and_hasher(lock.packages().len(), FxBuildHasher);
-        for dist in lock.packages() {
-            let name = dist.name();
-            let Some(version) = dist.version() else {
-                continue;
-            };
-            match minimum_version.entry(name) {
-                Entry::Vacant(entry) => {
-                    entry.insert(version);
-                }
-                Entry::Occupied(mut entry) => {
-                    if version < *entry.get() {
-                        entry.insert(version);
-                    }
-                }
-            }
-        }
-
         // If any of the requirements were added without version specifiers, add a lower bound.
         let mut modified = false;
         for edit in edits {
@@ -1211,13 +1110,18 @@ async fn lock_and_sync(
             }
 
             // Set the minimum version.
-            let Some(minimum) = minimum_version.get(&edit.requirement.name) else {
+            let Some(minimum) = lock
+                .packages_for_name(&edit.requirement.name)
+                .iter()
+                .filter_map(|package| package.version())
+                .min()
+            else {
                 continue;
             };
 
             // Drop the local version identifier, which isn't permitted in `>=` constraints.
             // For example, convert `1.2.3+local` to `1.2.3`.
-            let minimum = (*minimum).clone().without_local();
+            let minimum = minimum.clone().without_local();
 
             toml.set_dependency_bound(
                 &edit.dependency_type,
@@ -1238,8 +1142,7 @@ async fn lock_and_sync(
             // Write the updated `pyproject.toml` to disk.
             target.write(&content)?;
 
-            // Update the `pypackage.toml` in-memory.
-            target = target.update(&content, &WorkspaceCache::default())?;
+            target = target.update(content, &WorkspaceCache::default())?;
 
             // Invalidate any cached project metadata. Reusing a metadata-free lock may not
             // populate the in-memory index.
@@ -1258,13 +1161,7 @@ async fn lock_and_sync(
             // the addition of the minimum version specifiers.
             lock = Box::pin(
                 LockOperation::new(
-                    if let LockCheck::Enabled(lock_check) = lock_check {
-                        LockMode::Locked(python_target.interpreter(), lock_check)
-                    } else if dry_run {
-                        LockMode::DryRun(python_target.interpreter())
-                    } else {
-                        LockMode::Write(python_target.interpreter())
-                    },
+                    mode,
                     &settings.resolver,
                     client_builder,
                     &lock_state,
