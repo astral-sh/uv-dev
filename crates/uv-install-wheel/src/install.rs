@@ -88,8 +88,8 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     trace!(?name, "Extracted wheel files");
 
     // Read the RECORD file.
-    let mut record_file = File::open(dist_info_file(wheel, &dist_info_prefix, "RECORD"))?;
-    let mut record = read_record(&mut record_file)?;
+    let record_file = File::open(dist_info_file(wheel, &dist_info_prefix, "RECORD"))?;
+    let mut record = read_record(record_file)?;
 
     let (console_scripts, gui_scripts) =
         parse_scripts(wheel, &dist_info_prefix, layout.python_version.1)?;
