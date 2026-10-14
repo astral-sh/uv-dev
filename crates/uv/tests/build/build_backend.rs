@@ -265,13 +265,14 @@ fn preserve_executable_bit() -> Result<()> {
                 member = archive.getmember(
                     "preserve_executable_bit-0.1.0/scripts/greet.sh"
                 )
-                assert "path" in member.pax_headers
                 print(f"{member.name}: {member.mode:o}")
+                print(f"PAX path: {member.pax_headers['path']}")
         "#})
         .arg(context.temp_dir.path().join("preserve_executable_bit-0.1.0.tar.gz")), @"
     exit_code: 0 (success)
     ----- stdout -----
     preserve_executable_bit-0.1.0/scripts/greet.sh: 755
+    PAX path: preserve_executable_bit-0.1.0/scripts/greet.sh
     ");
 
     context
