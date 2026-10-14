@@ -884,11 +884,10 @@ fn write_json_recorded(
     write_file_recorded(site_packages, relative_path, content, record)
 }
 
-/// Adds `INSTALLER`, `REQUESTED` and `direct_url.json` to the .dist-info dir
+/// Write `REQUESTED` and any available installer metadata to `.dist-info`.
 pub(crate) fn write_installer_metadata<Cache: serde::Serialize, Build: serde::Serialize>(
     site_packages: &Path,
     dist_info_prefix: &str,
-    requested: bool,
     direct_url: Option<&DirectUrl>,
     cache_info: Option<&Cache>,
     build_info: Option<&Build>,
@@ -896,9 +895,7 @@ pub(crate) fn write_installer_metadata<Cache: serde::Serialize, Build: serde::Se
     record: &mut Vec<RecordEntry>,
 ) -> Result<(), Error> {
     let dist_info_dir = PathBuf::from(format!("{dist_info_prefix}.dist-info"));
-    if requested {
-        write_file_recorded(site_packages, &dist_info_dir.join("REQUESTED"), "", record)?;
-    }
+    write_file_recorded(site_packages, &dist_info_dir.join("REQUESTED"), "", record)?;
     if let Some(direct_url) = direct_url {
         write_json_recorded(
             site_packages,
@@ -1532,7 +1529,6 @@ mod test {
         write_installer_metadata::<(), ()>(
             site_packages,
             "foo-0.1.0",
-            true,
             None,
             None,
             None,

@@ -151,7 +151,6 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         write_installer_metadata(
             site_packages,
             &dist_info_prefix,
-            true,
             direct_url,
             cache_info,
             build_info,
