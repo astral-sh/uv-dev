@@ -246,12 +246,15 @@ fn assert_effective_cache_directory(command: &Command) {
         return;
     }
 
-    let explicit_cache_directory = command.get_args().any(|argument| {
-        argument == "--cache-dir"
-            || argument
-                .to_str()
-                .is_some_and(|argument| argument.starts_with("--cache-dir="))
-    });
+    let explicit_cache_directory = command
+        .get_args()
+        .take_while(|argument| *argument != "--")
+        .any(|argument| {
+            argument == "--cache-dir"
+                || argument
+                    .to_str()
+                    .is_some_and(|argument| argument.starts_with("--cache-dir="))
+        });
 
     assert!(
         !explicit_cache_directory,
@@ -470,6 +473,16 @@ mod cache_directory_tests {
         command
             .arg("cache")
             .arg("dir")
+            .env(EnvVars::UV_CACHE_DIR, "effective-cache");
+
+        assert_effective_cache_directory(&command);
+    }
+
+    #[test]
+    fn allows_cache_argument_forwarded_to_child() {
+        let mut command = Command::new("uv");
+        command
+            .args(["run", "--", "child", "--cache-dir=child-cache"])
             .env(EnvVars::UV_CACHE_DIR, "effective-cache");
 
         assert_effective_cache_directory(&command);
