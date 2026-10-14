@@ -5,6 +5,39 @@ use assert_fs::prelude::{PathChild, PathCreateDir};
 use uv_test::{assert_path_missing, uv_snapshot};
 
 #[test]
+fn python_find_rejects_unsupported_minor() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.python_find().arg("3.5"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid version request: Python <3.6 is not supported but 3.5 was requested.
+    ");
+}
+
+#[test]
+fn python_list_rejects_unsupported_patch() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.python_list().arg("2.6.8"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid version request: Python <3.6 is not supported but 2.6.8 was requested.
+    ");
+}
+
+#[test]
+fn python_find_rejects_unsupported_freethreading() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.python_find().arg("3.12t"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid version request: Python <3.13 does not support free-threading but 3.12+freethreaded was requested.
+    ");
+}
+
+#[test]
 fn python_install_invalid_request() {
     let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
 
