@@ -801,15 +801,11 @@ impl InternerGuard<'_> {
         // This has the effect of producing a marker that is only
         // applicable in a context where the Python lower/upper bounds
         // are known to be satisfied.
-        let &(ref first_range, first_node_id) = new.first().unwrap();
-        let first_upper = first_range.bounding_range().unwrap().1;
-        let clipped = Ranges::from_range_bounds((Bound::Unbounded, first_upper.cloned()));
-        *new.first_mut().unwrap() = (clipped, first_node_id);
+        let (first_range, _) = new.first_mut().unwrap();
+        replace_lower_bound(first_range, Bound::Unbounded);
 
-        let &(ref last_range, last_node_id) = new.last().unwrap();
-        let last_lower = last_range.bounding_range().unwrap().0;
-        let clipped = Ranges::from_range_bounds((last_lower.cloned(), Bound::Unbounded));
-        *new.last_mut().unwrap() = (clipped, last_node_id);
+        let (last_range, _) = new.last_mut().unwrap();
+        replace_upper_bound(last_range, Bound::Unbounded);
 
         self.create_node(node.var.clone(), Edges::Version { edges: new })
             .negate(i)
@@ -887,38 +883,32 @@ impl InternerGuard<'_> {
         // parent is negated.
         let exclude_node_id = NodeId::FALSE.negate(i);
         if !matches!(py_lower, Bound::Unbounded) {
-            let &(ref first_range, first_node_id) = new.first().unwrap();
-            let first_upper = first_range.bounding_range().unwrap().1;
+            let (first_range, first_node_id) = new.first_mut().unwrap();
             // When the first range is always false, then we can just
             // "expand" it out to negative infinity to reflect that
             // anything less than our lower bound should evaluate to
             // false. If we don't do this, then we could have two
             // adjacent ranges map to the same node, which would not be
             // a canonical representation.
-            if exclude_node_id == first_node_id {
-                let clipped = Ranges::from_range_bounds((Bound::Unbounded, first_upper.cloned()));
-                *new.first_mut().unwrap() = (clipped, first_node_id);
+            if exclude_node_id == *first_node_id {
+                replace_lower_bound(first_range, Bound::Unbounded);
             } else {
-                let clipped = Ranges::from_range_bounds((py_lower.cloned(), first_upper.cloned()));
-                *new.first_mut().unwrap() = (clipped, first_node_id);
+                replace_lower_bound(first_range, py_lower.cloned());
 
                 let py_range_lower =
                     Ranges::from_range_bounds((py_lower.cloned(), Bound::Unbounded));
-                new.insert(0, (py_range_lower.complement(), NodeId::FALSE.negate(i)));
+                new.insert(0, (py_range_lower.complement(), exclude_node_id));
             }
         }
         if !matches!(py_upper, Bound::Unbounded) {
-            let &(ref last_range, last_node_id) = new.last().unwrap();
-            let last_lower = last_range.bounding_range().unwrap().0;
+            let (last_range, last_node_id) = new.last_mut().unwrap();
             // See lower bound case above for why we do this. The
             // same reasoning applies here: to maintain a canonical
             // representation.
-            if exclude_node_id == last_node_id {
-                let clipped = Ranges::from_range_bounds((last_lower.cloned(), Bound::Unbounded));
-                *new.last_mut().unwrap() = (clipped, last_node_id);
+            if exclude_node_id == *last_node_id {
+                replace_upper_bound(last_range, Bound::Unbounded);
             } else {
-                let clipped = Ranges::from_range_bounds((last_lower.cloned(), py_upper.cloned()));
-                *new.last_mut().unwrap() = (clipped, last_node_id);
+                replace_upper_bound(last_range, py_upper.cloned());
 
                 let py_range_upper =
                     Ranges::from_range_bounds((Bound::Unbounded, py_upper.cloned()));
@@ -1887,6 +1877,18 @@ fn python_version_to_full_version(specifier: VersionSpecifier) -> Result<Version
             }
         })
     }
+}
+
+/// Replaces the lower bound of a non-empty interval.
+fn replace_lower_bound(range: &mut Ranges<Version>, lower: Bound<Version>) {
+    let upper = range.bounding_range().unwrap().1.cloned();
+    *range = Ranges::from_range_bounds((lower, upper));
+}
+
+/// Replaces the upper bound of a non-empty interval.
+fn replace_upper_bound(range: &mut Ranges<Version>, upper: Bound<Version>) {
+    let lower = range.bounding_range().unwrap().0.cloned();
+    *range = Ranges::from_range_bounds((lower, upper));
 }
 
 /// Compares the start of two ranges that are known to be disjoint.
