@@ -111,17 +111,11 @@ pub async fn audit(
     let mut matched_ignores = FxHashSet::default();
 
     for (name, tool) in tools {
-        let tool = match tool {
-            Ok(tool) => tool,
-            Err(error) => {
-                if explicit_tool {
-                    bail!("Tool `{name}` has an invalid receipt: {error}");
-                }
-                warn_user!(
-                    "Ignoring malformed tool `{name}` (run `uv tool uninstall {name}` to remove)"
-                );
-                continue;
-            }
+        let Ok(tool) = tool else {
+            warn_user!(
+                "Ignoring malformed tool `{name}` (run `uv tool uninstall {name}` to remove)"
+            );
+            continue;
         };
 
         let root = installed_tools.tool_dir(&name);
