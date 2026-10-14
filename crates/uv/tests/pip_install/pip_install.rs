@@ -7131,12 +7131,30 @@ fn utf8_to_utf16_with_bom_be(s: &str) -> Vec<u8> {
     u8s
 }
 
+/// Read installed distributions independently of uv's dry-run plan.
+fn installed_distributions(context: &TestContext) -> String {
+    let output = context
+        .assert_command(indoc! {r"
+            import importlib.metadata
+
+            distributions = [
+                (distribution.metadata['Name'], distribution.version)
+                for distribution in importlib.metadata.distributions()
+            ]
+            print(sorted(distributions))
+        "})
+        .success();
+    String::from_utf8(output.get_output().stdout.clone())
+        .expect("installed distribution metadata should be UTF-8")
+}
+
 #[test]
 fn dry_run_install() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("httpx==0.25.1")?;
 
+    let before = installed_distributions(&context);
     uv_snapshot!(context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -7156,6 +7174,7 @@ fn dry_run_install() -> std::result::Result<(), Box<dyn std::error::Error>> {
      + sniffio==1.3.1
     "
     );
+    assert_eq!(installed_distributions(&context), before);
 
     Ok(())
 }
@@ -7224,6 +7243,7 @@ fn dry_run_install_url_dependency() -> std::result::Result<(), Box<dyn std::erro
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("anyio @ https://files.pythonhosted.org/packages/2d/b8/7333d87d5f03247215d86a86362fd3e324111788c6cdd8d2e6196a6ba833/anyio-4.2.0.tar.gz")?;
 
+    let before = installed_distributions(&context);
     uv_snapshot!(context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -7239,6 +7259,7 @@ fn dry_run_install_url_dependency() -> std::result::Result<(), Box<dyn std::erro
      + sniffio==1.3.1
     "
     );
+    assert_eq!(installed_distributions(&context), before);
 
     Ok(())
 }
@@ -7267,6 +7288,7 @@ fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::er
 
     // Then switch to a registry dependency
     requirements_txt.write_str("anyio")?;
+    let before = installed_distributions(&context);
     uv_snapshot!(context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -7284,6 +7306,7 @@ fn dry_run_uninstall_url_dependency() -> std::result::Result<(), Box<dyn std::er
      + anyio==4.3.0
     "
     );
+    assert_eq!(installed_distributions(&context), before);
 
     Ok(())
 }
@@ -7354,8 +7377,9 @@ fn dry_run_install_transitive_dependency_already_installed()
     "
     );
 
-    // Install it httpx with dry run enabled
+    // Plan the installation of httpx while retaining the installed dependency.
     requirements_txt.write_str("httpx==0.25.1")?;
+    let before = installed_distributions(&context);
     uv_snapshot!(context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -7372,6 +7396,7 @@ fn dry_run_install_transitive_dependency_already_installed()
      + sniffio==1.3.1
     "
     );
+    assert_eq!(installed_distributions(&context), before);
 
     Ok(())
 }
@@ -7404,6 +7429,7 @@ fn dry_run_install_then_upgrade() -> std::result::Result<(), Box<dyn std::error:
 
     // Bump the version and install with dry run enabled
     requirements_txt.write_str("httpx==0.25.1")?;
+    let before = installed_distributions(&context);
     uv_snapshot!(context.pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -7418,6 +7444,7 @@ fn dry_run_install_then_upgrade() -> std::result::Result<(), Box<dyn std::error:
      + httpx==0.25.1
     "
     );
+    assert_eq!(installed_distributions(&context), before);
 
     Ok(())
 }
