@@ -512,6 +512,11 @@ fn list_editable_only() {
     sniffio 1.3.1
     "
     );
+}
+
+#[test]
+fn list_conflicting_editable_filters() {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.filters(), context.pip_list()
         .arg("--editable")
