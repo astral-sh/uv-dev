@@ -423,12 +423,14 @@ fn build_backend_path_with_newline() -> Result<()> {
                 return filename
         "#})?;
 
-    context
-        .build()
+    uv_snapshot!(context.filters(), context.build()
         .arg("--wheel")
-        .arg(project.path())
-        .assert()
-        .success();
+        .arg(project.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built project/dist/project-0.1.0-py3-none-any.whl
+    ");
     project
         .child("dist/project-0.1.0-py3-none-any.whl")
         .assert(predicate::path::is_file());
