@@ -1809,7 +1809,7 @@ fn workspace_metadata_module_owners_use_installed_package_id() -> Result<()> {
     write_wheel(
         module_owner_311.path(),
         "module-owner",
-        &[("shared.py", "")],
+        &[("shared.py", "SOURCE = 'py311'\n")],
     )?;
 
     let py312_dir = context.temp_dir.child("py312");
@@ -1818,7 +1818,7 @@ fn workspace_metadata_module_owners_use_installed_package_id() -> Result<()> {
     write_wheel(
         module_owner_312.path(),
         "module-owner",
-        &[("shared.py", "")],
+        &[("shared.py", "SOURCE = 'py312'\n")],
     )?;
 
     let module_owner_311_url = SafeUrl::from_file_path(module_owner_311.path())
@@ -1848,6 +1848,10 @@ dependencies = [
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     let module_owners = serde_json::to_string_pretty(&metadata["modules"])?;
+    context
+        .assert_command("import shared; print(shared.SOURCE, end='')")
+        .success()
+        .stdout("py312");
 
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_snapshot!(module_owners, @r#"
