@@ -1,12 +1,14 @@
 #[cfg(windows)]
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
+use std::process::Command;
 #[cfg(unix)]
 use std::{
     io::Read,
     os::unix::fs::{MetadataExt, PermissionsExt},
 };
 
-use std::{env, path::Path, process::Command};
+use std::{env, path::Path};
 
 use anyhow::Context;
 use assert_cmd::assert::OutputAssertExt;
@@ -1929,7 +1931,7 @@ fn python_install_relative_unmanaged_link() -> anyhow::Result<()> {
       cause: Executable already exists at `[BIN]/python3.13` but is not managed by uv; use `--force` to replace it
     ");
     assert_link_target(&bin_python, "unmanaged-python");
-    uv_snapshot!(context.filters(), Command::new(bin_python.path())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.path())
         .args(["-I", "-c", "import sys; print('.'.join(map(str, sys.version_info[:2])))"]), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -1950,7 +1952,7 @@ fn python_install_relative_unmanaged_link() -> anyhow::Result<()> {
             canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13"
         );
     });
-    uv_snapshot!(context.filters(), Command::new(bin_python.path())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.path())
         .args(["-I", "-c", "import sys; print(sys.version.split()[0])"]), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -1999,7 +2001,7 @@ fn python_install_relative_broken_link() -> anyhow::Result<()> {
             canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.13.1-[PLATFORM]/bin/python3.13"
         );
     });
-    uv_snapshot!(context.filters(), Command::new(bin_python.path())
+    uv_snapshot!(context.filters(), context.external_command(bin_python.path())
         .args(["-I", "-c", "import sys; print(sys.version.split()[0])"]), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -2146,7 +2148,7 @@ fn python_install_patch_dylib() {
             std::env::consts::DLL_SUFFIX
         ));
 
-    let mut cmd = std::process::Command::new("otool");
+    let mut cmd = Command::new("otool");
     cmd.arg("-D").arg(dylib.as_ref());
 
     uv_snapshot!(context.filters(), cmd, @r###"
