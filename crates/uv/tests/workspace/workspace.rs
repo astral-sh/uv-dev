@@ -13,6 +13,18 @@ use serde::{Deserialize, Serialize};
 
 use uv_test::{copy_dir_ignore, make_project, uv_snapshot};
 
+#[cfg(feature = "test-pypi")]
+fn assert_workspace_installation(root: &std::path::Path, script: &std::path::Path) {
+    let python = uv_test::venv_bin_path(root.join(".venv"))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    std::process::Command::new(python)
+        .arg("-I")
+        .arg(script)
+        .assert()
+        .success()
+        .stdout("Success\n");
+}
+
 #[test]
 #[cfg(feature = "test-pypi")]
 fn test_albatross_in_examples_bird_feeder() {
@@ -44,7 +56,8 @@ fn test_albatross_in_examples_bird_feeder() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    let check_script = current_dir.join("check_installed_bird_feeder.py");
+    assert_workspace_installation(&current_dir, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -53,7 +66,7 @@ fn test_albatross_in_examples_bird_feeder() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    assert_workspace_installation(&current_dir, &check_script);
 }
 
 #[test]
@@ -84,7 +97,8 @@ fn test_albatross_in_examples() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    let check_script = current_dir.join("check_installed_albatross.py");
+    assert_workspace_installation(&current_dir, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -93,7 +107,7 @@ fn test_albatross_in_examples() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    assert_workspace_installation(&current_dir, &check_script);
 }
 
 #[test]
@@ -124,7 +138,8 @@ fn test_albatross_just_project() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    let check_script = current_dir.join("check_installed_albatross.py");
+    assert_workspace_installation(&current_dir, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -133,7 +148,7 @@ fn test_albatross_just_project() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    assert_workspace_installation(&current_dir, &check_script);
 }
 
 #[test]
@@ -182,7 +197,8 @@ fn test_albatross_project_in_excluded() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    let check_script = current_dir.join("check_installed_bird_feeder.py");
+    assert_workspace_installation(&current_dir, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -191,7 +207,7 @@ fn test_albatross_project_in_excluded() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    assert_workspace_installation(&current_dir, &check_script);
 
     let current_dir = workspace
         .join("albatross-project-in-excluded")
@@ -236,7 +252,8 @@ fn test_albatross_root_workspace() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    let check_script = current_dir.join("check_installed_albatross.py");
+    assert_workspace_installation(&current_dir, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -245,7 +262,7 @@ fn test_albatross_root_workspace() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    assert_workspace_installation(&current_dir, &check_script);
 }
 
 #[test]
@@ -261,10 +278,8 @@ fn test_albatross_root_workspace_bird_feeder() {
     )
     .expect("workspace fixture should be copied");
 
-    let current_dir = workspace
-        .join("albatross-root-workspace")
-        .join("packages")
-        .join("bird-feeder");
+    let root = workspace.join(fixture);
+    let current_dir = root.join("packages").join("bird-feeder");
 
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
@@ -281,7 +296,8 @@ fn test_albatross_root_workspace_bird_feeder() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    let check_script = current_dir.join("check_installed_bird_feeder.py");
+    assert_workspace_installation(&root, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -290,7 +306,7 @@ fn test_albatross_root_workspace_bird_feeder() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    assert_workspace_installation(&root, &check_script);
 }
 
 #[test]
@@ -351,10 +367,8 @@ fn test_albatross_virtual_workspace() {
     )
     .expect("workspace fixture should be copied");
 
-    let current_dir = workspace
-        .join("albatross-virtual-workspace")
-        .join("packages")
-        .join("bird-feeder");
+    let root = workspace.join(fixture);
+    let current_dir = root.join("packages").join("bird-feeder");
 
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
@@ -372,7 +386,8 @@ fn test_albatross_virtual_workspace() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    let check_script = current_dir.join("check_installed_bird_feeder.py");
+    assert_workspace_installation(&root, &check_script);
     uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -381,7 +396,7 @@ fn test_albatross_virtual_workspace() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_bird_feeder.py"));
+    assert_workspace_installation(&root, &check_script);
 }
 
 /// Check that `uv run --package` works in a virtual workspace.
