@@ -492,14 +492,12 @@ fn python_executables_from_search_path<'a>(
     search_dirs
         .into_iter()
         .filter(|dir| dir.is_dir())
-        .flat_map(move |dir| {
-            // Clone the directory for second closure
-            let dir_clone = dir.clone();
+        .filter(move |dir| {
             trace!(
                 "Checking `PATH` directory for interpreters: {}",
                 dir.display()
             );
-            same_file::Handle::from_path(&dir)
+            same_file::Handle::from_path(dir)
                 // Skip directories we've already seen, to avoid inspecting interpreters multiple
                 // times when directories are repeated or symlinked in the `PATH`
                 .map(|handle| seen_dirs.insert(handle))
@@ -510,52 +508,47 @@ fn python_executables_from_search_path<'a>(
                 })
                 // If we cannot determine if the directory is unique, we'll assume it is
                 .unwrap_or(true)
+        })
+        .flat_map(move |dir| {
+            let minor_version_directory = dir.clone();
+            // TODO(zanieb): Consider moving `python.bat` into `possible_names` to avoid a chain
+            let batch_executables = cfg!(windows)
                 .then(|| {
-                    let minor_version_directory = dir_clone.clone();
-
-                    possible_names
-                        .clone()
+                    which::which_in_global("python.bat", Some(&dir))
                         .into_iter()
-                        .flat_map(move |name| {
-                            // Since we're just working with a single directory at a time, we collect to simplify ownership
-                            which::which_in_global(&*name, Some(&dir))
-                                .into_iter()
-                                .flatten()
-                                .filter(|path| !is_windows_store_shim(path))
-                                .map(|path| vec![path])
-                                // We have to collect since `which` requires that the regex outlives its
-                                // parameters, and the dir is local while we return the iterator.
-                                .collect::<Vec<_>>()
-                        })
-                        .chain(
-                            iter::once_with(move || {
-                                find_all_minor(implementation, version, &minor_version_directory)
-                                    .filter(|path| !is_windows_store_shim(path))
-                                    .collect::<Vec<_>>()
-                            })
-                            .filter(|paths| !paths.is_empty()),
-                        )
-                        .inspect(|paths| {
-                            for path in paths {
-                                trace!("Found possible Python executable: {}", path.display());
-                            }
-                        })
-                        .chain(
-                            // TODO(zanieb): Consider moving `python.bat` into `possible_names` to avoid a chain
-                            cfg!(windows)
-                                .then(move || {
-                                    which::which_in_global("python.bat", Some(&dir_clone))
-                                        .into_iter()
-                                        .flatten()
-                                        .map(|path| vec![path])
-                                        .collect::<Vec<_>>()
-                                })
-                                .into_iter()
-                                .flatten(),
-                        )
+                        .flatten()
+                        .map(|path| vec![path])
+                        .collect::<Vec<_>>()
                 })
                 .into_iter()
-                .flatten()
+                .flatten();
+
+            possible_names
+                .clone()
+                .into_iter()
+                .flat_map(move |name| {
+                    which::which_in_global(&*name, Some(&dir))
+                        .into_iter()
+                        .flatten()
+                        .filter(|path| !is_windows_store_shim(path))
+                        .map(|path| vec![path])
+                        // Collect the search results while the iterator can borrow its inputs.
+                        .collect::<Vec<_>>()
+                })
+                .chain(
+                    iter::once_with(move || {
+                        find_all_minor(implementation, version, &minor_version_directory)
+                            .filter(|path| !is_windows_store_shim(path))
+                            .collect::<Vec<_>>()
+                    })
+                    .filter(|paths| !paths.is_empty()),
+                )
+                .inspect(|paths| {
+                    for path in paths {
+                        trace!("Found possible Python executable: {}", path.display());
+                    }
+                })
+                .chain(batch_executables)
         })
 }
 
