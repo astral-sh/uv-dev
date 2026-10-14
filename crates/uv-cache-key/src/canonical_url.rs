@@ -50,28 +50,19 @@ impl CanonicalUrl {
         // Repos can generally be accessed with or without `.git` extension.
         if let Some((prefix, suffix)) = url.path().rsplit_once('@') {
             // Ex) `git+https://github.com/pypa/sample-namespace-packages.git@2.0.0`
-            let needs_chopping = std::path::Path::new(prefix)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("git"));
-            if needs_chopping {
-                let prefix = &prefix[..prefix.len() - 4];
+            if let Some(prefix) = strip_git_suffix(prefix) {
                 let path = format!("{prefix}@{suffix}");
                 url.set_path(&path);
             }
-        } else {
+        } else if let Some(last) = url
+            .path_segments()
+            .expect("URL has a base")
+            .next_back()
+            .and_then(strip_git_suffix)
+            .map(str::to_owned)
+        {
             // Ex) `git+https://github.com/pypa/sample-namespace-packages.git`
-            let needs_chopping = std::path::Path::new(url.path())
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("git"));
-            if needs_chopping {
-                let last = {
-                    // Unwrap safety: We checked `url.cannot_be_a_base()`, and `url.path()` having
-                    // an extension implies at least one segment.
-                    let last = url.path_segments().unwrap().next_back().unwrap();
-                    last[..last.len() - 4].to_owned()
-                };
-                url.path_segments_mut().unwrap().pop().push(&last);
-            }
+            url.path_segments_mut().unwrap().pop().push(&last);
         }
 
         // Decode any percent-encoded characters in the path.
@@ -99,6 +90,14 @@ impl CanonicalUrl {
     pub fn parse(url: &str) -> Result<Self, DisplaySafeUrlError> {
         Ok(Self::new(DisplaySafeUrl::parse(url)?))
     }
+}
+
+/// Remove a Git repository suffix from a path or path segment.
+fn strip_git_suffix(path: &str) -> Option<&str> {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("git"))
+        .then(|| &path[..path.len() - ".git".len()])
 }
 
 impl CacheKey for CanonicalUrl {
@@ -288,6 +287,12 @@ mod tests {
         assert_eq!(
             CanonicalUrl::parse("git+https://github.com/pypa/sample-namespace-packages.git@2.0.0")?,
             CanonicalUrl::parse("git+https://github.com/pypa/sample-namespace-packages@2.0.0")?,
+        );
+
+        // A `.git` suffix on an earlier segment does not belong to the final empty segment.
+        assert_eq!(
+            CanonicalUrl::parse("https://example.com/repo.git//")?.to_string(),
+            "https://example.com/repo.git/",
         );
 
         // Two URLs should be _not_ considered equal if they point to different repositories.
