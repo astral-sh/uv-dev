@@ -621,14 +621,14 @@ fn list_exclude() {
 
 #[test]
 #[cfg(feature = "test-pypi")]
-#[cfg(not(windows))]
-fn list_format_json() {
+fn list_format_json() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let project = context.workspace_root.join("test/packages/poetry_editable");
 
     // Install the editable package.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-e")
-        .arg(context.workspace_root.join("test/packages/poetry_editable")), @"
+        .arg(&project), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
@@ -641,31 +641,47 @@ fn list_format_json() {
     "
     );
 
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=json"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [{"name":"anyio","version":"4.3.0"},{"name":"idna","version":"3.6"},{"name":"poetry-editable","version":"0.1.0","editable_project_location":"[WORKSPACE]/test/packages/poetry_editable"},{"name":"sniffio","version":"1.3.1"}]
-    "#
+    let list = |filters: &[&str]| -> Result<Vec<serde_json::Value>> {
+        let output = context
+            .pip_list()
+            .arg("--format=json")
+            .args(filters)
+            .assert()
+            .success()
+            .stderr("");
+        Ok(serde_json::from_slice(&output.get_output().stdout)?)
+    };
+    let all = list(&[])?;
+    let location = all
+        .get(2)
+        .and_then(|row| row.get("editable_project_location"))
+        .and_then(serde_json::Value::as_str)
+        .expect("missing editable project location");
+    assert_eq!(
+        fs_err::canonicalize(location)?,
+        fs_err::canonicalize(&project)?
     );
 
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=json")
-    .arg("--editable"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [{"name":"poetry-editable","version":"0.1.0","editable_project_location":"[WORKSPACE]/test/packages/poetry_editable"}]
-    "#
+    let anyio = serde_json::json!({"name": "anyio", "version": "4.3.0"});
+    let idna = serde_json::json!({"name": "idna", "version": "3.6"});
+    let editable = serde_json::json!({
+        "name": "poetry-editable",
+        "version": "0.1.0",
+        "editable_project_location": location,
+    });
+    let sniffio = serde_json::json!({"name": "sniffio", "version": "1.3.1"});
+    assert_eq!(
+        all,
+        vec![
+            anyio.clone(),
+            idna.clone(),
+            editable.clone(),
+            sniffio.clone()
+        ]
     );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--format=json")
-    .arg("--exclude-editable"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [{"name":"anyio","version":"4.3.0"},{"name":"idna","version":"3.6"},{"name":"sniffio","version":"1.3.1"}]
-    "#
-    );
+    assert_eq!(list(&["--editable"])?, vec![editable]);
+    assert_eq!(list(&["--exclude-editable"])?, vec![anyio, idna, sniffio]);
+    Ok(())
 }
 
 #[test]
