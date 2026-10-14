@@ -7,6 +7,8 @@
 ))]
 use uv_test::pypi_proxy;
 
+mod index_configuration;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod lock;
 
