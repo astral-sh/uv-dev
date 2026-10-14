@@ -12,6 +12,11 @@ mod python_dir;
 mod python_find;
 
 #[cfg(feature = "test-python-managed")]
+mod python_find_managed;
+
+mod python_find_missing;
+
+#[cfg(feature = "test-python-managed")]
 mod python_install;
 
 mod python_list;
