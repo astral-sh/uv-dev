@@ -100,7 +100,7 @@ pub enum TomlCredentialError {
 }
 
 impl TomlCredentialError {
-    fn from_parse_error(error: toml::de::Error, content: &str) -> Self {
+    fn from_parse_error(error: &toml::de::Error, content: &str) -> Self {
         // Parser diagnostics can contain credential values in both source excerpts and messages.
         let location = error
             .span()
@@ -290,7 +290,7 @@ impl TextCredentialStore {
     fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, TomlCredentialError> {
         let content = fs::read_to_string(path)?;
         let credentials: TomlCredentials<TomlCredential> = toml::from_str(&content)
-            .map_err(|error| TomlCredentialError::from_parse_error(error, &content))?;
+            .map_err(|error| TomlCredentialError::from_parse_error(&error, &content))?;
 
         let credentials: FxHashMap<(Service, Username), Credentials> = credentials
             .credentials
