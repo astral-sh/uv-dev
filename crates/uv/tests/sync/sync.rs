@@ -16275,7 +16275,7 @@ fn sync_does_not_remove_empty_virtual_environment_directory() -> Result<()> {
     let venv_dir = project_dir.child(".venv");
     fs_err::create_dir(&venv_dir)?;
     // Keep the original inode allocated so replacing the directory cannot reuse it.
-    let original = fs_err::File::open(&venv_dir)?;
+    let original = fs_err::File::open(venv_dir.path())?;
 
     context
         .sync()
