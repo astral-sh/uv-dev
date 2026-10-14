@@ -2921,9 +2921,14 @@ mod tests {
     #[tokio::test]
     async fn cancelled_workspace_build_can_be_retried() -> Result<()> {
         let root = tempfile::TempDir::new()?;
-        fs_err::write(
-            root.path().join("pyproject.toml"),
-            "[project]\nname = 'demo'\nversion = '0.1.0'\n",
+        let root = ChildPath::new(root.path());
+
+        root.child("pyproject.toml").write_str(
+            r#"
+            [project]
+            name = "demo"
+            version = "0.1.0"
+            "#,
         )?;
         let workspace_cache = WorkspaceCache::default();
 
