@@ -6,13 +6,13 @@ use std::str::FromStr;
 use uv_fs::normalize_url_path;
 use uv_normalize::ExtraName;
 
-use crate::marker::parse;
 use crate::verbatim_url::strip_host;
 use crate::verbatim_url::were_vars_expanded;
 use crate::{
     Cursor, MarkerEnvironment, MarkerTree, Pep508Error, Pep508ErrorSource, Pep508Url, Reporter,
     RequirementOrigin, Scheme, TracingReporter, VerbatimUrl, VerbatimUrlError, expand_env_vars,
-    fmt_extras, parse_extras_cursor, scan_url, split_extras, split_scheme,
+    fmt_extras, parse_extras_cursor, parse_requirement_suffix, scan_url, split_extras,
+    split_scheme,
 };
 
 /// An extension over [`Pep508Url`] that also supports parsing unnamed requirements, namely paths.
@@ -158,40 +158,12 @@ fn parse_unnamed_requirement<Url: UnnamedRequirementUrl>(
     // Parse the URL itself, along with any extras.
     let (url, extras) = parse_unnamed_url::<Url>(cursor, working_dir)?;
 
-    // wsp*
-    cursor.eat_whitespace();
-    // quoted_marker?
-    let marker = if cursor.peek_char() == Some(';') {
-        // Skip past the semicolon
-        cursor.next();
-        parse::parse_markers_cursor(cursor, reporter)?
-    } else {
-        None
-    };
-    // wsp*
-    cursor.eat_whitespace();
-    if let Some((pos, char)) = cursor.next() {
-        let message = if char == '#' {
-            format!(
-                r"Expected end of input or `;`, found `{char}`; comments must be preceded by a leading space"
-            )
-        } else if marker.is_none() {
-            format!(r"Expected end of input or `;`, found `{char}`")
-        } else {
-            format!(r"Expected end of input, found `{char}`")
-        };
-        return Err(Pep508Error {
-            message: Pep508ErrorSource::String(message),
-            start: pos,
-            len: char.len_utf8(),
-            input: cursor.to_string(),
-        });
-    }
+    let marker = parse_requirement_suffix(cursor, reporter, None)?;
 
     Ok(UnnamedRequirement {
         url,
         extras: extras.into_boxed_slice(),
-        marker: marker.unwrap_or_default(),
+        marker,
         origin: None,
     })
 }
