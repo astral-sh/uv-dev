@@ -2964,37 +2964,40 @@ fn install_extra_index_url_has_priority() {
     context.assert_installed("a", "2.0.0");
 }
 
-/// Ensure that the index is fetched only once when duplicate indices are specified
+/// Duplicate index URLs are fetched once even with a strategy that considers later indexes.
 #[tokio::test]
 async fn install_deduplicated_indices() {
     let context = uv_test::test_context!("3.12");
-
+    let packages = PackseServer::new("simple/single-package.toml");
     let redirect_server = MockServer::start().await;
 
     Mock::given(method("GET"))
+        .and(path("/a/"))
         .respond_with(
-            ResponseTemplate::new(302).insert_header("Location", "https://pypi.org/simple/sniffio"),
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}a/", packages.index_url())),
         )
         .expect(1)
         .mount(&redirect_server)
         .await;
 
+    let duplicated_index = redirect_server.uri();
     uv_snapshot!(context
         .pip_install()
-        .arg("sniffio")  // Use a zero-dependency package
+        .arg("a==1.0.0")
         .arg("--index")
-        .arg(redirect_server.uri())
+        .arg(&duplicated_index)
         .arg("--default-index")
-        .arg(redirect_server.uri())
+        .arg(&duplicated_index)
         .arg("--index-strategy")
-        .arg("unsafe-first-match"),  // Anything but "first-index"
+        .arg("unsafe-first-match"),
         @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + sniffio==1.3.1
+     + a==1.0.0
     ");
 }
 
