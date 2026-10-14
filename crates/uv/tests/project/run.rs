@@ -3238,7 +3238,7 @@ fn run_editable() -> Result<()> {
 #[test]
 fn run_from_directory() -> Result<()> {
     // Default to 3.11 so that the `.python-version` is meaningful.
-    let context = uv_test::test_context_with_versions!(&["3.10", "3.11", "3.12"])
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.10", "3.12"])
         .with_filtered_missing_file_error();
 
     let project_dir = context.temp_dir.child("project");
