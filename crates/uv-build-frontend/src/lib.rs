@@ -1048,35 +1048,24 @@ impl SourceBuild {
             )
             .instrument(span)
             .await?;
-        if !output.status.success() {
-            return Err(Error::from_command_output(
-                format!(
-                    "Call to `{}.build_{}` failed",
-                    self.pep517_backend.backend, self.build_kind
-                ),
-                &output,
-                self.level,
-                self.package_name.as_ref(),
-                self.package_version.as_ref(),
-                self.version_id.as_deref(),
-            ));
+        if output.status.success() {
+            let distribution_filename = fs::read_to_string(&outfile)?;
+            if output_dir.join(&distribution_filename).is_file() {
+                return Ok(distribution_filename);
+            }
         }
 
-        let distribution_filename = fs::read_to_string(&outfile)?;
-        if !output_dir.join(&distribution_filename).is_file() {
-            return Err(Error::from_command_output(
-                format!(
-                    "Call to `{}.build_{}` failed",
-                    self.pep517_backend.backend, self.build_kind
-                ),
-                &output,
-                self.level,
-                self.package_name.as_ref(),
-                self.package_version.as_ref(),
-                self.version_id.as_deref(),
-            ));
-        }
-        Ok(distribution_filename)
+        Err(Error::from_command_output(
+            format!(
+                "Call to `{}.build_{}` failed",
+                self.pep517_backend.backend, self.build_kind
+            ),
+            &output,
+            self.level,
+            self.package_name.as_ref(),
+            self.package_version.as_ref(),
+            self.version_id.as_deref(),
+        ))
     }
 }
 
