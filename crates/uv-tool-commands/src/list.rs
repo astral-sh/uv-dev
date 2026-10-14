@@ -116,52 +116,48 @@ pub async fn list(
 
     // Determine the latest version for each tool when `--outdated` is requested.
     let latest: FxHashMap<PackageName, Version> = if outdated && !valid_tools.is_empty() {
-        let download_concurrency = concurrency.downloads_semaphore.clone();
-
         let reporter = LatestVersionReporter::from(printer).with_length(valid_tools.len() as u64);
 
         // Fetch the latest version for each tool.
         let mut fetches = futures::stream::iter(&valid_tools)
-            .map(|(name, tool, tool_env, _version)| {
-                let client_builder = client_builder.clone();
-                let download_concurrency = download_concurrency.clone();
-                let args = args.clone();
-                let filesystem = filesystem.clone();
-                async move {
-                    let capabilities = IndexCapabilities::default();
-                    let settings = ResolverInstallerSettings::from(args.combine(
-                        ResolverInstallerOptions::from(tool.options().clone()).combine(filesystem),
-                    ));
-                    let interpreter = tool_env.environment().interpreter();
+            .map(async |(name, tool, tool_env, _version)| {
+                let capabilities = IndexCapabilities::default();
+                let settings = ResolverInstallerSettings::from(
+                    args.clone().combine(
+                        ResolverInstallerOptions::from(tool.options().clone())
+                            .combine(filesystem.clone()),
+                    ),
+                );
+                let interpreter = tool_env.environment().interpreter();
 
-                    let client = RegistryClientBuilder::new(
-                        client_builder.keyring(settings.resolver.keyring_provider),
-                        cache.clone().with_refresh(Refresh::All(Timestamp::now())),
-                    )
-                    .index_locations(settings.resolver.index_locations.clone())
-                    .index_strategy(settings.resolver.index_strategy)
-                    .markers(interpreter.markers())
-                    .platform(interpreter.platform())
-                    .build()?;
+                let client = RegistryClientBuilder::new(
+                    client_builder
+                        .clone()
+                        .keyring(settings.resolver.keyring_provider),
+                    cache.clone().with_refresh(Refresh::All(Timestamp::now())),
+                )
+                .index_locations(settings.resolver.index_locations.clone())
+                .index_strategy(settings.resolver.index_strategy)
+                .markers(interpreter.markers())
+                .platform(interpreter.platform())
+                .build()?;
 
-                    let requires_python = RequiresPython::greater_than_equal_version(
-                        interpreter.python_full_version(),
-                    );
-                    let latest_client = LatestClient {
-                        client: &client,
-                        capabilities: &capabilities,
-                        prerelease: &settings.resolver.prerelease,
-                        exclude_newer: &settings.resolver.exclude_newer,
-                        index_locations: &settings.resolver.index_locations,
-                        tags: None,
-                        requires_python: Some(&requires_python),
-                    };
+                let requires_python =
+                    RequiresPython::greater_than_equal_version(interpreter.python_full_version());
+                let latest_client = LatestClient {
+                    client: &client,
+                    capabilities: &capabilities,
+                    prerelease: &settings.resolver.prerelease,
+                    exclude_newer: &settings.resolver.exclude_newer,
+                    index_locations: &settings.resolver.index_locations,
+                    tags: None,
+                    requires_python: Some(&requires_python),
+                };
 
-                    let latest = latest_client
-                        .find_latest(name, None, &download_concurrency)
-                        .await?;
-                    Ok::<(&PackageName, Option<DistFilename>), anyhow::Error>((name, latest))
-                }
+                let latest = latest_client
+                    .find_latest(name, None, &concurrency.downloads_semaphore)
+                    .await?;
+                Ok::<(&PackageName, Option<DistFilename>), anyhow::Error>((name, latest))
             })
             .buffer_unordered(concurrency.downloads);
 
