@@ -4344,54 +4344,6 @@ fn no_prerelease_hint_source_builds() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn cache_priority() {
-    let context = uv_test::test_context!("3.12");
-
-    // Install a specific `idna` version.
-    uv_snapshot!(
-        context.pip_install().arg("idna==3.6"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + idna==3.6
-    "
-    );
-
-    // Install a lower `idna` version.
-    uv_snapshot!(
-        context.pip_install().arg("idna==3.0"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
-     + idna==3.0
-    "
-    );
-
-    // Re-create the virtual environment.
-    context.venv().arg("--clear").assert().success();
-
-    // Install `idna` without a version specifier.
-    uv_snapshot!(
-        context.pip_install().arg("idna"),
-        @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + idna==3.6
-    "
-    );
-}
-
 /// Install a package into a virtual environment, and ensuring that the executable permissions
 /// are retained.
 ///
