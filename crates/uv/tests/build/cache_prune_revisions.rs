@@ -1,8 +1,29 @@
-use anyhow::Result;
+use std::path::PathBuf;
+
+use anyhow::{Context, Result, bail};
 use assert_fs::prelude::*;
 
+use uv_cache::CacheBucket;
 use uv_static::EnvVars;
-use uv_test::uv_snapshot;
+use uv_test::{TestContext, assert_path_missing, uv_snapshot};
+
+fn sole_project_revision(context: &TestContext) -> Result<PathBuf> {
+    let wheels = context
+        .cache_files(CacheBucket::SourceDistributions)?
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name == "project-0.1.0-py3-none-any.whl")
+        })
+        .collect::<Vec<_>>();
+    let [wheel] = wheels.as_slice() else {
+        bail!("expected one cached project wheel, found {wheels:?}");
+    };
+    Ok(wheel
+        .parent()
+        .context("cached wheel has no revision directory")?
+        .to_path_buf())
+}
 
 /// `cache prune` should remove any stale source distribution revisions.
 #[test]
@@ -51,6 +72,7 @@ fn prune_stale_revision() -> Result<()> {
     Installed 1 package in [TIME]
      + project==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    let stale_revision = sole_project_revision(&context)?;
 
     uv_snapshot!(context.filters(), context
         .pip_install()
@@ -64,6 +86,11 @@ fn prune_stale_revision() -> Result<()> {
     Installed 1 package in [TIME]
      ~ project==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    assert!(
+        stale_revision.is_dir(),
+        "first revision disappeared before pruning: {}",
+        stale_revision.display()
+    );
 
     // Pruning should remove the unused revision.
     uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
@@ -79,6 +106,8 @@ fn prune_stale_revision() -> Result<()> {
     DEBUG Removing dangling cache archive: [CACHE_DIR]/archive-v0/[ENTRY]
     Removed [N] files ([SIZE])
     ");
+    assert_ne!(sole_project_revision(&context)?, stale_revision);
+    assert_path_missing(stale_revision);
 
     // Uninstall and reinstall the package. We should use the cached version.
     uv_snapshot!(context.filters(), context
