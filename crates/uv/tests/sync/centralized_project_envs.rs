@@ -294,6 +294,8 @@ fn sync_centralized_env_reuses_symlinked_workspace() -> Result<()> {
         .assert()
         .success();
     let first = fs_err::read_link(project.child(".venv").path())?;
+    let marker = first.join("reuse-marker");
+    fs_err::write(&marker, "original environment")?;
 
     fs_err::remove_file(project.child(".venv").path())?;
     context
@@ -307,6 +309,7 @@ fn sync_centralized_env_reuses_symlinked_workspace() -> Result<()> {
     let second = fs_err::read_link(project.child(".venv").path())?;
 
     assert_eq!(first, second);
+    assert_eq!(fs_err::read_to_string(marker)?, "original environment");
     Ok(())
 }
 
