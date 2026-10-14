@@ -87,20 +87,34 @@ fn freeze_duplicate() -> Result<()> {
 
 /// List a direct URL package in a virtual environment.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn freeze_url() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "freeze-direct-url"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.anyio.versions."4.3.0"]
+        sdist = false
+        requires = ["idna>=2.8", "sniffio>=1.1"]
+        [packages.iniconfig.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {"
+    let iniconfig_url = index.file_url("iniconfig-2.0.0-py3-none-any.whl");
+    requirements_txt.write_str(&formatdoc! {"
         anyio
-        iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
+        iniconfig @ {iniconfig_url}
     "})?;
 
     // Run `pip sync`.
     context
         .pip_sync()
         .arg(requirements_txt.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -110,7 +124,7 @@ fn freeze_url() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     anyio==4.3.0
-    iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
+    iniconfig @ http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl
 
     ----- stderr -----
     warning: The package `anyio` requires `idna>=2.8`, but it's not installed
