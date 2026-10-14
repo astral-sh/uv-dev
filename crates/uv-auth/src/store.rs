@@ -49,7 +49,13 @@ impl AuthBackend {
         username: Option<&str>,
     ) -> Result<Option<Cow<'_, Credentials>>, LookupError> {
         match self {
-            Self::System(provider) => Ok(provider.fetch(url, username).await.map(Cow::Owned)),
+            Self::System(provider) => {
+                let service = url.without_credentials();
+                Ok(provider
+                    .fetch(DisplaySafeUrl::ref_cast(&service), username)
+                    .await
+                    .map(Cow::Owned))
+            }
             Self::TextStore(store, _lock) => {
                 Ok(store.get_credentials(url, username)?.map(Cow::Borrowed))
             }
@@ -410,6 +416,23 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
+
+    #[tokio::test]
+    async fn system_backend_looks_up_credential_free_service() {
+        let backend = AuthBackend::System(KeyringProvider::dummy([(
+            "https://example.com/repository",
+            "user",
+            "stored-password",
+        )]));
+        let url =
+            DisplaySafeUrl::parse("https://user:ignored-password@example.com/repository").unwrap();
+        let credentials = backend
+            .get_credentials(&url, Some("user"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(credentials.password(), Some("stored-password"));
+    }
 
     #[test]
     fn test_toml_serialization() {
