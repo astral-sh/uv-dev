@@ -24,11 +24,9 @@ pub enum Error {
     ),
     #[error(transparent)]
     DirectoryHash(#[from] crate::dirhash::DirhashError),
-    #[error(
-        "The top-level of the archive must only contain a list directory, but it contains: {0:?}"
-    )]
+    #[error("Expected a single top-level directory in the archive, but found: {0:?}")]
     NonSingularArchive(Vec<OsString>),
-    #[error("The top-level of the archive must only contain a list directory, but it's empty")]
+    #[error("Expected a single top-level directory in the archive, but the archive is empty")]
     EmptyArchive,
     #[error("ZIP local header filename at offset {offset} does not use UTF-8 encoding")]
     LocalHeaderNotUtf8 { offset: u64 },
