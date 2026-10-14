@@ -1750,15 +1750,15 @@ fn create_venv_then_allow_existing() {
 #[test]
 #[cfg(windows)]
 fn windows_shims() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.10", "3.9"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
     let shim_path = context.temp_dir.child("shim");
 
-    // Route the shim to 3.9 while the ordinary search path prefers 3.10.
+    // Route the shim to 3.11 while the ordinary search path prefers 3.12.
     let (version, python) = context
         .python_versions
         .last()
-        .expect("Python 3.9 interpreter");
-    assert_eq!(version.to_string(), "3.9");
+        .expect("Python 3.11 interpreter");
+    assert_eq!(version.to_string(), "3.11");
 
     // Pass the executable through the environment so its path retains native encoding.
     let shim_python = "UV_TEST_SHIM_PYTHON";
@@ -1779,13 +1779,13 @@ fn windows_shims() -> Result<()> {
         .env(shim_python, python), @r###"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     "###
     );
 
-    context.venv.assert(predicates::path::is_dir());
+    assert_venv_python_version(&context, "3.11");
 
     Ok(())
 }
