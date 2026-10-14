@@ -557,10 +557,11 @@ async fn upgrade_tool(
         )
         .await?;
 
-        let outcome = if changelog.includes(name) {
-            UpgradeOutcome::UpgradeTool
-        } else if changelog.is_empty() {
+        let mut changed_packages = changelog.added_or_removed_packages().peekable();
+        let outcome = if changed_packages.peek().is_none() {
             UpgradeOutcome::NoOp
+        } else if changed_packages.any(|package| package == name) {
+            UpgradeOutcome::UpgradeTool
         } else {
             UpgradeOutcome::UpgradeDependencies
         };
