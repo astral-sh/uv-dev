@@ -339,10 +339,10 @@ impl ToolLock {
     pub(super) fn from_resolution(
         root: &Path,
         resolution: &ResolverOutput,
-        manifest: &ResolverManifest,
+        manifest: ResolverManifest,
         index_locations: &IndexLocations,
     ) -> anyhow::Result<Self> {
-        let manifest = manifest.clone().relative_to(root)?;
+        let manifest = manifest.relative_to(root)?;
         let lock = Lock::from_resolution(
             resolution,
             manifest,
