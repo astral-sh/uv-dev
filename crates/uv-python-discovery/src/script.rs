@@ -79,33 +79,28 @@ pub async fn init_script_python_requirement(
 /// Returns an error if the [`Interpreter`] does not satisfy the script's `requires-python`.
 fn validate_script_requires_python(
     interpreter: &Interpreter,
-    requires_python: &RequiresPython,
+    requires_python: RequiresPython,
     source: &PythonRequestSource,
 ) -> Result<(), PythonSelectionError> {
     if requires_python.contains(interpreter.python_version()) {
         return Ok(());
     }
-    match source {
+    let version = interpreter.python_version().clone();
+    Err(match source {
         PythonRequestSource::UserRequest => {
-            Err(PythonSelectionError::RequestedPythonScriptIncompatibility(
-                interpreter.python_version().clone(),
-                requires_python.clone(),
-            ))
+            PythonSelectionError::RequestedPythonScriptIncompatibility(version, requires_python)
         }
         PythonRequestSource::DotPythonVersion(file) => {
-            Err(PythonSelectionError::DotPythonVersionScriptIncompatibility(
+            PythonSelectionError::DotPythonVersionScriptIncompatibility(
                 file.file_name().to_string(),
-                interpreter.python_version().clone(),
-                requires_python.clone(),
-            ))
+                version,
+                requires_python,
+            )
         }
         PythonRequestSource::RequiresPython => {
-            Err(PythonSelectionError::RequiresPythonScriptIncompatibility(
-                interpreter.python_version().clone(),
-                requires_python.clone(),
-            ))
+            PythonSelectionError::RequiresPythonScriptIncompatibility(version, requires_python)
         }
-    }
+    })
 }
 
 /// An interpreter suitable for a PEP 723 script.
@@ -273,7 +268,7 @@ impl ScriptInterpreter {
 
         if let Some(requires_python) = requires_python
             && let Err(err) =
-                validate_script_requires_python(&interpreter, &requires_python, &source)
+                validate_script_requires_python(&interpreter, requires_python, &source)
         {
             warn_user!("{err}");
         }
