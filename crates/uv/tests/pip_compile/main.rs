@@ -4,6 +4,8 @@
 use uv_test::pypi_proxy;
 
 #[cfg(feature = "test-python")]
+mod editable;
+#[cfg(feature = "test-python")]
 mod hash_preservation;
 #[cfg(feature = "test-python")]
 mod index_inputs;
