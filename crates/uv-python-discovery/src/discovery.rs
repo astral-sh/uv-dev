@@ -766,42 +766,27 @@ fn source_satisfies_environment_preference(
     interpreter_path: &Path,
     preference: EnvironmentPreference,
 ) -> bool {
-    match preference {
-        EnvironmentPreference::Any => true,
-        EnvironmentPreference::OnlyVirtual => {
-            if source.is_maybe_virtualenv() {
-                true
-            } else {
-                debug!(
-                    "Ignoring Python interpreter at `{}`: only virtual environments allowed",
-                    interpreter_path.display()
-                );
-                false
-            }
-        }
-        EnvironmentPreference::ExplicitSystem => {
-            if source.is_maybe_virtualenv() {
-                true
-            } else {
-                debug!(
-                    "Ignoring Python interpreter at `{}`: system interpreter not explicitly requested",
-                    interpreter_path.display()
-                );
-                false
-            }
-        }
+    let (satisfied, reason) = match preference {
+        EnvironmentPreference::Any => return true,
+        EnvironmentPreference::OnlyVirtual => (
+            source.is_maybe_virtualenv(),
+            "only virtual environments allowed",
+        ),
+        EnvironmentPreference::ExplicitSystem => (
+            source.is_maybe_virtualenv(),
+            "system interpreter not explicitly requested",
+        ),
         EnvironmentPreference::OnlySystem => {
-            if source.is_maybe_system() {
-                true
-            } else {
-                debug!(
-                    "Ignoring Python interpreter at `{}`: system interpreter required",
-                    interpreter_path.display()
-                );
-                false
-            }
+            (source.is_maybe_system(), "system interpreter required")
         }
+    };
+    if !satisfied {
+        debug!(
+            "Ignoring Python interpreter at `{}`: {reason}",
+            interpreter_path.display()
+        );
     }
+    satisfied
 }
 
 /// Check if an encountered error is critical and should stop discovery.
