@@ -1431,14 +1431,12 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         };
 
         // If the file is already unzipped, and the cache is up-to-date, return it.
-        if let Some(archive) = archive {
+        if let Some(archive) = archive
+            && let Some(archive_path) = archive.existing_path(self.build_context.cache())
+        {
             Ok(LocalWheel {
                 dist: Dist::Built(dist.clone()),
-                archive: self
-                    .build_context
-                    .cache()
-                    .archive(&archive.id)
-                    .into_boxed_path(),
+                archive: archive_path.into_boxed_path(),
                 hashes: archive.hashes,
                 filename: filename.clone(),
                 cache: CacheInfo::from_timestamp(modified),
