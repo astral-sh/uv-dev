@@ -43,6 +43,7 @@ use std::str::FromStr;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::instrument;
 use unscanny::{Pattern, Scanner};
+#[cfg(feature = "http")]
 use url::Url;
 
 #[cfg(feature = "http")]
@@ -269,49 +270,46 @@ impl RequirementsTxt {
                         file: Box::new(requirements_txt.clone()),
                         error: RequirementsTxtParserError::Io(err),
                     })?,
+                #[cfg(feature = "http")]
                 RequirementsInput::Remote(url) => {
-                    #[cfg(not(feature = "http"))]
-                    {
+                    // Avoid constructing a client if network is disabled already.
+                    if client_builder.is_offline() {
                         return Err(RequirementsTxtFileError {
                             file: Box::new(requirements_txt.clone()),
                             error: RequirementsTxtParserError::Io(io::Error::new(
                                 io::ErrorKind::InvalidInput,
-                                "Remote file not supported without `http` feature",
+                                format!(
+                                    "Network connectivity is disabled, but a remote requirements file was requested: {url}"
+                                ),
                             )),
                         });
                     }
-
-                    #[cfg(feature = "http")]
-                    {
-                        // Avoid constructing a client if network is disabled already.
-                        if client_builder.is_offline() {
-                            return Err(RequirementsTxtFileError {
+                    let client =
+                        client_builder
+                            .build()
+                            .map_err(|err| RequirementsTxtFileError {
                                 file: Box::new(requirements_txt.clone()),
-                                error: RequirementsTxtParserError::Io(io::Error::new(
-                                    io::ErrorKind::InvalidInput,
-                                    format!(
-                                        "Network connectivity is disabled, but a remote requirements file was requested: {url}"
-                                    ),
-                                )),
-                            });
+                                error: RequirementsTxtParserError::ClientBuild(
+                                    url.clone(),
+                                    Box::new(err),
+                                ),
+                            })?;
+                    read_url_to_string(url, client).await.map_err(|err| {
+                        RequirementsTxtFileError {
+                            file: Box::new(requirements_txt.clone()),
+                            error: err,
                         }
-                        let client =
-                            client_builder
-                                .build()
-                                .map_err(|err| RequirementsTxtFileError {
-                                    file: Box::new(requirements_txt.clone()),
-                                    error: RequirementsTxtParserError::ClientBuild(
-                                        url.clone(),
-                                        Box::new(err),
-                                    ),
-                                })?;
-                        read_url_to_string(url, client).await.map_err(|err| {
-                            RequirementsTxtFileError {
-                                file: Box::new(requirements_txt.clone()),
-                                error: err,
-                            }
-                        })?
-                    }
+                    })?
+                }
+                #[cfg(not(feature = "http"))]
+                RequirementsInput::Remote(_) => {
+                    return Err(RequirementsTxtFileError {
+                        file: Box::new(requirements_txt.clone()),
+                        error: RequirementsTxtParserError::Io(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "Remote file not supported without `http` feature",
+                        )),
+                    });
                 }
             };
             cache.insert(requirements_txt.clone(), content.clone());
