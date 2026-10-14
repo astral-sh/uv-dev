@@ -633,6 +633,11 @@ impl<'lock> InstallTarget<'lock> {
                     return Ok(());
                 }
 
+                let mut requested_extras = extras.explicit_names().peekable();
+                if requested_extras.peek().is_none() {
+                    return Ok(());
+                }
+
                 let roots = self.roots().collect::<FxHashSet<_>>();
                 // Read only the lockfile so frozen installs cannot select newly declared extras.
                 let known_extras = lock
@@ -647,7 +652,7 @@ impl<'lock> InstallTarget<'lock> {
                     })
                     .collect::<FxHashSet<_>>();
 
-                for extra in extras.explicit_names() {
+                for extra in requested_extras {
                     if !known_extras.contains(extra) {
                         return match self {
                             Self::Project { name, .. } => Err(
