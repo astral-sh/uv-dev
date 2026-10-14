@@ -107,18 +107,8 @@ impl GitResolver {
 
     /// Return the [`GitOid`] for the given [`GitUrl`], if it is already known.
     pub fn get_precise(&self, url: &GitUrl) -> Option<GitOid> {
-        // If the URL is already precise, return it.
-        if let Some(precise) = url.precise() {
-            return Some(precise);
-        }
-
-        // If we know the precise commit already, return it.
-        let reference = RepositoryReference::from(url);
-        if let Some(precise) = self.get(&reference) {
-            return Some(precise);
-        }
-
-        None
+        url.precise()
+            .or_else(|| self.get(&RepositoryReference::from(url)))
     }
 
     /// Resolve a Git URL to a specific commit without performing any Git operations.
@@ -158,26 +148,24 @@ impl GitResolver {
             .unwrap_or_else(|| "HEAD".into());
 
         let github_api_base_url = std::env::var(EnvVars::UV_GITHUB_FAST_PATH_URL)
-            .unwrap_or("https://api.github.com/repos".to_owned());
+            .unwrap_or_else(|_| "https://api.github.com/repos".to_owned());
         let github_api_url = format!("{github_api_base_url}/{owner}/{repo}/commits/{reference}");
 
         debug!("Querying GitHub for commit at: {github_api_url}");
-        let mut request = client.get(&github_api_url);
-        request = request.header("Accept", "application/vnd.github.3.sha");
-        request = request.header(
-            "User-Agent",
-            format!("uv/{} (+https://github.com/astral-sh/uv)", version()),
-        );
-
-        let response = request.send().await?;
+        let response = client
+            .get(&github_api_url)
+            .header("Accept", "application/vnd.github.3.sha")
+            .header(
+                "User-Agent",
+                format!("uv/{} (+https://github.com/astral-sh/uv)", version()),
+            )
+            .send()
+            .await?;
         let status = response.status();
         if !status.is_success() {
             // Returns a 404 if the repository does not exist, and a 422 if GitHub is unable to
             // resolve the requested rev.
-            debug!(
-                "GitHub API request failed for: {github_api_url} ({})",
-                response.status()
-            );
+            debug!("GitHub API request failed for: {github_api_url} ({status})");
 
             if is_github_rate_limited(&response) {
                 // Mark that we are being rate-limited by GitHub
@@ -217,35 +205,33 @@ impl GitResolver {
 
         // If we know the precise commit already, reuse it, to ensure that all fetches within a
         // single process are consistent.
-        let url = {
-            if let Some(precise) = self.get(&reference) {
-                Cow::Owned(
-                    url.clone()
-                        .with_precise(precise)
-                        .map_err(|error| GitResolverError::Git(error.into()))?,
-                )
-            } else {
-                Cow::Borrowed(url)
-            }
+        let url = if let Some(precise) = self.get(&reference) {
+            Cow::Owned(
+                url.clone()
+                    .with_precise(precise)
+                    .map_err(|error| GitResolverError::Git(error.into()))?,
+            )
+        } else {
+            Cow::Borrowed(url)
         };
 
         // Avoid races between different processes, too.
         let lock_dir = cache.join("locks");
         fs::create_dir_all(&lock_dir).await?;
-        let repository_url = url.repository().clone();
+        let repository_url = url.repository();
         let _lock = LockedFile::acquire(
-            lock_dir.join(cache_digest(&repository_url)),
+            lock_dir.join(cache_digest(repository_url)),
             LockedFileMode::Exclusive,
-            &repository_url,
+            repository_url,
         )
         .await?;
 
         // Fetch the Git repository.
+        let source = GitSource::new(url.into_owned(), cache, http_settings.offline);
         let source = if let Some(reporter) = reporter {
-            GitSource::new(url.as_ref().clone(), cache, http_settings.offline)
-                .with_reporter(reporter)
+            source.with_reporter(reporter)
         } else {
-            GitSource::new(url.as_ref().clone(), cache, http_settings.offline)
+            source
         };
 
         // If necessary, disable SSL.
