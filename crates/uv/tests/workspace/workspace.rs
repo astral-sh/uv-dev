@@ -10,10 +10,8 @@ use indoc::indoc;
 use insta::assert_json_snapshot;
 #[cfg(feature = "test-universal")]
 use insta::assert_snapshot;
-#[cfg(feature = "test-pypi")]
-use predicates::prelude::PredicateStrExt;
 #[cfg(any(feature = "test-pypi", feature = "test-universal"))]
-use predicates::prelude::predicate;
+use predicates::prelude::{PredicateStrExt, predicate};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "test-pypi")]
@@ -894,11 +892,11 @@ fn workspace_to_workspace_paths_dependencies() -> Result<()> {
         .args([
             "-I",
             "-c",
-            "from importlib.metadata import distributions; print('\\n'.join(sorted(d.metadata['Name'] for d in distributions())))",
+            "from importlib.metadata import distributions; print(sorted(d.metadata['Name'] for d in distributions()))",
         ])
         .assert()
         .success()
-        .stdout("a\nb\nc\nd\n");
+        .stdout(predicate::eq("['a', 'b', 'c', 'd']").trim());
 
     Ok(())
 }
