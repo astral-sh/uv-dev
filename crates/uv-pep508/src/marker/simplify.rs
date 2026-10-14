@@ -386,9 +386,6 @@ where
 /// For negative ranges like `python_full_version < '3.8' or python_full_version >= '3.9'`,
 /// returns `!= '3.8.*'`.
 fn star_range_specifier(range: &Ranges<Version>) -> Option<VersionSpecifier> {
-    if range.iter().count() != 2 {
-        return None;
-    }
     // Check for negative star range: two segments [(Unbounded, Excluded(v1)), (Included(v2), Unbounded)]
     let (b1, b2) = range.iter().collect_tuple()?;
     if let ((Bound::Unbounded, Bound::Excluded(v1)), (Bound::Included(v2), Bound::Unbounded)) =
