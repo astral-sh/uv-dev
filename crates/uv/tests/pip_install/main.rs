@@ -12,6 +12,8 @@ mod cross_device;
 #[cfg(feature = "test-python")]
 mod direct_url_hashes;
 #[cfg(feature = "test-python")]
+mod entrypoints;
+#[cfg(feature = "test-python")]
 mod environment_metadata;
 #[cfg(feature = "test-python")]
 mod exact;
