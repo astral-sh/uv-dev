@@ -19,7 +19,6 @@ mod python_list;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod python_module;
 
-#[cfg(feature = "test-python")]
 mod python_pin;
 
 #[cfg(feature = "test-python-managed")]

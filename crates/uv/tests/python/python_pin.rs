@@ -1,20 +1,23 @@
 #[cfg(unix)]
 use std::fs::Permissions;
+#[cfg(all(unix, feature = "test-python"))]
+use std::os::unix::fs::FileTypeExt;
 #[cfg(unix)]
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(all(unix, feature = "test-python"))]
 use std::os::unix::net::UnixListener;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-python"))]
 use std::path::PathBuf;
 
 use anyhow::Result;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-python"))]
 use assert_fs::fixture::SymlinkToFile;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 #[cfg(unix)]
 use indoc::formatdoc;
 use indoc::indoc;
 use insta::assert_snapshot;
+#[cfg(feature = "test-python")]
 use uv_platform::{Arch, Os};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 use uv_test::{assert_path_missing, uv_snapshot};
@@ -24,7 +27,7 @@ use wiremock::{
 };
 
 /// Pinning through a symlink must not replace a special file at its target.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-python"))]
 #[test]
 fn python_pin_symlink_to_special_file() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
@@ -94,6 +97,7 @@ fn python_pin_warning_chain() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_pin() {
     let context =
         uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_filtered_python_sources();
@@ -252,6 +256,7 @@ async fn python_pin_uses_python_downloads_json_url() {
 }
 
 #[tokio::test]
+#[cfg(feature = "test-python")]
 async fn python_pin_downloads_metadata_once_for_multiple_pins() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
@@ -290,6 +295,7 @@ async fn python_pin_downloads_metadata_once_for_multiple_pins() -> Result<()> {
 
 // If there is no project-level `.python-version` file, respect the global pin.
 #[test]
+#[cfg(feature = "test-python")]
 fn python_pin_global_if_no_local() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
     let uv = context.user_config_dir.child("uv");
@@ -322,6 +328,7 @@ fn python_pin_global_if_no_local() -> Result<()> {
 // If there is a project-level `.python-version` file, it takes precedence over
 // the global pin.
 #[test]
+#[cfg(feature = "test-python")]
 fn python_pin_global_use_local_if_available() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
     let uv = context.user_config_dir.child("uv");
@@ -372,6 +379,7 @@ fn python_pin_global_use_local_if_available() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_pin_global_creates_parent_dirs() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
     let uv_global_config_dir = context.user_config_dir.child("uv");
@@ -407,6 +415,7 @@ fn python_pin_no_python() {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_pin_compatible_with_requires_python() -> Result<()> {
     let context =
         uv_test::test_context_with_versions!(&["3.10", "3.11"]).with_filtered_python_sources();
@@ -555,6 +564,7 @@ fn python_pin_compatible_with_requires_python() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn warning_pinned_python_version_not_installed() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.10", "3.11"]);
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -609,6 +619,7 @@ fn python_pin_resolve_no_python() {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_pin_resolve() {
     let context =
         uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_filtered_python_sources();
