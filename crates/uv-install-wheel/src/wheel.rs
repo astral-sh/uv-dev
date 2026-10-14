@@ -430,7 +430,7 @@ impl WheelFile {
     /// > email message format:
     pub fn parse(wheel_text: &str) -> Result<Self, Error> {
         // {distribution}-{version}.dist-info/WHEEL is metadata about the archive itself in the same email message format:
-        let data = parse_email_message_file(&mut wheel_text.as_bytes(), "WHEEL")?;
+        let data = parse_email_message(wheel_text.as_bytes(), "WHEEL")?;
 
         // mkl_fft-1.3.6-58-cp310-cp310-manylinux2014_x86_64.whl has multiple Wheel-Version entries, we have to ignore that
         // like pip
@@ -1097,17 +1097,14 @@ pub fn validate_and_heal_record<'a>(
     Ok(healed.then(|| PathBuf::from(dist_info_dir).join("RECORD")))
 }
 
-/// Parse a file with email message format such as WHEEL and METADATA
-fn parse_email_message_file(
-    file: impl Read,
+/// Parse metadata in email message format, such as WHEEL and METADATA.
+fn parse_email_message(
+    content: &[u8],
     debug_filename: &str,
 ) -> Result<FxHashMap<String, Vec<String>>, Error> {
     let mut data: FxHashMap<String, Vec<String>> = FxHashMap::default();
 
-    let file = BufReader::new(file);
-    let content = file.bytes().collect::<Result<Vec<u8>, _>>()?;
-
-    let message = Message::parse(&content);
+    let message = Message::parse(content);
     for header in message.headers() {
         let name = header.name().to_owned();
         let mut value = header
@@ -1248,7 +1245,7 @@ mod test {
 
     use super::{
         Error, RecordEntry, Script, WheelFile, find_script_encoding, format_shebang,
-        get_script_executable, parse_email_message_file, parse_scripts, read_record,
+        get_script_executable, parse_email_message, parse_scripts, read_record,
         write_installer_metadata,
     };
 
@@ -1262,7 +1259,7 @@ mod test {
             Tag: cp38-cp38-manylinux2014_x86_64
         "};
 
-        parse_email_message_file(&mut text.as_bytes(), "WHEEL").unwrap();
+        parse_email_message(text.as_bytes(), "WHEEL").unwrap();
     }
 
     #[test]
@@ -1274,7 +1271,7 @@ mod test {
             Tag:        cp38-cp38-manylinux_2_17_x86_64
         "};
 
-        let wheel = parse_email_message_file(&mut text.as_bytes(), "WHEEL").unwrap();
+        let wheel = parse_email_message(text.as_bytes(), "WHEEL").unwrap();
         let tags = &wheel["Tag"];
         let tag = tags
             .first()
@@ -1291,7 +1288,7 @@ mod test {
               Tag  : cp38-cp38-manylinux_2_17_x86_64
         "};
 
-        let wheel = parse_email_message_file(&mut text.as_bytes(), "WHEEL").unwrap();
+        let wheel = parse_email_message(text.as_bytes(), "WHEEL").unwrap();
         assert!(!wheel.contains_key("Tag"));
         assert_eq!(3, wheel.keys().len());
     }
@@ -1307,7 +1304,7 @@ mod test {
               py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64
         "};
 
-        parse_email_message_file(&mut text.as_bytes(), "WHEEL").unwrap();
+        parse_email_message(text.as_bytes(), "WHEEL").unwrap();
     }
 
     #[test]
@@ -1485,8 +1482,7 @@ mod test {
         Tag: -manylinux2014_x86_64
         "
         };
-        let reader = Cursor::new(wheel.to_string().into_bytes());
-        let wheel_file = parse_email_message_file(reader, "WHEEL")?;
+        let wheel_file = parse_email_message(wheel.as_bytes(), "WHEEL")?;
         assert_eq!(
             wheel_file.get("Wheel-Version"),
             Some(&["1.0".to_string()].to_vec())
