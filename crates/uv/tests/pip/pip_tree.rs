@@ -1,11 +1,10 @@
 #![cfg(not(windows))]
 
-use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{ChildPath, FileTouch, FileWriteStr, PathChild, PathCreateDir};
+use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
 use indoc::indoc;
 
-use uv_test::{TestContext, uv_snapshot};
+use uv_test::uv_snapshot;
 
 #[test]
 fn no_package() {
@@ -101,7 +100,8 @@ fn nested_dependencies() {
 }
 
 #[test]
-fn reverse_dependencies() -> Result<()> {
+#[cfg(feature = "test-python")]
+fn reverse_dependencies() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     write_branching_dependency_metadata(&context)?;
 
@@ -188,7 +188,10 @@ fn depth() {
     );
 }
 
-fn write_branching_dependency_metadata(context: &TestContext) -> Result<()> {
+#[cfg(feature = "test-python")]
+fn write_branching_dependency_metadata(context: &uv_test::TestContext) -> anyhow::Result<()> {
+    use assert_fs::fixture::{ChildPath, PathCreateDir};
+
     let site_packages = ChildPath::new(context.site_packages());
     for (name, requires_dist) in [
         (
@@ -210,7 +213,8 @@ fn write_branching_dependency_metadata(context: &TestContext) -> Result<()> {
 }
 
 #[test]
-fn prune() -> Result<()> {
+#[cfg(feature = "test-python")]
+fn prune() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     write_branching_dependency_metadata(&context)?;
 
