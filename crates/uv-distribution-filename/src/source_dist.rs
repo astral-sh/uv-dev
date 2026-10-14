@@ -39,23 +39,16 @@ impl SourceDistFilename {
     ) -> Result<Self, SourceDistFilenameError> {
         let stem = source_dist_stem(filename, extension)?;
 
-        let package_name_len = package_name.as_ref().len();
-        if stem.len() <= package_name_len + "-".len() {
-            return Err(SourceDistFilenameError {
+        let (actual_package_name, version) = stem
+            .split_at_checked(package_name.as_ref().len())
+            .and_then(|(name, suffix)| {
+                let version = suffix.strip_prefix('-')?;
+                (!version.is_empty()).then_some((name, version))
+            })
+            .ok_or_else(|| SourceDistFilenameError {
                 filename: filename.to_string(),
                 kind: SourceDistFilenameErrorKind::Filename(package_name.clone()),
-            });
-        }
-        let (Some(actual_package_name), Some(version)) = (
-            stem.get(..package_name_len),
-            stem.get(package_name_len..)
-                .and_then(|suffix| suffix.strip_prefix('-')),
-        ) else {
-            return Err(SourceDistFilenameError {
-                filename: filename.to_string(),
-                kind: SourceDistFilenameErrorKind::Filename(package_name.clone()),
-            });
-        };
+            })?;
         if !normalized_package_name_matches(actual_package_name, package_name) {
             PackageName::from_str(actual_package_name).map_err(|err| SourceDistFilenameError {
                 filename: filename.to_string(),
