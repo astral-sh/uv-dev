@@ -364,14 +364,15 @@ fn make_executable(path: &Path) -> io::Result<()> {
 }
 
 /// Entry-point scripts with destinations validated against the installation layout.
-pub(crate) struct ValidatedEntryPoints<'script> {
-    console_scripts: Vec<ValidatedScript<'script>>,
-    gui_scripts: Vec<ValidatedScript<'script>>,
+pub(crate) struct ValidatedEntryPoints<'a> {
+    layout: &'a Layout,
+    console_scripts: Vec<ValidatedScript<'a>>,
+    gui_scripts: Vec<ValidatedScript<'a>>,
 }
 
-impl<'script> ValidatedEntryPoints<'script> {
-    pub(crate) fn new(entrypoints: &'script EntryPoints, layout: &Layout) -> Result<Self, Error> {
-        let validate = |scripts: &'script [Script]| {
+impl<'a> ValidatedEntryPoints<'a> {
+    pub(crate) fn new(entrypoints: &'a EntryPoints, layout: &'a Layout) -> Result<Self, Error> {
+        let validate = |scripts: &'a [Script]| {
             scripts
                 .iter()
                 .map(|script| ValidatedScript::try_from_script(script, layout))
@@ -379,6 +380,7 @@ impl<'script> ValidatedEntryPoints<'script> {
         };
 
         Ok(Self {
+            layout,
             console_scripts: validate(&entrypoints.console_scripts)?,
             gui_scripts: validate(&entrypoints.gui_scripts)?,
         })
@@ -387,11 +389,11 @@ impl<'script> ValidatedEntryPoints<'script> {
     /// Create wrapper scripts in the environment's scripts directory.
     pub(crate) fn write(
         self,
-        layout: &Layout,
         relocatable: bool,
         site_packages: &Path,
         record: &mut Vec<RecordEntry>,
     ) -> Result<(), Error> {
+        let layout = self.layout;
         for (scripts, is_gui) in [(self.console_scripts, false), (self.gui_scripts, true)] {
             for ValidatedScript { path, script } in scripts {
                 let entrypoint_relative = relative_install_path(&path, site_packages)?;

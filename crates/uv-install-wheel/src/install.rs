@@ -98,7 +98,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         trace!(?name, "Writing entrypoints");
 
         fs_err::create_dir_all(&layout.scheme.scripts)?;
-        validated_entrypoints.write(layout, relocatable, site_packages, &mut record)?;
+        validated_entrypoints.write(relocatable, site_packages, &mut record)?;
     }
 
     // Move wheel data into the interpreter's installation scheme.
