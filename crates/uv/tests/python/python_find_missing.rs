@@ -19,19 +19,20 @@ fn python_find_script_python_not_found() {
     let script = context.temp_dir.child("foo.py");
 
     script
-        .write_str(indoc! {r"
+        .write_str(indoc! {r#"
             # /// script
+            # requires-python = ">=3.12"
             # dependencies = []
             # ///
-        "})
+        "#})
         .unwrap();
 
     uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("foo.py"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: No interpreter found in virtual environments or managed installations
+    error: No interpreter found for Python >=3.12 in virtual environments or managed installations
 
-    hint: A managed Python download is available, but Python downloads are set to 'never'
+    hint: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
     ");
 }
 
