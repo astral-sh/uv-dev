@@ -786,7 +786,7 @@ fn logout_token_native_auth() -> Result<()> {
 }
 
 #[test]
-fn login_service_url() {
+fn login_service_url_normalizes_to_https() {
     let context = uv_test::test_context_with_versions!(&[]);
 
     // A domain-only service name gets https:// prepended
@@ -795,10 +795,15 @@ fn login_service_url() {
         .arg("--username")
         .arg("test")
         .arg("--password")
-        .arg("test"), @r"
+        .arg("domain-password"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
+    ");
+    uv_snapshot!(context.auth_token().args(["https://example.com/", "--username", "test"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    domain-password
     ");
 
     uv_snapshot!(context.auth_login()
@@ -806,10 +811,15 @@ fn login_service_url() {
         .arg("--username")
         .arg("test")
         .arg("--password")
-        .arg("test"), @r"
+        .arg("https-password"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
+    ");
+    uv_snapshot!(context.auth_token().args(["example.com", "--username", "test"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    https-password
     ");
 
     // A domain-only service with a path also gets https:// prepended
@@ -818,13 +828,21 @@ fn login_service_url() {
         .arg("--username")
         .arg("test")
         .arg("--password")
-        .arg("test"), @r"
+        .arg("path-password"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
     ");
+    uv_snapshot!(context.auth_token().args(["https://example.com/", "--username", "test"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    path-password
+    ");
+}
 
-    // An invalid URL is rejected
+#[test]
+fn login_rejects_invalid_service_url() {
+    let context = uv_test::test_context_with_versions!(&[]);
     uv_snapshot!(context.auth_login()
         .arg("not a valid url")
         .arg("--username")
@@ -837,16 +855,27 @@ fn login_service_url() {
 
     For more information, try '--help'.
     ");
+}
 
-    // URL with embedded credentials works
+#[test]
+fn login_with_embedded_credentials() {
+    let context = uv_test::test_context_with_versions!(&[]);
     uv_snapshot!(context.auth_login()
         .arg("https://test:password@example.com/simple"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
     ");
+    uv_snapshot!(context.auth_token().args(["https://example.com/", "--username", "test"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    password
+    ");
+}
 
-    // URL with embedded username and separate password works
+#[test]
+fn login_with_embedded_username_and_cli_password() {
+    let context = uv_test::test_context_with_versions!(&[]);
     uv_snapshot!(context.auth_login()
         .arg("https://test@example.com/simple")
         .arg("--password")
@@ -854,6 +883,11 @@ fn login_service_url() {
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
+    ");
+    uv_snapshot!(context.auth_token().args(["https://example.com/", "--username", "test"]), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    password
     ");
 }
 
