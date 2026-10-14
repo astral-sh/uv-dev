@@ -1,4 +1,4 @@
-use uv_test::uv_snapshot;
+use uv_test::{assert_path_missing, uv_snapshot};
 
 #[test]
 fn tool_dir() {
@@ -9,6 +9,7 @@ fn tool_dir() {
     ----- stdout -----
     [TEMP_DIR]/tools
     ");
+    assert_path_missing(context.temp_dir.join("tools"));
 }
 
 #[test]
@@ -20,4 +21,5 @@ fn tool_dir_bin() {
     ----- stdout -----
     [TEMP_DIR]/bin
     ");
+    assert_path_missing(context.temp_dir.join("bin"));
 }
