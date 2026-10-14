@@ -414,6 +414,8 @@ fn has_lower_bound(
     constraints: &Constraints,
     modifiers: &DependencyModifiers,
 ) -> bool {
+    // Constraints are not graph edges and apply equally to every incoming dependency.
+    let mut constraint_requirements = constraints.requirements().map(Cow::Borrowed);
     for neighbor_index in graph.neighbors_directed(node_index, Direction::Incoming) {
         let neighbor_dist = match graph.node_weight(neighbor_index).unwrap() {
             ResolutionGraphNode::Root => {
@@ -445,8 +447,7 @@ fn has_lower_bound(
                 DependencyModifierScope::Global,
                 metadata.dependency_groups.values().flatten(),
             ))
-            // Constraints are missing from the graph.
-            .chain(constraints.requirements().map(Cow::Borrowed))
+            .chain(&mut constraint_requirements)
         {
             if requirement.name != *package_name {
                 continue;
