@@ -294,18 +294,17 @@ fn python_list_warns_on_non_native_search_path_interpreters() -> Result<()> {
 }
 
 #[test]
-fn python_list_pin() {
+fn python_list_pin() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
         .with_filtered_python_keys()
         .with_collapsed_whitespace();
 
-    // Pin to a version
-    uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Pinned `.python-version` to `3.12`
-    ");
+    // Pin the older interpreter so accidentally prioritizing it would change the listing order.
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("3.11\n")?;
 
     // The pin should not affect the listing
     uv_snapshot!(context.filters(), context.python_list(), @"
@@ -322,6 +321,8 @@ fn python_list_pin() {
     cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
     cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
     ");
+
+    Ok(())
 }
 
 #[test]
