@@ -245,14 +245,14 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
         fake_uv(&context)?.portable_display()
     })?;
 
-    // When running in an ephemeral environment, we should find the binary in the project
-    // environment
+    // Import the package from the ephemeral environment to verify it is active while finding
+    // the binary in the project environment.
     uv_snapshot!(context.filters(), context.run()
         .arg("--with")
-        .arg("anyio")
+        .arg(context.workspace_root.join("test/links/ok-1.0.0-py3-none-any.whl"))
         .arg("python")
         .arg("-c")
-        .arg(TEST_SCRIPT),
+        .arg(format!("import ok\n{TEST_SCRIPT}")),
      @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -263,12 +263,10 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + uv==0.1.0 (from file://[TEMP_DIR]/fake-uv)
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0 (from file://[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl)
     "
     );
 
