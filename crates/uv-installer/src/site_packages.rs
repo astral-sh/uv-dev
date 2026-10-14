@@ -14,15 +14,16 @@ use uv_configuration::{
 use uv_distribution_filename::EggInfoFilename;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, Diagnostic, ExtraBuildRequires, ExtraBuildVariables,
-    InstalledDist, InstalledDistKind, Name, NameRequirementSpecification, PackageConfigSettings,
-    Requirement, RequiresPython, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    InstalledDist, InstalledDistError, InstalledDistKind, Name, NameRequirementSpecification,
+    PackageConfigSettings, Requirement, RequiresPython, UnresolvedRequirement,
+    UnresolvedRequirementSpecification,
 };
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::VersionOrUrl;
 use uv_platform_tags::Tags;
-use uv_pypi_types::{ResolverMarkerEnvironment, VerbatimParsedUrl};
+use uv_pypi_types::{ResolutionMetadata, ResolverMarkerEnvironment, VerbatimParsedUrl};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_redacted::DisplaySafeUrl;
 use uv_types::InstalledPackagesProvider;
@@ -252,19 +253,12 @@ impl SitePackages {
             }
 
             // Determine the dependencies for the given package.
-            let metadata = if let Some(metadata) =
-                dependency_metadata.get(package, Some(distribution.version()))
-            {
-                Cow::Owned(metadata)
-            } else {
-                let Ok(metadata) = distribution.read_metadata() else {
-                    diagnostics.push(SitePackagesDiagnostic::MetadataUnavailable {
-                        package: package.clone(),
-                        path: distribution.install_path().to_owned(),
-                    });
-                    continue;
-                };
-                Cow::Borrowed(metadata)
+            let Ok(metadata) = installed_metadata(distribution, dependency_metadata) else {
+                diagnostics.push(SitePackagesDiagnostic::MetadataUnavailable {
+                    package: package.clone(),
+                    path: distribution.install_path().to_owned(),
+                });
+                continue;
             };
 
             // Ignore Python upper bounds, as we do during resolution.
@@ -524,15 +518,8 @@ impl SitePackages {
                     }
 
                     // Recurse into the dependencies.
-                    let metadata = if let Some(metadata) =
-                        dependency_metadata.get(name, Some(distribution.version()))
-                    {
-                        Cow::Owned(metadata)
-                    } else {
-                        Cow::Borrowed(distribution.read_metadata().with_context(|| {
-                            format!("Failed to read metadata for: {distribution}")
-                        })?)
-                    };
+                    let metadata = installed_metadata(distribution, dependency_metadata)
+                        .with_context(|| format!("Failed to read metadata for: {distribution}"))?;
 
                     // Add the dependencies to the queue.
                     let dependencies = metadata
@@ -562,6 +549,20 @@ impl SitePackages {
         Ok(SatisfiesResult::Fresh {
             recursive_requirements: seen,
         })
+    }
+}
+
+/// Return configured dependency metadata, falling back to the installed distribution's metadata.
+fn installed_metadata<'a>(
+    distribution: &'a InstalledDist,
+    dependency_metadata: &DependencyMetadata,
+) -> Result<Cow<'a, ResolutionMetadata>, InstalledDistError> {
+    if let Some(metadata) =
+        dependency_metadata.get(distribution.name(), Some(distribution.version()))
+    {
+        Ok(Cow::Owned(metadata))
+    } else {
+        distribution.read_metadata().map(Cow::Borrowed)
     }
 }
 
