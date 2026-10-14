@@ -2,7 +2,7 @@
 
 use std::assert_matches;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Display;
@@ -1371,19 +1371,22 @@ impl Workspace {
                     member_root.simplified_display()
                 );
 
-                if let Some(existing) = workspace_members.insert(
-                    project.name.clone(),
-                    WorkspaceMember {
-                        root: member_root.clone(),
-                        project,
-                        pyproject_toml,
-                    },
-                ) {
-                    return Err(WorkspaceError::from(WorkspaceErrorKind::DuplicatePackage {
-                        name: existing.project.name,
-                        first: existing.root.clone(),
-                        second: member_root,
-                    }));
+                match workspace_members.entry(project.name.clone()) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(WorkspaceMember {
+                            root: member_root,
+                            project,
+                            pyproject_toml,
+                        });
+                    }
+                    Entry::Occupied(entry) => {
+                        let existing = entry.remove();
+                        return Err(WorkspaceError::from(WorkspaceErrorKind::DuplicatePackage {
+                            name: existing.project.name,
+                            first: existing.root,
+                            second: member_root,
+                        }));
+                    }
                 }
             }
         }
