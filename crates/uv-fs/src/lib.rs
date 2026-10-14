@@ -1040,6 +1040,17 @@ pub fn remove_virtualenv(location: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Remove a virtual environment if it exists, returning whether an entry was found.
+///
+/// The link or file at `location` is removed without following it.
+pub fn remove_virtualenv_if_exists(location: &Path) -> io::Result<bool> {
+    match remove_virtualenv(location) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
 /// Prepare an empty virtual environment directory, resolving links when possible.
 ///
 /// Returns whether an existing entry was found.
@@ -1047,11 +1058,7 @@ pub fn clear_virtualenv(location: &Path) -> io::Result<bool> {
     let location = location
         .canonicalize()
         .unwrap_or_else(|_| location.to_path_buf());
-    let cleared = match remove_virtualenv(&location) {
-        Ok(()) => true,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-        Err(err) => return Err(err),
-    };
+    let cleared = remove_virtualenv_if_exists(&location)?;
     fs_err::create_dir_all(location)?;
     Ok(cleared)
 }
