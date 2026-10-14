@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::env;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -15,24 +14,18 @@ use serde::{Deserialize, Serialize};
 
 use uv_test::{copy_dir_ignore, make_project, uv_snapshot};
 
-fn workspaces_dir() -> PathBuf {
-    env::current_dir()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("test")
-        .join("workspaces")
-}
-
 #[test]
 #[cfg(feature = "test-pypi")]
 fn test_albatross_in_examples_bird_feeder() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-in-example";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace
         .join("albatross-in-example")
@@ -70,7 +63,12 @@ fn test_albatross_in_examples() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-in-example";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace.join("albatross-in-example");
 
@@ -105,7 +103,12 @@ fn test_albatross_just_project() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-just-project";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace.join("albatross-just-project");
 
@@ -140,7 +143,12 @@ fn test_albatross_project_in_excluded() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-project-in-excluded";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace.join("albatross-project-in-excluded");
 
@@ -204,7 +212,12 @@ fn test_albatross_root_workspace() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-root-workspace";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace.join("albatross-root-workspace");
 
@@ -242,7 +255,12 @@ fn test_albatross_root_workspace_bird_feeder() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-root-workspace";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace
         .join("albatross-root-workspace")
@@ -282,7 +300,12 @@ fn test_albatross_root_workspace_albatross() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-root-workspace";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace
         .join("albatross-root-workspace")
@@ -322,7 +345,12 @@ fn test_albatross_virtual_workspace() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
-    copy_dir_ignore(workspaces_dir(), &workspace).unwrap();
+    let fixture = "albatross-virtual-workspace";
+    copy_dir_ignore(
+        context.workspace_root.join("test/workspaces").join(fixture),
+        workspace.child(fixture),
+    )
+    .expect("workspace fixture should be copied");
 
     let current_dir = workspace
         .join("albatross-virtual-workspace")
@@ -365,7 +393,10 @@ fn test_uv_run_with_package_virtual_workspace() -> Result<()> {
     let work_dir = context.temp_dir.join("albatross-virtual-workspace");
 
     copy_dir_ignore(
-        workspaces_dir().join("albatross-virtual-workspace"),
+        context
+            .workspace_root
+            .join("test/workspaces")
+            .join("albatross-virtual-workspace"),
         &work_dir,
     )?;
 
@@ -427,7 +458,10 @@ fn test_uv_run_virtual_workspace_root() -> Result<()> {
     let work_dir = context.temp_dir.join("albatross-virtual-workspace");
 
     copy_dir_ignore(
-        workspaces_dir().join("albatross-virtual-workspace"),
+        context
+            .workspace_root
+            .join("test/workspaces")
+            .join("albatross-virtual-workspace"),
         &work_dir,
     )?;
 
@@ -466,7 +500,13 @@ fn test_uv_run_with_package_root_workspace() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let work_dir = context.temp_dir.join("albatross-root-workspace");
 
-    copy_dir_ignore(workspaces_dir().join("albatross-root-workspace"), &work_dir)?;
+    copy_dir_ignore(
+        context
+            .workspace_root
+            .join("test/workspaces")
+            .join("albatross-root-workspace"),
+        &work_dir,
+    )?;
 
     uv_snapshot!(context.filters(), context
         .run()
@@ -521,7 +561,13 @@ fn test_uv_run_isolate() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let work_dir = context.temp_dir.join("albatross-root-workspace");
 
-    copy_dir_ignore(workspaces_dir().join("albatross-root-workspace"), &work_dir)?;
+    copy_dir_ignore(
+        context
+            .workspace_root
+            .join("test/workspaces")
+            .join("albatross-root-workspace"),
+        &work_dir,
+    )?;
 
     // Install the root package.
     uv_snapshot!(context.filters(), context
@@ -606,7 +652,13 @@ fn workspace_lock_idempotence(workspace: &str, subdirectories: &[&str]) -> Resul
         let context = uv_test::test_context!("3.12");
         let work_dir = context.temp_dir.join(workspace);
 
-        copy_dir_ignore(workspaces_dir().join(workspace), &work_dir)?;
+        copy_dir_ignore(
+            context
+                .workspace_root
+                .join("test/workspaces")
+                .join(workspace),
+            &work_dir,
+        )?;
 
         context
             .lock()
