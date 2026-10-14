@@ -1088,18 +1088,15 @@ fn parse_email_message(
     let message = Message::parse(content);
     for header in message.headers() {
         let name = header.name().to_owned();
-        let mut value = header
-            .decoded_value()
-            .map_err(|err| {
-                Error::InvalidWheel(format!("Failed to decode `{debug_filename}` file: {err}"))
-            })?
-            .into_owned();
-
-        // Trim the value only if needed
-        let trimmed_value = value.trim();
-        if value != trimmed_value {
-            value = trimmed_value.to_string();
-        }
+        let value = header.decoded_value().map_err(|err| {
+            Error::InvalidWheel(format!("Failed to decode `{debug_filename}` file: {err}"))
+        })?;
+        let trimmed = value.trim();
+        let value = if trimmed.len() == value.len() {
+            value.into_owned()
+        } else {
+            trimmed.to_owned()
+        };
 
         data.entry(name).or_default().push(value);
     }
