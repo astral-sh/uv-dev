@@ -360,13 +360,9 @@ impl Cache {
         let timestamp = match &self.refresh {
             Refresh::None(_) => return Ok(Freshness::Fresh),
             Refresh::All(timestamp) => timestamp,
-            Refresh::Packages(packages, paths, timestamp) => {
+            Refresh::Packages(packages, _, timestamp) => {
                 if package.is_none_or(|package| packages.contains(package))
-                    || path.is_some_and(|path| {
-                        paths
-                            .iter()
-                            .any(|target| same_file::is_same_file(path, target).unwrap_or(false))
-                    })
+                    || path.is_some_and(|path| self.must_revalidate_path(path))
                 {
                     timestamp
                 } else {
