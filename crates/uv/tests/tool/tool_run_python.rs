@@ -12,6 +12,34 @@ fn context_with_global_python_pin() -> TestContext {
 }
 
 #[test]
+fn tool_run_short_implementation_name_is_a_package() {
+    let context = uv_test::test_context!("3.12");
+
+    uv_snapshot!(context.tool_run().args(["--offline", "--no-index", "cp311", "--version"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving tool dependencies
+      cause: Because cp311 was not found in the provided package locations and you require cp311, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+}
+
+#[test]
+fn tool_run_bare_version_is_a_package() {
+    let context = uv_test::test_context!("3.12");
+
+    uv_snapshot!(context.tool_run().args(["--offline", "--no-index", "311", "--version"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving tool dependencies
+      cause: Because 311 was not found in the provided package locations and you require 311, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+}
+
+#[test]
 fn tool_run_python_from_global_version_file() {
     let context = context_with_global_python_pin();
 
