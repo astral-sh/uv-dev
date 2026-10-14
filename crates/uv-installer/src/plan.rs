@@ -328,69 +328,60 @@ impl<'a> Planner<'a> {
 
             // Determine whether the distribution is already installed.
             let installed_dists = site_packages.remove_packages(dist.name());
-            if reinstall {
-                reinstalls.extend(installed_dists);
-            } else {
-                match installed_dists.as_slice() {
-                    [] => {}
-                    [installed] => {
-                        let source = RequirementSource::from(dist);
-                        match RequirementSatisfaction::check(
-                            dist.name(),
-                            installed,
-                            &source,
-                            dist.version(),
-                            installation,
-                            tags,
-                            Some(BuildSettings {
-                                config_settings,
-                                config_settings_package,
-                                extra_build_requires,
-                                extra_build_variables,
-                            }),
-                        ) {
-                            RequirementSatisfaction::Mismatch => {
-                                debug!(
-                                    "Requirement installed, but mismatched:\n  Installed: {installed:?}\n  Requested: {source:?}"
-                                );
-                            }
-                            RequirementSatisfaction::Satisfied => {
-                                debug!("Requirement already installed: {installed}");
-                                continue;
-                            }
-                            RequirementSatisfaction::OutOfDate => {
-                                debug!("Requirement installed, but not fresh: {installed}");
-
-                                // If we made it here, something went wrong in the resolver, because it returned an
-                                // already-installed distribution that we "shouldn't" use. Typically, this means the
-                                // distribution was considered out-of-date, but in a way that the resolver didn't
-                                // detect, and is indicative of drift between the resolver's candidate selector and
-                                // the install plan. For example, at present, the resolver doesn't check that an
-                                // installed distribution was built with the expected build settings. Treat it as
-                                // up-to-date for now; it's just means we may not rebuild a package when we otherwise
-                                // should. This is a known issue, but should only affect the `uv pip` CLI, as the
-                                // project APIs never return installed distributions during resolution (i.e., the
-                                // resolver is stateless).
-                                // TODO(charlie): Incorporate these checks into the resolver.
-                                if matches!(dist, ResolvedDist::Installed { .. }) {
-                                    warn!(
-                                        "Installed distribution was considered out-of-date, but returned by the resolver: {dist}"
-                                    );
-                                    continue;
-                                }
-                            }
-                            RequirementSatisfaction::CacheInvalid => {
-                                // Already logged
-                            }
-                        }
-                        reinstalls.push(installed.clone());
+            if !reinstall && let [installed] = installed_dists.as_slice() {
+                let source = RequirementSource::from(dist);
+                match RequirementSatisfaction::check(
+                    dist.name(),
+                    installed,
+                    &source,
+                    dist.version(),
+                    installation,
+                    tags,
+                    Some(BuildSettings {
+                        config_settings,
+                        config_settings_package,
+                        extra_build_requires,
+                        extra_build_variables,
+                    }),
+                ) {
+                    RequirementSatisfaction::Mismatch => {
+                        debug!(
+                            "Requirement installed, but mismatched:\n  Installed: {installed:?}\n  Requested: {source:?}"
+                        );
                     }
-                    // We reinstall installed distributions with multiple versions because
-                    // we do not want to keep multiple incompatible versions but removing
-                    // one version is likely to break another.
-                    _ => reinstalls.extend(installed_dists),
+                    RequirementSatisfaction::Satisfied => {
+                        debug!("Requirement already installed: {installed}");
+                        continue;
+                    }
+                    RequirementSatisfaction::OutOfDate => {
+                        debug!("Requirement installed, but not fresh: {installed}");
+
+                        // If we made it here, something went wrong in the resolver, because it returned an
+                        // already-installed distribution that we "shouldn't" use. Typically, this means the
+                        // distribution was considered out-of-date, but in a way that the resolver didn't
+                        // detect, and is indicative of drift between the resolver's candidate selector and
+                        // the install plan. For example, at present, the resolver doesn't check that an
+                        // installed distribution was built with the expected build settings. Treat it as
+                        // up-to-date for now; it's just means we may not rebuild a package when we otherwise
+                        // should. This is a known issue, but should only affect the `uv pip` CLI, as the
+                        // project APIs never return installed distributions during resolution (i.e., the
+                        // resolver is stateless).
+                        // TODO(charlie): Incorporate these checks into the resolver.
+                        if matches!(dist, ResolvedDist::Installed { .. }) {
+                            warn!(
+                                "Installed distribution was considered out-of-date, but returned by the resolver: {dist}"
+                            );
+                            continue;
+                        }
+                    }
+                    RequirementSatisfaction::CacheInvalid => {
+                        // Already logged
+                    }
                 }
             }
+            // Multiple installed versions must be removed together because removing one can break
+            // another.
+            reinstalls.extend(installed_dists);
 
             let ResolvedDist::Installable { dist, .. } = dist else {
                 unreachable!("Installed distribution could not be found in site-packages: {dist}");
