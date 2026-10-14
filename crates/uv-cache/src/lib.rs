@@ -335,14 +335,14 @@ impl Cache {
 
     /// Create a temporary directory to be used as a Python virtual environment.
     pub fn venv_dir(&self) -> io::Result<tempfile::TempDir> {
-        fs_err::create_dir_all(self.bucket(CacheBucket::Builds))?;
-        tempfile::tempdir_in(self.bucket(CacheBucket::Builds))
+        self.build_dir()
     }
 
     /// Create a temporary directory to be used for executing PEP 517 source distribution builds.
     pub fn build_dir(&self) -> io::Result<tempfile::TempDir> {
-        fs_err::create_dir_all(self.bucket(CacheBucket::Builds))?;
-        tempfile::tempdir_in(self.bucket(CacheBucket::Builds))
+        let builds = self.bucket(CacheBucket::Builds);
+        fs_err::create_dir_all(&builds)?;
+        tempfile::tempdir_in(builds)
     }
 
     /// Returns `true` if a cache entry must be revalidated given the [`Refresh`] policy.
