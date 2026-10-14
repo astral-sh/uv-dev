@@ -13664,9 +13664,8 @@ fn sync_dry_run() -> Result<()> {
      + typing-extensions==4.10.0
     ");
     assert_eq!(context.read("uv.lock"), lock);
-    context
-        .assert_command("import iniconfig; import importlib.util; assert importlib.util.find_spec('typing_extensions') is None")
-        .success();
+    context.assert_command("import iniconfig").success();
+    context.assert_not_installed("typing_extensions");
 
     // Update the `requires-python`.
     pyproject_toml.write_str(
@@ -13765,11 +13764,7 @@ fn sync_dry_run_and_locked() -> Result<()> {
     ");
 
     assert_eq!(context.read("uv.lock"), existing);
-    context
-        .assert_command(
-            "import importlib.util; assert importlib.util.find_spec('iniconfig') is None",
-        )
-        .success();
+    context.assert_not_installed("iniconfig");
 
     Ok(())
 }
@@ -13816,9 +13811,7 @@ fn sync_dry_run_and_frozen() -> Result<()> {
      + sniffio==1.3.1
     ");
     assert_eq!(context.read("uv.lock"), existing);
-    context
-        .assert_command("import importlib.util; assert importlib.util.find_spec('anyio') is None")
-        .success();
+    context.assert_not_installed("anyio");
 
     Ok(())
 }
@@ -18394,11 +18387,7 @@ async fn sync_malware_detected() {
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
-    context
-        .assert_command(
-            "import importlib.util; assert importlib.util.find_spec('iniconfig') is None",
-        )
-        .success();
+    context.assert_not_installed("iniconfig");
 }
 
 /// Ensure that `uv sync` succeeds when no malware is found.
