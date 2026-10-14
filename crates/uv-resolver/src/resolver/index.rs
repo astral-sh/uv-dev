@@ -2,7 +2,7 @@ use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
 use rustc_hash::FxHasher;
-use uv_distribution_types::IndexUrl;
+use uv_distribution_types::{IndexMetadata, IndexUrl};
 use uv_normalize::PackageName;
 use uv_once_map::{RegisteredEntry, RegisteredOnceMap};
 use uv_resolver_types::DistributionMetadataIndex;
@@ -30,6 +30,18 @@ pub(crate) type FxRegisteredEntry<'a, K, V> =
     RegisteredEntry<'a, K, V, BuildHasherDefault<FxHasher>>;
 
 impl InMemoryIndex {
+    /// Return a completed package-version response for an explicit index or the implicit indexes.
+    pub(crate) fn get_versions(
+        &self,
+        name: &PackageName,
+        index: Option<&IndexMetadata>,
+    ) -> Option<Arc<VersionsResponse>> {
+        match index {
+            Some(index) => self.explicit().get(&(name.clone(), index.url().clone())),
+            None => self.implicit().get(name),
+        }
+    }
+
     /// Returns a reference to the package metadata map.
     pub(crate) fn implicit(&self) -> &FxOnceMap<PackageName, Arc<VersionsResponse>> {
         &self.0.implicit
