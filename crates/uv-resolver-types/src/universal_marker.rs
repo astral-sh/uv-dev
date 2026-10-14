@@ -213,99 +213,24 @@ impl UniversalMarker {
         }
     }
 
-    /// Assumes that a given extra/group for the given package is activated.
+    /// Assumes that the given conflict item is activated.
     ///
     /// This may simplify the conflicting marker component of this universal
     /// marker.
     pub fn assume_conflict_item(&mut self, item: &ConflictItem) {
-        match *item.kind() {
-            ConflictKind::Extra(ref extra) => self.assume_extra(item.package(), extra),
-            ConflictKind::Group(ref group) => self.assume_group(item.package(), group),
-            ConflictKind::Project => self.assume_project(item.package()),
-        }
+        let extra = encode_conflict_item(item);
+        self.marker = self
+            .marker
+            .simplify_extras_with(|candidate| *candidate == extra);
+        self.pep508 = self.marker.without_extras();
     }
 
-    /// Assumes that a given extra/group for the given package is not
-    /// activated.
+    /// Assumes that the given conflict item is not activated.
     ///
     /// This may simplify the conflicting marker component of this universal
     /// marker.
     pub fn assume_not_conflict_item(&mut self, item: &ConflictItem) {
-        match *item.kind() {
-            ConflictKind::Extra(ref extra) => self.assume_not_extra(item.package(), extra),
-            ConflictKind::Group(ref group) => self.assume_not_group(item.package(), group),
-            ConflictKind::Project => self.assume_not_project(item.package()),
-        }
-    }
-
-    /// Assumes that the "production" dependencies for the given project are
-    /// activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_project(&mut self, package: &PackageName) {
-        let extra = encode_project(package);
-        self.marker = self
-            .marker
-            .simplify_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that the "production" dependencies for the given project are
-    /// not activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_not_project(&mut self, package: &PackageName) {
-        let extra = encode_project(package);
-        self.marker = self
-            .marker
-            .simplify_not_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given extra for the given package is activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_extra(&mut self, package: &PackageName, extra: &ExtraName) {
-        let extra = encode_package_extra(package, extra);
-        self.marker = self
-            .marker
-            .simplify_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given extra for the given package is not activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_not_extra(&mut self, package: &PackageName, extra: &ExtraName) {
-        let extra = encode_package_extra(package, extra);
-        self.marker = self
-            .marker
-            .simplify_not_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given group for the given package is activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_group(&mut self, package: &PackageName, group: &GroupName) {
-        let extra = encode_package_group(package, group);
-        self.marker = self
-            .marker
-            .simplify_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given group for the given package is not activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_not_group(&mut self, package: &PackageName, group: &GroupName) {
-        let extra = encode_package_group(package, group);
+        let extra = encode_conflict_item(item);
         self.marker = self
             .marker
             .simplify_not_extras_with(|candidate| *candidate == extra);
