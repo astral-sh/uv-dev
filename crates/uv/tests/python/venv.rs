@@ -715,6 +715,8 @@ fn create_centralized_project_environment_path_file() -> Result<()> {
 fn create_centralized_project_environment_link_failure() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"])
         .with_filtered_centralized_environment_hashes();
+    #[cfg(windows)]
+    let context = context.with_filtered_path_os_error(145);
     context
         .temp_dir
         .child("pyproject.toml")
@@ -750,7 +752,7 @@ fn create_centralized_project_environment_link_failure() -> Result<()> {
             ----- stderr -----
             Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
             Creating virtual environment `project-cp3.12.[X]-[HASH]`
-            warning: Failed to create link to project environment: failed to remove directory `[VENV]/`: The directory is not empty. (os error 145)
+            warning: Failed to create link to project environment: failed to remove directory `[VENV]/`: [OS ERROR 145]
             Activate with: source [CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]/[BIN]/activate
             "#);
         },
@@ -2330,7 +2332,7 @@ fn create_venv_current_working_directory() -> Result<()> {
 #[test]
 #[cfg(windows)]
 fn create_venv_current_working_directory() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_path_os_error(32);
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -2355,7 +2357,7 @@ fn create_venv_current_working_directory() {
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .
     error: Failed to create virtual environment
-      cause: failed to remove directory `[VENV]/`: The process cannot access the file because it is being used by another process. (os error 32)
+      cause: failed to remove directory `[VENV]/`: [OS ERROR 32]
     "
     );
 }

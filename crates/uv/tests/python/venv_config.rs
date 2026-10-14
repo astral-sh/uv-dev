@@ -97,24 +97,18 @@ fn create_venv_unknown_python_patch() {
 #[test]
 #[cfg(windows)]
 fn path_with_trailing_space_gives_proper_error() {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_path_os_error(3);
 
     // Set a custom cache directory with a trailing space
     let mut cache_dir = context.cache_dir.as_os_str().to_owned();
     cache_dir.push(" ");
-    // Windows translates error messages, for example i get:
-    // ": Das System kann den angegebenen Pfad nicht finden. (os error 3)"
-    let context = context.with_filter((
-        r"\.lock`: .* \(os error 3\)",
-        ".lock`: The system cannot find the path specified. (os error 3)",
-    ));
     uv_snapshot!(context.filters(), context.external_command(uv_test::get_bin!())
         .arg("venv")
         .env(EnvVars::UV_CACHE_DIR, cache_dir), @r###"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Could not acquire lock
-      cause: failed to open file `[CACHE_DIR]/ /.lock`: The system cannot find the path specified. (os error 3)
+      cause: failed to open file `[CACHE_DIR]/ /.lock`: [OS ERROR 3]
     "###
     );
     // Note the extra trailing `/` in the snapshot is due to the filters, not the actual output.
