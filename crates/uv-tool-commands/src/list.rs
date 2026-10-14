@@ -14,6 +14,7 @@ use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{IndexCapabilities, RequiresPython};
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
+use uv_pep440::Version;
 use uv_python_types::LenientImplementationName;
 use uv_settings::{Combine, ResolverInstallerOptions};
 use uv_tool::InstalledTools;
@@ -114,7 +115,7 @@ pub async fn list(
     }
 
     // Determine the latest version for each tool when `--outdated` is requested.
-    let latest: FxHashMap<PackageName, DistFilename> = if outdated && !valid_tools.is_empty() {
+    let latest: FxHashMap<PackageName, Version> = if outdated && !valid_tools.is_empty() {
         let download_concurrency = concurrency.downloads_semaphore.clone();
 
         let reporter = LatestVersionReporter::from(printer).with_length(valid_tools.len() as u64);
@@ -165,9 +166,10 @@ pub async fn list(
             .buffer_unordered(concurrency.downloads);
 
         let mut map = FxHashMap::default();
-        while let Some((name, version)) = fetches.next().await.transpose()? {
-            if let Some(version) = version {
-                reporter.on_fetch_version(name, version.version());
+        while let Some((name, filename)) = fetches.next().await.transpose()? {
+            if let Some(filename) = filename {
+                let version = filename.into_version();
+                reporter.on_fetch_version(name, &version);
                 map.insert(name.clone(), version);
             } else {
                 reporter.on_fetch_progress();
@@ -184,13 +186,10 @@ pub async fn list(
     for (name, tool, tool_env, version) in valid_tools {
         // If `--outdated` is set, skip tools that are up-to-date.
         let latest_version = if outdated {
-            let Some(latest) = latest
-                .get(&name)
-                .filter(|latest| latest.version() > &version)
-            else {
+            let Some(latest) = latest.get(&name).filter(|latest| *latest > &version) else {
                 continue;
             };
-            format!(" [latest: {}]", latest.version())
+            format!(" [latest: {latest}]")
         } else {
             String::new()
         };
