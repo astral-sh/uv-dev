@@ -793,17 +793,19 @@ enum SyncAction {
 
 impl From<&SyncEnvironment> for SyncAction {
     fn from(env: &SyncEnvironment) -> Self {
-        match &env {
-            SyncEnvironment::Project(ProjectEnvironment::Existing(..)) => Self::Check,
-            SyncEnvironment::Project(ProjectEnvironment::Created(..)) => Self::Create,
-            SyncEnvironment::Project(ProjectEnvironment::WouldCreate(..)) => Self::Create,
-            SyncEnvironment::Project(ProjectEnvironment::WouldReplace(..)) => Self::Replace,
-            SyncEnvironment::Project(ProjectEnvironment::Replaced(..)) => Self::Update,
-            SyncEnvironment::Script(ScriptEnvironment::Existing(..)) => Self::Check,
-            SyncEnvironment::Script(ScriptEnvironment::Created(..)) => Self::Create,
-            SyncEnvironment::Script(ScriptEnvironment::WouldCreate(..)) => Self::Create,
-            SyncEnvironment::Script(ScriptEnvironment::WouldReplace(..)) => Self::Replace,
-            SyncEnvironment::Script(ScriptEnvironment::Replaced(..)) => Self::Update,
+        match env {
+            SyncEnvironment::Project(ProjectEnvironment::Existing(..))
+            | SyncEnvironment::Script(ScriptEnvironment::Existing(..)) => Self::Check,
+            SyncEnvironment::Project(
+                ProjectEnvironment::Created(..) | ProjectEnvironment::WouldCreate(..),
+            )
+            | SyncEnvironment::Script(
+                ScriptEnvironment::Created(..) | ScriptEnvironment::WouldCreate(..),
+            ) => Self::Create,
+            SyncEnvironment::Project(ProjectEnvironment::WouldReplace(..))
+            | SyncEnvironment::Script(ScriptEnvironment::WouldReplace(..)) => Self::Replace,
+            SyncEnvironment::Project(ProjectEnvironment::Replaced(..))
+            | SyncEnvironment::Script(ScriptEnvironment::Replaced(..)) => Self::Update,
         }
     }
 }
