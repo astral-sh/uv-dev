@@ -17088,6 +17088,12 @@ fn match_runtime_optional() -> Result<()> {
 #[test]
 fn sync_extra_build_dependencies_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let assert_build_environment = |expected: &'static str| {
+        context
+            .assert_command("import child.build_environment as build; print(build.has_iniconfig, build.variable)")
+            .success()
+            .stdout(expected);
+    };
 
     // Write a test package.
     context
@@ -17102,13 +17108,37 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
 
         [build-system]
         requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        build-backend = "build_backend"
+        backend-path = ["."]
     "#})?;
     context
         .temp_dir
         .child("child")
         .child("src/child/__init__.py")
         .touch()?;
+    // Record the build inputs in the wheel without changing the source tree between syncs.
+    context
+        .temp_dir
+        .child("child/build_backend.py")
+        .write_str(indoc! {r#"
+        import os
+        from importlib.util import find_spec
+        from pathlib import Path
+
+        from hatchling.build import build_wheel as hatchling_build_wheel
+        from hatchling.build import get_requires_for_build_wheel, prepare_metadata_for_build_wheel
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            marker = Path(__file__).parent / "src/child/build_environment.py"
+            marker.write_text(
+                f"has_iniconfig = {find_spec('iniconfig') is not None!r}\n"
+                f"variable = {os.getenv('UV_TEST_BUILD_CACHE_MARKER')!r}\n"
+            )
+            try:
+                return hatchling_build_wheel(wheel_directory, config_settings, metadata_directory)
+            finally:
+                marker.unlink()
+    "#})?;
 
     // Create a project that depends on the test package.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -17132,6 +17162,7 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
     Installed 1 package in [TIME]
      + child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
+    assert_build_environment("False None\n");
 
     // Running `uv sync` again should be a no-op.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -17166,6 +17197,7 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
     Installed 1 package in [TIME]
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
+    assert_build_environment("True None\n");
 
     // Running `uv sync` again should be a no-op.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -17222,6 +17254,7 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
     Installed 1 package in [TIME]
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
+    assert_build_environment("False None\n");
 
     // Add a build variable.
     pyproject_toml.write_str(indoc! {r#"
@@ -17235,10 +17268,10 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
         child = { path = "child" }
 
         [tool.uv.extra-build-variables]
-        child = { INI_CONFIG_VERSION = "1.0.0" }
+        child = { UV_TEST_BUILD_CACHE_MARKER = "set" }
     "#})?;
 
-    // Running `uv sync` should rebuild the child package with the new build dependency.
+    // Running `uv sync` should rebuild the child package with the new build variable.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -17248,6 +17281,7 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
     Installed 1 package in [TIME]
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
+    assert_build_environment("False set\n");
 
     // Running `uv sync` again should be a no-op.
     uv_snapshot!(context.filters(), context.sync(), @"
