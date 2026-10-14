@@ -11167,21 +11167,23 @@ fn sync_invalid_environment() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
         "#,
     )?;
 
-    // If the directory already exists and is not a virtual environment we should fail with an error
-    fs_err::create_dir(context.temp_dir.join(".venv"))?;
-    fs_err::write(context.temp_dir.join(".venv").join("file"), b"")?;
-    uv_snapshot!(context.filters(), context.sync(), @"
+    // A directory without an environment must not be replaced.
+    let environment = context.temp_dir.child(".venv");
+    let marker = environment.child("user-data");
+    environment.create_dir_all()?;
+    marker.write_str("user data")?;
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project virtual environment directory `[VENV]/` cannot be used because it is not a valid Python environment (no Python executable was found)
     ");
+    marker.assert("user data");
 
-    // But if it's just an incompatible virtual environment...
-    fs_err::remove_dir_all(context.temp_dir.join(".venv"))?;
+    // An incompatible virtual environment may be replaced, even with extraneous content.
+    fs_err::remove_dir_all(&environment)?;
     uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.11"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -11191,57 +11193,51 @@ fn sync_invalid_environment() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     ");
 
-    // Even with some extraneous content...
-    fs_err::write(context.temp_dir.join(".venv").join("file"), b"")?;
-
-    // We can delete and use it
-    uv_snapshot!(context.filters(), context.sync(), @"
+    marker.write_str("user data")?;
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
     ");
+    marker.assert(predicate::path::missing());
 
-    let bin = venv_bin_path(context.temp_dir.join(".venv"));
+    let bin = venv_bin_path(&environment);
 
-    // If there's just a broken symlink, we should warn
+    // A broken Python symlink is detected and reported.
     #[cfg(unix)]
     {
         fs_err::remove_file(bin.join("python"))?;
         fs_err::os::unix::fs::symlink(context.temp_dir.join("does-not-exist"), bin.join("python"))?;
-        uv_snapshot!(context.filters(), context.sync(), @"
+        uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
         exit_code: 0 (success)
         ----- stderr -----
         warning: Ignoring existing virtual environment linked to non-existent Python interpreter: `.venv/[BIN]/[PYTHON]` -> `does-not-exist`
         Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
         Removed virtual environment at: .venv
         Creating virtual environment at: .venv
-        Resolved 2 packages in [TIME]
-        Installed 1 package in [TIME]
-         + iniconfig==2.0.0
+        Resolved 1 package in [TIME]
+        Checked in [TIME]
         ");
     }
 
-    // If the Python executable is missing entirely, we'll delete and use it
+    // A missing Python executable also causes recreation.
     fs_err::remove_dir_all(&bin)?;
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
-    Resolved 2 packages in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
     ");
 
-    // But if it's not a virtual environment...
-    fs_err::remove_dir_all(context.temp_dir.join(".venv"))?;
+    // Without `pyvenv.cfg`, an incompatible environment is no longer safe to replace.
+    fs_err::remove_dir_all(&environment)?;
     uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.11"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -11251,38 +11247,25 @@ fn sync_invalid_environment() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     ");
 
-    // Which we detect by the presence of a `pyvenv.cfg` file
-    fs_err::remove_file(context.temp_dir.join(".venv").join("pyvenv.cfg"))?;
-
-    // Let's make sure some extraneous content isn't removed
-    fs_err::write(context.temp_dir.join(".venv").join("file"), b"")?;
-
-    // We should never delete it
-    uv_snapshot!(context.filters(), context.sync(), @"
+    fs_err::remove_file(environment.child("pyvenv.cfg"))?;
+    marker.write_str("user data")?;
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: Project virtual environment directory `[VENV]/` cannot be used because it is not a compatible environment but cannot be recreated because it is not a virtual environment
     ");
+    marker.assert("user data");
 
-    // Even if there's no Python executable
+    // The directory remains protected if its Python executable is removed as well.
     fs_err::remove_dir_all(&bin)?;
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project virtual environment directory `[VENV]/` cannot be used because it is not a valid Python environment (no Python executable was found)
     ");
 
-    context
-        .temp_dir
-        .child(".venv")
-        .assert(predicate::path::is_dir());
-
-    context
-        .temp_dir
-        .child(".venv")
-        .child("file")
-        .assert(predicate::path::is_file());
+    marker.assert("user data");
 
     Ok(())
 }
