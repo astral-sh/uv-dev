@@ -32956,6 +32956,7 @@ fn lock_dry_run() -> Result<()> {
     ----- stderr -----
     Resolved 12 packages in [TIME]
     ");
+    let lock = context.read("uv.lock");
 
     pyproject_toml.write_str(
         r#"
@@ -32989,6 +32990,7 @@ fn lock_dry_run() -> Result<()> {
     Add typing-extensions v4.10.0
     Add urllib3 v1.26.18
     ");
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
@@ -33021,12 +33023,17 @@ fn lock_dry_run_noop() -> Result<()> {
     Add project v0.1.0
     Add sniffio v1.3.1
     ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicates::path::missing());
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     ");
+    let lock = context.read("uv.lock");
 
     uv_snapshot!(context.filters(), context.lock().arg("--dry-run"), @"
     exit_code: 0 (success)
@@ -33034,6 +33041,7 @@ fn lock_dry_run_noop() -> Result<()> {
     Resolved 5 packages in [TIME]
     No lockfile changes detected
     ");
+    assert_eq!(context.read("uv.lock"), lock);
 
     uv_snapshot!(context.filters(), context.lock().arg("--dry-run").arg("-U"), @"
     exit_code: 0 (success)
@@ -33041,6 +33049,7 @@ fn lock_dry_run_noop() -> Result<()> {
     Resolved 5 packages in [TIME]
     No lockfile changes detected
     ");
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
