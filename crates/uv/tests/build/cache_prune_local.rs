@@ -3,6 +3,7 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 
 use uv_cache::{Cache, CacheBucket};
+use uv_static::EnvVars;
 use uv_test::{assert_path_missing, uv_snapshot};
 
 /// `cache prune --ci` should be a no-op if the cache does not contain any buckets.
@@ -18,6 +19,52 @@ fn prune_ci_empty_cache() -> Result<()> {
     No unused entries found
     ");
 
+    Ok(())
+}
+
+#[test]
+fn prune_force_unlocked_cache() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let response =
+        ChildPath::new(Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::Simple))
+            .child("response.rkyv");
+    response.write_str("cached response")?;
+
+    uv_snapshot!(context.filters(), context.prune().arg("--verbose").arg("--force"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
+    DEBUG uv [VERSION] ([COMMIT] DATE)
+    Pruning cache at: [CACHE_DIR]/
+    No unused entries found
+    ");
+
+    assert_eq!(context.read(response), "cached response");
+    Ok(())
+}
+
+#[tokio::test]
+async fn prune_force_busy_cache() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let stale = context.cache_dir.child("simple-v4");
+    stale.create_dir_all()?;
+
+    // Bound the wait so a regression in `--force` fails instead of hanging the test.
+    let _cache = Cache::from_path(context.cache_dir.path())
+        .with_exclusive_lock()
+        .await?;
+    uv_snapshot!(context.filters(), context.prune().arg("--verbose").arg("--force").env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
+    DEBUG uv [VERSION] ([COMMIT] DATE)
+    DEBUG Lock is busy for `[CACHE_DIR]/`
+    DEBUG Cache is currently in use, proceeding due to `--force`
+    Pruning cache at: [CACHE_DIR]/
+    DEBUG Removing dangling cache bucket: [CACHE_DIR]/simple-v4
+    Removed 1 directory (0B)
+    ");
+    assert_path_missing(stale);
     Ok(())
 }
 
