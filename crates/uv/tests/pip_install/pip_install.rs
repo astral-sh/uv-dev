@@ -6,6 +6,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow};
 use assert_cmd::prelude::*;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -12320,12 +12321,11 @@ fn respect_no_installer_metadata_env_var() {
 
     context.assert_command("import urllib3").success();
 
-    // Assert INSTALLER file was _not_ created.
-    let installer_file = context
-        .site_packages()
-        .join("urllib3-2.2.3.dist-info")
-        .join("INSTALLER");
-    assert!(!installer_file.exists());
+    let dist_info = ChildPath::new(context.site_packages()).child("urllib3-2.2.1.dist-info");
+    dist_info.assert(predicates::path::is_dir());
+    dist_info
+        .child("INSTALLER")
+        .assert(predicates::path::missing());
 }
 
 /// Check that we error if a source dist lies about its built wheel version.
