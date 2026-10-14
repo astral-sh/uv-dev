@@ -875,7 +875,7 @@ fn python_install_preview() {
 ///
 /// See: <https://github.com/astral-sh/uv/issues/9707>
 #[test]
-fn python_install_multiple_unmanaged_executables() {
+fn python_install_multiple_unmanaged_executables() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -890,13 +890,18 @@ fn python_install_multiple_unmanaged_executables() {
      + cpython-3.13.[LATEST]-[PLATFORM] (python, python3, python3.13)
     ");
 
-    // Replace each managed executable with an empty, unmanaged file.
-    for name in ["python", "python3", "python3.13"] {
-        let executable = context
-            .bin_dir
-            .child(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-        fs_err::remove_file(executable.path()).unwrap();
-        executable.touch().unwrap();
+    // Give each unmanaged executable distinct contents to detect accidental replacements.
+    let executables = ["python", "python3", "python3.13"].map(|name| {
+        (
+            name,
+            context
+                .bin_dir
+                .child(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
+        )
+    });
+    for (name, executable) in &executables {
+        fs_err::remove_file(executable.path())?;
+        executable.write_str(name)?;
     }
 
     // Re-installing without `--force` should report all three conflicts in a single grouped error.
@@ -907,13 +912,10 @@ fn python_install_multiple_unmanaged_executables() {
       cause: Executables `python3.13`, `python3`, and `python` already exist in `[BIN]/` but are not managed by uv; use `--force` to replace them
     ");
 
-    // The unmanaged executables should be left untouched (still empty).
-    for name in ["python", "python3", "python3.13"] {
-        let executable = context
-            .bin_dir
-            .child(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-        assert_eq!(fs_err::read_to_string(executable.path()).unwrap(), "");
+    for (name, executable) in executables {
+        assert_eq!(context.read(executable), name);
     }
+    Ok(())
 }
 
 #[test]
