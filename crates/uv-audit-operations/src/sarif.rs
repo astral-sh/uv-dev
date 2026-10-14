@@ -5,14 +5,30 @@
 //! `uv audit` emits is modeled here.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use serde::Serialize;
 use serde_json::Value;
 use uv_audit::{AdverseStatus, ProjectStatus, Vulnerability};
+use uv_fs::{CWD, find_git_repository_root, relative_to};
 use uv_normalize::PackageName;
 use uv_version::version;
 
 use super::AuditResults;
+
+/// Resolve an artifact path into the URI used by SARIF consumers.
+fn artifact_uri(path: &Path) -> String {
+    let path = if let Some(repository_root) = find_git_repository_root(path)
+        && let Ok(relative) = relative_to(path, repository_root)
+    {
+        relative
+    } else if let Ok(relative) = path.strip_prefix(&*CWD) {
+        relative.to_path_buf()
+    } else {
+        path.to_path_buf()
+    };
+    path.to_string_lossy().replace('\\', "/")
+}
 
 /// Top-level SARIF log object (SARIF §3.13).
 #[derive(Debug, Serialize)]
@@ -24,7 +40,16 @@ pub struct Report {
 }
 
 impl Report {
-    pub(super) fn from_findings(
+    pub(super) fn from_audit(audit: &AuditResults) -> Self {
+        let (vulnerabilities, statuses) = audit.split_findings();
+        Self::from_findings(
+            &vulnerabilities,
+            &statuses,
+            &artifact_uri(&audit.artifact_path),
+        )
+    }
+
+    fn from_findings(
         vulnerabilities: &[&Vulnerability],
         statuses: &[&ProjectStatus],
         artifact_uri: &str,
@@ -99,16 +124,12 @@ impl Report {
         report.runs.clear();
 
         for (name, results) in audits {
-            let (vulnerabilities, statuses) = results.split_findings();
-            let runs = Self::from_findings(&vulnerabilities, &statuses, &results.artifact_uri)
-                .runs
-                .into_iter()
-                .map(|mut run| {
-                    run.automation_details = Some(RunAutomationDetails {
-                        id: RunId(format!("uv/tool-audit/{name}")),
-                    });
-                    run
+            let runs = Self::from_audit(results).runs.into_iter().map(|mut run| {
+                run.automation_details = Some(RunAutomationDetails {
+                    id: RunId(format!("uv/tool-audit/{name}")),
                 });
+                run
+            });
             report.runs.extend(runs);
         }
 
