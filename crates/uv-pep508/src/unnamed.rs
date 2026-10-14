@@ -206,7 +206,7 @@ fn parse_unnamed_requirement<Url: UnnamedRequirementUrl>(
 /// - `https://download.pytorch.org/whl/torch_stable.html`
 fn preprocess_unnamed_url<Url: UnnamedRequirementUrl>(
     url: &str,
-    #[cfg_attr(not(feature = "non-pep508-extensions"), allow(unused))] working_dir: Option<&Path>,
+    working_dir: Option<&Path>,
     cursor: &Cursor,
     start: usize,
     len: usize,
@@ -237,109 +237,31 @@ fn preprocess_unnamed_url<Url: UnnamedRequirementUrl>(
     let expanded = expand_env_vars(url);
     let vars_expanded = were_vars_expanded(url, expanded.as_ref());
 
-    if let Some((scheme, path)) = split_scheme(&expanded) {
-        match Scheme::parse(scheme) {
-            // Ex) `file:///home/ferris/project/scripts/...`, `file://localhost/home/ferris/project/scripts/...`, or `file:../ferris/`
-            Some(Scheme::File) => {
-                // Strip the leading slashes, along with the `localhost` host, if present.
-                let path = strip_host(path);
-
-                // Transform, e.g., `/C:/Users/ferris/wheel-0.42.0.tar.gz` to `C:\Users\ferris\wheel-0.42.0.tar.gz`.
-                let path = normalize_url_path(path);
-
-                #[cfg(feature = "non-pep508-extensions")]
-                if let Some(working_dir) = working_dir {
-                    let url = Url::parse_path(path.as_ref(), working_dir)
-                        .map_err(|err| Pep508Error {
-                            message: Pep508ErrorSource::UrlError(Box::new(err)),
-                            start,
-                            len,
-                            input: cursor.to_string(),
-                        })?
-                        .with_given(url)
-                        .with_expanded(vars_expanded);
-                    return Ok((url, extras));
-                }
-
-                let url = Url::parse_absolute_path(path.as_ref())
-                    .map_err(|err| Pep508Error {
-                        message: Pep508ErrorSource::UrlError(Box::new(err)),
-                        start,
-                        len,
-                        input: cursor.to_string(),
-                    })?
-                    .with_given(url)
-                    .with_expanded(vars_expanded);
-                Ok((url, extras))
-            }
-            // Ex) `https://download.pytorch.org/whl/torch_stable.html`
-            Some(_) => {
-                // Ex) `https://download.pytorch.org/whl/torch_stable.html`
-                let url = Url::parse_unnamed_url(expanded.as_ref())
-                    .map_err(|err| Pep508Error {
-                        message: Pep508ErrorSource::UrlError(Box::new(err)),
-                        start,
-                        len,
-                        input: cursor.to_string(),
-                    })?
-                    .with_given(url)
-                    .with_expanded(vars_expanded);
-                Ok((url, extras))
-            }
-
-            // Ex) `C:\Users\ferris\wheel-0.42.0.tar.gz`
-            _ => {
-                if let Some(working_dir) = working_dir {
-                    let url = Url::parse_path(expanded.as_ref(), working_dir)
-                        .map_err(|err| Pep508Error {
-                            message: Pep508ErrorSource::UrlError(Box::new(err)),
-                            start,
-                            len,
-                            input: cursor.to_string(),
-                        })?
-                        .with_given(url)
-                        .with_expanded(vars_expanded);
-                    return Ok((url, extras));
-                }
-
-                let url = Url::parse_absolute_path(expanded.as_ref())
-                    .map_err(|err| Pep508Error {
-                        message: Pep508ErrorSource::UrlError(Box::new(err)),
-                        start,
-                        len,
-                        input: cursor.to_string(),
-                    })?
-                    .with_given(url)
-                    .with_expanded(vars_expanded);
-                Ok((url, extras))
-            }
+    let parse_path = |path: &str| match working_dir {
+        Some(working_dir) => Url::parse_path(path, working_dir),
+        None => Url::parse_absolute_path(path),
+    };
+    let url = match split_scheme(&expanded)
+        .and_then(|(scheme, path)| Scheme::parse(scheme).map(|scheme| (scheme, path)))
+    {
+        Some((Scheme::File, path)) => {
+            // Strip leading slashes and the localhost host, then normalize Windows drive letters.
+            let path = normalize_url_path(strip_host(path));
+            parse_path(path.as_ref())
         }
-    } else {
-        // Ex) `../editable/`
-        if let Some(working_dir) = working_dir {
-            let url = Url::parse_path(expanded.as_ref(), working_dir)
-                .map_err(|err| Pep508Error {
-                    message: Pep508ErrorSource::UrlError(Box::new(err)),
-                    start,
-                    len,
-                    input: cursor.to_string(),
-                })?
-                .with_given(url)
-                .with_expanded(vars_expanded);
-            return Ok((url, extras));
-        }
-
-        let url = Url::parse_absolute_path(expanded.as_ref())
-            .map_err(|err| Pep508Error {
-                message: Pep508ErrorSource::UrlError(Box::new(err)),
-                start,
-                len,
-                input: cursor.to_string(),
-            })?
-            .with_given(url)
-            .with_expanded(vars_expanded);
-        Ok((url, extras))
+        Some(_) => Url::parse_unnamed_url(expanded.as_ref()),
+        // An unrecognized scheme may be a Windows drive letter.
+        None => parse_path(expanded.as_ref()),
     }
+    .map_err(|err| Pep508Error {
+        message: Pep508ErrorSource::UrlError(Box::new(err)),
+        start,
+        len,
+        input: cursor.to_string(),
+    })?
+    .with_given(url)
+    .with_expanded(vars_expanded);
+    Ok((url, extras))
 }
 
 /// Like [`crate::parse_url`], but allows for extras to be present at the end of the URL, to comply
