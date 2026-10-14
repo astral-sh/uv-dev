@@ -11,18 +11,14 @@ pub fn resolution_markers(
     python_platform: Option<&TargetTriple>,
     interpreter: &Interpreter,
 ) -> ResolverMarkerEnvironment {
-    match (python_platform, python_version) {
-        (Some(python_platform), Some(python_version)) => ResolverMarkerEnvironment::from(
-            python_version.markers(python_platform.markers(interpreter.markers().clone())),
-        ),
-        (Some(python_platform), None) => {
-            ResolverMarkerEnvironment::from(python_platform.markers(interpreter.markers().clone()))
-        }
-        (None, Some(python_version)) => {
-            ResolverMarkerEnvironment::from(python_version.markers(interpreter.markers().clone()))
-        }
-        (None, None) => interpreter.to_resolver_marker_environment(),
+    let mut markers = interpreter.markers().clone();
+    if let Some(python_platform) = python_platform {
+        markers = python_platform.markers(markers);
     }
+    if let Some(python_version) = python_version {
+        markers = python_version.markers(markers);
+    }
+    ResolverMarkerEnvironment::from(markers)
 }
 
 pub fn resolution_tags<'env>(
