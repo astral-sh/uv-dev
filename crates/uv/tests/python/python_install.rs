@@ -427,9 +427,10 @@ fn python_install_automatic() {
     {
         use std::os::unix::fs::PermissionsExt;
 
-        let contents = r"#!/bin/sh
+        let contents = r#"#!/bin/sh
+        printf 'queried\n' > "$0.queried"
         echo 'error: intentionally broken python executable' >&2
-        exit 1";
+        exit 1"#;
         let python = context
             .bin_dir
             .join(format!("python3{}", std::env::consts::EXE_SUFFIX));
@@ -450,6 +451,7 @@ fn python_install_automatic() {
         ----- stdout -----
         (3, 11)
         ");
+        assert_eq!(context.read(python.with_extension("queried")), "queried\n");
     }
 }
 
