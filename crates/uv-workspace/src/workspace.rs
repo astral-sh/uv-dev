@@ -2155,41 +2155,19 @@ impl VirtualProject {
             )
             .await?;
             Ok(Self::Project(project))
-        } else if let Some(workspace) = pyproject_toml
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.workspace.as_ref())
-        {
-            // Otherwise, if it contains a `tool.uv.workspace` table, it's a non-project workspace
-            // root.
-            let project_path = std::path::absolute(project_root)
-                .map_err(WorkspaceErrorKind::Normalize)?
-                .clone();
-
-            let result = Workspace::build(
-                project_path.clone(),
-                workspace.clone(),
-                pyproject_toml,
-                None,
-                options,
-                cache,
-            )
-            .await;
-            if options.members == MemberDiscovery::All {
-                workspace_cache.insert(result.clone(), &project_path);
-            }
-            Ok(Self::NonProject(result?))
         } else {
-            // Otherwise it's a pyproject.toml that maybe contains dependency-groups
-            // that we want to treat like a project/workspace to handle those uniformly
-            let project_path = std::path::absolute(project_root)
-                .map_err(WorkspaceErrorKind::Normalize)?
-                .clone();
+            // A non-project manifest can define dependency groups without an explicit workspace.
+            let workspace = pyproject_toml
+                .tool
+                .as_ref()
+                .and_then(|tool| tool.uv.as_ref())
+                .and_then(|uv| uv.workspace.as_ref());
+            let project_path =
+                std::path::absolute(project_root).map_err(WorkspaceErrorKind::Normalize)?;
 
             let result = Workspace::build(
                 project_path.clone(),
-                ToolUvWorkspace::default(),
+                workspace.cloned().unwrap_or_default(),
                 pyproject_toml,
                 None,
                 options,
