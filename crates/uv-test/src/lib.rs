@@ -2008,18 +2008,9 @@ impl TestContext {
         create_venv_from_executable(&self.venv, &self.cache_dir, &executable, &self.uv_bin);
     }
 
-    /// Copies the files from the ecosystem project given into this text
-    /// context.
-    ///
-    /// This will almost always write at least a `pyproject.toml` into this
-    /// test context.
-    ///
-    /// The given name should correspond to the name of a sub-directory (not a
-    /// path to it) in the `test/ecosystem` directory.
-    ///
-    /// This panics (fails the current test) for any failure.
+    /// Copy the named fixture from `test/ecosystem` into this test context.
     pub fn copy_ecosystem_project(&self, name: &str) {
-        let project_dir = PathBuf::from(format!("../../test/ecosystem/{name}"));
+        let project_dir = self.workspace_root.join("test/ecosystem").join(name);
         copy_dir_ignore(project_dir, &self.temp_dir).expect("Failed to copy ecosystem project");
         // If there is a (gitignore) lockfile, remove it.
         if let Err(err) = fs_err::remove_file(self.temp_dir.join("uv.lock")) {
