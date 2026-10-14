@@ -71,12 +71,8 @@ impl GitReference {
 
     /// Converts the [`GitReference`] to a percent-encoded revision string for use in a URL.
     pub fn as_url_rev(&self) -> Option<Cow<'_, str>> {
-        self.as_str().map(Self::encode_rev)
-    }
-
-    /// Percent-encode a revision string for use in a URL.
-    pub(crate) fn encode_rev(rev: &str) -> Cow<'_, str> {
-        utf8_percent_encode(rev, GIT_REFERENCE_ENCODE_SET).into()
+        self.as_str()
+            .map(|revision| utf8_percent_encode(revision, GIT_REFERENCE_ENCODE_SET).into())
     }
 
     /// Returns the kind of this reference.
