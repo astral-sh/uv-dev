@@ -195,19 +195,18 @@ fn require_build_hashes_forced_pep517() -> Result<()> {
     Ok(())
 }
 
-/// Test the `--list` option.
+/// Listing a wheel built from an sdist requires producing the sdist first.
 #[test]
-fn list_files() {
-    let context = uv_test::test_context!("3.12");
-
+fn list_default_plan() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let built_by_uv = context.workspace_root.join("test/packages/built-by-uv");
+    let output = context.temp_dir.child("dist");
 
-    // By default, we build the wheel from the source dist, which we need to do even for the list
-    // task.
     uv_snapshot!(context.build()
         .arg(&built_by_uv)
         .arg("--out-dir")
-        .arg(context.temp_dir.join("output1"))
+        .arg(output.path())
+        .arg("--no-index")
         .arg("--list"), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -246,23 +245,25 @@ fn list_files() {
 
     ----- stderr -----
     Building source distribution...
-    Successfully built output1/built_by_uv-0.1.0.tar.gz
+    Successfully built dist/built_by_uv-0.1.0.tar.gz
     ");
-    context
-        .temp_dir
-        .child("output1")
+    output
         .child("built_by_uv-0.1.0.tar.gz")
         .assert(predicate::path::is_file());
-    context
-        .temp_dir
-        .child("output1")
-        .child("built_by_uv-0.1.0-py3-none-any.whl")
-        .assert(predicate::path::missing());
+    assert_path_missing(output.child("built_by_uv-0.1.0-py3-none-any.whl"));
+}
 
+/// Listing artifacts built directly from the source tree produces neither artifact.
+#[test]
+fn list_sdist_and_wheel_plan() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let built_by_uv = context.workspace_root.join("test/packages/built-by-uv");
+    let output = context.temp_dir.child("dist");
     uv_snapshot!(context.build()
         .arg(&built_by_uv)
         .arg("--out-dir")
-        .arg(context.temp_dir.join("output2"))
+        .arg(output.path())
+        .arg("--no-index")
         .arg("--list")
         .arg("--sdist")
         .arg("--wheel"), @"
@@ -301,16 +302,8 @@ fn list_files() {
     built_by_uv-0.1.0.dist-info/entry_points.txt (generated)
     built_by_uv-0.1.0.dist-info/METADATA (generated)
     ");
-    context
-        .temp_dir
-        .child("output2")
-        .child("built_by_uv-0.1.0.tar.gz")
-        .assert(predicate::path::missing());
-    context
-        .temp_dir
-        .child("output2")
-        .child("built_by_uv-0.1.0-py3-none-any.whl")
-        .assert(predicate::path::missing());
+    assert_path_missing(output.child("built_by_uv-0.1.0.tar.gz"));
+    assert_path_missing(output.child("built_by_uv-0.1.0-py3-none-any.whl"));
 }
 
 /// Test `--list` option errors.
