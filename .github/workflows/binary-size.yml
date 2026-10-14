@@ -1,18 +1,13 @@
-name: "Binary size"
-
 on:
-  push:
-    branches: [main]
-  pull_request:
-    types: [opened, synchronize, reopened, labeled]
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      save-rust-cache:
+        required: false
+        type: string
+        default: "true"
 
 permissions:
   contents: read
-
-concurrency:
-  group: binary-size-${{ github.event.pull_request.number || github.sha }}-${{ github.event.action == 'labeled' && github.event.label.name != 'build:binary-size' && github.run_id || 'measurement' }}
-  cancel-in-progress: true
 
 env:
   AWS_LC_SYS_USE_SYSTEM: "0"
@@ -24,10 +19,6 @@ env:
 
 jobs:
   plan:
-    if: >-
-      github.event_name != 'pull_request' ||
-      (contains(github.event.pull_request.labels.*.name, 'build:binary-size') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'build:binary-size'))
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-latest' }}
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -102,6 +93,7 @@ jobs:
           key: binary-size-${{ matrix.name }}-${{ hashFiles('source/Cargo.toml') }}
           workspaces: source -> target
           cache-workspace-crates: "true"
+          save-if: ${{ inputs.save-rust-cache == 'true' }}
 
       - name: "Record Cargo cache freshness"
         if: ${{ steps.baseline.outputs.cache-hit != 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
@@ -141,7 +133,7 @@ jobs:
           python3 ../scripts/prune_cargo_workspace_cache.py "target/$TARGET/minimal-size" "$RUNNER_TEMP/uv-cargo-cache-marker"
 
       - name: "Save incremental artifacts"
-        if: ${{ steps.baseline.outputs.cache-hit != 'true' && steps.incremental-cache.outputs.cache-hit != 'true' }}
+        if: ${{ inputs.save-rust-cache == 'true' && steps.baseline.outputs.cache-hit != 'true' && steps.incremental-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: source/target/**/incremental
@@ -166,6 +158,8 @@ jobs:
   report:
     needs: measure
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-latest' }}
+    outputs:
+      comment: ${{ steps.report.outputs.comment }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -175,6 +169,7 @@ jobs:
           pattern: binary-size-*
           path: measurements
       - name: "Summarize binary sizes"
+        id: report
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -184,3 +179,62 @@ jobs:
             args+=(--base measurements/binary-size-base/measurement.json)
           fi
           python3 scripts/binary_size.py report measurements/binary-size-current/measurement.json "${args[@]}" | tee "$GITHUB_STEP_SUMMARY"
+          comment="$(python3 scripts/binary_size.py report measurements/binary-size-current/measurement.json "${args[@]}" --sizes-only | jq -Rs .)"
+          echo "comment=$comment" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: report
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.repository == 'astral-sh/uv' || github.repository == 'astral-sh/uv-dev')
+    runs-on: github-ubuntu-24.04-x86_64-2
+    environment: automations
+    timeout-minutes: 5
+    permissions:
+      id-token: write # for the pull request comment credential broker
+    steps:
+      - name: "Get pull request comment token"
+        id: token
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ github.repository }}
+          permissions: |
+            pull_requests: write
+
+      - name: "Update binary-size report"
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
+          REPORT_JSON: ${{ needs.report.outputs.comment }}
+          AUTOMATIONS_BOT_ID: "305554984"
+        run: |
+          pull_request="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")"
+          if ! jq --exit-status --arg head "$HEAD_SHA" --arg merge "$MERGE_SHA" \
+            '.state == "open" and .head.sha == $head and .merge_commit_sha == $merge and any(.labels[]; .name == "build:binary-size")' \
+            <<< "$pull_request" > /dev/null; then
+            echo "The pull request changed or no longer requests a binary-size report."
+            exit 0
+          fi
+
+          marker="<!-- uv-binary-size -->"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
+          jq --null-input --argjson report "$REPORT_JSON" --arg marker "$marker" --arg run_url "$run_url" \
+            '{body: ($marker + "\n" + $report + "\n[CI run](" + $run_url + ").\n")}' \
+            > "$RUNNER_TEMP/binary-size-comment.json"
+
+          comments="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/comments" --paginate --slurp)"
+          comment_id="$(jq --raw-output --arg marker "$marker" --argjson bot_id "$AUTOMATIONS_BOT_ID" \
+            '[.[][] | select(.user.id == $bot_id and (.body | startswith($marker))) | .id] | last // empty' \
+            <<< "$comments")"
+          if [ -n "$comment_id" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" \
+              --input "$RUNNER_TEMP/binary-size-comment.json" --silent
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/comments" \
+              --input "$RUNNER_TEMP/binary-size-comment.json" --silent
+          fi

@@ -86,7 +86,7 @@ def measure(
     }
 
 
-def report(current: dict, base: dict | None) -> str:
+def report(current: dict, base: dict | None, *, sizes_only: bool = False) -> str:
     if current["target"] != TARGET or (base and base["target"] != TARGET):
         raise ValueError(f"Expected measurements for {TARGET}")
 
@@ -136,7 +136,7 @@ def report(current: dict, base: dict | None) -> str:
             line += f" (baseline: `{base['rustc'][binary]}`)"
         lines.append(line)
 
-    if durations := current.get("build_seconds"):
+    if not sizes_only and (durations := current.get("build_seconds")):
         cache_match = "yes" if current["rust_cache_hit"] else "no"
         lines += [
             "",
@@ -176,6 +176,7 @@ def main() -> None:
     summary = commands.add_parser("report")
     summary.add_argument("current", type=Path)
     summary.add_argument("--base", type=Path)
+    summary.add_argument("--sizes-only", action="store_true")
     args = parser.parse_args()
 
     if args.command == "build":
@@ -191,7 +192,7 @@ def main() -> None:
     elif args.command == "report":
         current = json.loads(args.current.read_text())
         base = json.loads(args.base.read_text()) if args.base else None
-        print(report(current, base), end="")
+        print(report(current, base, sizes_only=args.sizes_only), end="")
 
 
 if __name__ == "__main__":
