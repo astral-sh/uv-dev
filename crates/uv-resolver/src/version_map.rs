@@ -773,17 +773,10 @@ impl VersionMapLazy {
         let hash_policy = self
             .hasher
             .archive_policy_for_package(&filename.name, &filename.version);
-        let required_hashes = hash_policy.digests();
-        let hash = if required_hashes.is_empty() {
+        let hash = if hash_policy.digests().is_empty() {
             HashComparison::Matched
         } else {
-            if hashes.is_empty() {
-                HashComparison::Missing
-            } else if hash_policy.matches(hashes) {
-                HashComparison::Matched
-            } else {
-                HashComparison::Mismatched
-            }
+            HashComparison::compare(hash_policy, hashes)
         };
 
         SourceDistCompatibility::Compatible(hash)
@@ -845,17 +838,10 @@ impl VersionMapLazy {
 
         // Check if hashes line up. If hashes aren't required, they're considered matching.
         let hash_policy = self.hasher.archive_policy_for_package(name, version);
-        let required_hashes = hash_policy.digests();
-        let hash = if required_hashes.is_empty() {
+        let hash = if hash_policy.digests().is_empty() {
             HashComparison::Matched
         } else {
-            if hashes.is_empty() {
-                HashComparison::Missing
-            } else if hash_policy.matches(hashes) {
-                HashComparison::Matched
-            } else {
-                HashComparison::Mismatched
-            }
+            HashComparison::compare(hash_policy, hashes)
         };
 
         // Break ties with the build tag.
