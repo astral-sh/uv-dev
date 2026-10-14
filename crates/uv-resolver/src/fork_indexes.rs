@@ -1,13 +1,13 @@
-use rustc_hash::FxHashMap;
+use hashbrown::hash_map::EntryRef;
 use uv_distribution_types::IndexMetadata;
 use uv_normalize::PackageName;
 
-use crate::ResolveError;
 use crate::resolver::ResolverEnvironment;
+use crate::{FxHashbrownMap, ResolveError};
 
 /// See [`crate::resolver::ForkState`].
 #[derive(Default, Debug, Clone)]
-pub(crate) struct ForkIndexes(FxHashMap<PackageName, IndexMetadata>);
+pub(crate) struct ForkIndexes(FxHashbrownMap<PackageName, IndexMetadata>);
 
 impl ForkIndexes {
     /// Get the [`Index`] previously used for a package in this fork.
@@ -22,16 +22,21 @@ impl ForkIndexes {
         index: &IndexMetadata,
         env: &ResolverEnvironment,
     ) -> Result<(), ResolveError> {
-        if let Some(previous) = self.0.insert(package_name.clone(), index.clone()) {
-            if &previous != index {
-                let mut conflicts = vec![previous.url, index.url.clone()];
-                conflicts.sort();
-                return Err(ResolveError::ConflictingIndexesForEnvironment {
-                    package_name: package_name.clone(),
-                    indexes: conflicts,
-                    env: env.clone(),
-                });
+        let previous = match self.0.entry_ref(package_name) {
+            EntryRef::Occupied(mut entry) => entry.insert(index.clone()),
+            EntryRef::Vacant(entry) => {
+                entry.insert(index.clone());
+                return Ok(());
             }
+        };
+        if &previous != index {
+            let mut conflicts = vec![previous.url, index.url.clone()];
+            conflicts.sort();
+            return Err(ResolveError::ConflictingIndexesForEnvironment {
+                package_name: package_name.clone(),
+                indexes: conflicts,
+                env: env.clone(),
+            });
         }
         Ok(())
     }
