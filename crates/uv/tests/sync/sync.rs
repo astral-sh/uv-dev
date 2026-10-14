@@ -6832,9 +6832,8 @@ fn sync_ignore_extras_check_when_no_provides_extras() -> Result<()> {
         "#,
     )?;
 
-    // Write a lockfile that does not have `provides-extra`, simulating a version that predates when
-    // the feature was added.
-    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+    // Omit `provides-extras`, as lockfiles created before extra validation did.
+    let legacy_lock = indoc! {r#"
         version = 1
         requires-python = ">=3.12"
 
@@ -6859,13 +6858,27 @@ fn sync_ignore_extras_check_when_no_provides_extras() -> Result<()> {
         wheels = [
             { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235 },
         ]
-    "#})?;
+    "#};
+    let lockfile = context.temp_dir.child("uv.lock");
+    lockfile.write_str(legacy_lock)?;
 
     // Requesting a non-existent extra should not fail, as no validation should be performed.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("baz"), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--extra", "baz", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Checked in [TIME]
+    ");
+
+    // Supplying the extra metadata enables validation for the same lock and request.
+    lockfile.write_str(&legacy_lock.replacen(
+        "[package.metadata]",
+        "[package.metadata]\nprovides-extras = [\"types\"]",
+        1,
+    ))?;
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--extra", "baz", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `baz` is not defined in the `optional-dependencies` table for `project`
     ");
 
     Ok(())
