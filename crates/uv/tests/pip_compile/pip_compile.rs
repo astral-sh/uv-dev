@@ -37,7 +37,7 @@ use uv_test::archive::write_tar_gz;
 use uv_test::assert_link_target;
 #[cfg(feature = "test-universal")]
 use uv_test::diff_snapshot;
-use uv_test::packse::scenario::{ArtifactMetadata, Package, PackageMetadata, Scenario};
+use uv_test::packse::scenario::{Package, PackageMetadata, Scenario};
 use uv_test::packse::{PackseServer, generate_wheel};
 use uv_test::{
     DEFAULT_PYTHON_VERSION, TestContext, copy_dir_ignore, download_to_disk, uv_snapshot,
@@ -382,8 +382,7 @@ fn compile_constraints_many_versions() -> Result<()> {
             version.clone(),
             PackageMetadata {
                 requires: vec![Requirement::from_str(&format!("dependency=={version}"))?],
-                wheel: Some(ArtifactMetadata::default()),
-                ..PackageMetadata::default()
+                ..PackageMetadata::wheel_only()
             },
         );
     }
@@ -400,10 +399,7 @@ fn compile_constraints_many_versions() -> Result<()> {
         Package {
             versions: BTreeMap::from([(
                 Version::from_str("2.0.0")?,
-                PackageMetadata {
-                    wheel: Some(ArtifactMetadata::default()),
-                    ..PackageMetadata::default()
-                },
+                PackageMetadata::wheel_only(),
             )]),
         },
     );
@@ -7428,8 +7424,7 @@ fn offline_registry() -> Result<()> {
                     Version::from_str("1.0.0")?,
                     PackageMetadata {
                         requires,
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
+                        ..PackageMetadata::wheel_only()
                     },
                 )]),
             },
@@ -10259,16 +10254,14 @@ fn universal_marker_propagation() -> Result<()> {
                     Version::from_str("2.0.0")?,
                     PackageMetadata {
                         requires_python: None,
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
+                        ..PackageMetadata::wheel_only()
                     },
                 ),
                 (
                     Version::from_str("2.2.0")?,
                     PackageMetadata {
                         requires_python: None,
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
+                        ..PackageMetadata::wheel_only()
                     },
                 ),
             ]),
@@ -10283,8 +10276,7 @@ fn universal_marker_propagation() -> Result<()> {
                     PackageMetadata {
                         requires_python: None,
                         requires: vec![Requirement::from_str("torch==2.0.0")?],
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
+                        ..PackageMetadata::wheel_only()
                     },
                 ),
                 (
@@ -10292,8 +10284,7 @@ fn universal_marker_propagation() -> Result<()> {
                     PackageMetadata {
                         requires_python: None,
                         requires: vec![Requirement::from_str("torch==2.2.0")?],
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
+                        ..PackageMetadata::wheel_only()
                     },
                 ),
             ]),
@@ -11535,20 +11526,8 @@ fn editable_scoped_exclusion_lowest_direct() -> Result<()> {
         PackageName::from_str("foo")?,
         Package {
             versions: BTreeMap::from([
-                (
-                    Version::from_str("1.0.0")?,
-                    PackageMetadata {
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
-                    },
-                ),
-                (
-                    Version::from_str("2.0.0")?,
-                    PackageMetadata {
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
-                    },
-                ),
+                (Version::from_str("1.0.0")?, PackageMetadata::wheel_only()),
+                (Version::from_str("2.0.0")?, PackageMetadata::wheel_only()),
             ]),
         },
     );
@@ -11559,8 +11538,7 @@ fn editable_scoped_exclusion_lowest_direct() -> Result<()> {
                 Version::from_str("1.0.0")?,
                 PackageMetadata {
                     requires: vec![Requirement::from_str("foo>=1")?],
-                    wheel: Some(ArtifactMetadata::default()),
-                    ..PackageMetadata::default()
+                    ..PackageMetadata::wheel_only()
                 },
             )]),
         },
@@ -11688,8 +11666,7 @@ fn scoped_exclusion_recursive_extra() -> Result<()> {
                         Requirement::from_str("parent[foo]")?,
                         Requirement::from_str("child==1.0.0 ; extra == 'foo'")?,
                     ],
-                    wheel: Some(ArtifactMetadata::default()),
-                    ..PackageMetadata::default()
+                    ..PackageMetadata::wheel_only()
                 },
             )]),
         },
@@ -11740,19 +11717,10 @@ fn shadowed_scoped_override_candidate_policy() -> Result<()> {
         PackageName::from_str("target")?,
         Package {
             versions: BTreeMap::from([
-                (
-                    Version::from_str("1.0.0")?,
-                    PackageMetadata {
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
-                    },
-                ),
+                (Version::from_str("1.0.0")?, PackageMetadata::wheel_only()),
                 (
                     Version::from_str("2.0.0rc1")?,
-                    PackageMetadata {
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
-                    },
+                    PackageMetadata::wheel_only(),
                 ),
             ]),
         },
@@ -11762,10 +11730,7 @@ fn shadowed_scoped_override_candidate_policy() -> Result<()> {
         Package {
             versions: BTreeMap::from([(
                 Version::from_str("1.0.0")?,
-                PackageMetadata {
-                    wheel: Some(ArtifactMetadata::default()),
-                    ..PackageMetadata::default()
-                },
+                PackageMetadata::wheel_only(),
             )]),
         },
     );
@@ -11773,19 +11738,12 @@ fn shadowed_scoped_override_candidate_policy() -> Result<()> {
         PackageName::from_str("yanked-target")?,
         Package {
             versions: BTreeMap::from([
-                (
-                    Version::from_str("1.0.0")?,
-                    PackageMetadata {
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
-                    },
-                ),
+                (Version::from_str("1.0.0")?, PackageMetadata::wheel_only()),
                 (
                     Version::from_str("2.0.0")?,
                     PackageMetadata {
-                        wheel: Some(ArtifactMetadata::default()),
                         yanked: true,
-                        ..PackageMetadata::default()
+                        ..PackageMetadata::wheel_only()
                     },
                 ),
             ]),
@@ -11802,8 +11760,7 @@ fn shadowed_scoped_override_candidate_policy() -> Result<()> {
                         Requirement::from_str("yanked-target>=1")?,
                         Requirement::from_str("existing>=1")?,
                     ],
-                    wheel: Some(ArtifactMetadata::default()),
-                    ..PackageMetadata::default()
+                    ..PackageMetadata::wheel_only()
                 },
             )]),
         },
@@ -11871,19 +11828,10 @@ fn inactive_scoped_override_does_not_enable_prerelease() -> Result<()> {
         PackageName::from_str("target")?,
         Package {
             versions: BTreeMap::from([
-                (
-                    Version::from_str("1.0.0")?,
-                    PackageMetadata {
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
-                    },
-                ),
+                (Version::from_str("1.0.0")?, PackageMetadata::wheel_only()),
                 (
                     Version::from_str("2.0.0rc1")?,
-                    PackageMetadata {
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
-                    },
+                    PackageMetadata::wheel_only(),
                 ),
             ]),
         },
@@ -11896,16 +11844,14 @@ fn inactive_scoped_override_does_not_enable_prerelease() -> Result<()> {
                     Version::from_str("1.0.0")?,
                     PackageMetadata {
                         requires: vec![Requirement::from_str("target>=1")?],
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
+                        ..PackageMetadata::wheel_only()
                     },
                 ),
                 (
                     Version::from_str("2.0.0")?,
                     PackageMetadata {
                         requires: vec![Requirement::from_str("target>=1")?],
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
+                        ..PackageMetadata::wheel_only()
                     },
                 ),
             ]),
@@ -13390,15 +13336,7 @@ requires-python = ">3.8"
 fn index_with_package_versions(name: &str, versions: &[&str]) -> Result<PackseServer> {
     let versions = versions
         .iter()
-        .map(|version| {
-            Ok((
-                Version::from_str(version)?,
-                PackageMetadata {
-                    wheel: Some(ArtifactMetadata::default()),
-                    ..PackageMetadata::default()
-                },
-            ))
-        })
+        .map(|version| Ok((Version::from_str(version)?, PackageMetadata::wheel_only())))
         .collect::<Result<_>>()?;
     let mut scenario = Scenario::empty();
     scenario
