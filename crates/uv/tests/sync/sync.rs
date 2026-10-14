@@ -7687,8 +7687,13 @@ fn no_install_local() -> Result<()> {
         name = "local"
         version = "0.1.0"
         requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    local.child("src/local/__init__.py").touch()?;
 
     let local_editable = context.temp_dir.child("local-editable");
     local_editable.create_dir_all()?;
@@ -7699,8 +7704,15 @@ fn no_install_local() -> Result<()> {
         name = "local-editable"
         version = "0.1.0"
         requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    local_editable
+        .child("src/local_editable/__init__.py")
+        .touch()?;
 
     let workspace_member = context.temp_dir.child("workspace-member");
     workspace_member.create_dir_all()?;
@@ -7711,8 +7723,15 @@ fn no_install_local() -> Result<()> {
         name = "workspace-member"
         version = "0.1.0"
         requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    workspace_member
+        .child("src/workspace_member/__init__.py")
+        .touch()?;
 
     context.lock().assert().success();
     uv_snapshot!(context.filters(), context.sync().arg("--no-install-local"), @"
@@ -7724,6 +7743,18 @@ fn no_install_local() -> Result<()> {
      + anyio==3.7.0
      + idna==3.6
      + sniffio==1.3.1
+    ");
+
+    // All four local packages are installable when the filter is absent.
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 4 packages in [TIME]
+    Installed 4 packages in [TIME]
+     + local==0.1.0 (from file://[TEMP_DIR]/local)
+     + local-editable==0.1.0 (from file://[TEMP_DIR]/local-editable)
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+     + workspace-member==0.1.0 (from file://[TEMP_DIR]/workspace-member)
     ");
 
     fs_err::remove_dir_all(&context.venv)?;
