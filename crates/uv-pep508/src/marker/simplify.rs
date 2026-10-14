@@ -349,7 +349,7 @@ where
         paths
             .entry(tree)
             .and_modify(|union| *union = union.union(&range))
-            .or_insert_with(|| range.clone());
+            .or_insert(range);
     }
 
     paths
