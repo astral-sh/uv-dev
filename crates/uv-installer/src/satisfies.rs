@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::fmt::Debug;
+use std::path::Path;
 
 use same_file::is_same_file;
 use tracing::{debug, trace};
@@ -39,9 +40,7 @@ pub(crate) enum RequirementSatisfaction {
 }
 
 impl RequirementSatisfaction {
-    /// Returns true if a requirement is satisfied by an installed distribution.
-    ///
-    /// Returns an error if IO fails during a freshness check for a local path.
+    /// Determine whether a requirement is satisfied by an installed distribution.
     pub(crate) fn check(
         name: &PackageName,
         distribution: &InstalledDist,
@@ -80,8 +79,8 @@ impl RequirementSatisfaction {
             return Self::OutOfDate;
         }
 
-        // Filter out already-installed packages.
-        match source {
+        // Check that the installed distribution matches the requested source.
+        let source_satisfaction = match source {
             // If the requirement comes from a registry, check by name.
             RequirementSource::Registry { specifier, .. } => {
                 // If the installed distribution is _not_ from a registry, reject it if and only if
@@ -97,16 +96,17 @@ impl RequirementSatisfaction {
                 // declaratively ahead-of-time. So if you `uv sync` to install `./path/to/idna` and
                 // later `uv sync` to install `anyio`, we'll know (during that second sync) if the
                 // already-installed `idna` should come from the registry or not.
-                if installation == InstallationStrategy::Strict {
-                    if !matches!(distribution.kind, InstalledDistKind::Registry { .. }) {
-                        debug!("Distribution type mismatch for {name}: {distribution:?}");
-                        return Self::Mismatch;
-                    }
+                if installation == InstallationStrategy::Strict
+                    && !matches!(distribution.kind, InstalledDistKind::Registry { .. })
+                {
+                    debug!("Distribution type mismatch for {name}: {distribution:?}");
+                    return Self::Mismatch;
                 }
 
                 if !specifier.contains(distribution.version()) {
                     return Self::Mismatch;
                 }
+                Self::Satisfied
             }
             RequirementSource::Url {
                 // We use the location since `direct_url.json` also stores this URL, e.g.
@@ -150,25 +150,12 @@ impl RequirementSatisfaction {
                 }
 
                 // If the requirement came from a local path, check freshness.
-                if requested_url.scheme() == "file" {
-                    if let Ok(archive) = requested_url.to_file_path() {
-                        let Some(cache_info) = cache_info.as_ref() else {
-                            return Self::OutOfDate;
-                        };
-                        match CacheInfo::from_path(&archive) {
-                            Ok(read_cache_info) => {
-                                if *cache_info != read_cache_info {
-                                    return Self::OutOfDate;
-                                }
-                            }
-                            Err(err) => {
-                                debug!(
-                                    "Failed to read cached requirement for: {distribution} ({err})"
-                                );
-                                return Self::CacheInvalid;
-                            }
-                        }
-                    }
+                if requested_url.scheme() == "file"
+                    && let Ok(archive) = requested_url.to_file_path()
+                {
+                    Self::check_cache_info(distribution, &archive, cache_info.as_ref())
+                } else {
+                    Self::Satisfied
                 }
             }
             RequirementSource::GitDirectory {
@@ -184,11 +171,8 @@ impl RequirementSatisfaction {
                 let DirectUrl::VcsUrl {
                     url: installed_url,
                     vcs_info:
-                        VcsInfo {
-                            vcs: VcsKind::Git,
-                            requested_revision: _,
-                            commit_id: installed_precise,
-                            git_lfs: installed_git_lfs,
+                        installed_vcs @ VcsInfo {
+                            vcs: VcsKind::Git, ..
                         },
                     subdirectory: installed_subdirectory,
                     path: None,
@@ -205,35 +189,7 @@ impl RequirementSatisfaction {
                     return Self::Mismatch;
                 }
 
-                let requested_git_lfs = requested_git.lfs();
-                let installed_git_lfs = installed_git_lfs.map(GitLfs::from).unwrap_or_default();
-                if requested_git_lfs != installed_git_lfs {
-                    debug!(
-                        "Git LFS mismatch: {} (installed) vs. {} (requested)",
-                        installed_git_lfs, requested_git_lfs,
-                    );
-                    return Self::Mismatch;
-                }
-
-                if !RepositoryUrl::parse(installed_url)
-                    .is_ok_and(|installed_url| installed_url == *requested_git.repository())
-                {
-                    debug!(
-                        "Repository mismatch: {:?} vs. {:?}",
-                        installed_url,
-                        requested_git.url()
-                    );
-                    return Self::Mismatch;
-                }
-
-                if !git_commit_matches(installed_precise.as_deref(), requested_git) {
-                    debug!(
-                        "Precise mismatch: {:?} vs. {:?}",
-                        installed_precise,
-                        requested_git.precise()
-                    );
-                    return Self::OutOfDate;
-                }
+                Self::check_git(requested_git, installed_url, installed_vcs)
             }
             RequirementSource::GitPath {
                 url: _,
@@ -249,11 +205,8 @@ impl RequirementSatisfaction {
                 let DirectUrl::VcsUrl {
                     url: installed_url,
                     vcs_info:
-                        VcsInfo {
-                            vcs: VcsKind::Git,
-                            requested_revision: _,
-                            commit_id: installed_precise,
-                            git_lfs: installed_git_lfs,
+                        installed_vcs @ VcsInfo {
+                            vcs: VcsKind::Git, ..
                         },
                     subdirectory: None,
                     path: Some(installed_path),
@@ -270,35 +223,7 @@ impl RequirementSatisfaction {
                     return Self::Mismatch;
                 }
 
-                let requested_git_lfs = requested_git.lfs();
-                let installed_git_lfs = installed_git_lfs.map(GitLfs::from).unwrap_or_default();
-                if requested_git_lfs != installed_git_lfs {
-                    debug!(
-                        "Git LFS mismatch: {} (installed) vs. {} (requested)",
-                        installed_git_lfs, requested_git_lfs,
-                    );
-                    return Self::Mismatch;
-                }
-
-                if !RepositoryUrl::parse(installed_url)
-                    .is_ok_and(|installed_url| installed_url == *requested_git.repository())
-                {
-                    debug!(
-                        "Repository mismatch: {:?} vs. {:?}",
-                        installed_url,
-                        requested_git.url()
-                    );
-                    return Self::Mismatch;
-                }
-
-                if !git_commit_matches(installed_precise.as_deref(), requested_git) {
-                    debug!(
-                        "Precise mismatch: {:?} vs. {:?}",
-                        installed_precise,
-                        requested_git.precise()
-                    );
-                    return Self::OutOfDate;
-                }
+                Self::check_git(requested_git, installed_url, installed_vcs)
             }
             RequirementSource::Path {
                 install_path: requested_path,
@@ -322,37 +247,12 @@ impl RequirementSatisfaction {
                     return Self::Mismatch;
                 };
 
-                let Some(installed_path) = Url::parse(installed_url)
-                    .ok()
-                    .and_then(|url| url.to_file_path().ok())
-                else {
-                    return Self::Mismatch;
-                };
-
-                if !(**requested_path == installed_path
-                    || is_same_file(requested_path, &installed_path).unwrap_or(false))
-                {
-                    trace!(
-                        "Path mismatch: {:?} vs. {:?}",
-                        requested_path, installed_path,
-                    );
-                    return Self::Mismatch;
-                }
-
-                let Some(cache_info) = cache_info.as_ref() else {
-                    return Self::OutOfDate;
-                };
-                match CacheInfo::from_path(requested_path) {
-                    Ok(read_cache_info) => {
-                        if *cache_info != read_cache_info {
-                            return Self::OutOfDate;
-                        }
-                    }
-                    Err(err) => {
-                        debug!("Failed to read cached requirement for: {distribution} ({err})");
-                        return Self::CacheInvalid;
-                    }
-                }
+                Self::check_local_path(
+                    distribution,
+                    requested_path,
+                    installed_url,
+                    cache_info.as_ref(),
+                )
             }
             RequirementSource::Directory {
                 install_path: requested_path,
@@ -389,38 +289,16 @@ impl RequirementSatisfaction {
                     return Self::Mismatch;
                 }
 
-                let Some(installed_path) = Url::parse(installed_url)
-                    .ok()
-                    .and_then(|url| url.to_file_path().ok())
-                else {
-                    return Self::Mismatch;
-                };
-
-                if !(**requested_path == installed_path
-                    || is_same_file(requested_path, &installed_path).unwrap_or(false))
-                {
-                    trace!(
-                        "Path mismatch: {:?} vs. {:?}",
-                        requested_path, installed_path,
-                    );
-                    return Self::Mismatch;
-                }
-
-                let Some(cache_info) = cache_info.as_ref() else {
-                    return Self::OutOfDate;
-                };
-                match CacheInfo::from_path(requested_path) {
-                    Ok(read_cache_info) => {
-                        if *cache_info != read_cache_info {
-                            return Self::OutOfDate;
-                        }
-                    }
-                    Err(err) => {
-                        debug!("Failed to read cached requirement for: {distribution} ({err})");
-                        return Self::CacheInvalid;
-                    }
-                }
+                Self::check_local_path(
+                    distribution,
+                    requested_path,
+                    installed_url,
+                    cache_info.as_ref(),
+                )
             }
+        };
+        if !matches!(source_satisfaction, Self::Satisfied) {
+            return source_satisfaction;
         }
 
         // If the distribution isn't compatible with the current platform, it is a mismatch.
@@ -452,6 +330,87 @@ impl RequirementSatisfaction {
 
         // Otherwise, assume the requirement is up-to-date.
         Self::Satisfied
+    }
+
+    /// Compare the Git details common to repository and in-repository path requirements.
+    fn check_git(requested_git: &GitUrl, installed_url: &str, installed_vcs: &VcsInfo) -> Self {
+        let requested_git_lfs = requested_git.lfs();
+        let installed_git_lfs = installed_vcs.git_lfs.map(GitLfs::from).unwrap_or_default();
+        if requested_git_lfs != installed_git_lfs {
+            debug!(
+                "Git LFS mismatch: {} (installed) vs. {} (requested)",
+                installed_git_lfs, requested_git_lfs,
+            );
+            return Self::Mismatch;
+        }
+
+        if !RepositoryUrl::parse(installed_url)
+            .is_ok_and(|installed_url| installed_url == *requested_git.repository())
+        {
+            debug!(
+                "Repository mismatch: {:?} vs. {:?}",
+                installed_url,
+                requested_git.url()
+            );
+            return Self::Mismatch;
+        }
+
+        if !git_commit_matches(installed_vcs.commit_id.as_deref(), requested_git) {
+            debug!(
+                "Precise mismatch: {:?} vs. {:?}",
+                installed_vcs.commit_id,
+                requested_git.precise()
+            );
+            return Self::OutOfDate;
+        }
+
+        Self::Satisfied
+    }
+
+    /// Compare a local path requirement to an installed archive or directory.
+    fn check_local_path(
+        distribution: &InstalledDist,
+        requested_path: &Path,
+        installed_url: &str,
+        cache_info: Option<&CacheInfo>,
+    ) -> Self {
+        let Some(installed_path) = Url::parse(installed_url)
+            .ok()
+            .and_then(|url| url.to_file_path().ok())
+        else {
+            return Self::Mismatch;
+        };
+
+        if !(requested_path == installed_path.as_path()
+            || is_same_file(requested_path, &installed_path).unwrap_or(false))
+        {
+            trace!(
+                "Path mismatch: {:?} vs. {:?}",
+                requested_path, installed_path,
+            );
+            return Self::Mismatch;
+        }
+
+        Self::check_cache_info(distribution, requested_path, cache_info)
+    }
+
+    /// Compare the installed source's cache information to the current local path.
+    fn check_cache_info(
+        distribution: &InstalledDist,
+        requested_path: &Path,
+        cache_info: Option<&CacheInfo>,
+    ) -> Self {
+        let Some(cache_info) = cache_info else {
+            return Self::OutOfDate;
+        };
+        match CacheInfo::from_path(requested_path) {
+            Ok(current) if cache_info == &current => Self::Satisfied,
+            Ok(_) => Self::OutOfDate,
+            Err(err) => {
+                debug!("Failed to read cached requirement for: {distribution} ({err})");
+                Self::CacheInvalid
+            }
+        }
     }
 }
 
