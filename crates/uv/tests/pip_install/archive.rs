@@ -6,18 +6,30 @@ use futures::executor::block_on;
 use futures::io::Cursor;
 use predicates::prelude::predicate;
 
+use uv_test::TestContext;
 use uv_test::find_links::FindLinksServer;
+
+const WHEEL_FILENAME: &str = "ok-1.0.0-py3-none-any.whl";
 
 enum Corruption {
     UncompressedSize,
     Crc32,
 }
 
-fn reject_corrupt_streamed_wheel(corruption: Corruption) -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let filename = "ok-1.0.0-py3-none-any.whl";
-    let mut wheel = fs_err::read(context.workspace_root.join("test/links").join(filename))?;
-    let (offset, actual, error_kind) = {
+struct CorruptWheel {
+    server: FindLinksServer,
+    actual: u32,
+    declared: u32,
+}
+
+fn corrupt_streamed_wheel(context: &TestContext, corruption: Corruption) -> Result<CorruptWheel> {
+    let mut wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links")
+            .join(WHEEL_FILENAME),
+    )?;
+    let (offset, actual) = {
         let archive = block_on(ZipFileReader::new(Cursor::new(wheel.as_slice())))?;
         let entry = archive
             .file()
@@ -34,9 +46,8 @@ fn reject_corrupt_streamed_wheel(corruption: Corruption) -> Result<()> {
             Corruption::UncompressedSize => (
                 entry.header_offset() + 22,
                 u32::try_from(entry.uncompressed_size())?,
-                "uncompressed size",
             ),
-            Corruption::Crc32 => (entry.header_offset() + 14, entry.crc32(), "CRC"),
+            Corruption::Crc32 => (entry.header_offset() + 14, entry.crc32()),
         }
     };
     let offset = usize::try_from(offset)?;
@@ -49,19 +60,32 @@ fn reject_corrupt_streamed_wheel(corruption: Corruption) -> Result<()> {
 
     let wheelhouse = context.temp_dir.child("wheelhouse");
     wheelhouse.create_dir_all()?;
-    wheelhouse.child(filename).write_binary(&wheel)?;
+    wheelhouse.child(WHEEL_FILENAME).write_binary(&wheel)?;
     let server = FindLinksServer::new(wheelhouse.path());
+
+    Ok(CorruptWheel {
+        server,
+        actual,
+        declared,
+    })
+}
+
+#[test]
+fn reject_incorrect_uncompressed_size() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let fixture = corrupt_streamed_wheel(&context, Corruption::UncompressedSize)?;
     context
         .pip_install()
         .arg("--no-index")
-        .arg(format!("ok @ {}/{filename}", server.url()))
+        .arg(format!("ok @ {}/{WHEEL_FILENAME}", fixture.server.url()))
         .assert()
         .code(1)
         .stderr(predicate::str::contains(format!(
-            "Failed to extract archive: {filename}"
+            "Failed to extract archive: {WHEEL_FILENAME}"
         )))
         .stderr(predicate::str::contains(format!(
-            "Bad {error_kind} (got {actual:08x}, expected {declared:08x}) for file:"
+            "Bad uncompressed size (got {:08x}, expected {:08x}) for file:",
+            fixture.actual, fixture.declared
         )))
         .stderr(predicate::str::contains("__init__.py"));
     context.assert_not_installed("ok");
@@ -69,11 +93,23 @@ fn reject_corrupt_streamed_wheel(corruption: Corruption) -> Result<()> {
 }
 
 #[test]
-fn reject_incorrect_uncompressed_size() -> Result<()> {
-    reject_corrupt_streamed_wheel(Corruption::UncompressedSize)
-}
-
-#[test]
 fn reject_incorrect_crc32() -> Result<()> {
-    reject_corrupt_streamed_wheel(Corruption::Crc32)
+    let context = uv_test::test_context!("3.12");
+    let fixture = corrupt_streamed_wheel(&context, Corruption::Crc32)?;
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg(format!("ok @ {}/{WHEEL_FILENAME}", fixture.server.url()))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(format!(
+            "Failed to extract archive: {WHEEL_FILENAME}"
+        )))
+        .stderr(predicate::str::contains(format!(
+            "Bad CRC (got {:08x}, expected {:08x}) for file:",
+            fixture.actual, fixture.declared
+        )))
+        .stderr(predicate::str::contains("__init__.py"));
+    context.assert_not_installed("ok");
+    Ok(())
 }
