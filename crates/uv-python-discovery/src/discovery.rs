@@ -471,7 +471,8 @@ fn python_executables_from_search_path<'a>(
 ) -> impl Iterator<Item = Vec<PathBuf>> + 'a {
     // `UV_PYTHON_SEARCH_PATH` can be used to override `PATH` for Python executable discovery
     let search_path = env::var_os(EnvVars::UV_PYTHON_SEARCH_PATH)
-        .unwrap_or(env::var_os(EnvVars::PATH).unwrap_or_default());
+        .or_else(|| env::var_os(EnvVars::PATH))
+        .unwrap_or_default();
 
     let possible_names: Vec<_> = version
         .executable_names(implementation)
