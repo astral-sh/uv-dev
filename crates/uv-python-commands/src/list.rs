@@ -85,39 +85,22 @@ pub async fn list(
         )
     };
 
-    let download_request = if let Some(base_download_request) = base_download_request {
-        match kinds {
-            PythonListKinds::Installed => None,
-            PythonListKinds::Downloads => Some(if all_platforms {
-                base_download_request
-            } else if all_arches {
-                base_download_request.fill_platform()?.with_any_arch()
-            } else {
-                base_download_request.fill_platform()?
-            }),
-            PythonListKinds::Default => {
-                if python_downloads.is_automatic() {
-                    Some(if all_platforms {
-                        base_download_request
-                    } else if all_arches {
-                        base_download_request.fill_platform()?.with_any_arch()
-                    } else {
-                        base_download_request.fill_platform()?
-                    })
-                } else {
-                    // If fetching is not automatic, then don't show downloads as available by default
-                    None
-                }
-            }
-        }
-        // Include pre-release versions
-        .map(|request| request.with_prereleases(true))
-    } else {
-        None
+    let include_downloads = match kinds {
+        PythonListKinds::Installed => false,
+        PythonListKinds::Downloads => true,
+        PythonListKinds::Default => python_downloads.is_automatic(),
     };
-
     let mut output = BTreeSet::new();
-    if let Some(download_request) = download_request {
+    if include_downloads && let Some(download_request) = base_download_request {
+        let download_request = if all_platforms {
+            download_request
+        } else if all_arches {
+            download_request.fill_platform()?.with_any_arch()
+        } else {
+            download_request.fill_platform()?
+        }
+        .with_prereleases(true);
+
         let download_list = ManagedPythonDownloadList::new(
             client_builder,
             cache,
@@ -145,7 +128,7 @@ pub async fn list(
         }
     }
 
-    let installed = match kinds {
+    match kinds {
         PythonListKinds::Installed | PythonListKinds::Default => {
             // While usually [`PythonPreference::OnlyManaged`] means we can skip searching the
             // `PATH`, in `uv python list` we want to enumerate links to managed Python
@@ -156,7 +139,7 @@ pub async fn list(
             } else {
                 python_preference
             };
-            let mut installations = find_all_python_installations(
+            let installations = find_all_python_installations(
                 request.as_ref().unwrap_or(&PythonRequest::Any),
                 EnvironmentPreference::OnlySystem,
                 discovery_preference,
@@ -165,26 +148,23 @@ pub async fn list(
             )?;
             // Apply the original `PythonPreference` to discovered interpreters, since we may
             // have expanded it above.
-            installations
-                .retain(|installation| installation.satisfies_preference(&python_preference));
-            Some(installations)
+            for installation in installations
+                .into_iter()
+                .filter(|installation| installation.satisfies_preference(&python_preference))
+            {
+                let kind = if matches!(installation.source(), PythonSource::Managed) {
+                    Kind::Managed
+                } else {
+                    Kind::System
+                };
+                output.insert((
+                    installation.key(),
+                    kind,
+                    Either::Left(installation.interpreter().real_executable().to_path_buf()),
+                ));
+            }
         }
-        PythonListKinds::Downloads => None,
-    };
-
-    if let Some(installed) = installed {
-        for installation in installed {
-            let kind = if matches!(installation.source(), PythonSource::Managed) {
-                Kind::Managed
-            } else {
-                Kind::System
-            };
-            output.insert((
-                installation.key(),
-                kind,
-                Either::Left(installation.interpreter().real_executable().to_path_buf()),
-            ));
-        }
+        PythonListKinds::Downloads => {}
     }
 
     let mut seen_minor = FxHashSet::default();
@@ -193,10 +173,10 @@ pub async fn list(
     let mut include = Vec::new();
     for (key, kind, uri) in output.iter().rev() {
         // Do not show the same path more than once
-        if let Either::Left(path) = uri {
-            if !seen_paths.insert(path) {
-                continue;
-            }
+        if let Either::Left(path) = uri
+            && !seen_paths.insert(path)
+        {
+            continue;
         }
 
         // Only show the latest patch version for each download unless all were requested.
@@ -205,8 +185,8 @@ pub async fn list(
         // we want to only show the "best" option for each version by default, even
         // if e.g. the x86_32 build would also work on x86_64.
         if !matches!(kind, Kind::System) {
-            if let [major, minor, ..] = *key.version().release() {
-                if !seen_minor.insert((
+            if let [major, minor, ..] = *key.version().release()
+                && !seen_minor.insert((
                     all_platforms.then_some(*key.os()),
                     major,
                     minor,
@@ -214,14 +194,14 @@ pub async fn list(
                     key.implementation(),
                     all_arches.then_some(*key.arch()),
                     *key.libc(),
-                )) {
-                    if matches!(kind, Kind::Download) && !all_versions {
-                        continue;
-                    }
-                }
+                ))
+                && matches!(kind, Kind::Download)
+                && !all_versions
+            {
+                continue;
             }
-            if let [major, minor, patch] = *key.version().release() {
-                if !seen_patch.insert((
+            if let [major, minor, patch] = *key.version().release()
+                && !seen_patch.insert((
                     all_platforms.then_some(*key.os()),
                     major,
                     minor,
@@ -230,11 +210,10 @@ pub async fn list(
                     key.implementation(),
                     all_arches.then_some(*key.arch()),
                     key.libc(),
-                )) {
-                    if matches!(kind, Kind::Download) {
-                        continue;
-                    }
-                }
+                ))
+                && matches!(kind, Kind::Download)
+            {
+                continue;
             }
         }
         include.push((key, uri));
@@ -245,38 +224,32 @@ pub async fn list(
             let data = include
                 .iter()
                 .map(|(key, uri)| -> Result<_> {
-                    let mut path_or_none: Option<String> = None;
-                    let mut symlink_or_none: Option<String> = None;
-                    let mut url_or_none: Option<String> = None;
-                    match uri {
+                    let (path, symlink, url) = match uri {
                         Either::Left(path) => {
-                            path_or_none = Some(path.user_display().to_string());
-
-                            let is_symlink = fs_err::symlink_metadata(path)?.is_symlink();
-                            if is_symlink {
-                                symlink_or_none =
-                                    Some(path.read_link()?.user_display().to_string());
-                            }
+                            let symlink = if fs_err::symlink_metadata(path)?.is_symlink() {
+                                Some(path.read_link()?.user_display().to_string())
+                            } else {
+                                None
+                            };
+                            (Some(path.user_display().to_string()), symlink, None)
                         }
-                        Either::Right(url) => {
-                            url_or_none = Some((*url).to_string());
-                        }
-                    }
+                        Either::Right(url) => (None, None, Some((*url).to_string())),
+                    };
                     let version = key.version();
                     let release = version.release();
+                    let mut release_parts = release.iter().copied();
 
                     Ok(PrintData {
                         key: key.to_string(),
                         version: version.version().clone(),
-                        #[expect(clippy::get_first)]
                         version_parts: NamedVersionParts {
-                            major: release.get(0).copied().unwrap_or(0),
-                            minor: release.get(1).copied().unwrap_or(0),
-                            patch: release.get(2).copied().unwrap_or(0),
+                            major: release_parts.next().unwrap_or(0),
+                            minor: release_parts.next().unwrap_or(0),
+                            patch: release_parts.next().unwrap_or(0),
                         },
-                        path: path_or_none,
-                        symlink: symlink_or_none,
-                        url: url_or_none,
+                        path,
+                        symlink,
+                        url,
                         arch: key.arch().to_string(),
                         implementation: key.implementation().to_string(),
                         os: key.os().to_string(),
