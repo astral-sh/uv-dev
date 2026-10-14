@@ -17,7 +17,7 @@ use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 
 #[test]
-fn tool_upgrade_up_to_date() {
+fn tool_upgrade_up_to_date() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
@@ -38,6 +38,8 @@ fn tool_upgrade_up_to_date() {
      + babel==2.14.0
     Installed 1 executable: pybabel
     ");
+    let marker = context.temp_dir.child("tools/babel/retained-environment");
+    marker.write_str("original tool environment\n")?;
 
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
@@ -46,6 +48,7 @@ fn tool_upgrade_up_to_date() {
     ----- stderr -----
     Nothing to upgrade
     ");
+    assert_eq!(context.read(&marker), "original tool environment\n");
 
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
@@ -56,6 +59,8 @@ fn tool_upgrade_up_to_date() {
     ----- stderr -----
     Nothing to upgrade
     ");
+    assert_eq!(context.read(&marker), "original tool environment\n");
+    Ok(())
 }
 
 #[test]
