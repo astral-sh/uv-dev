@@ -8396,7 +8396,7 @@ fn assert_edit_rolled_back(context: &TestContext, pyproject: &str, lock: Option<
     }
 }
 
-fn project_with_failing_editable_build() -> Result<TestContext> {
+fn project_with_editable_build_backend(backend: &str) -> Result<TestContext> {
     let context = uv_test::test_context!("3.12");
     context
         .temp_dir
@@ -8413,14 +8413,18 @@ fn project_with_failing_editable_build() -> Result<TestContext> {
             build-backend = "backend"
             backend-path = ["."]
         "#})?;
-    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+    context.temp_dir.child("backend.py").write_str(backend)?;
+    Ok(context)
+}
+
+fn project_with_failing_editable_build() -> Result<TestContext> {
+    project_with_editable_build_backend(indoc! {r#"
         from pathlib import Path
 
         def build_editable(*args, **kwargs):
             Path(__file__).with_name("built").touch()
             raise RuntimeError("build failed")
-    "#})?;
-    Ok(context)
+    "#})
 }
 
 fn assert_failed_build_rolled_back(context: &TestContext, pyproject: &str, lock: Option<&str>) {
@@ -8475,27 +8479,10 @@ fn version_build_failure_reverts_existing_lock() -> Result<()> {
     Ok(())
 }
 
-/// Interrupt during a build, after the manifest and lockfile have both been written.
-#[test]
+/// The editable build interrupts uv after the manifest and lockfile have both been written.
 #[cfg(unix)]
-fn edit_interrupt_reverts_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            requires-python = ">=3.12"
-            dependencies = ["iniconfig"]
-
-            [build-system]
-            requires = []
-            build-backend = "backend"
-            backend-path = ["."]
-        "#})?;
-    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+fn project_with_interrupted_editable_build() -> Result<TestContext> {
+    project_with_editable_build_backend(indoc! {r#"
         import os
         import signal
         import time
@@ -8504,7 +8491,13 @@ fn edit_interrupt_reverts_project() -> Result<()> {
             os.kill(os.getppid(), signal.SIGINT)
             time.sleep(1)
             raise RuntimeError("build interrupted")
-    "#})?;
+    "#})
+}
+
+#[test]
+#[cfg(unix)]
+fn add_interrupt_reverts_new_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
     let pyproject = context.read("pyproject.toml");
 
     context
@@ -8513,25 +8506,73 @@ fn edit_interrupt_reverts_project() -> Result<()> {
         .assert()
         .code(130);
     assert_edit_rolled_back(&context, &pyproject, None);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn remove_interrupt_reverts_new_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
+    let pyproject = context.read("pyproject.toml");
+
     context.remove().arg("iniconfig").assert().code(130);
     assert_edit_rolled_back(&context, &pyproject, None);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn version_interrupt_reverts_new_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
+    let pyproject = context.read("pyproject.toml");
+
     context
         .version()
         .args(["--bump", "minor"])
         .assert()
         .code(130);
     assert_edit_rolled_back(&context, &pyproject, None);
+    Ok(())
+}
 
+#[test]
+#[cfg(unix)]
+fn add_interrupt_reverts_existing_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
     context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
     let lock = context.read("uv.lock");
+
     context
         .add()
         .args(["iniconfig", "--dev"])
         .assert()
         .code(130);
     assert_edit_rolled_back(&context, &pyproject, Some(&lock));
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn remove_interrupt_reverts_existing_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
+    context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
+    let lock = context.read("uv.lock");
+
     context.remove().arg("iniconfig").assert().code(130);
     assert_edit_rolled_back(&context, &pyproject, Some(&lock));
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn version_interrupt_reverts_existing_lock() -> Result<()> {
+    let context = project_with_interrupted_editable_build()?;
+    context.lock().assert().success();
+    let pyproject = context.read("pyproject.toml");
+    let lock = context.read("uv.lock");
+
     context
         .version()
         .args(["--bump", "minor"])
