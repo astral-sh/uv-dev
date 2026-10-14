@@ -56,6 +56,13 @@ def probe(root, reference):
     allocate = function("AllocConsole", boolean, [])
     release = function("FreeConsole", boolean, [])
     standard = function("GetStdHandle", handle, [dword])
+    set_standard = function("SetStdHandle", boolean, [dword, handle])
+    create_file = function(
+        "CreateFileW",
+        handle,
+        [ctypes.c_wchar_p, dword, dword, handle, dword, dword, handle],
+    )
+    close_handle = function("CloseHandle", boolean, [handle])
     information = function(
         "GetConsoleScreenBufferInfo", boolean, [handle, ctypes.POINTER(Information)]
     )
@@ -91,8 +98,15 @@ def probe(root, reference):
 
     release()
     checked(allocate())
+    console = None
     try:
-        console = standard(0xFFFFFFF4)
+        # STARTF_USESTDHANDLES keeps inherited pipes after AllocConsole. Open the
+        # new screen buffer explicitly before passing stderr to either backend.
+        console = create_file("CONOUT$", 0xC0000000, 3, None, 3, 0, None)
+        if console in {None, ctypes.c_void_p(-1).value}:
+            raise ctypes.WinError(ctypes.get_last_error())
+        checked(set_standard(0xFFFFFFF4, console))
+        assert standard(0xFFFFFFF4) == console
         initial, mode = Information(), dword()
         checked(information(console, ctypes.byref(initial)))
         checked(get_mode(console, ctypes.byref(mode)))
@@ -169,6 +183,8 @@ def probe(root, reference):
             + "\n"
         )
     finally:
+        if console not in {None, ctypes.c_void_p(-1).value}:
+            close_handle(console)
         release()
 
 
