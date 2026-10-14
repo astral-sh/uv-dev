@@ -12131,27 +12131,12 @@ fn sync_multiple_sources_index_disjoint_extras() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn sync_derivation_chain() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["wsgiref"]
-
-        [[tool.uv.dependency-metadata]]
-        name = "wsgiref"
-        version = "0.1.2"
-        requires-dist = []
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.sync(), @r#"
+fn assert_sync_derivation_chain(context: &TestContext, args: &[&str], origin: &str) {
+    let output = uv_test::capture_uv_snapshot!(context.filters(), context.sync().args(args));
+    let expected_hint = format!(
+        "hint: `wsgiref` (v0.1.2) was included because `{origin}` (v0.1.0) depends on `wsgiref`"
+    );
+    assert_snapshot!(output.replacen(&expected_hint, "hint: [DERIVATION]", 1), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -12177,10 +12162,33 @@ fn sync_derivation_chain() -> Result<()> {
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
              SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
 
-    hint: `wsgiref` (v0.1.2) was included because `project` (v0.1.0) depends on `wsgiref`
+    hint: [DERIVATION]
 
     hint: Build failures usually indicate a problem with the package or the build environment
     "#);
+}
+
+#[test]
+fn sync_derivation_chain() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"[/\\].*[/\\]src", "/[TMP]/src"));
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["wsgiref"]
+
+        [[tool.uv.dependency-metadata]]
+        name = "wsgiref"
+        version = "0.1.2"
+        requires-dist = []
+        "#,
+    )?;
+
+    assert_sync_derivation_chain(&context, &[], "project");
 
     Ok(())
 }
@@ -12206,36 +12214,7 @@ fn sync_derivation_chain_extra() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--extra").arg("wsgi"), @r#"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    error: Failed to build `wsgiref==0.1.2`
-      cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
-
-             [stderr]
-             Traceback (most recent call last):
-               File "<string>", line 14, in <module>
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 325, in get_requires_for_build_wheel
-                 return self._get_build_requires(config_settings, requirements=['wheel'])
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 295, in _get_build_requires
-                 self.run_setup()
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 487, in run_setup
-                 super().run_setup(setup_script=setup_script)
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 311, in run_setup
-                 exec(code, locals())
-               File "<string>", line 5, in <module>
-               File "[CACHE_DIR]/[TMP]/src/ez_setup/__init__.py", line 170
-                 print "Setuptools version",version,"or greater has been installed."
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-             SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project[wsgi]` (v0.1.0) depends on `wsgiref`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
-    "#);
+    assert_sync_derivation_chain(&context, &["--extra", "wsgi"], "project[wsgi]");
 
     Ok(())
 }
@@ -12263,36 +12242,7 @@ fn sync_derivation_chain_group() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--group").arg("wsgi"), @r#"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    error: Failed to build `wsgiref==0.1.2`
-      cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta:__legacy__.get_requires_for_build_wheel` failed (exit status: 1)
-
-             [stderr]
-             Traceback (most recent call last):
-               File "<string>", line 14, in <module>
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 325, in get_requires_for_build_wheel
-                 return self._get_build_requires(config_settings, requirements=['wheel'])
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 295, in _get_build_requires
-                 self.run_setup()
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 487, in run_setup
-                 super().run_setup(setup_script=setup_script)
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 311, in run_setup
-                 exec(code, locals())
-               File "<string>", line 5, in <module>
-               File "[CACHE_DIR]/[TMP]/src/ez_setup/__init__.py", line 170
-                 print "Setuptools version",version,"or greater has been installed."
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-             SyntaxError: Missing parentheses in call to 'print'. Did you mean print(...)?
-
-    hint: `wsgiref` (v0.1.2) was included because `project:wsgi` (v0.1.0) depends on `wsgiref`
-
-    hint: Build failures usually indicate a problem with the package or the build environment
-    "#);
+    assert_sync_derivation_chain(&context, &["--group", "wsgi"], "project:wsgi");
 
     Ok(())
 }
