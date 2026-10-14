@@ -131,8 +131,8 @@ pub enum LookupError {
 }
 
 /// A single credential entry in a TOML credentials file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(try_from = "TomlCredentialWire", into = "TomlCredentialWire")]
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "TomlCredentialWire")]
 struct TomlCredential {
     /// The service URL for this credential.
     service: Service,
@@ -155,9 +155,11 @@ struct TomlCredentialWire {
     token: Option<String>,
 }
 
-impl From<TomlCredential> for TomlCredentialWire {
-    fn from(value: TomlCredential) -> Self {
-        match value.credentials {
+impl TryFrom<TomlCredential> for TomlCredentialWire {
+    type Error = TomlCredentialError;
+
+    fn try_from(value: TomlCredential) -> Result<Self, Self::Error> {
+        Ok(match value.credentials {
             Credentials::Basic { username, password } => Self {
                 service: value.service,
                 username,
@@ -170,9 +172,9 @@ impl From<TomlCredential> for TomlCredentialWire {
                 username: Username::new(None),
                 scheme: AuthScheme::Bearer,
                 password: None,
-                token: Some(String::from_utf8(token.into_bytes()).expect("Token is valid UTF-8")),
+                token: Some(String::from_utf8(token.into_bytes())?),
             },
-        }
+        })
     }
 }
 
@@ -223,11 +225,11 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct TomlCredentials {
+#[derive(Debug, Serialize, Deserialize)]
+struct TomlCredentials<T> {
     /// Array of credential entries.
-    #[serde(default, rename = "credential")]
-    credentials: Vec<TomlCredential>,
+    #[serde(default = "Vec::new", rename = "credential")]
+    credentials: Vec<T>,
 }
 
 /// A credential store with a plain text storage backend.
@@ -267,7 +269,7 @@ impl TextCredentialStore {
     /// Read credentials from a file.
     fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, TomlCredentialError> {
         let content = fs::read_to_string(path)?;
-        let credentials: TomlCredentials = toml::from_str(&content)?;
+        let credentials: TomlCredentials<TomlCredential> = toml::from_str(&content)?;
 
         let credentials: FxHashMap<(Service, Username), Credentials> = credentials
             .credentials
@@ -306,11 +308,13 @@ impl TextCredentialStore {
         let credentials = self
             .credentials
             .into_iter()
-            .map(|((service, _username), credentials)| TomlCredential {
-                service,
-                credentials,
+            .map(|((service, _username), credentials)| {
+                TomlCredentialWire::try_from(TomlCredential {
+                    service,
+                    credentials,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
 
         let toml_creds = TomlCredentials { credentials };
         let content = toml::to_string_pretty(&toml_creds)?;
@@ -406,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_toml_serialization() {
-        let credentials = TomlCredentials {
+        let credentials: TomlCredentials<TomlCredentialWire> = TomlCredentials {
             credentials: vec![
                 TomlCredential {
                     service: Service::from_str("https://example.com").unwrap(),
@@ -414,19 +418,23 @@ mod tests {
                         username: Username::new(Some("user1".to_string())),
                         password: Some(Password::new("pass1".to_string())),
                     },
-                },
+                }
+                .try_into()
+                .unwrap(),
                 TomlCredential {
                     service: Service::from_str("https://test.org").unwrap(),
                     credentials: Credentials::Basic {
                         username: Username::new(Some("user2".to_string())),
                         password: Some(Password::new("pass2".to_string())),
                     },
-                },
+                }
+                .try_into()
+                .unwrap(),
             ],
         };
 
         let toml_str = toml::to_string_pretty(&credentials).unwrap();
-        let parsed: TomlCredentials = toml::from_str(&toml_str).unwrap();
+        let parsed: TomlCredentials<TomlCredential> = toml::from_str(&toml_str).unwrap();
 
         assert_eq!(parsed.credentials.len(), 2);
         assert_eq!(
@@ -507,6 +515,24 @@ password = "pass2"
         let content = fs::read_to_string(temp_output.path()).unwrap();
         assert!(content.contains("example.com"));
         assert!(content.contains("testuser"));
+    }
+
+    #[tokio::test]
+    async fn credential_store_rejects_non_utf8_bearer_tokens() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("credentials.toml");
+        let lock = TextCredentialStore::lock(&path).await.unwrap();
+        let mut store = TextCredentialStore::default();
+        store.insert(
+            Service::from_str("https://example.com").unwrap(),
+            Credentials::bearer(vec![0xff]),
+        );
+
+        assert!(matches!(
+            store.write(&path, lock),
+            Err(TomlCredentialError::TokenNotUnicode(_))
+        ));
+        assert!(!path.exists());
     }
 
     #[test]
