@@ -84,7 +84,7 @@ use std::collections::HashMap;
 use secret_service::{Collection, EncryptionType, Error, Item, SecretService};
 
 use crate::credential::{Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi};
-use crate::error::{Error as ErrorCode, Result, decode_password};
+use crate::error::{Error as ErrorCode, Result};
 
 /// The representation of an item in the secret-service.
 ///
@@ -103,18 +103,6 @@ struct SsCredential {
 
 #[async_trait::async_trait]
 impl CredentialApi for SsCredential {
-    /// Sets the password on a unique matching item, if it exists, or creates one if necessary.
-    ///
-    /// If there are multiple matches,
-    /// returns an [`Ambiguous`](ErrorCode::Ambiguous) error with a credential for each
-    /// matching item.
-    ///
-    /// When creating, the item is put into a collection named by the credential's `target`
-    /// attribute.
-    async fn set_password(&self, password: &str) -> Result<()> {
-        self.set_secret(password.as_bytes()).await
-    }
-
     /// Sets the secret on a unique matching item, if it exists, or creates one if necessary.
     ///
     /// If there are multiple matches,
@@ -157,20 +145,6 @@ impl CredentialApi for SsCredential {
             .await
             .map_err(platform_failure)?;
         Ok(())
-    }
-
-    /// Gets the password on a unique matching item, if it exists.
-    ///
-    /// If there are no
-    /// matching items, returns a [`NoEntry`](ErrorCode::NoEntry) error.
-    /// If there are multiple matches,
-    /// returns an [`Ambiguous`](ErrorCode::Ambiguous)
-    /// error with a credential for each matching item.
-    async fn get_password(&self) -> Result<String> {
-        Ok(self
-            .map_matching_items(get_item_password, true)
-            .await?
-            .remove(0))
     }
 
     /// Gets the secret on a unique matching item, if it exists.
@@ -520,12 +494,6 @@ async fn set_item_secret(item: &Item<'_>, secret: &[u8]) -> Result<()> {
     item.set_secret(secret, "text/plain")
         .await
         .map_err(decode_error)
-}
-
-/// Given an existing item, retrieve and decode its password.
-async fn get_item_password(item: &Item<'_>) -> Result<String> {
-    let bytes = item.get_secret().await.map_err(decode_error)?;
-    decode_password(bytes)
 }
 
 /// Given an existing item, retrieve its secret.
