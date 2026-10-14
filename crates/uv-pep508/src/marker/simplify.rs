@@ -234,11 +234,11 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
         return;
     }
 
+    let mut redundant_indices = Vec::new();
     for i in 0..dnf.len() {
         let clause = &dnf[i];
 
         // Find redundant terms in this clause.
-        let mut redundant_terms = Vec::new();
         'term: for (skipped, skipped_term) in clause.iter().enumerate() {
             for (j, other_clause) in dnf.iter().enumerate() {
                 if i == j {
@@ -268,28 +268,28 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
                         .position(|x| x == term)
                         // If the term was already removed from this one, we cannot
                         // depend on it for further simplification.
-                        .is_some_and(|i| redundant_terms.binary_search(&i).is_err())
+                        .is_some_and(|i| redundant_indices.binary_search(&i).is_err())
                 }) {
-                    redundant_terms.push(skipped);
+                    redundant_indices.push(skipped);
                     continue 'term;
                 }
             }
         }
 
         // Eliminate any redundant terms.
-        remove_sorted_indices(&mut dnf[i], redundant_terms);
+        remove_sorted_indices(&mut dnf[i], &redundant_indices);
+        redundant_indices.clear();
     }
 
     // Once we have eliminated redundant terms, there may also be redundant clauses.
     // For example, `(A and B) or (not A and B)` would have been simplified above to
     // `(A and B) or B` and can now be further simplified to just `B`.
-    let mut redundant_clauses = Vec::new();
     'clause: for i in 0..dnf.len() {
         let clause = &dnf[i];
 
         for (j, other_clause) in dnf.iter().enumerate() {
             // Ignore clauses that are going to be eliminated.
-            if i == j || redundant_clauses.binary_search(&j).is_ok() {
+            if i == j || redundant_indices.binary_search(&j).is_ok() {
                 continue;
             }
 
@@ -299,22 +299,22 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
                 // from a linear search to an integer `HashSet` lookup
                 clause.contains(term)
             }) {
-                redundant_clauses.push(i);
+                redundant_indices.push(i);
                 continue 'clause;
             }
         }
     }
 
     // Eliminate any redundant clauses.
-    remove_sorted_indices(dnf, redundant_clauses);
+    remove_sorted_indices(dnf, &redundant_indices);
 }
 
 /// Remove strictly increasing indices in one pass over the affected span.
-fn remove_sorted_indices<T>(values: &mut Vec<T>, indices: Vec<usize>) {
+fn remove_sorted_indices<T>(values: &mut Vec<T>, indices: &[usize]) {
     let Some((&first, &last)) = indices.first().zip(indices.last()) else {
         return;
     };
-    let mut indices = indices.into_iter().peekable();
+    let mut indices = indices.iter().copied().peekable();
     let mut current = first;
     values
         .extract_if(first..=last, |_| {
