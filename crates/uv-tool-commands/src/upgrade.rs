@@ -567,55 +567,49 @@ async fn upgrade_tool(
         (environment, outcome, None)
     };
 
-    if matches!(
-        outcome,
-        UpgradeOutcome::UpgradeEnvironment | UpgradeOutcome::UpgradeTool
-    ) {
-        // At this point, we updated the existing environment, so we should remove any of its
-        // existing executables.
-        remove_entrypoints(&existing_tool_receipt);
+    let constraint = match outcome {
+        UpgradeOutcome::UpgradeTool | UpgradeOutcome::UpgradeEnvironment => {
+            // At this point, we updated the existing environment, so we should remove any of its
+            // existing executables.
+            remove_entrypoints(&existing_tool_receipt);
 
-        let entrypoints: Vec<_> = existing_tool_receipt
-            .entrypoints()
-            .iter()
-            .filter_map(|entry| PackageName::from_str(entry.from.as_ref()?).ok())
-            .collect();
+            let entrypoints: Vec<_> = existing_tool_receipt
+                .entrypoints()
+                .iter()
+                .filter_map(|entry| PackageName::from_str(entry.from.as_ref()?).ok())
+                .collect();
 
-        // If we modified the target tool, reinstall the entrypoints.
-        finalize_tool_install(
-            &environment,
-            name,
-            &entrypoints,
-            installed_tools,
-            &ToolOptions::from(options),
-            true,
-            existing_tool_receipt.python().to_owned(),
-            existing_tool_receipt.requirements().to_vec(),
-            existing_tool_receipt.constraints().to_vec(),
-            existing_tool_receipt.overrides().to_vec(),
-            existing_tool_receipt.excludes().to_vec(),
-            existing_tool_receipt.build_constraints().to_vec(),
-            tool_lock.as_ref(),
-            printer,
-        )?;
-    } else {
-        if tool_locks {
-            ToolLock::write(&tool_dir, tool_lock.as_ref())?;
+            // If we modified the target tool, reinstall the entrypoints.
+            finalize_tool_install(
+                &environment,
+                name,
+                &entrypoints,
+                installed_tools,
+                &ToolOptions::from(options),
+                true,
+                existing_tool_receipt.python().to_owned(),
+                existing_tool_receipt.requirements().to_vec(),
+                existing_tool_receipt.constraints().to_vec(),
+                existing_tool_receipt.overrides().to_vec(),
+                existing_tool_receipt.excludes().to_vec(),
+                existing_tool_receipt.build_constraints().to_vec(),
+                tool_lock.as_ref(),
+                printer,
+            )?;
+            None
         }
-        installed_tools.add_tool_receipt(
-            name,
-            existing_tool_receipt
-                .clone()
-                .with_options(ToolOptions::from(options)),
-        )?;
-    }
-
-    let constraint = match &outcome {
         UpgradeOutcome::UpgradeDependencies | UpgradeOutcome::NoOp => {
-            pinned_requirement_version(&existing_tool_receipt, name)
-                .map(|version| UpgradeConstraint::PinnedVersion { version })
+            if tool_locks {
+                ToolLock::write(&tool_dir, tool_lock.as_ref())?;
+            }
+            let constraint = pinned_requirement_version(&existing_tool_receipt, name)
+                .map(|version| UpgradeConstraint::PinnedVersion { version });
+            installed_tools.add_tool_receipt(
+                name,
+                existing_tool_receipt.with_options(ToolOptions::from(options)),
+            )?;
+            constraint
         }
-        UpgradeOutcome::UpgradeTool | UpgradeOutcome::UpgradeEnvironment => None,
     };
 
     Ok(UpgradeReport {
