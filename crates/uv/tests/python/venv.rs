@@ -939,7 +939,7 @@ fn create_venv_reads_request_from_python_versions_file() {
 
 #[test]
 fn create_venv_respects_pyproject_requires_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.9", "3.10", "3.12"]);
+    let mut context = uv_test::test_context_with_versions!(&["3.11", "3.9", "3.10", "3.12"]);
 
     // Without a Python requirement, we use the first on the PATH
     uv_snapshot!(context.filters(), context.venv(), @"
@@ -971,8 +971,10 @@ fn create_venv_respects_pyproject_requires_python() -> Result<()> {
     "
     );
 
+    // Put an incompatible interpreter first so the following requirements must filter it out.
+    context.python_versions.swap(0, 1);
+
     // With `requires-python = "==3.11.*"`, we prefer exact version (3.11)
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
@@ -992,7 +994,6 @@ fn create_venv_respects_pyproject_requires_python() -> Result<()> {
     );
 
     // With `requires-python = ">=3.11,<3.12"`, we prefer exact version (3.11)
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
@@ -1012,18 +1013,25 @@ fn create_venv_respects_pyproject_requires_python() -> Result<()> {
     );
 
     // With `requires-python = ">=3.10"`, we prefer first compatible version (3.11)
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
-        requires-python = ">=3.11"
+        requires-python = ">=3.10"
         dependencies = []
         "#
     })?;
 
+    uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    "
+    );
+
     // With `requires-python = ">=3.11"`, we prefer first compatible version (3.11)
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
@@ -1043,7 +1051,6 @@ fn create_venv_respects_pyproject_requires_python() -> Result<()> {
     );
 
     // With `requires-python = ">3.11"`, we prefer first compatible version (3.11)
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
@@ -1063,7 +1070,6 @@ fn create_venv_respects_pyproject_requires_python() -> Result<()> {
     );
 
     // With `requires-python = ">=3.12"`, we prefer first compatible version (3.12)
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
