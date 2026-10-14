@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use async_zip::base::read::mem::ZipFileReader;
 use futures::executor::block_on;
@@ -2897,24 +2898,28 @@ fn build_fast_path_verbose() -> Result<()> {
     Ok(())
 }
 
-/// Exact backend pins must match the running uv version; compatible ranges can use the fast path.
-#[test]
-fn build_fast_path_exact_pin() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let project = context.temp_dir.child("project");
-    let pyproject_toml = project.child("pyproject.toml");
-
-    pyproject_toml.write_str(indoc! {r#"
+/// Create a minimal project with an explicit `uv_build` requirement.
+fn write_uv_build_project(project: &ChildPath, requirement: &str) -> Result<()> {
+    project.child("pyproject.toml").write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
 
         [build-system]
-        requires = ["uv_build==0.11.33"]
+        requires = ["{requirement}"]
         build-backend = "uv_build"
     "#})?;
     project.child("src/project/__init__.py").touch()?;
+    Ok(())
+}
+
+/// An active exact backend pin must match the running uv version.
+#[test]
+fn build_fast_path_rejects_mismatched_exact_pin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    write_uv_build_project(&project, "uv_build==0.11.33")?;
 
     uv_snapshot!(context.filters(), context.build()
         .arg("project")
@@ -2931,32 +2936,64 @@ fn build_fast_path_exact_pin() -> Result<()> {
     hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
     ");
 
-    for requirement in [
-        format!("uv_build=={}", uv_version::version()),
-        "uv_build>=0.11,<0.12".to_string(),
-        "uv_build==0.11.*".to_string(),
-        "uv_build==0.11.33 ; python_version < '0'".to_string(),
-    ] {
-        pyproject_toml.write_str(&formatdoc! {r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            requires-python = ">=3.12"
+    Ok(())
+}
 
-            [build-system]
-            requires = ["{requirement}"]
-            build-backend = "uv_build"
-        "#})?;
+#[test]
+fn build_fast_path_running_version() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    write_uv_build_project(
+        &context.temp_dir.child("project"),
+        &format!("uv_build=={}", uv_version::version()),
+    )?;
 
-        context
-            .build()
-            .arg("project")
-            .arg("--wheel")
-            .arg("--no-index")
-            .assert()
-            .success();
-    }
+    context
+        .build()
+        .args(["project", "--wheel", "--no-index"])
+        .assert()
+        .success();
+    Ok(())
+}
 
+#[test]
+fn build_fast_path_range() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    write_uv_build_project(&context.temp_dir.child("project"), "uv_build>=0.11,<0.12")?;
+
+    context
+        .build()
+        .args(["project", "--wheel", "--no-index"])
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn build_fast_path_wildcard() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    write_uv_build_project(&context.temp_dir.child("project"), "uv_build==0.11.*")?;
+
+    context
+        .build()
+        .args(["project", "--wheel", "--no-index"])
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn build_fast_path_inactive_marker() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    write_uv_build_project(
+        &context.temp_dir.child("project"),
+        "uv_build==0.11.33 ; python_version < '0'",
+    )?;
+
+    context
+        .build()
+        .args(["project", "--wheel", "--no-index"])
+        .assert()
+        .success();
     Ok(())
 }
 
@@ -2966,17 +3003,7 @@ fn build_fast_path_constraint_exact_pin() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
 
-    project.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.11,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    project.child("src/project/__init__.py").touch()?;
+    write_uv_build_project(&project, "uv_build>=0.11,<10000")?;
 
     let constraints = context.temp_dir.child("constraints.txt");
     constraints.write_str("uv_build==0.11.33")?;
@@ -3029,26 +3056,96 @@ fn build_fast_path_constraint_exact_pin() -> Result<()> {
       cause: Can only use `--list` with a compatible uv build backend, but `project` is not compatible because `uv_build==0.11.33` does not match the running uv version
     ");
 
-    for constraint in [
-        format!("uv_build=={}", uv_version::version()),
-        "uv_build==0.11.33 ; python_version < '0'".to_string(),
-        "uv_build==0.11.*".to_string(),
-        "other-package==0.11.33".to_string(),
-        "uv_build>=0.11,<0.12".to_string(),
-    ] {
-        constraints.write_str(&constraint)?;
+    Ok(())
+}
 
-        context
-            .build()
-            .arg("project")
-            .arg("--wheel")
-            .arg("--no-index")
-            .arg("--build-constraint")
-            .arg("constraints.txt")
-            .assert()
-            .success();
-    }
+#[test]
+fn build_fast_path_constraint_running_version() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    write_uv_build_project(&context.temp_dir.child("project"), "uv_build>=0.11,<10000")?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str(&format!("uv_build=={}", uv_version::version()))?;
 
+    context
+        .build()
+        .args(["project", "--wheel", "--no-index"])
+        .args(["--build-constraint", "constraints.txt"])
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn build_fast_path_constraint_inactive_marker() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    write_uv_build_project(&context.temp_dir.child("project"), "uv_build>=0.11,<10000")?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("uv_build==0.11.33 ; python_version < '0'")?;
+
+    context
+        .build()
+        .args(["project", "--wheel", "--no-index"])
+        .args(["--build-constraint", "constraints.txt"])
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn build_fast_path_constraint_wildcard() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    write_uv_build_project(&context.temp_dir.child("project"), "uv_build>=0.11,<10000")?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("uv_build==0.11.*")?;
+
+    context
+        .build()
+        .args(["project", "--wheel", "--no-index"])
+        .args(["--build-constraint", "constraints.txt"])
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn build_fast_path_constraint_unrelated_package() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    write_uv_build_project(&context.temp_dir.child("project"), "uv_build>=0.11,<10000")?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("other-package==0.11.33")?;
+
+    context
+        .build()
+        .args(["project", "--wheel", "--no-index"])
+        .args(["--build-constraint", "constraints.txt"])
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn build_fast_path_constraint_range() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    write_uv_build_project(&context.temp_dir.child("project"), "uv_build>=0.11,<10000")?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("uv_build>=0.11,<0.12")?;
+
+    context
+        .build()
+        .args(["project", "--wheel", "--no-index"])
+        .args(["--build-constraint", "constraints.txt"])
+        .assert()
+        .success();
     Ok(())
 }
 
