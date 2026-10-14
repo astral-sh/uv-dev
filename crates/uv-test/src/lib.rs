@@ -795,10 +795,7 @@ impl TestContext {
     ///
     /// Returns `Ok(None)` if the environment variable is not set.
     pub fn with_cache_on_cow_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_COW_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_cache_on_fs(&dir, "COW_FS").map(Some)
+        self.with_cache_on_fs(EnvVars::UV_INTERNAL__TEST_COW_FS, "COW_FS")
     }
 
     /// Use a cache directory on the filesystem specified by
@@ -806,10 +803,7 @@ impl TestContext {
     ///
     /// Returns `Ok(None)` if the environment variable is not set.
     pub fn with_cache_on_alt_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_ALT_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_cache_on_fs(&dir, "ALT_FS").map(Some)
+        self.with_cache_on_fs(EnvVars::UV_INTERNAL__TEST_ALT_FS, "ALT_FS")
     }
 
     /// Use a cache directory on the filesystem specified by
@@ -817,10 +811,7 @@ impl TestContext {
     ///
     /// Returns `Ok(None)` if the environment variable is not set.
     pub fn with_cache_on_lowlinks_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_LOWLINKS_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_cache_on_fs(&dir, "LOWLINKS_FS").map(Some)
+        self.with_cache_on_fs(EnvVars::UV_INTERNAL__TEST_LOWLINKS_FS, "LOWLINKS_FS")
     }
 
     /// Use a cache directory on the filesystem specified by
@@ -828,10 +819,7 @@ impl TestContext {
     ///
     /// Returns `Ok(None)` if the environment variable is not set.
     pub fn with_cache_on_nocow_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_NOCOW_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_cache_on_fs(&dir, "NOCOW_FS").map(Some)
+        self.with_cache_on_fs(EnvVars::UV_INTERNAL__TEST_NOCOW_FS, "NOCOW_FS")
     }
 
     /// Use a working directory on the filesystem specified by
@@ -841,10 +829,7 @@ impl TestContext {
     ///
     /// Note a virtual environment is not created automatically.
     pub fn with_working_dir_on_cow_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_COW_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_working_dir_on_fs(&dir, "COW_FS").map(Some)
+        self.with_working_dir_on_fs(EnvVars::UV_INTERNAL__TEST_COW_FS, "COW_FS")
     }
 
     /// Use a working directory on the filesystem specified by
@@ -854,15 +839,13 @@ impl TestContext {
     ///
     /// Note a virtual environment is not created automatically.
     pub fn with_working_dir_on_nocow_fs(self) -> anyhow::Result<Option<Self>> {
-        let Some(dir) = env::var(EnvVars::UV_INTERNAL__TEST_NOCOW_FS).ok() else {
-            return Ok(None);
-        };
-        self.with_working_dir_on_fs(&dir, "NOCOW_FS").map(Some)
+        self.with_working_dir_on_fs(EnvVars::UV_INTERNAL__TEST_NOCOW_FS, "NOCOW_FS")
     }
 
-    fn with_cache_on_fs(mut self, dir: &str, name: &str) -> anyhow::Result<Self> {
-        fs_err::create_dir_all(dir)?;
-        let tmp = tempfile::TempDir::new_in(dir)?;
+    fn with_cache_on_fs(mut self, variable: &str, name: &str) -> anyhow::Result<Option<Self>> {
+        let Some(tmp) = Self::temp_dir_on_fs(variable)? else {
+            return Ok(None);
+        };
         self.cache_dir = ChildPath::new(tmp.path()).child("cache");
         fs_err::create_dir_all(&self.cache_dir)?;
         let replacement = format!("[{name}]/[CACHE_DIR]/");
@@ -870,12 +853,17 @@ impl TestContext {
             self.filters.insert(0, (pattern, replacement.clone()));
         }
         self._extra_tempdirs.push(tmp);
-        Ok(self)
+        Ok(Some(self))
     }
 
-    fn with_working_dir_on_fs(mut self, dir: &str, name: &str) -> anyhow::Result<Self> {
-        fs_err::create_dir_all(dir)?;
-        let tmp = tempfile::TempDir::new_in(dir)?;
+    fn with_working_dir_on_fs(
+        mut self,
+        variable: &str,
+        name: &str,
+    ) -> anyhow::Result<Option<Self>> {
+        let Some(tmp) = Self::temp_dir_on_fs(variable)? else {
+            return Ok(None);
+        };
         self.temp_dir = ChildPath::new(tmp.path()).child("temp");
         fs_err::create_dir_all(&self.temp_dir)?;
         // Place the venv inside temp_dir (matching the default TestContext layout)
@@ -895,7 +883,16 @@ impl TestContext {
                 .map(|pattern| (pattern, venv_replacement.clone())),
         );
         self._extra_tempdirs.push(tmp);
-        Ok(self)
+        Ok(Some(self))
+    }
+
+    fn temp_dir_on_fs(variable: &str) -> anyhow::Result<Option<tempfile::TempDir>> {
+        let Some(directory) = env::var_os(variable) else {
+            return Ok(None);
+        };
+        let directory = Path::new(&directory);
+        fs_err::create_dir_all(directory)?;
+        Ok(Some(tempfile::TempDir::new_in(directory)?))
     }
 
     /// Default to the canonicalized path to the temp directory. We need to do this because on
