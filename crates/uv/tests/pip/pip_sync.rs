@@ -3350,14 +3350,9 @@ fn compile() -> Result<()> {
     "
     );
 
-    assert!(
-        context
-            .site_packages()
-            .join("markupsafe")
-            .join("__pycache__")
-            .join("__init__.cpython-312.pyc")
-            .exists()
-    );
+    ChildPath::new(context.site_packages())
+        .child("markupsafe/__pycache__/__init__.cpython-312.pyc")
+        .assert(predicates::path::is_file());
 
     context.assert_command("import markupsafe").success();
 
@@ -3384,6 +3379,10 @@ fn recompile() -> Result<()> {
     "
     );
 
+    let bytecode = ChildPath::new(context.site_packages())
+        .child("markupsafe/__pycache__/__init__.cpython-312.pyc");
+    bytecode.assert(predicates::path::missing());
+
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
         .arg("--compile")
@@ -3395,14 +3394,7 @@ fn recompile() -> Result<()> {
     "
     );
 
-    assert!(
-        context
-            .site_packages()
-            .join("markupsafe")
-            .join("__pycache__")
-            .join("__init__.cpython-312.pyc")
-            .exists()
-    );
+    bytecode.assert(predicates::path::is_file());
 
     context.assert_command("import markupsafe").success();
 
