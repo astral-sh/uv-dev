@@ -965,19 +965,15 @@ impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome<'_>)> for LockReport {
         Self {
             path: target.lock_path().deref().into(),
             action: match outcome {
-                Outcome::Success(result) => {
-                    match result {
-                        LockResult::Unchanged(..) => match mode {
-                            // When `--frozen` is used, we don't check the lockfile.
-                            LockMode::Frozen(_) => LockAction::Use,
-                            LockMode::DryRun(_) | LockMode::Locked(_, _) | LockMode::Write(_) => {
-                                LockAction::Check
-                            }
-                        },
-                        LockResult::Changed(None, ..) => LockAction::Create,
-                        LockResult::Changed(Some(_), ..) => LockAction::Update,
+                Outcome::Success(LockResult::Unchanged(..)) => match mode {
+                    // When `--frozen` is used, we don't check the lockfile.
+                    LockMode::Frozen(_) => LockAction::Use,
+                    LockMode::DryRun(_) | LockMode::Locked(_, _) | LockMode::Write(_) => {
+                        LockAction::Check
                     }
-                }
+                },
+                Outcome::Success(LockResult::Changed(None, ..)) => LockAction::Create,
+                Outcome::Success(LockResult::Changed(Some(_), ..)) => LockAction::Update,
                 Outcome::Frozen(_) => LockAction::Use,
                 // TODO(zanieb): We don't have a way to report the outcome of the lock yet
                 Outcome::LockMismatch(..) => LockAction::Check,
