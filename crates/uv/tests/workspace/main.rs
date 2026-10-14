@@ -3,7 +3,6 @@
 #[cfg(feature = "test-python")]
 mod workspace;
 
-#[cfg(feature = "test-python")]
 mod workspace_dir;
 
 #[cfg(feature = "test-python")]

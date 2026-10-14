@@ -1,18 +1,17 @@
 use anyhow::Result;
-use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild};
+use indoc::indoc;
 
 use uv_test::uv_snapshot;
 
 /// Test basic output for a simple workspace with one member.
 #[test]
-fn workspace_dir_simple() {
-    let context = uv_test::test_context!("3.12");
-
-    // Initialize a workspace with one member
-    context.init().arg("foo").assert().success();
-
+fn workspace_dir_simple() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
     let workspace = context.temp_dir.child("foo");
+    workspace
+        .child("pyproject.toml")
+        .write_str("[project]\nname = \"foo\"\nversion = \"0.1.0\"\n")?;
 
     uv_snapshot!(context.filters(), context.workspace_dir().current_dir(&workspace), @"
     exit_code: 0 (success)
@@ -20,15 +19,25 @@ fn workspace_dir_simple() {
     [TEMP_DIR]/foo
     "
     );
+    Ok(())
 }
 
 /// Workspace dir output when run with `--package`.
 #[test]
-fn workspace_dir_specific_package() {
-    let context = uv_test::test_context!("3.12");
-    context.init().arg("foo").assert().success();
-    context.init().arg("foo/bar").assert().success();
+fn workspace_dir_specific_package() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
     let workspace = context.temp_dir.child("foo");
+    workspace.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+
+        [tool.uv.workspace]
+        members = ["bar"]
+    "#})?;
+    workspace
+        .child("bar/pyproject.toml")
+        .write_str("[project]\nname = \"bar\"\nversion = \"0.1.0\"\n")?;
 
     // root workspace
     uv_snapshot!(context.filters(), context.workspace_dir().current_dir(&workspace), @"
@@ -45,12 +54,13 @@ fn workspace_dir_specific_package() {
     [TEMP_DIR]/foo/bar
     "
     );
+    Ok(())
 }
 
 /// Test output when run from a workspace member directory.
 #[test]
 fn workspace_dir_from_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let workspace = context.temp_dir.child("workspace");
     let member = workspace.child("member");
     workspace.child("pyproject.toml").write_str(
@@ -84,7 +94,7 @@ fn workspace_dir_from_member() -> Result<()> {
 /// Test workspace discovery from a nested project that is ignored by a shallower member glob.
 #[test]
 fn workspace_dir_nested_gitignored_project() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let workspace = context.temp_dir.child("workspace");
     let project = workspace.child("packages").child("foo").child("nested");
 
@@ -118,7 +128,7 @@ fn workspace_dir_nested_gitignored_project() -> Result<()> {
 /// Test workspace discovery from a nested project matched by a recursive member glob.
 #[test]
 fn workspace_dir_nested_recursive_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let workspace = context.temp_dir.child("workspace");
     let project = workspace.child("packages").child("foo").child("nested");
 
@@ -150,7 +160,7 @@ fn workspace_dir_nested_recursive_member() -> Result<()> {
 /// discovery.
 #[test]
 fn workspace_dir_rejects_project_inside_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_cache_dir("workspace/cache");
+    let context = uv_test::test_context_with_versions!(&[]).with_cache_dir("workspace/cache");
     let workspace = context.temp_dir.child("workspace");
     let cached_project = context.cache_dir.child("cached-project");
 
@@ -181,13 +191,12 @@ fn workspace_dir_rejects_project_inside_cache() -> Result<()> {
 
 /// Test workspace dir error output for a non-existent package.
 #[test]
-fn workspace_dir_package_doesnt_exist() {
-    let context = uv_test::test_context!("3.12");
-
-    // Initialize a workspace with one member
-    context.init().arg("foo").assert().success();
-
+fn workspace_dir_package_doesnt_exist() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
     let workspace = context.temp_dir.child("foo");
+    workspace
+        .child("pyproject.toml")
+        .write_str("[project]\nname = \"foo\"\nversion = \"0.1.0\"\n")?;
 
     uv_snapshot!(context.filters(), context.workspace_dir().arg("--package").arg("bar").current_dir(&workspace), @"
     exit_code: 2 (failure)
@@ -195,12 +204,13 @@ fn workspace_dir_package_doesnt_exist() {
     error: Package `bar` not found in workspace.
     "
     );
+    Ok(())
 }
 
 /// Test workspace dir error output when not in a project.
 #[test]
 fn workspace_dir_no_project() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.filters(), context.workspace_dir(), @"
     exit_code: 2 (failure)
