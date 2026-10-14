@@ -1777,32 +1777,13 @@ fn pep_751_package_requires_python() -> Result<()> {
 
 #[test]
 fn pep_751_requires_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
         requires-python = ">=3.13"
-        dependencies = ["iniconfig"]
-        "#,
-    )?;
-
-    context
-        .export()
-        .arg("-o")
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    context
-        .venv()
-        .arg("--python")
-        .arg("3.12")
-        .assert()
-        .success();
+        packages = []
+    "#})?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
