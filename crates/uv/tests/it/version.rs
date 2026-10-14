@@ -13,20 +13,20 @@ use insta::assert_snapshot;
 use uv_static::EnvVars;
 use uv_test::{apply_filters, assert_path_missing, uv_snapshot};
 
+const VERSION_QUERY_PROJECT: &str = indoc! {r#"
+    [project]
+    name = "myproject"
+    version = '1.10.31'
+    requires-python = ">=3.12"
+"#};
+
 // Print the version
 #[test]
 fn version_get() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "myproject"
-        version = "1.10.31"
-        requires-python = ">=3.12"
-        "#,
-    )?;
+    pyproject_toml.write_str(VERSION_QUERY_PROJECT)?;
 
     uv_snapshot!(context.filters(), context.version(), @"
     exit_code: 0 (success)
@@ -34,17 +34,9 @@ fn version_get() -> Result<()> {
     myproject 1.10.31
     ");
 
-    let pyproject = context.read("pyproject.toml");
-    assert_snapshot!(
-        pyproject,
-    @r#"
-
-    [project]
-    name = "myproject"
-    version = "1.10.31"
-    requires-python = ">=3.12"
-    "#
-    );
+    assert_eq!(context.read(&pyproject_toml), VERSION_QUERY_PROJECT);
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(&context.venv);
     Ok(())
 }
 
@@ -54,14 +46,7 @@ fn version_get_json() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "myproject"
-        version = "1.10.31"
-        requires-python = ">=3.12"
-        "#,
-    )?;
+    pyproject_toml.write_str(VERSION_QUERY_PROJECT)?;
 
     let output = uv_snapshot!(context.filters(), context.version()
         .arg("--output-format").arg("json"), @r#"
@@ -87,17 +72,7 @@ fn version_get_json() -> Result<()> {
         .success()
         .stdout("");
 
-    let pyproject = context.read("pyproject.toml");
-    assert_snapshot!(
-        pyproject,
-    @r#"
-
-    [project]
-    name = "myproject"
-    version = "1.10.31"
-    requires-python = ">=3.12"
-    "#
-    );
+    assert_eq!(context.read(&pyproject_toml), VERSION_QUERY_PROJECT);
     Ok(())
 }
 
@@ -107,14 +82,7 @@ fn version_get_short() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "myproject"
-        version = "1.10.31"
-        requires-python = ">=3.12"
-        "#,
-    )?;
+    pyproject_toml.write_str(VERSION_QUERY_PROJECT)?;
 
     uv_snapshot!(context.filters(), context.version()
         .arg("--short"), @"
@@ -123,17 +91,7 @@ fn version_get_short() -> Result<()> {
     1.10.31
     ");
 
-    let pyproject = context.read("pyproject.toml");
-    assert_snapshot!(
-        pyproject,
-    @r#"
-
-    [project]
-    name = "myproject"
-    version = "1.10.31"
-    requires-python = ">=3.12"
-    "#
-    );
+    assert_eq!(context.read(&pyproject_toml), VERSION_QUERY_PROJECT);
 
     Ok(())
 }
