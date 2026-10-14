@@ -18438,6 +18438,9 @@ async fn sync_malware_detected() {
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
+    context
+        .assert_command("import importlib.util; assert importlib.util.find_spec('iniconfig') is None")
+        .success();
 }
 
 /// Ensure that `uv sync` succeeds when no malware is found.

@@ -7844,7 +7844,8 @@ async fn run_malware_detected() {
         .run()
         .arg("--preview-features").arg("malware-check")
         .arg("python")
-        .arg("--version")
+        .arg("-c")
+        .arg("from pathlib import Path; Path('command-ran').touch()")
         .env(EnvVars::UV_MALWARE_CHECK, "1")
         .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri()), @"
     exit_code: 2 (failure)
@@ -7854,6 +7855,10 @@ async fn run_malware_detected() {
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
+    context
+        .temp_dir
+        .child("command-ran")
+        .assert(predicate::path::missing());
 }
 
 #[test]
