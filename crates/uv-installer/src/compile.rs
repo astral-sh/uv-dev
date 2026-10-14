@@ -1,9 +1,8 @@
-use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{env, io, panic};
+use std::{env, io};
 
 use async_channel::{Receiver, SendError, Sender};
 use tempfile::{TempDir, tempdir_in};
@@ -23,8 +22,7 @@ const COMPILEALL_SCRIPT: &str = include_str!("pip_compileall.py");
 /// This is longer than any compilation should ever take.
 const DEFAULT_COMPILE_TIMEOUT: Duration = Duration::from_mins(1);
 
-type WorkerOutcome = std::thread::Result<Result<(), CompileError>>;
-type WorkerHandle = oneshot::Receiver<WorkerOutcome>;
+type WorkerHandle = oneshot::Receiver<Result<(), CompileError>>;
 
 /// Bytecode workers and the resources needed until they exit.
 struct BytecodeWorkers {
@@ -135,21 +133,14 @@ fn spawn_workers(
     for _ in 0..worker_count {
         let (tx, rx) = oneshot::channel();
 
-        let worker = worker(Arc::clone(&context), receiver.clone());
+        let context = Arc::clone(&context);
+        let receiver = receiver.clone();
 
         // Spawn each worker on a dedicated thread.
         std::thread::Builder::new()
             .name("uv-compile".to_owned())
             .spawn(move || {
-                // Report panics back to the main thread.
-                let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .expect("Failed to build runtime")
-                        .block_on(worker)
-                }));
-
+                let result = run_worker(context, receiver);
                 // This may fail if the main thread returned early due to an error.
                 let _ = tx.send(result);
             })
@@ -209,12 +200,8 @@ impl BytecodeWorkers {
         // Closing the channel lets workers exit after consuming the remaining queued files.
         drop(sender);
         for result in futures::future::join_all(handles).await {
-            match result {
-                // A worker thread panicked or exited without reporting its result.
-                Err(_) | Ok(Err(_)) => return Err(CompileError::Join),
-                Ok(Ok(Err(compile_error))) => return Err(compile_error),
-                Ok(Ok(Ok(()))) => {}
-            }
+            // A disconnected worker panicked or exited without reporting its result.
+            result.unwrap_or(Err(CompileError::Join))?;
         }
 
         producer_result.map(|()| source_files)
@@ -309,6 +296,18 @@ pub async fn compile_files(
         .submit_files(initial_files.into_iter().map(Ok).chain(files))
         .await;
     workers.finish(producer_result).await
+}
+
+/// Run a worker to completion on its dedicated thread.
+fn run_worker(
+    context: Arc<BytecodeWorkerContext>,
+    receiver: Receiver<PathBuf>,
+) -> Result<(), CompileError> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build runtime")
+        .block_on(worker(context, receiver))
 }
 
 async fn worker(
