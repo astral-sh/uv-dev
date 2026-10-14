@@ -30,6 +30,22 @@ impl ExtractionDirectories {
     }
 }
 
+/// Set executable permissions according to pip's wheel extraction behavior.
+#[cfg(unix)]
+pub(crate) fn set_executable_bits(path: &Path) -> Result<(), Error> {
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    // https://github.com/pypa/pip/blob/3898741e29b7279e7bffe044ecfbe20f6a438b1e/src/pip/_internal/utils/unpacking.py#L88-L100
+    let permissions = fs_err::metadata(path).map_err(Error::Io)?.permissions();
+    if permissions.mode() & 0o111 == 0o111 {
+        return Ok(());
+    }
+
+    fs_err::set_permissions(path, Permissions::from_mode(permissions.mode() | 0o111))
+        .map_err(Error::Io)
+}
+
 static REPLACEMENT_CHARACTER: &str = "\u{FFFD}";
 
 /// Validate that a given filename (e.g. reported by a ZIP archive's
