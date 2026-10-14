@@ -13108,6 +13108,8 @@ async fn lock_core_metadata_hash() -> Result<()> {
         cache-control = {{ api = "max-age=3600, immutable", files = "max-age=3600, immutable" }}
     "#, index_server.uri()})?;
 
+    let lockfile = context.temp_dir.child("uv.lock");
+
     // Reject sidecar bytes that do not match the index's advertised hash.
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
@@ -13120,6 +13122,7 @@ async fn lock_core_metadata_hash() -> Result<()> {
     Computed:
       sha256:987ad54f0d53537fb7157c700260deaa18346f43db7968cf0327de594d631205
     ");
+    lockfile.assert(predicates::path::missing());
 
     // The cached index response must retain the expected sidecar hashes.
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -13133,6 +13136,7 @@ async fn lock_core_metadata_hash() -> Result<()> {
     Computed:
       sha256:987ad54f0d53537fb7157c700260deaa18346f43db7968cf0327de594d631205
     ");
+    lockfile.assert(predicates::path::missing());
 
     // Serve the genuine metadata without refreshing the sidecar cache.
     artifact_server.verify().await;
@@ -13149,7 +13153,7 @@ async fn lock_core_metadata_hash() -> Result<()> {
     // The rejected metadata must not be reused from the cache.
     artifact_server.verify().await;
 
-    fs_err::remove_file(context.temp_dir.join("uv.lock"))?;
+    fs_err::remove_file(&lockfile)?;
     context.lock().assert().success();
     // The verified metadata must be reused without another download.
     artifact_server.verify().await;
@@ -13370,6 +13374,10 @@ async fn lock_index_hash_algorithm_missing() -> Result<()> {
     warning: Setting `hash-algorithm` on configured indexes is experimental and may change without warning. Pass `--preview-features index-hash-algorithm` to disable this warning.
     error: The index `http://[LOCALHOST]/simple` requires `sha256` hashes, but `basic_package-0.1.0-py3-none-any.whl` does not provide one
     ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicates::path::missing());
 
     Ok(())
 }
