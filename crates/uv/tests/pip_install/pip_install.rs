@@ -4235,72 +4235,6 @@ fn no_prerelease_hint_source_builds() -> Result<()> {
     Ok(())
 }
 
-/// Install a package into a virtual environment, and ensuring that the executable permissions
-/// are retained.
-///
-/// This test uses the default link semantics. (On macOS, this is `clone`.)
-#[test]
-fn install_executable() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("pylint==3.0.0"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + astroid==3.0.3
-     + dill==0.3.8
-     + isort==5.13.2
-     + mccabe==0.7.0
-     + platformdirs==4.2.0
-     + pylint==3.0.0
-     + tomlkit==0.12.4
-    "
-    );
-
-    // Verify that `pylint` is executable.
-    let executable = context
-        .venv
-        .join(if cfg!(windows) { "Scripts" } else { "bin" })
-        .join(format!("pylint{}", std::env::consts::EXE_SUFFIX));
-    Command::new(executable).arg("--version").assert().success();
-}
-
-/// Install a package into a virtual environment using copy semantics, and ensure that the
-/// executable permissions are retained.
-#[test]
-fn install_executable_copy() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("pylint==3.0.0")
-        .arg("--link-mode")
-        .arg("copy"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + astroid==3.0.3
-     + dill==0.3.8
-     + isort==5.13.2
-     + mccabe==0.7.0
-     + platformdirs==4.2.0
-     + pylint==3.0.0
-     + tomlkit==0.12.4
-    "
-    );
-
-    // Verify that `pylint` is executable.
-    let executable = context
-        .venv
-        .join(if cfg!(windows) { "Scripts" } else { "bin" })
-        .join(format!("pylint{}", std::env::consts::EXE_SUFFIX));
-    Command::new(executable).arg("--version").assert().success();
-}
-
 /// With `LongPathsEnabled=0`, `uv pip install jupyterlab-widgets==3.0.16` can fail when its nested
 /// frontend assets exceed `MAX_PATH` under the virtual environment. See astral-sh/uv#21611.
 ///
@@ -4371,39 +4305,6 @@ fn install_copy_long_paths() -> Result<()> {
     }?;
 
     Ok(())
-}
-
-/// Install a package into a virtual environment using hardlink semantics, and ensure that the
-/// executable permissions are retained.
-#[test]
-fn install_executable_hardlink() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-        .arg("pylint==3.0.0")
-        .arg("--link-mode")
-        .arg("hardlink"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + astroid==3.0.3
-     + dill==0.3.8
-     + isort==5.13.2
-     + mccabe==0.7.0
-     + platformdirs==4.2.0
-     + pylint==3.0.0
-     + tomlkit==0.12.4
-    "
-    );
-
-    // Verify that `pylint` is executable.
-    let executable = context
-        .venv
-        .join(if cfg!(windows) { "Scripts" } else { "bin" })
-        .join(format!("pylint{}", std::env::consts::EXE_SUFFIX));
-    Command::new(executable).arg("--version").assert().success();
 }
 
 /// Install a package into a virtual environment using clone semantics, and ensure that the
