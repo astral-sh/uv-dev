@@ -320,21 +320,16 @@ pub async fn remove(
         Err(err) => return Err(UvError::from(err).into()),
     };
 
-    let EditTarget::Project(project) = target else {
-        // If we're not adding to a project, exit early.
-        edit.commit();
-        return Ok(ExitStatus::Success);
-    };
-
-    let PythonTarget::Environment(venv) = &python_target else {
-        // If we're not syncing, exit early.
+    // Sync only project removals that have an environment.
+    let (EditTarget::Project(project), PythonTarget::Environment(venv)) = (&target, &python_target)
+    else {
         edit.commit();
         return Ok(ExitStatus::Success);
     };
 
     // Identify the installation target.
     let target = InstallTarget::from_project(
-        &project,
+        project,
         &lock,
         PackageSelection::from_args(false, &[], project.project_name()),
     );
