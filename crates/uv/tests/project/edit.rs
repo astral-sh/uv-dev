@@ -1068,8 +1068,9 @@ fn add_raw_error() -> Result<()> {
     Ok(())
 }
 
+/// Re-adding a local source reinstalls it without losing its editable status.
 #[test]
-fn reinstall_local_source_trees() -> Result<()> {
+fn add_reinstalls_local_editable_source() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let project_1 = context.temp_dir.child("project1");
@@ -1088,9 +1089,14 @@ fn reinstall_local_source_trees() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = []
-    "#})?;
 
-    uv_snapshot!(context.filters(), context.add().current_dir(&project_1).arg("../project2").arg("--editable"), @"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    project_2.child("src/project2/__init__.py").touch()?;
+
+    uv_snapshot!(context.filters(), context.add().current_dir(&project_1).arg("../project2").arg("--editable").arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -1102,7 +1108,7 @@ fn reinstall_local_source_trees() -> Result<()> {
     ");
 
     // Running `uv add` should reinstall the project.
-    uv_snapshot!(context.filters(), context.add().current_dir(&project_1).arg("../project2").arg("--editable"), @"
+    uv_snapshot!(context.filters(), context.add().current_dir(&project_1).arg("../project2").arg("--editable").arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -1111,6 +1117,10 @@ fn reinstall_local_source_trees() -> Result<()> {
     Installed 1 package in [TIME]
      ~ project2==0.1.0 (from file://[TEMP_DIR]/project2)
     ");
+    let direct_url = site_packages_path(project_1.child(".venv").path(), "python3.12")
+        .join("project2-0.1.0.dist-info/direct_url.json");
+    let direct_url: serde_json::Value = serde_json::from_slice(&fs_err::read(direct_url)?)?;
+    assert_eq!(direct_url["dir_info"]["editable"], true);
 
     Ok(())
 }
