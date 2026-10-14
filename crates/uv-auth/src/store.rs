@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
@@ -349,17 +350,16 @@ impl TextCredentialStore {
         // Perform an exact lookup first
         // TODO(zanieb): Consider adding `DisplaySafeUrlRef` so we can avoid this clone
         // TODO(zanieb): We could also return early here if we can't normalize to a `Service`
-        if let Ok(url_service) = Service::try_from(url.clone()) {
-            if let Some(credential) = self
+        if let Ok(url_service) = Service::try_from(url.clone())
+            && let Some(credential) = self
                 .credentials
                 .get(&(url_service, Username::from(username.map(str::to_string))))
-            {
-                return Ok(Some(credential));
-            }
+        {
+            return Ok(Some(credential));
         }
 
         // If that fails, iterate through to find a prefix match
-        let mut best: Option<(usize, &Service, &Credentials)> = None;
+        let mut best: Option<(usize, &Credentials)> = None;
 
         for ((service, stored_username), credential) in &self.credentials {
             let service_realm = Realm::from(service.url().deref());
@@ -375,27 +375,24 @@ impl TextCredentialStore {
             }
 
             // If a username is provided, it must match
-            if let Some(request_username) = username {
-                if Some(request_username) != stored_username.as_deref() {
-                    continue;
-                }
+            if username.is_some_and(|username| Some(username) != stored_username.as_deref()) {
+                continue;
             }
 
             // Update our best matching credential based on prefix length
             let specificity = service.url().path().len();
-            if best.is_none_or(|(best_specificity, _, _)| specificity > best_specificity) {
-                best = Some((specificity, service, credential));
-            } else if best.is_some_and(|(best_specificity, _, _)| specificity == best_specificity) {
-                return Err(LookupError::AmbiguousUsername(url.clone()));
+            if let Some((best_specificity, _)) = best {
+                match specificity.cmp(&best_specificity) {
+                    Ordering::Less => continue,
+                    Ordering::Equal => return Err(LookupError::AmbiguousUsername(url.clone())),
+                    Ordering::Greater => {}
+                }
             }
+            best = Some((specificity, credential));
         }
 
         // Return the most specific match
-        if let Some((_, _, credential)) = best {
-            return Ok(Some(credential));
-        }
-
-        Ok(None)
+        Ok(best.map(|(_, credential)| credential))
     }
 
     /// Store credentials for a given service.
