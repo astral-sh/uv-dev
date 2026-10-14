@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg(feature = "test-python")]
 use uv_platform::{Arch, Os};
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
@@ -11,7 +12,7 @@ use indoc::indoc;
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{any, method, path},
+    matchers::{method, path},
 };
 
 #[test]
@@ -56,6 +57,7 @@ fn python_list_default_arch() {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_list() {
     let mut context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
@@ -220,7 +222,7 @@ fn python_list_warns_on_noncritical_explicit_path_errors() -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "test-python"))]
 #[test]
 fn python_list_warns_on_non_native_search_path_interpreters() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"])
@@ -301,6 +303,7 @@ fn python_list_warns_on_non_native_search_path_interpreters() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_list_pin() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
@@ -333,6 +336,7 @@ fn python_list_pin() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_list_venv() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
@@ -365,6 +369,7 @@ fn python_list_venv() {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_list_unsupported_version() {
     let context = uv_test::test_context_with_versions!(&["3.12"])
         .with_filtered_python_symlinks()
@@ -417,6 +422,7 @@ fn python_list_unsupported_version() {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_list_duplicate_path_entries() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
@@ -608,6 +614,7 @@ fn python_list_managed_symlinks() {
 }
 
 #[tokio::test]
+#[cfg(feature = "test-python")]
 async fn python_list_only_installed_skips_download_metadata() {
     let context = uv_test::test_context_with_versions!(&["3.12"])
         .with_filtered_python_symlinks()
@@ -615,7 +622,7 @@ async fn python_list_only_installed_skips_download_metadata() {
         .with_collapsed_whitespace();
     let server = MockServer::start().await;
 
-    Mock::given(any())
+    Mock::given(wiremock::matchers::any())
         .respond_with(ResponseTemplate::new(200).set_body_raw("{", "application/json"))
         .expect(0)
         .mount(&server)
