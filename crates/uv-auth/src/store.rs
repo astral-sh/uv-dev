@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use fs_err as fs;
@@ -349,11 +348,11 @@ impl TextCredentialStore {
         }
 
         // If that fails, iterate through to find a prefix match
-        let request_realm = RealmRef::from(url.deref());
+        let request_realm = RealmRef::from(url);
         let mut best: Option<(usize, &Credentials)> = None;
 
         for ((service, stored_username), credential) in &self.credentials {
-            let service_realm = RealmRef::from(service.url().deref());
+            let service_realm = RealmRef::from(service.url());
 
             // Only consider services in the same realm
             if service_realm != request_realm {

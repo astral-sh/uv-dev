@@ -110,6 +110,12 @@ impl<'a> From<&'a Url> for RealmRef<'a> {
     }
 }
 
+impl<'a> From<&'a DisplaySafeUrl> for RealmRef<'a> {
+    fn from(url: &'a DisplaySafeUrl) -> Self {
+        Self::from(&**url)
+    }
+}
+
 impl PartialEq for RealmRef<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.scheme == other.scheme && self.host == other.host && self.port == other.port
