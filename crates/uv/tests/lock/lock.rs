@@ -14579,12 +14579,9 @@ fn lock_workspace_member_with_external_workspace_source() -> Result<()> {
 fn lock_peer_member() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    context
-        .temp_dir
-        .child("project")
-        .child("pyproject.toml")
-        .write_str(
-            r#"
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(
+        r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -14597,7 +14594,7 @@ fn lock_peer_member() -> Result<()> {
         [tool.uv.sources]
         child = { workspace = true }
         "#,
-        )?;
+    )?;
 
     context
         .temp_dir
@@ -14617,7 +14614,7 @@ fn lock_peer_member() -> Result<()> {
         "#,
         )?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(context.temp_dir.child("project")), @"
+    uv_snapshot!(context.filters(), context.lock().current_dir(&project), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -14664,10 +14661,11 @@ fn lock_peer_member() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
-    exit_code: 2 (failure)
+    uv_snapshot!(context.filters(), context.lock().current_dir(&project).arg("--locked"), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No `pyproject.toml` found in current directory or any parent directory
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
     ");
 
     Ok(())
@@ -15053,10 +15051,12 @@ fn lock_dev_transitive() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
-    exit_code: 2 (failure)
+    uv_snapshot!(context.filters(), context.lock().current_dir(&bar).arg("--locked"), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No `pyproject.toml` found in current directory or any parent directory
+    warning: The `tool.uv.dev-dependencies` field (used in `baz/pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 5 packages in [TIME]
     ");
 
     Ok(())
