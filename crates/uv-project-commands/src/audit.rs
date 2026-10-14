@@ -174,7 +174,7 @@ pub async fn audit(
     let state = UniversalState::default();
 
     // Update the lockfile, if necessary.
-    let lock = match Box::pin(
+    let lock = Box::pin(
         LockOperation::new(
             mode,
             &settings,
@@ -190,10 +190,8 @@ pub async fn audit(
         .execute(target),
     )
     .await
-    {
-        Ok(result) => result.into_lock(),
-        Err(err) => return Err(UvError::from(err).into()),
-    };
+    .map_err(UvError::from)?
+    .into_lock();
 
     // Determine the markers to use for resolution.
     let markers = (!universal).then(|| {
