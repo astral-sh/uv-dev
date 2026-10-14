@@ -1,7 +1,9 @@
 #[cfg(feature = "test-universal")]
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
+#[cfg(feature = "test-universal")]
+use anyhow::{Context, bail};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
@@ -14,6 +16,7 @@ use uv_test::TestContext;
 use uv_test::uv_snapshot;
 
 /// Trees require a lockfile with revision 5 or later.
+#[cfg(feature = "test-universal")]
 #[test]
 fn tree_lockfile_requires_revision() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -164,6 +167,7 @@ fn tree_lockfile_incompatible_python() -> Result<()> {
 }
 
 /// The workspace discovered while resolving settings is reused by `uv tree`.
+#[cfg(feature = "test-universal")]
 #[test]
 fn tree_reuses_settings_workspace_discovery() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -772,6 +776,7 @@ fn json_output_projected_members_respect_depth() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
 #[test]
 fn json_output_root_contexts_respect_depth() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -890,6 +895,7 @@ fn json_output_root_contexts_respect_depth() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
 #[test]
 fn json_output_virtual_root() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1068,6 +1074,7 @@ fn json_output_virtual_root() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
 #[test]
 fn virtual_workspace_members() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1192,6 +1199,7 @@ fn virtual_workspace_members() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
 #[test]
 fn virtual_workspace_dependency_groups_only() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1301,6 +1309,7 @@ fn virtual_workspace_dependency_groups_only() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
 #[test]
 fn json_output_frozen_missing_members() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1520,6 +1529,7 @@ fn json_output_depth_with_extra_context() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
 #[test]
 fn nested_platform_dependencies() -> Result<()> {
     let context = uv_test::test_context!("3.12");
