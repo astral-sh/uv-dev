@@ -381,7 +381,10 @@ fn tool_run_warn_executable_from_multiple_dependencies() -> Result<()> {
     let index = PackseServer::from_scenario(&scenario);
     let context = uv_test::test_context!("3.12")
         .with_tool_dirs()
-        .with_filter((r"(?m)^Hello from provider-[ab]!$", "Hello from [PROVIDER]!"));
+        .with_filter((
+            r"(?m)^Hello from provider-[ab]!\r?$",
+            "Hello from [PROVIDER]!",
+        ));
 
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("--index-url")
