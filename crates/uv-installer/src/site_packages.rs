@@ -453,14 +453,13 @@ impl SitePackages {
         build_settings: Option<BuildSettings<'_>>,
     ) -> Result<SatisfiesResult<Requirement>> {
         // Collect the constraints by package name.
-        let constraints: FxHashMap<&PackageName, Vec<&Requirement>> =
-            constraints.fold(FxHashMap::default(), |mut constraints, constraint| {
-                constraints
-                    .entry(&constraint.name)
-                    .or_default()
-                    .push(constraint);
-                constraints
-            });
+        let mut constraints_by_name: FxHashMap<_, Vec<_>> = FxHashMap::default();
+        for constraint in constraints {
+            constraints_by_name
+                .entry(&constraint.name)
+                .or_default()
+                .push(constraint);
+        }
         let mut stack: Vec<Cow<'_, Requirement>> = Vec::with_capacity(requirements.size_hint().0);
         let mut seen =
             FxHashSet::with_capacity_and_hasher(requirements.size_hint().0, FxBuildHasher);
@@ -502,7 +501,7 @@ impl SitePackages {
                     }
 
                     // Validate that the installed version satisfies the constraints.
-                    for constraint in constraints.get(name).into_iter().flatten() {
+                    for constraint in constraints_by_name.get(name).into_iter().flatten() {
                         if constraint.evaluate_markers(Some(markers), &[])
                             && !satisfies_source(&constraint.source)
                         {
