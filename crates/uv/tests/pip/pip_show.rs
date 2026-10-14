@@ -238,11 +238,12 @@ fn show_required_by_multiple() -> Result<()> {
         .write_str("Metadata-Version: 2.1\nName: anyio\nVersion: 4.0.0\nRequires-Dist: idna\n")?;
     site_packages
         .child("requests-2.31.0.dist-info/METADATA")
-        .write_str(
-            "Metadata-Version: 2.1\nName: requests\nVersion: 2.31.0\nRequires-Dist: idna\n",
-        )?;
+        .write_str("Metadata-Version: 2.1\nName: requests\nVersion: 2.31.0\nRequires-Dist: idna; python_version >= '3.8'\n")?;
+    site_packages
+        .child("legacy-1.0.0.dist-info/METADATA")
+        .write_str("Metadata-Version: 2.1\nName: legacy\nVersion: 1.0.0\nRequires-Dist: idna; python_version < '3.8'\n")?;
 
-    // idna is required by anyio and requests
+    // Reverse dependencies include active requirements and omit inactive markers.
     uv_snapshot!(context.filters(), context.pip_show()
         .arg("idna"), @"
     exit_code: 0 (success)
