@@ -194,57 +194,38 @@ impl VersionMap {
         &self,
         range: &Ranges<Version>,
     ) -> impl DoubleEndedIterator<Item = (&Version, VersionMapDistHandle<'_>)> {
-        // Performance optimization: If we only have a single version, return that version directly.
-        if let Some(version) = range.as_singleton() {
-            either::Either::Left(match self.inner {
-                VersionMapInner::Eager(ref eager) => {
-                    either::Either::Left(eager.map.get_key_value(version).into_iter().map(
-                        move |(version, dist)| {
-                            let version_map_dist = VersionMapDistHandle {
-                                inner: VersionMapDistHandleInner::Eager(dist),
-                            };
-                            (version, version_map_dist)
+        // Use a direct lookup when the range contains exactly one version.
+        let singleton = range.as_singleton();
+        match &self.inner {
+            VersionMapInner::Eager(eager) => {
+                let entries = if let Some(version) = singleton {
+                    either::Either::Left(eager.map.get_key_value(version).into_iter())
+                } else {
+                    either::Either::Right(eager.map.range(BoundingRange::from(range)))
+                };
+                either::Either::Left(entries.map(|(version, dist)| {
+                    let handle = VersionMapDistHandle {
+                        inner: VersionMapDistHandleInner::Eager(dist),
+                    };
+                    (version, handle)
+                }))
+            }
+            VersionMapInner::Lazy(lazy) => {
+                let entries = if let Some(version) = singleton {
+                    either::Either::Left(lazy.map.get(version).into_iter())
+                } else {
+                    either::Either::Right(lazy.map.range(BoundingRange::from(range)).iter())
+                };
+                either::Either::Right(entries.map(move |entry| {
+                    let handle = VersionMapDistHandle {
+                        inner: VersionMapDistHandleInner::Lazy {
+                            lazy,
+                            dist: &entry.dist,
                         },
-                    ))
-                }
-                VersionMapInner::Lazy(ref lazy) => {
-                    either::Either::Right(lazy.map.get(version).into_iter().map(move |entry| {
-                        let version_map_dist = VersionMapDistHandle {
-                            inner: VersionMapDistHandleInner::Lazy {
-                                lazy,
-                                dist: &entry.dist,
-                            },
-                        };
-                        (&entry.version, version_map_dist)
-                    }))
-                }
-            })
-        } else {
-            either::Either::Right(match self.inner {
-                VersionMapInner::Eager(ref eager) => {
-                    either::Either::Left(eager.map.range(BoundingRange::from(range)).map(
-                        |(version, dist)| {
-                            let version_map_dist = VersionMapDistHandle {
-                                inner: VersionMapDistHandleInner::Eager(dist),
-                            };
-                            (version, version_map_dist)
-                        },
-                    ))
-                }
-                VersionMapInner::Lazy(ref lazy) => {
-                    either::Either::Right(lazy.map.range(BoundingRange::from(range)).iter().map(
-                        |entry| {
-                            let version_map_dist = VersionMapDistHandle {
-                                inner: VersionMapDistHandleInner::Lazy {
-                                    lazy,
-                                    dist: &entry.dist,
-                                },
-                            };
-                            (&entry.version, version_map_dist)
-                        },
-                    ))
-                }
-            })
+                    };
+                    (&entry.version, handle)
+                }))
+            }
         }
     }
 
