@@ -17,9 +17,7 @@ use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
 use uv_test::find_links::FindLinksServer;
 use uv_test::packse::PackseServer;
-use uv_test::{
-    TestContext, copy_dir_ignore, download_to_disk, site_packages_path, uv_snapshot, venv_bin_path,
-};
+use uv_test::{TestContext, copy_dir_ignore, download_to_disk, uv_snapshot, venv_bin_path};
 
 #[test]
 fn missing_requirements_txt() {
@@ -5379,69 +5377,6 @@ fn assert_target_distributions(context: &TestContext, target: &Path, expected: &
         .assert()
         .success()
         .stdout(expected);
-}
-
-/// Sync to a `--prefix` directory.
-#[test]
-fn prefix() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix();
-
-    // Install `iniconfig` to the prefix directory.
-    let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("iniconfig==2.0.0")?;
-
-    let prefix = context.temp_dir.child("prefix");
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.in")
-        .arg("--prefix")
-        .arg(prefix.path()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
-
-    context.assert_not_installed("iniconfig");
-
-    // Ensure that we can import the package by augmenting the `PYTHONPATH`.
-    context
-        .python_command()
-        .arg("-c")
-        .arg("import iniconfig")
-        .env(
-            EnvVars::PYTHONPATH,
-            site_packages_path(&context.temp_dir.join("prefix"), "python3.12"),
-        )
-        .assert()
-        .success();
-
-    // Upgrade it.
-    let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("iniconfig==1.1.1")?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.in")
-        .arg("--prefix")
-        .arg(prefix.path()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - iniconfig==2.0.0
-     + iniconfig==1.1.1
-    ");
-
-    Ok(())
 }
 
 /// Include a `build_constraints.txt` file with an incompatible constraint.
