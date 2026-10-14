@@ -18015,8 +18015,12 @@ async fn lock_sources_url() -> Result<()> {
 
 /// Skip direct URL freshness checks while offline without skipping mutable transitive sources.
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
+#[tokio::test]
+async fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
+    let archive = crate::workspace_sources::archive()?;
+    let server = PackageServer::new(&"workspace".parse()?).await;
+    server.serve("workspace.zip", &archive, None).await;
+    let archive_url = server.file_url("workspace.zip");
     let context = uv_test::test_context!("3.12");
 
     // The remote `workspace` archive depends on `anyio`. Override that transitive dependency to
@@ -18024,25 +18028,22 @@ fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
     // offline; changing its version below proves that we still recurse into the parent's locked
     // dependencies.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["workspace @ https://github.com/user-attachments/files/16592193/workspace.zip"]
+        dependencies = ["workspace @ {archive_url}"]
 
         [tool.uv]
         override-dependencies = ["anyio"]
 
         [tool.uv.sources]
-        anyio = { path = "anyio" }
-        "#,
-    )?;
+        anyio = {{ path = "anyio" }}
+        "#
+    })?;
 
-    let transitive = context.temp_dir.child("anyio");
-    fs_err::create_dir_all(&transitive)?;
-    let transitive_pyproject_toml = transitive.child("pyproject.toml");
+    let transitive_pyproject_toml = context.temp_dir.child("anyio/pyproject.toml");
     transitive_pyproject_toml.write_str(
         r#"
         [project]
@@ -18052,12 +18053,14 @@ fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
 
+    // The direct URL cannot be fetched while validating the modified local dependency.
+    drop(server);
     transitive_pyproject_toml.write_str(
         r#"
         [project]
