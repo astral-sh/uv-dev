@@ -113,50 +113,21 @@ fn parse_marker_value<T: Pep508Url>(
                     len,
                     input: cursor.to_string(),
                 })
-                .inspect(|value| match value {
-                    MarkerValue::MarkerEnvString(MarkerValueString::OsNameDeprecated) => {
+                .inspect(|value| {
+                    if let MarkerValue::MarkerEnvString(
+                        name @ (MarkerValueString::OsNameDeprecated
+                        | MarkerValueString::PlatformMachineDeprecated
+                        | MarkerValueString::PlatformPythonImplementationDeprecated
+                        | MarkerValueString::PythonImplementationDeprecated
+                        | MarkerValueString::PlatformVersionDeprecated
+                        | MarkerValueString::SysPlatformDeprecated),
+                    ) = value
+                    {
                         reporter.report(
                             MarkerWarningKind::DeprecatedMarkerName,
-                            "os.name is deprecated in favor of os_name".to_string(),
+                            format!("{key} is deprecated in favor of {name}"),
                         );
                     }
-                    MarkerValue::MarkerEnvString(MarkerValueString::PlatformMachineDeprecated) => {
-                        reporter.report(
-                            MarkerWarningKind::DeprecatedMarkerName,
-                            "platform.machine is deprecated in favor of platform_machine".to_string(),
-                        );
-                    }
-                    MarkerValue::MarkerEnvString(
-                        MarkerValueString::PlatformPythonImplementationDeprecated,
-                    ) => {
-                        reporter.report(
-                            MarkerWarningKind::DeprecatedMarkerName,
-                            "platform.python_implementation is deprecated in favor of platform_python_implementation".to_string(),
-                        );
-                    }
-                    MarkerValue::MarkerEnvString(
-                        MarkerValueString::PythonImplementationDeprecated,
-                    ) => {
-                        reporter.report(
-                            MarkerWarningKind::DeprecatedMarkerName,
-                            "python_implementation is deprecated in favor of platform_python_implementation"
-                                .to_string(),
-                        );
-                    }
-                    MarkerValue::MarkerEnvString(MarkerValueString::PlatformVersionDeprecated) => {
-                        reporter.report(
-                            MarkerWarningKind::DeprecatedMarkerName,
-                            "platform.version is deprecated in favor of platform_version"
-                                .to_string(),
-                        );
-                    }
-                    MarkerValue::MarkerEnvString(MarkerValueString::SysPlatformDeprecated) => {
-                        reporter.report(
-                            MarkerWarningKind::DeprecatedMarkerName,
-                            "sys.platform is deprecated in favor of sys_platform".to_string(),
-                        );
-                    }
-                    _ => {}
                 })
         }
     }
