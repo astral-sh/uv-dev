@@ -7,94 +7,106 @@ use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{FileWriteBin, PathChild};
 use predicates::prelude::predicate;
 use uv_test::packse::generate_wheel;
-use uv_test::uv_snapshot;
+use uv_test::{assert_path_missing, uv_snapshot};
 
-/// Test the uv fast path. Tests all four possible build plans:
-/// * Defaults
-/// * `--sdist`
-/// * `--wheel`
-/// * `--sdist --wheel`
+/// The default plan builds a wheel from the source distribution.
 #[test]
-fn build_plans() {
-    let context = uv_test::test_context!("3.12");
-
-    let built_by_uv = context.workspace_root.join("test/packages/built-by-uv");
+fn build_default_plan() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let source = context.workspace_root.join("test/packages/built-by-uv");
+    let output = context.temp_dir.child("dist");
 
     uv_snapshot!(context.build()
-        .arg(&built_by_uv)
+        .arg(&source)
         .arg("--out-dir")
-        .arg(context.temp_dir.join("output1")), @"
+        .arg(output.path())
+        .arg("--no-index"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Building source distribution...
     Building wheel from source distribution...
-    Successfully built output1/built_by_uv-0.1.0.tar.gz
-    Successfully built output1/built_by_uv-0.1.0-py3-none-any.whl
+    Successfully built dist/built_by_uv-0.1.0.tar.gz
+    Successfully built dist/built_by_uv-0.1.0-py3-none-any.whl
     ");
-    context
-        .temp_dir
-        .child("output1")
+    output
         .child("built_by_uv-0.1.0.tar.gz")
         .assert(predicate::path::is_file());
-    context
-        .temp_dir
-        .child("output1")
+    output
         .child("built_by_uv-0.1.0-py3-none-any.whl")
         .assert(predicate::path::is_file());
+}
+
+#[test]
+fn build_sdist_plan() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let source = context.workspace_root.join("test/packages/built-by-uv");
+    let output = context.temp_dir.child("dist");
 
     uv_snapshot!(context.build()
-        .arg(&built_by_uv)
+        .arg(&source)
         .arg("--out-dir")
-        .arg(context.temp_dir.join("output2"))
-        .arg("--sdist"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Building source distribution...
-    Successfully built output2/built_by_uv-0.1.0.tar.gz
-    ");
-    context
-        .temp_dir
-        .child("output2")
-        .child("built_by_uv-0.1.0.tar.gz")
-        .assert(predicate::path::is_file());
-
-    uv_snapshot!(context.build()
-        .arg(&built_by_uv)
-        .arg("--out-dir")
-        .arg(context.temp_dir.join("output3"))
-        .arg("--wheel"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Building wheel...
-    Successfully built output3/built_by_uv-0.1.0-py3-none-any.whl
-    ");
-    context
-        .temp_dir
-        .child("output3")
-        .child("built_by_uv-0.1.0-py3-none-any.whl")
-        .assert(predicate::path::is_file());
-
-    uv_snapshot!(context.build()
-        .arg(&built_by_uv)
-        .arg("--out-dir")
-        .arg(context.temp_dir.join("output4"))
+        .arg(output.path())
         .arg("--sdist")
-        .arg("--wheel"), @"
+        .arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    Successfully built dist/built_by_uv-0.1.0.tar.gz
+    ");
+    output
+        .child("built_by_uv-0.1.0.tar.gz")
+        .assert(predicate::path::is_file());
+    assert_path_missing(output.child("built_by_uv-0.1.0-py3-none-any.whl"));
+}
+
+#[test]
+fn build_wheel_plan() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let source = context.workspace_root.join("test/packages/built-by-uv");
+    let output = context.temp_dir.child("dist");
+
+    uv_snapshot!(context.build()
+        .arg(&source)
+        .arg("--out-dir")
+        .arg(output.path())
+        .arg("--wheel")
+        .arg("--no-index"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/built_by_uv-0.1.0-py3-none-any.whl
+    ");
+    output
+        .child("built_by_uv-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    assert_path_missing(output.child("built_by_uv-0.1.0.tar.gz"));
+}
+
+/// Explicitly requesting both artifacts builds each directly from the source tree.
+#[test]
+fn build_sdist_and_wheel_plan() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let source = context.workspace_root.join("test/packages/built-by-uv");
+    let output = context.temp_dir.child("dist");
+
+    uv_snapshot!(context.build()
+        .arg(&source)
+        .arg("--out-dir")
+        .arg(output.path())
+        .arg("--sdist")
+        .arg("--wheel")
+        .arg("--no-index"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Building source distribution...
     Building wheel...
-    Successfully built output4/built_by_uv-0.1.0.tar.gz
-    Successfully built output4/built_by_uv-0.1.0-py3-none-any.whl
+    Successfully built dist/built_by_uv-0.1.0.tar.gz
+    Successfully built dist/built_by_uv-0.1.0-py3-none-any.whl
     ");
-    context
-        .temp_dir
-        .child("output4")
+    output
         .child("built_by_uv-0.1.0.tar.gz")
         .assert(predicate::path::is_file());
-    context
-        .temp_dir
-        .child("output4")
+    output
         .child("built_by_uv-0.1.0-py3-none-any.whl")
         .assert(predicate::path::is_file());
 }
