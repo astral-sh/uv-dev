@@ -770,15 +770,11 @@ fn python_sync_honors_pinned_patch_version() -> Result<()> {
      + cpython-3.10.[LATEST]-[PLATFORM] (python3.10)
     ");
 
-    // The environment should continue to report the pinned patch version.
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @r"
+    // Query the synced environment directly so a project command cannot repair it first.
+    uv_snapshot!(context.filters(), context.external_command(context.interpreter()).arg("--version"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
-
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Checked in [TIME]
     ");
 
     Ok(())
