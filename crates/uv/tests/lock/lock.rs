@@ -18,7 +18,7 @@ use walkdir::WalkDir;
 #[cfg(feature = "test-universal")]
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{any, method, path},
 };
 
 #[cfg(feature = "test-universal")]
@@ -27997,6 +27997,13 @@ fn lock_invalid_index_cache_control() -> Result<()> {
 async fn lock_named_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
+    let unselected = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .named("unselected indexes")
+        .mount(&unselected)
+        .await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -28008,8 +28015,8 @@ async fn lock_named_index() -> Result<()> {
         dependencies = ["typing-extensions"]
 
         [[tool.uv.index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121"
+        name = "explicit"
+        url = "{unselected_uri}/explicit/simple"
         explicit = true
 
         [[tool.uv.index]]
@@ -28017,10 +28024,11 @@ async fn lock_named_index() -> Result<()> {
         url = "{proxy_uri}/simple"
 
         [[tool.uv.index]]
-        name = "test"
-        url = "https://test.pypi.org/simple"
+        name = "fallback"
+        url = "{unselected_uri}/fallback/simple"
         "#,
-        proxy_uri = proxy.uri()
+        proxy_uri = proxy.uri(),
+        unselected_uri = unselected.uri()
     ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
