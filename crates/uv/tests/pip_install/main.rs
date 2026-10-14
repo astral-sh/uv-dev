@@ -36,6 +36,7 @@ mod launcher;
 mod link_mode;
 #[cfg(feature = "test-python")]
 mod no_index;
+mod offline_input;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_install;
 #[cfg(feature = "test-python")]
