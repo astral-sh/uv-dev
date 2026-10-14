@@ -800,17 +800,31 @@ pub(crate) fn split_extras(given: &str) -> Option<(&str, &str)> {
 
 /// PEP 440 wrapper
 fn parse_specifier<T: Pep508Url>(
-    cursor: &mut Cursor,
-    buffer: &str,
+    cursor: &Cursor,
     start: usize,
     end: usize,
 ) -> Result<VersionSpecifier, Pep508Error<T>> {
-    VersionSpecifier::from_str(buffer).map_err(|err| Pep508Error {
+    VersionSpecifier::from_str(cursor.slice(start, end - start)).map_err(|err| Pep508Error {
         message: Pep508ErrorSource::String(err.to_string()),
         start,
         len: end - start,
         input: cursor.to_string(),
     })
+}
+
+/// Parse the final specifier, allowing one trailing comma after a nonempty list.
+fn finish_version_specifiers<T: Pep508Url>(
+    cursor: &Cursor,
+    mut specifiers: Vec<VersionSpecifier>,
+    start: usize,
+    end: usize,
+) -> Result<VersionOrUrl<T>, Pep508Error<T>> {
+    if specifiers.is_empty() || !cursor.slice(start, end - start).trim().is_empty() {
+        specifiers.push(parse_specifier(cursor, start, end)?);
+    }
+    Ok(VersionOrUrl::VersionSpecifier(
+        specifiers.into_iter().collect(),
+    ))
 }
 
 /// Such as `>=1.19,<2.0`, either delimited by the end of the specifier or a `;` for the marker part
@@ -820,39 +834,24 @@ fn parse_specifier<T: Pep508Url>(
 /// ```
 fn parse_version_specifier<T: Pep508Url>(
     cursor: &mut Cursor,
-) -> Result<Option<VersionOrUrl<T>>, Pep508Error<T>> {
+) -> Result<VersionOrUrl<T>, Pep508Error<T>> {
     let mut start = cursor.pos();
     let mut specifiers = Vec::new();
-    let mut buffer = String::new();
-    let requirement_kind = loop {
+    loop {
         match cursor.peek() {
             Some((end, ',')) => {
-                let specifier = parse_specifier(cursor, &buffer, start, end)?;
-                specifiers.push(specifier);
-                buffer.clear();
+                specifiers.push(parse_specifier(cursor, start, end)?);
                 cursor.next();
                 start = end + 1;
             }
             Some((_, ';')) | None => {
-                if buffer.trim().is_empty() && !specifiers.is_empty() {
-                    break Some(VersionOrUrl::VersionSpecifier(
-                        specifiers.into_iter().collect(),
-                    ));
-                }
-                let end = cursor.pos();
-                let specifier = parse_specifier(cursor, &buffer, start, end)?;
-                specifiers.push(specifier);
-                break Some(VersionOrUrl::VersionSpecifier(
-                    specifiers.into_iter().collect(),
-                ));
+                return finish_version_specifiers(cursor, specifiers, start, cursor.pos());
             }
-            Some((_, char)) => {
-                buffer.push(char);
+            Some(_) => {
                 cursor.next();
             }
         }
-    };
-    Ok(requirement_kind)
+    }
 }
 
 /// Such as `(>=1.19,<2.0)`
@@ -862,34 +861,23 @@ fn parse_version_specifier<T: Pep508Url>(
 /// ```
 fn parse_version_specifier_parentheses<T: Pep508Url>(
     cursor: &mut Cursor,
-) -> Result<Option<VersionOrUrl<T>>, Pep508Error<T>> {
+) -> Result<VersionOrUrl<T>, Pep508Error<T>> {
     let brace_pos = cursor.pos();
     cursor.next();
     // Makes for slightly better error underline
     cursor.eat_whitespace();
     let mut start = cursor.pos();
     let mut specifiers = Vec::new();
-    let mut buffer = String::new();
-    let requirement_kind = loop {
+    loop {
         match cursor.next() {
             Some((end, ',')) => {
-                let specifier =
-                    parse_specifier(cursor, &buffer, start, end)?;
-                specifiers.push(specifier);
-                buffer.clear();
+                specifiers.push(parse_specifier(cursor, start, end)?);
                 start = end + 1;
             }
             Some((end, ')')) => {
-                if buffer.trim().is_empty() && !specifiers.is_empty() {
-                    break Some(VersionOrUrl::VersionSpecifier(
-                        specifiers.into_iter().collect(),
-                    ));
-                }
-                let specifier = parse_specifier(cursor, &buffer, start, end)?;
-                specifiers.push(specifier);
-                break Some(VersionOrUrl::VersionSpecifier(specifiers.into_iter().collect()));
+                return finish_version_specifiers(cursor, specifiers, start, end);
             }
-            Some((_, char)) => buffer.push(char),
+            Some(_) => {}
             None => return Err(Pep508Error {
                 message: Pep508ErrorSource::String("Missing closing parenthesis (expected ')', found end of dependency specification)".to_string()),
                 start: brace_pos,
@@ -897,8 +885,7 @@ fn parse_version_specifier_parentheses<T: Pep508Url>(
                 input: cursor.to_string(),
             }),
         }
-    };
-    Ok(requirement_kind)
+    }
 }
 
 /// Parse a PEP 508-compliant [dependency specifier](https://packaging.python.org/en/latest/specifications/dependency-specifiers).
@@ -942,9 +929,9 @@ fn parse_pep508_requirement<T: Pep508Url>(
             Some(VersionOrUrl::Url(parse_url(cursor, working_dir)?))
         }
         // name_req
-        Some('(') => parse_version_specifier_parentheses(cursor)?,
+        Some('(') => Some(parse_version_specifier_parentheses(cursor)?),
         // name_req
-        Some('<' | '=' | '>' | '~' | '!') => parse_version_specifier(cursor)?,
+        Some('<' | '=' | '>' | '~' | '!') => Some(parse_version_specifier(cursor)?),
         // No requirements / any version
         Some(';') | None => None,
         Some(other) => {
