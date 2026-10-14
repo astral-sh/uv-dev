@@ -5,9 +5,11 @@ use std::process::Command;
 use std::{env, path::Path};
 
 use assert_cmd::assert::OutputAssertExt;
+#[cfg(unix)]
+use assert_fs::prelude::PathCreateDir;
 use assert_fs::{
     assert::PathAssert,
-    prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir},
+    prelude::{FileTouch, FileWriteStr, PathChild},
 };
 use indoc::indoc;
 use predicates::prelude::predicate;
@@ -1669,7 +1671,6 @@ fn read_link(path: &Path) -> String {
 #[cfg(unix)]
 #[test]
 fn python_install_broken_link() {
-    use assert_fs::prelude::PathCreateDir;
     use fs_err::os::unix::fs::symlink;
 
     let context = uv_test::test_context_with_versions!(&[])
