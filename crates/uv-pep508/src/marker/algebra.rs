@@ -621,24 +621,17 @@ impl InternerGuard<'_> {
                 // Split both trees into matching ranges. Replace any ranges that are unreachable
                 // under the assumption with the first reachable child, simplifying them out of the
                 // resulting marker.
-                let mut fallback = None;
-                value_node.children.apply(
-                    value,
-                    &assumption_node.children,
-                    assumption,
-                    |value, assumption| {
-                        if assumption.is_false() {
-                            NodeId::FALSE
-                        } else {
-                            let result = self.restrict_cached(value, assumption, cache);
-                            fallback.get_or_insert(result);
-                            result
-                        }
-                    },
-                );
-                let Some(fallback) = fallback else {
+                let Some((fallback_value, fallback_assumption)) =
+                    value_node.children.find_intersecting(
+                        value,
+                        &assumption_node.children,
+                        assumption,
+                        |_, assumption| !assumption.is_false(),
+                    )
+                else {
                     return NodeId::FALSE;
                 };
+                let fallback = self.restrict_cached(fallback_value, fallback_assumption, cache);
                 let children = value_node.children.apply(
                     value,
                     &assumption_node.children,
@@ -1623,59 +1616,67 @@ impl Edges {
         right_parent: NodeId,
         interner: &mut InternerGuard<'_>,
     ) -> bool {
+        self.find_intersecting(parent, right_edges, right_parent, |left, right| {
+            !interner.disjointness(left, right)
+        })
+        .is_none()
+    }
+
+    /// Find the first pair of intersecting child nodes that satisfies `predicate`, in the same
+    /// order as [`Self::apply`].
+    fn find_intersecting(
+        &self,
+        parent: NodeId,
+        right_edges: &Self,
+        right_parent: NodeId,
+        mut predicate: impl FnMut(NodeId, NodeId) -> bool,
+    ) -> Option<(NodeId, NodeId)> {
         match (self, right_edges) {
-            // For version or string variables, we have to split and check the overlapping ranges.
             (Self::Version { edges }, Self::Version { edges: right_edges }) => {
-                Self::is_disjoint_ranges(edges, parent, right_edges, right_parent, interner)
+                Self::find_intersecting_ranges(edges, parent, right_edges, right_parent, predicate)
             }
             (Self::String { edges }, Self::String { edges: right_edges }) => {
-                Self::is_disjoint_ranges(edges, parent, right_edges, right_parent, interner)
+                Self::find_intersecting_ranges(edges, parent, right_edges, right_parent, predicate)
             }
-            // For boolean variables, we simply check the low and high edges.
             (
                 Self::Boolean { high, low },
                 Self::Boolean {
                     high: right_high,
                     low: right_low,
                 },
-            ) => {
-                interner.disjointness(high.negate(parent), right_high.negate(right_parent))
-                    && interner.disjointness(low.negate(parent), right_low.negate(right_parent))
-            }
+            ) => [(high, right_high), (low, right_low)]
+                .into_iter()
+                .map(|(&left, &right)| (left.negate(parent), right.negate(right_parent)))
+                .find(|&(left, right)| predicate(left, right)),
             _ => unreachable!("cannot merge two `Edges` of different types"),
         }
     }
 
-    // Returns `true` if all intersecting ranges in two range maps are disjoint.
-    fn is_disjoint_ranges<T>(
+    fn find_intersecting_ranges<T>(
         left_edges: &SmallVec<(Ranges<T>, NodeId)>,
         left_parent: NodeId,
         right_edges: &SmallVec<(Ranges<T>, NodeId)>,
         right_parent: NodeId,
-        interner: &mut InternerGuard<'_>,
-    ) -> bool
+        mut predicate: impl FnMut(NodeId, NodeId) -> bool,
+    ) -> Option<(NodeId, NodeId)>
     where
         T: Clone + Ord,
     {
-        // This is similar to the routine in `apply_ranges` except we only care about disjointness,
-        // not the resulting edges.
         for (left_range, left_child) in left_edges {
             for (right_range, right_child) in right_edges {
                 if right_range.is_disjoint(left_range) {
                     continue;
                 }
 
-                // Ensure the intersection is disjoint.
-                if !interner.disjointness(
-                    left_child.negate(left_parent),
-                    right_child.negate(right_parent),
-                ) {
-                    return false;
+                let left = left_child.negate(left_parent);
+                let right = right_child.negate(right_parent);
+                if predicate(left, right) {
+                    return Some((left, right));
                 }
             }
         }
 
-        true
+        None
     }
 
     // Apply the given function to all direct children of this node.
