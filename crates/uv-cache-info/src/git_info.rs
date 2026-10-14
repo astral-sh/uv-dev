@@ -153,7 +153,7 @@ fn read_git_dir(dot_git_path: &Path) -> Option<PathBuf> {
 
     let contents = fs_err::read_to_string(dot_git_path).ok()?;
     let git_dir = contents.strip_prefix("gitdir:")?.trim();
-    Some(resolve_relative_path(dot_git_path.parent()?, git_dir))
+    Some(dot_git_path.parent()?.join(git_dir))
 }
 
 /// Return the common Git directory, following a linked worktree's `commondir` file.
@@ -161,7 +161,7 @@ fn read_common_dir(git_dir: &Path) -> Result<PathBuf, GitInfoError> {
     let Some(contents) = read_optional_git_file(&git_dir.join("commondir"))? else {
         return Ok(git_dir.to_path_buf());
     };
-    Ok(resolve_relative_path(git_dir, contents.trim()))
+    Ok(git_dir.join(contents.trim()))
 }
 
 /// Read and validate a loose ref, returning [`None`] when it does not exist.
@@ -203,15 +203,6 @@ fn read_optional_git_file(path: &Path) -> std::io::Result<Option<String>> {
         Ok(contents) => Ok(Some(contents)),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err),
-    }
-}
-
-fn resolve_relative_path(base: &Path, path: &str) -> PathBuf {
-    let path = PathBuf::from(path);
-    if path.is_absolute() {
-        path
-    } else {
-        base.join(path)
     }
 }
 
