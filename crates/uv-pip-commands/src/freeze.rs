@@ -114,7 +114,7 @@ pub fn pip_freeze(
         let tags = environment.interpreter().tags()?;
 
         for entry in site_packages {
-            for diagnostic in entry.diagnostics(&markers, tags, dependency_metadata)? {
+            for diagnostic in entry.diagnostics(&markers, tags, dependency_metadata) {
                 writeln!(
                     printer.stderr(),
                     "{}{} {}",
