@@ -39,4 +39,6 @@ mod target;
 #[cfg(feature = "test-python")]
 mod wheel_cache;
 #[cfg(feature = "test-python")]
+mod wheel_fixture;
+#[cfg(feature = "test-python")]
 mod wheel_variants;
