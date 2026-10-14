@@ -35,38 +35,6 @@ fn prune_no_op() -> Result<()> {
     Ok(())
 }
 
-/// `cache prune` should remove any stale top-level directories from the cache.
-#[test]
-fn prune_stale_directory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio")?;
-
-    // Install a requirement, to populate the cache.
-    context
-        .pip_sync()
-        .arg("requirements.txt")
-        .assert()
-        .success();
-
-    // Add a stale directory to the cache.
-    let simple = context.cache_dir.child("simple-v4");
-    simple.create_dir_all()?;
-
-    uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
-    DEBUG uv [VERSION] ([COMMIT] DATE)
-    Pruning cache at: [CACHE_DIR]/
-    DEBUG Removing dangling cache bucket: [CACHE_DIR]/simple-v4
-    Removed 1 directory (0B)
-    ");
-
-    Ok(())
-}
-
 /// `cache prune` should remove all cached environments from the cache.
 #[test]
 fn prune_cached_env() {

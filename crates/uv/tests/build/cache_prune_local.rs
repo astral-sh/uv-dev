@@ -5,6 +5,32 @@ use assert_fs::prelude::*;
 use uv_cache::{Cache, CacheBucket};
 use uv_test::{assert_path_missing, uv_snapshot};
 
+/// Cache pruning removes obsolete bucket versions without touching the current bucket.
+#[test]
+fn prune_stale_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let current =
+        ChildPath::new(Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::Simple))
+            .child("response.rkyv");
+    current.write_str("cached response")?;
+    let stale = context.cache_dir.child("simple-v4");
+    stale.create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
+    DEBUG uv [VERSION] ([COMMIT] DATE)
+    Pruning cache at: [CACHE_DIR]/
+    DEBUG Removing dangling cache bucket: [CACHE_DIR]/simple-v4
+    Removed 1 directory (0B)
+    ");
+
+    assert_path_missing(stale);
+    assert_eq!(context.read(current), "cached response");
+    Ok(())
+}
+
 /// Cache pruning should not count storage retained by another hardlink.
 #[cfg(unix)]
 #[test]
