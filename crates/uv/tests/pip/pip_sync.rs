@@ -6,7 +6,6 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use fs_err as fs;
 use indoc::{formatdoc, indoc};
-use predicates::Predicate;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -55,14 +54,13 @@ fn cert() -> Result<()> {
 }
 
 #[test]
-fn missing_venv() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
+fn missing_active_venv() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"])
         .with_filtered_virtualenv_bin()
         .with_filtered_python_names();
 
     let requirements = context.temp_dir.child("requirements.txt");
     requirements.write_str("anyio")?;
-    fs::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(context.filters(), context.pip_sync().arg("requirements.txt"), @"
     exit_code: 2 (failure)
@@ -71,16 +69,26 @@ fn missing_venv() -> Result<()> {
       cause: Python interpreter not found at `[VENV]/[BIN]/[PYTHON]`
     ");
 
-    assert!(predicates::path::missing().eval(&context.venv));
+    context.venv.assert(predicates::path::missing());
 
-    // If not "active", we hint to create one
+    Ok(())
+}
+
+#[test]
+fn missing_venv() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("anyio")?;
+
     uv_snapshot!(context.filters(), context.pip_sync().arg("requirements.txt").env_remove(EnvVars::VIRTUAL_ENV), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No virtual environment found; run `uv venv` to create an environment, or pass `--system` to install into a non-virtual environment
     ");
 
-    assert!(predicates::path::missing().eval(&context.venv));
+    context.venv.assert(predicates::path::missing());
 
     Ok(())
 }
