@@ -270,16 +270,14 @@ impl SourceBuildContext {
     }
 }
 
-/// Holds the state through a series of PEP 517 frontend to backend calls or a single `setup.py`
-/// invocation.
+/// State shared across backend hook calls for a source tree.
 ///
-/// This keeps both the temp dir and the result of a potential `prepare_metadata_for_build_wheel`
-/// call which changes how we call `build_wheel`.
+/// Retains the temporary build directory and any prepared metadata needed by subsequent hooks.
 pub struct SourceBuild {
     temp_dir: TempDir,
     source_tree: PathBuf,
     config_settings: ConfigSettings,
-    /// If performing a PEP 517 build, the backend to use.
+    /// The build backend, defaulting to legacy setuptools when the source tree does not declare one.
     pep517_backend: Pep517Backend,
     /// Additional build requirements from configuration.
     extra_build_dependencies: Vec<Requirement>,
@@ -679,10 +677,7 @@ impl SourceBuild {
                     )));
                 }
 
-                // If no `pyproject.toml` is present, by default, proceed with a PEP 517 build using
-                // the default backend, to match `build`. `pip` uses `setup.py` directly in this
-                // case, but plans to make PEP 517 builds the default in the future.
-                // See: https://github.com/pypa/pip/issues/9175.
+                // Build legacy `setup.py` projects through the PEP 517 setuptools backend.
                 return Ok((DEFAULT_BACKEND.clone(), None));
             }
             Err(err) => return Err(Box::new(err.into())),
