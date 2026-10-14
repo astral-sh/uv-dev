@@ -760,12 +760,7 @@ pub(super) fn finalize_tool_install(
                 "No executables are provided by package `{}`; removing tool",
                 package.cyan()
             )?;
-            remove_entrypoint_paths(
-                installed_entrypoints
-                    .iter()
-                    .map(|entrypoint| entrypoint.install_path.as_path()),
-            );
-            installed_tools.remove_environment(name)?;
+            rollback_tool_install(installed_tools, name, &installed_entrypoints)?;
 
             return Err(NoExecutablesError::Root {
                 package: package.clone(),
@@ -820,13 +815,7 @@ pub(super) fn finalize_tool_install(
                 package.cyan()
             )?;
 
-            // Clean up the environment we just created.
-            remove_entrypoint_paths(
-                installed_entrypoints
-                    .iter()
-                    .map(|entrypoint| entrypoint.install_path.as_path()),
-            );
-            installed_tools.remove_environment(name)?;
+            rollback_tool_install(installed_tools, name, &installed_entrypoints)?;
 
             return Err(err.into());
         }
@@ -838,13 +827,7 @@ pub(super) fn finalize_tool_install(
                 .filter(|(_, _, target_path)| target_path.exists())
                 .peekable();
             if existing_entrypoints.peek().is_some() {
-                // Clean up the environment we just created
-                remove_entrypoint_paths(
-                    installed_entrypoints
-                        .iter()
-                        .map(|entrypoint| entrypoint.install_path.as_path()),
-                );
-                installed_tools.remove_environment(name)?;
+                rollback_tool_install(installed_tools, name, &installed_entrypoints)?;
 
                 let existing_entrypoints = existing_entrypoints
                     // SAFETY: We know the target has a filename because we just constructed it above
@@ -913,6 +896,20 @@ pub(super) fn finalize_tool_install(
     warn_out_of_path(&executable_directory);
 
     Ok(())
+}
+
+/// Remove executables and the environment from a partially installed tool.
+fn rollback_tool_install(
+    installed_tools: &InstalledTools,
+    name: &PackageName,
+    entrypoints: &[ToolEntrypoint],
+) -> Result<(), uv_tool::Error> {
+    remove_entrypoint_paths(
+        entrypoints
+            .iter()
+            .map(|entrypoint| entrypoint.install_path.as_path()),
+    );
+    installed_tools.remove_environment(name)
 }
 
 fn warn_out_of_path(executable_directory: &Path) {
