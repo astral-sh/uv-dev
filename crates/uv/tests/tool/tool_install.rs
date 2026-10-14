@@ -859,16 +859,14 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
     Ok(())
 }
 
-fn assert_mixed_workspace_install(
-    install_args: &[&str],
-    expected_child_message: &str,
-) -> Result<()> {
+#[test]
+fn tool_install_preserves_mixed_workspace_member_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_tool_dirs();
     let fixture = MixedWorkspace::new(&context)?;
 
     context
         .tool_install()
-        .args(install_args)
+        .arg("--with-editable")
         .arg(fixture.other_workspace.path())
         .arg(fixture.tool_root.path())
         .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
@@ -877,18 +875,29 @@ fn assert_mixed_workspace_install(
     fixture.assert_tool_output(&context, "0.1.0 OK");
 
     fixture.child_module.write_str("MESSAGE = 'CHANGED'\n")?;
-    fixture.assert_tool_output(&context, &format!("0.1.0 {expected_child_message}"));
+    fixture.assert_tool_output(&context, "0.1.0 CHANGED");
     Ok(())
 }
 
 #[test]
-fn tool_install_preserves_mixed_workspace_member_editability() -> Result<()> {
-    assert_mixed_workspace_install(&["--with-editable"], "CHANGED")
-}
-
-#[test]
 fn tool_install_preserves_mixed_workspace_member_non_editability() -> Result<()> {
-    assert_mixed_workspace_install(&["--editable", "--with"], "OK")
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let fixture = MixedWorkspace::new(&context)?;
+
+    context
+        .tool_install()
+        .arg("--editable")
+        .arg("--with")
+        .arg(fixture.other_workspace.path())
+        .arg(fixture.tool_root.path())
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
+        .assert()
+        .success();
+    fixture.assert_tool_output(&context, "0.1.0 OK");
+
+    fixture.child_module.write_str("MESSAGE = 'CHANGED'\n")?;
+    fixture.assert_tool_output(&context, "0.1.0 OK");
+    Ok(())
 }
 
 #[test]
