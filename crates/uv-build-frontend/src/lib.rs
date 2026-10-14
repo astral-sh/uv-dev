@@ -86,7 +86,8 @@ struct Project {
     version: Option<Version>,
     /// Specifies which fields listed by PEP 621 were intentionally unspecified so another tool
     /// can/will provide such metadata dynamically.
-    dynamic: Option<Vec<String>>,
+    #[serde(default)]
+    dynamic: Vec<String>,
 }
 
 /// The `[build-system]` section of a pyproject.toml as specified in PEP 517.
@@ -241,13 +242,12 @@ impl Pep517Backend {
         // projects, but avoids relying on inconsistent dependency metadata.
         // See: https://github.com/astral-sh/uv/issues/2130
         self.backend == "hatchling.build"
-            && project
-                .and_then(|project| project.dynamic.as_ref())
-                .is_some_and(|dynamic| {
-                    dynamic
-                        .iter()
-                        .any(|field| field == "dependencies" || field == "optional-dependencies")
-                })
+            && project.is_some_and(|project| {
+                project
+                    .dynamic
+                    .iter()
+                    .any(|field| field == "dependencies" || field == "optional-dependencies")
+            })
     }
 }
 
