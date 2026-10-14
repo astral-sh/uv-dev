@@ -666,26 +666,26 @@ fn init_project_kind(
     match project_kind {
         // Create only the most barebones `pyproject.toml`, no build system
         InitProjectKind::Bare => {}
-        // Create only a barebones `pyproject.toml`, but with a build system table
-        InitProjectKind::BareWithBuildSystem => {
-            // Add a build system
+        InitProjectKind::BareWithBuildSystem
+        | InitProjectKind::ApplicationWithLibrary
+        | InitProjectKind::Library => {
+            if matches!(project_kind, InitProjectKind::ApplicationWithLibrary) {
+                pyproject.push('\n');
+                pyproject.push_str(&pyproject_project_scripts(name, name.as_str(), "main"));
+            }
+
             let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
             pyproject.push('\n');
             pyproject.push_str(&pyproject_build_system(name, build_backend));
-        }
-        InitProjectKind::ApplicationWithLibrary => {
-            // Since it'll be packaged, we can add a `[project.scripts]` entry
-            pyproject.push('\n');
-            pyproject.push_str(&pyproject_project_scripts(name, name.as_str(), "main"));
-
-            // Add a build system
-            let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
-            pyproject.push('\n');
-            pyproject.push_str(&pyproject_build_system(name, build_backend));
-            pyproject_build_backend_prerequisites(name, path, build_backend)?;
-
-            // Generate `src` files with app-style `main()` in `__init__.py`
-            generate_package_scripts(name, path, build_backend, false)?;
+            if !matches!(project_kind, InitProjectKind::BareWithBuildSystem) {
+                pyproject_build_backend_prerequisites(name, path, build_backend)?;
+                generate_package_scripts(
+                    name,
+                    path,
+                    build_backend,
+                    matches!(project_kind, InitProjectKind::Library),
+                )?;
+            }
         }
         InitProjectKind::Application => {
             let main_contents = indoc::formatdoc! {r#"
@@ -704,15 +704,6 @@ fn init_project_kind(
             if !main_py.try_exists()? && !bare {
                 fs_err::write(path.join("main.py"), main_contents)?;
             }
-        }
-        InitProjectKind::Library => {
-            let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
-            pyproject.push('\n');
-            pyproject.push_str(&pyproject_build_system(name, build_backend));
-            pyproject_build_backend_prerequisites(name, path, build_backend)?;
-
-            // Generate `src` files
-            generate_package_scripts(name, path, build_backend, true)?;
         }
     }
     fs_err::write(path.join("pyproject.toml"), pyproject)?;
