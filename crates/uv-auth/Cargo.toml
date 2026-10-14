@@ -19,6 +19,7 @@ workspace = true
 uv-fs = { workspace = true }
 uv-keyring = { workspace = true, features = ["apple-native", "secret-service", "windows-native"] }
 uv-netrc = { workspace = true }
+uv-once-map = { workspace = true }
 uv-preview = { workspace = true }
 uv-redacted = { workspace = true }
 uv-small-str = { workspace = true }
