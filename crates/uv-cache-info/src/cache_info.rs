@@ -54,7 +54,7 @@ impl CacheInfo {
     pub fn from_path(path: &Path) -> Result<Self, CacheInfoError> {
         let metadata = fs_err::metadata(path)?;
         if metadata.is_file() {
-            Ok(Self::from_file(path)?)
+            Ok(Self::from_timestamp(Timestamp::from_metadata(&metadata)))
         } else {
             Self::from_directory(path)
         }
@@ -300,12 +300,7 @@ impl CacheInfo {
     /// Compute the cache info for a given file, assumed to be a binary or source distribution
     /// represented as (e.g.) a `.whl` or `.tar.gz` archive.
     pub fn from_file(path: impl AsRef<Path>) -> std::io::Result<Self> {
-        let metadata = fs_err::metadata(path.as_ref())?;
-        let timestamp = Timestamp::from_metadata(&metadata);
-        Ok(Self {
-            timestamp: Some(timestamp),
-            ..Self::default()
-        })
+        Ok(Self::from_timestamp(Timestamp::from_path(path)?))
     }
 
     /// Returns `true` if the cache info is empty.
