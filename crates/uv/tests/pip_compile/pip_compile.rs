@@ -177,9 +177,10 @@ fn empty_output() -> Result<()> {
         .temp_dir
         .child("requirements.in")
         .write_str("iniconfig==1.1.1")?;
-    context.temp_dir.child("requirements.txt").touch()?;
+    let output_file = context.temp_dir.child("requirements.txt");
+    output_file.touch()?;
 
-    uv_snapshot!(context.filters(), context.pip_compile()
+    let output = uv_snapshot!(context.filters(), context.pip_compile()
             .arg("requirements.in")
             .arg("--output-file")
             .arg("requirements.txt"), @"
@@ -194,6 +195,7 @@ fn empty_output() -> Result<()> {
     Resolved 1 package in [TIME]
     "
     );
+    assert_eq!(fs_err::read(output_file.path())?, output.stdout);
 
     Ok(())
 }
