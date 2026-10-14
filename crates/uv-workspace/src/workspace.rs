@@ -1910,32 +1910,17 @@ async fn find_workspace(
 ///
 /// Returns `true` if walking the directory while respecting `.gitignore` and `.ignore` rules
 /// yields no files, indicating that any files present (e.g., `__pycache__`) are all ignored.
+/// An unreadable entry is treated as non-ignored content.
 fn has_only_gitignored_files(path: &Path) -> bool {
-    let walker = ignore::WalkBuilder::new(path)
+    ignore::WalkBuilder::new(path)
         .hidden(false)
         .parents(true)
         .ignore(true)
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
-        .build();
-
-    for entry in walker {
-        let Ok(entry) = entry else {
-            // If we can't read an entry, assume non-ignored content exists.
-            return false;
-        };
-
-        // Skip directories.
-        if entry.path().is_dir() {
-            continue;
-        }
-
-        // A non-ignored entry exists.
-        return false;
-    }
-
-    true
+        .build()
+        .all(|entry| entry.is_ok_and(|entry| entry.path().is_dir()))
 }
 
 /// Check if we're in the `tool.uv.workspace.excluded` of a workspace.
