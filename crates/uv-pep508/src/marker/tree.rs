@@ -1673,7 +1673,7 @@ impl ListMarkerTree<'_> {
 
     /// The value (LHS) for this expression.
     pub fn value(&self) -> String {
-        self.pair.value()
+        self.pair.value().to_owned()
     }
 
     /// The edges of this node, corresponding to the boolean evaluation of the expression.
