@@ -2774,6 +2774,7 @@ fn requirements_txt_frozen_invalid_git_scheme() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
 #[test]
 fn requirements_txt_create_missing_dir() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -6568,6 +6569,7 @@ fn pep_751_sdist_url_subdirectory() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_infer_output_format() -> Result<()> {
     let context = uv_test::test_context!("3.12");
