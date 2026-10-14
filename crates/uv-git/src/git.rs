@@ -597,7 +597,7 @@ impl GitCheckout {
         // nested relative URL resolves against its immediate parent submodule. The transient
         // credential rewrite is still safe to inherit because it only affects transport.
         let mut submodule_update = GIT.as_ref().cloned()?;
-        for config in submodule_auth_config(original_remote_url) {
+        if let Some(config) = submodule_auth_config(original_remote_url) {
             submodule_update.arg("-c").arg(config);
         }
 
@@ -651,24 +651,21 @@ fn submodule_update_config(original_remote_url: &DisplaySafeUrl) -> Vec<String> 
 /// Unlike `remote.origin.url`, these rewrites are safe to inherit during recursive submodule
 /// updates: they rewrite transport URLs for authentication, but do not change the base URL that Git
 /// uses to resolve nested relative submodule URLs.
-fn submodule_auth_config(original_remote_url: &DisplaySafeUrl) -> Vec<String> {
+fn submodule_auth_config(original_remote_url: &DisplaySafeUrl) -> Option<String> {
     let remote_url = original_remote_url.without_credentials();
-    let mut config = Vec::new();
-
-    if remote_url.as_str() != original_remote_url.as_str() {
-        let safe_root = remote_url_root(remote_url.into_owned());
-        let credentialed_root = remote_url_root((**original_remote_url).clone());
-
-        if safe_root.as_str() != credentialed_root.as_str() {
-            config.push(format!(
-                "url.{}.insteadOf={}",
-                credentialed_root.as_str(),
-                safe_root.as_str()
-            ));
-        }
+    if remote_url.as_str() == original_remote_url.as_str() {
+        return None;
     }
 
-    config
+    let safe_root = remote_url_root(remote_url.into_owned());
+    let credentialed_root = remote_url_root((**original_remote_url).clone());
+    (safe_root.as_str() != credentialed_root.as_str()).then(|| {
+        format!(
+            "url.{}.insteadOf={}",
+            credentialed_root.as_str(),
+            safe_root.as_str()
+        )
+    })
 }
 
 /// Return the scheme, authority, and root path of a remote URL.
