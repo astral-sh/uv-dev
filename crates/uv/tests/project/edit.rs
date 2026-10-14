@@ -1033,7 +1033,6 @@ fn add_git_implicit() -> Result<()> {
 
 /// `--raw-sources` should be considered conflicting with sources-specific arguments, like `--tag`.
 #[test]
-#[cfg(feature = "test-git")]
 fn add_raw_error() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -1108,7 +1107,6 @@ fn reinstall_local_source_trees() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-git")]
 fn add_editable_error() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
