@@ -11,6 +11,8 @@ use anyhow::Result;
     all(feature = "test-python", feature = "test-pypi")
 ))]
 use assert_cmd::prelude::*;
+#[cfg(unix)]
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use predicates::prelude::predicate;
 
@@ -84,24 +86,27 @@ fn clean_all() -> Result<()> {
     Ok(())
 }
 
-/// Cache cleanup should count hardlinked storage only when its final link is removed.
 #[cfg(unix)]
-#[test]
-fn clean_all_hardlinked_file() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_filtered_counts();
-
+fn external_cache_hardlink(context: &TestContext) -> Result<(ChildPath, Vec<u8>)> {
     // Keep the retained hardlink beside the cache so both entries share a filesystem.
-    let retained = context.cache_dir.path().with_file_name("retained.bin");
-    fs_err::write(&retained, vec![42; 1024 * 1024])?;
+    let retained = ChildPath::new(context.cache_dir.path().with_file_name("retained.bin"));
+    let contents = vec![42; 1024 * 1024];
+    retained.write_binary(&contents)?;
     fs_err::OpenOptions::new()
         .write(true)
-        .open(&retained)?
+        .open(retained.path())?
         .sync_all()?;
+    fs_err::hard_link(&retained, context.cache_dir.child("hardlinked.bin"))?;
+    Ok((retained, contents))
+}
 
-    let cached = context.cache_dir.child("hardlinked.bin");
-    fs_err::hard_link(&retained, &cached)?;
+/// Storage retained outside the cache should not count as freed logical space.
+#[cfg(unix)]
+#[test]
+fn clean_all_external_hardlink_logical() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_counts();
+    let (retained, contents) = external_cache_hardlink(&context)?;
 
-    // Counting the externally retained hardlink would incorrectly report 1.0MiB.
     uv_snapshot!(context.filters(), context.clean(), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -109,8 +114,17 @@ fn clean_all_hardlinked_file() -> Result<()> {
     Removed [N] files (0B)
     ");
 
-    context.cache_dir.create_dir_all()?;
-    fs_err::hard_link(&retained, &cached)?;
+    assert_cache_cleared(&context)?;
+    assert_eq!(context.read_bytes(retained), contents);
+    Ok(())
+}
+
+/// Storage retained outside the cache should not count as freed physical space.
+#[cfg(unix)]
+#[test]
+fn clean_all_external_hardlink_physical() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_counts();
+    let (retained, contents) = external_cache_hardlink(&context)?;
 
     uv_snapshot!(context.filters(), context.clean().arg("--preview-features").arg("cache-physical-space"), @"
     exit_code: 0 (success)
@@ -119,9 +133,17 @@ fn clean_all_hardlinked_file() -> Result<()> {
     Removed [N] files (0B)
     ");
 
-    assert!(retained.is_file());
+    assert_cache_cleared(&context)?;
+    assert_eq!(context.read_bytes(retained), contents);
+    Ok(())
+}
 
-    context.cache_dir.create_dir_all()?;
+/// Storage shared only within the cache should count once when its final link is removed.
+#[cfg(unix)]
+#[test]
+fn clean_all_internal_hardlinks_physical() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_counts();
+    let cached = context.cache_dir.child("hardlinked.bin");
     cached.write_binary(&vec![42; 1024 * 1024])?;
     fs_err::OpenOptions::new()
         .write(true)
@@ -137,6 +159,7 @@ fn clean_all_hardlinked_file() -> Result<()> {
     Removed [N] files (1.0MiB)
     ");
 
+    assert_cache_cleared(&context)?;
     Ok(())
 }
 
