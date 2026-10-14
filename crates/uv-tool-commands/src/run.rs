@@ -4,7 +4,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use uv_dispatch::PlatformState;
-use uv_distribution_types::RequirementScope;
 use uv_environment_operations::environment::CachedEnvironment;
 
 use anyhow::{Context, bail};
@@ -30,8 +29,6 @@ use uv_distribution_types::{
 use uv_errors::HintOrdering;
 use uv_installer::{BuildSettings, InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
-use uv_pep440::{VersionSpecifier, VersionSpecifiers};
-use uv_pep508::MarkerTree;
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
@@ -53,7 +50,7 @@ use uv_command_support::{
 
 use crate::common::{ToolPython, matching_packages, refine_interpreter};
 use crate::error::ToolError;
-use crate::requirements::{resolve_latest, resolve_names};
+use crate::requirements::{registry_requirement, resolve_latest, resolve_names};
 use crate::{Target, ToolRequest};
 use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
@@ -908,21 +905,8 @@ async fn get_or_create_environment(
                     let executable = request_executable
                         .map(ToString::to_string)
                         .unwrap_or_else(|| (*executable).to_string());
-                    let requirement = Requirement {
-                        name: name.clone(),
-                        extras: extras.clone(),
-                        groups: Box::new([]),
-                        marker: MarkerTree::default(),
-                        source: RequirementSource::Registry {
-                            specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(
-                                version.clone(),
-                            )),
-                            index: None,
-                            conflict: None,
-                        },
-                        scope: RequirementScope::Global,
-                        origin: None,
-                    };
+                    let requirement =
+                        registry_requirement(name.clone(), extras.clone(), Some(version.clone()));
 
                     (executable, requirement)
                 }
@@ -931,19 +915,7 @@ async fn get_or_create_environment(
                     let executable = request_executable
                         .map(ToString::to_string)
                         .unwrap_or_else(|| (*executable).to_string());
-                    let requirement = Requirement {
-                        name: name.clone(),
-                        extras: extras.clone(),
-                        groups: Box::new([]),
-                        marker: MarkerTree::default(),
-                        source: RequirementSource::Registry {
-                            specifier: VersionSpecifiers::empty(),
-                            index: None,
-                            conflict: None,
-                        },
-                        scope: RequirementScope::Global,
-                        origin: None,
-                    };
+                    let requirement = registry_requirement(name.clone(), extras.clone(), None);
 
                     (executable, requirement)
                 }
