@@ -2,19 +2,25 @@ use std::process::Command;
 
 use anyhow::Result;
 use assert_fs::prelude::*;
+#[cfg(feature = "test-python")]
 use predicates::prelude::predicate;
+#[cfg(feature = "test-python")]
 use sha2::{Digest, Sha256};
 
 #[cfg(unix)]
 use uv_fs::create_symlink;
+#[cfg(unix)]
+use uv_test::ReadOnlyDirectoryGuard;
+#[cfg(feature = "test-python")]
 use uv_test::archive::generate_source_archive;
+#[cfg(feature = "test-python")]
 use uv_test::package_server::PackageServer;
 use uv_test::{get_bin, uv_snapshot};
 
 /// A custom cache directory must configure commands and snapshot filters together.
 #[test]
 fn cache_dir_uses_configured_test_context_path() {
-    let context = uv_test::test_context!("3.12").with_cache_dir("project/cache");
+    let context = uv_test::test_context_with_versions!(&[]).with_cache_dir("project/cache");
 
     assert_eq!(
         context.cache_dir.path(),
@@ -31,6 +37,7 @@ fn cache_dir_uses_configured_test_context_path() {
 /// When the active cache directory is inside an explicit build source, we should warn and continue
 /// the build.
 #[test]
+#[cfg(feature = "test-python")]
 fn build_warns_cache_inside_source() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_cache_dir("project/.uv-cache");
     let project = context.temp_dir.child("project");
@@ -67,7 +74,7 @@ fn build_warns_cache_inside_source() -> Result<()> {
 /// When the canonical cache directory is inside an explicit build source, we should warn even if
 /// the configured cache path itself is outside the source.
 #[test]
-#[cfg(unix)]
+#[cfg(all(feature = "test-python", unix))]
 fn build_warns_symlinked_cache_inside_source() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
@@ -118,6 +125,7 @@ fn build_warns_symlinked_cache_inside_source() -> Result<()> {
 
 /// A cache in the workspace root is allowed when building a member that does not contain it.
 #[test]
+#[cfg(feature = "test-python")]
 fn build_allows_cache_outside_selected_source() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_cache_dir("workspace/.uv-cache");
     let workspace = context.temp_dir.child("workspace");
@@ -165,7 +173,7 @@ fn build_allows_cache_outside_selected_source() -> Result<()> {
 /// error before using the cache.
 #[test]
 fn cache_current_dir_inside_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.filters(), context.command()
         .arg("cache")
@@ -196,7 +204,7 @@ fn cache_current_dir_inside_cache() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn cache_current_dir_inside_symlinked_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let cache_link = context.temp_dir.child("cache-link");
     create_symlink(context.cache_dir.path(), cache_link.path())?;
@@ -225,7 +233,7 @@ fn cache_current_dir_inside_symlinked_cache() -> Result<()> {
 /// When a workspace is inside the cache directory, we should error before locking the workspace.
 #[test]
 fn cache_workspace_inside_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let workspace = context.cache_dir.child("workspace");
     workspace.child("pyproject.toml").write_str(
@@ -261,7 +269,7 @@ fn cache_workspace_inside_cache() -> Result<()> {
 /// detect that the project is inside the cache.
 #[test]
 fn cache_project_inside_relative_parent_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(
@@ -290,6 +298,7 @@ fn cache_project_inside_relative_parent_cache() -> Result<()> {
 /// When `--no-cache` is enabled, running from a project inside the configured cache directory
 /// should not trip the persistent cache guard.
 #[test]
+#[cfg(feature = "test-python")]
 fn cache_project_inside_cache_no_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -318,9 +327,7 @@ fn cache_project_inside_cache_no_cache() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn cache_init_failure() -> Result<()> {
-    use uv_test::ReadOnlyDirectoryGuard;
-
-    let context = uv_test::test_context!("3.12").with_cache_dir("cache_parent/cache");
+    let context = uv_test::test_context_with_versions!(&[]).with_cache_dir("cache_parent/cache");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -352,6 +359,7 @@ fn cache_init_failure() -> Result<()> {
 
 /// Index hashes must be checked before building an sdist or reading its metadata.
 #[tokio::test]
+#[cfg(feature = "test-python")]
 async fn index_source_hashes() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let name = "ok".parse()?;
