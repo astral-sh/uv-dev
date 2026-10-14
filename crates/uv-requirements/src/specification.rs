@@ -430,46 +430,20 @@ impl RequirementsSpecification {
         let mut spec = Self::default();
         let mut cache = SourceCache::default();
 
-        // Disallow `pylock.toml` files as constraints.
-        if let Some(pylock_toml) = constraints.iter().find_map(|source| {
-            if let RequirementsSource::PylockToml(path) = source {
-                Some(path)
-            } else {
-                None
+        for (sources, role) in [
+            (constraints, "a constraint file"),
+            (overrides, "an override file"),
+            (excludes, "an exclude file"),
+        ] {
+            if let Some(pylock_toml) = sources.iter().find_map(|source| match source {
+                RequirementsSource::PylockToml(path) => Some(path),
+                _ => None,
+            }) {
+                return Err(anyhow::anyhow!(
+                    "Cannot use `{}` as {role}",
+                    pylock_toml.user_display()
+                ));
             }
-        }) {
-            return Err(anyhow::anyhow!(
-                "Cannot use `{}` as a constraint file",
-                pylock_toml.user_display()
-            ));
-        }
-
-        // Disallow `pylock.toml` files as overrides.
-        if let Some(pylock_toml) = overrides.iter().find_map(|source| {
-            if let RequirementsSource::PylockToml(path) = source {
-                Some(path)
-            } else {
-                None
-            }
-        }) {
-            return Err(anyhow::anyhow!(
-                "Cannot use `{}` as an override file",
-                pylock_toml.user_display()
-            ));
-        }
-
-        // Disallow `pylock.toml` files as excludes.
-        if let Some(pylock_toml) = excludes.iter().find_map(|source| {
-            if let RequirementsSource::PylockToml(path) = source {
-                Some(path)
-            } else {
-                None
-            }
-        }) {
-            return Err(anyhow::anyhow!(
-                "Cannot use `{}` as an exclude file",
-                pylock_toml.user_display()
-            ));
         }
 
         // If we have a `pylock.toml`, don't allow additional requirements, constraints, or
