@@ -5,10 +5,10 @@ use uv_redacted::DisplaySafeUrl;
 
 /// Map a URL to a precise URL, if possible.
 pub(crate) fn url_to_precise(mut url: VerbatimParsedUrl, git: &GitResolver) -> VerbatimParsedUrl {
-    let git_url = match &mut url.parsed_url {
-        ParsedUrl::GitDirectory(ParsedGitDirectoryUrl { url, .. })
-        | ParsedUrl::GitPath(ParsedGitPathUrl { url, .. }) => url,
-        _ => return url,
+    let (ParsedUrl::GitDirectory(ParsedGitDirectoryUrl { url: git_url, .. })
+    | ParsedUrl::GitPath(ParsedGitPathUrl { url: git_url, .. })) = &mut url.parsed_url
+    else {
+        return url;
     };
     let Some(precise) = git.precise(git_url.clone()) else {
         debug_assert!(false, "Unresolved Git URL: {}, {git_url:?}", url.verbatim);
