@@ -104,16 +104,15 @@ pub(crate) fn find_microsoft_store_pythons() -> impl Iterator<Item = WindowsPyth
     Either::Right(
         MICROSOFT_STORE_PYTHONS
             .iter()
-            .map(move |store_python| {
+            .filter_map(move |store_python| {
                 let path = windows_apps
                     .join(store_python.family_name)
                     .join("python.exe");
-                WindowsPython {
+                path.is_file().then(|| WindowsPython {
                     path,
                     // All versions are constants, we know they are valid.
                     version: Some(PythonVersion::from_str(store_python.version).unwrap()),
-                }
-            })
-            .filter(|windows_python| windows_python.path.is_file()),
+                })
+            }),
     )
 }
