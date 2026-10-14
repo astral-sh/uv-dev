@@ -6,6 +6,9 @@ mod centralized_project_envs;
 #[cfg(feature = "test-python")]
 mod environment_path;
 
+#[cfg(feature = "test-python")]
+mod legacy_lockfile;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod show_settings;
 
