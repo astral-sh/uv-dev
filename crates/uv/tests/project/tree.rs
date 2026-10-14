@@ -733,26 +733,12 @@ fn json_output_projected_members_respect_depth() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     setup_json_output(&context)?;
 
-    let projected_members = |depth: Option<u8>| -> Result<Vec<String>> {
-        let mut command = context.tree();
-        command
-            .arg("--preview-features")
-            .arg("json-output")
-            .arg("--format")
-            .arg("json")
-            .arg("--universal")
-            .arg("--invert")
-            .arg("--package")
-            .arg("package-b");
-        if let Some(depth) = depth {
-            command.arg("--depth").arg(depth.to_string());
-        }
-        let assert = command.output()?.assert().success();
-        let report: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let member_names = |stdout: &[u8]| -> Result<Vec<String>> {
+        let report: serde_json::Value = serde_json::from_slice(stdout)?;
         report["members"]
             .as_array()
-            .into_iter()
-            .flatten()
+            .context("workspace members should be an array")?
+            .iter()
             .map(|member| {
                 member["name"]
                     .as_str()
@@ -762,12 +748,26 @@ fn json_output_projected_members_respect_depth() -> Result<()> {
             .collect()
     };
 
-    assert_json_snapshot!(projected_members(None)?, @r#"
+    let mut tree = context.tree();
+    tree.args([
+        "--preview-features",
+        "json-output",
+        "--format",
+        "json",
+        "--universal",
+        "--invert",
+        "--package",
+        "package-b",
+    ]);
+    let unrestricted = tree.assert().success();
+    assert_json_snapshot!(member_names(&unrestricted.get_output().stdout)?, @r#"
     [
       "project"
     ]
     "#);
-    assert_json_snapshot!(projected_members(Some(1))?, @r#"[]"#);
+
+    let depth_limited = tree.args(["--depth", "1"]).assert().success();
+    assert_json_snapshot!(member_names(&depth_limited.get_output().stdout)?, @r#"[]"#);
 
     Ok(())
 }
