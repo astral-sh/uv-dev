@@ -11,29 +11,67 @@ use crate::native_auth_fixture::NativeAuthFixture;
 #[cfg(feature = "test-python")]
 #[tokio::test]
 async fn invalid_s3_endpoint_url() {
-    assert_invalid_cloud_endpoint_url(EnvVars::UV_S3_ENDPOINT_URL).await;
+    let context = uv_test::test_context!("3.12");
+    let server = cloud_auth_challenge().await;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--dry-run", "--default-index"])
+        .arg(server.uri())
+        .arg("iniconfig")
+        .env(EnvVars::UV_S3_ENDPOINT_URL, "not-a-url"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/iniconfig/
+      cause: Invalid `UV_S3_ENDPOINT_URL`
+      cause: relative URL without a base
+    ");
 }
 
 #[cfg(feature = "test-python")]
 #[tokio::test]
 async fn invalid_gcs_endpoint_url() {
-    assert_invalid_cloud_endpoint_url(EnvVars::UV_GCS_ENDPOINT_URL).await;
+    let context = uv_test::test_context!("3.12");
+    let server = cloud_auth_challenge().await;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--dry-run", "--default-index"])
+        .arg(server.uri())
+        .arg("iniconfig")
+        .env(EnvVars::UV_GCS_ENDPOINT_URL, "not-a-url"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/iniconfig/
+      cause: Invalid `UV_GCS_ENDPOINT_URL`
+      cause: relative URL without a base
+    ");
 }
 
 #[cfg(feature = "test-python")]
 #[tokio::test]
 async fn invalid_azure_endpoint_url() {
-    assert_invalid_cloud_endpoint_url(EnvVars::UV_AZURE_ENDPOINT_URL).await;
+    let context = uv_test::test_context!("3.12");
+    let server = cloud_auth_challenge().await;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .args(["--dry-run", "--default-index"])
+        .arg(server.uri())
+        .arg("iniconfig")
+        .env(EnvVars::UV_AZURE_ENDPOINT_URL, "not-a-url"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/iniconfig/
+      cause: Invalid `UV_AZURE_ENDPOINT_URL`
+      cause: relative URL without a base
+    ");
 }
 
 #[cfg(feature = "test-python")]
-async fn assert_invalid_cloud_endpoint_url(variable: &str) {
+async fn cloud_auth_challenge() -> wiremock::MockServer {
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
     };
 
-    let context = uv_test::test_context!("3.12");
     let server = MockServer::start().await;
     // A challenge triggers lazy credential lookup; an invalid endpoint must prevent a retry.
     Mock::given(method("GET"))
@@ -44,18 +82,7 @@ async fn assert_invalid_cloud_endpoint_url(variable: &str) {
         .expect(0..=1)
         .mount(&server)
         .await;
-    let index = server.uri();
-
-    context
-        .pip_install()
-        .args(["--dry-run", "--default-index", &index, "iniconfig"])
-        .env(variable, "not-a-url")
-        .assert()
-        .code(2)
-        .stdout("")
-        .stderr(format!(
-            "error: Failed to fetch: {index}/iniconfig/\n  cause: Invalid `{variable}`\n  cause: relative URL without a base\n"
-        ));
+    server
 }
 
 #[tokio::test]
