@@ -771,6 +771,8 @@ async fn sdist_metadata_ignores_variant_wheels() -> Result<()> {
     let server = MockServer::start().await;
     let context = uv_test::test_context!("3.12").with_filter((server.uri(), "http://[LOCALHOST]"));
     let sdist = generate_source_archive(&"ok".parse()?, &"1.0.0".parse()?, "", None)?;
+    let variant_filename = "ok-1.0.0-py3-none-any-cpu.whl";
+    let variant_path = format!("/files/{variant_filename}");
 
     let simple_index = json!({
         "meta": { "api-version": "1.0" },
@@ -782,8 +784,8 @@ async fn sdist_metadata_ignores_variant_wheels() -> Result<()> {
                 "hashes": {},
             },
             {
-                "filename": "ok-1.0.0-py3-none-any-cpu.whl",
-                "url": format!("{}/files/ok-1.0.0-py3-none-any-cpu.whl", server.uri()),
+                "filename": variant_filename,
+                "url": format!("{}{variant_path}", server.uri()),
                 "hashes": {},
             },
         ],
@@ -799,6 +801,11 @@ async fn sdist_metadata_ignores_variant_wheels() -> Result<()> {
     Mock::given(method("GET"))
         .and(path("/files/ok-1.0.0.tar.gz"))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(sdist))
+        .mount(&server)
+        .await;
+    Mock::given(path(variant_path))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&server)
         .await;
 
