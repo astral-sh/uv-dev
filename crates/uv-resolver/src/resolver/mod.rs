@@ -2374,8 +2374,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         ));
         err = NoSolutionError::narrow_widened_sets(err, known_versions);
 
+        let packages = derivation_tree_packages(&err);
         let mut unavailable_packages = FxHashMap::default();
-        for package in derivation_tree_packages(&err) {
+        for &package in &packages {
             if let PubGrubPackageInner::Package { name, .. } = &**package {
                 if let Some(reason) = self.unavailable_packages.pin().get(name) {
                     unavailable_packages.insert(name.clone(), reason.clone());
@@ -2385,7 +2386,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
         let mut incomplete_packages = FxHashMap::default();
         let incomplete_packages_cache = self.incomplete_packages.pin();
-        for package in derivation_tree_packages(&err) {
+        for &package in &packages {
             if let PubGrubPackageInner::Package { name, .. } = &**package
                 && let Some(versions) = incomplete_packages_cache.get(name)
             {
@@ -2407,7 +2408,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 .ok()
                 .and_then(|s| s.parse().ok());
 
-        for package in derivation_tree_packages(&err) {
+        for package in packages {
             let Some(name) = package.name() else { continue };
             if !visited.contains(name) {
                 // Avoid including version data for packages that exist in the derivation
