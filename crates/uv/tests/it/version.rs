@@ -11,7 +11,7 @@ use indoc::indoc;
 use insta::assert_snapshot;
 
 use uv_static::EnvVars;
-use uv_test::{apply_filters, uv_snapshot};
+use uv_test::{apply_filters, assert_path_missing, uv_snapshot};
 
 // Print the version
 #[test]
@@ -1809,17 +1809,16 @@ requires-python = ">=3.12"
 // Set version --dry-run
 #[test]
 fn version_set_dry() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let original = r#"
 [project]
 name = "myproject"
 version = "1.10.31"
 requires-python = ">=3.12"
-"#,
-    )?;
+"#;
+    pyproject_toml.write_str(original)?;
 
     uv_snapshot!(context.filters(), context.version()
         .arg("1.2.3")
@@ -1829,34 +1828,25 @@ requires-python = ">=3.12"
     myproject 1.10.31 => 1.2.3
     ");
 
-    let pyproject = context.read("pyproject.toml");
-    assert_snapshot!(
-        pyproject,
-    @r#"
-
-    [project]
-    name = "myproject"
-    version = "1.10.31"
-    requires-python = ">=3.12"
-    "#
-    );
+    assert_eq!(context.read(&pyproject_toml), original);
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(&context.venv);
     Ok(())
 }
 
 // Bump version --dry-run
 #[test]
 fn version_major_dry() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let original = r#"
 [project]
 name = "myproject"
 version = "1.10.31"
 requires-python = ">=3.12"
-"#,
-    )?;
+"#;
+    pyproject_toml.write_str(original)?;
 
     uv_snapshot!(context.filters(), context.version()
         .arg("--bump").arg("major")
@@ -1866,17 +1856,9 @@ requires-python = ">=3.12"
     myproject 1.10.31 => 2.0.0
     ");
 
-    let pyproject = context.read("pyproject.toml");
-    assert_snapshot!(
-        pyproject,
-    @r#"
-
-    [project]
-    name = "myproject"
-    version = "1.10.31"
-    requires-python = ">=3.12"
-    "#
-    );
+    assert_eq!(context.read(&pyproject_toml), original);
+    assert_path_missing(context.temp_dir.child("uv.lock"));
+    assert_path_missing(&context.venv);
     Ok(())
 }
 
