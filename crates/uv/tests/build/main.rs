@@ -12,6 +12,8 @@ mod build;
 #[cfg(feature = "test-python")]
 mod build_backend;
 
+mod build_backend_requires;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod cache;
 
