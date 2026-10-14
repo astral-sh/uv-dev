@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, hash_map::Entry};
 use std::fmt::Write;
 use std::path::Path;
 use std::str::FromStr;
@@ -841,7 +841,7 @@ fn apply_requirement_replacements<'a>(
     pyproject: &mut PyProjectTomlMut,
     replacements: impl IntoIterator<Item = &'a RequirementUpdate>,
 ) -> Result<()> {
-    let mut applied = Vec::new();
+    let mut applied = FxHashMap::default();
     for RequirementUpdate {
         package,
         dependency_type,
@@ -850,29 +850,25 @@ fn apply_requirement_replacements<'a>(
         ..
     } in replacements
     {
-        if let Some((_, _, applied_replacement)) =
-            applied
-                .iter()
-                .find(|(applied_dependency_type, applied_existing, _)| {
-                    *applied_dependency_type == dependency_type && *applied_existing == existing
-                })
-        {
-            if *applied_replacement != replacement {
-                bail!("Dependency `{package}` has conflicting requirement updates");
+        match applied.entry((dependency_type, existing)) {
+            Entry::Occupied(entry) => {
+                if *entry.get() != replacement {
+                    bail!("Dependency `{package}` has conflicting requirement updates");
+                }
             }
-            continue;
+            Entry::Vacant(entry) => {
+                if pyproject
+                    .replace_dependency_declaration(dependency_type, existing, replacement)?
+                    .is_empty()
+                {
+                    bail!(
+                        "Dependency `{package}` was not found in {}",
+                        dependency_type.toml_table_name()
+                    );
+                }
+                entry.insert(replacement);
+            }
         }
-
-        if pyproject
-            .replace_dependency_declaration(dependency_type, existing, replacement)?
-            .is_empty()
-        {
-            bail!(
-                "Dependency `{package}` was not found in {}",
-                dependency_type.toml_table_name()
-            );
-        }
-        applied.push((dependency_type, existing, replacement));
     }
     Ok(())
 }
