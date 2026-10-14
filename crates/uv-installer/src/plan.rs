@@ -2,7 +2,6 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use owo_colors::OwoColorize;
 use rustc_hash::FxHashSet;
 use tracing::{debug, warn};
 
@@ -27,6 +26,7 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_redacted::DisplaySafeUrl;
 use uv_types::HashStrategy;
 
+use crate::compatibility::CompatibilitySubject;
 use crate::satisfies::{BuildSettings, RequirementSatisfaction};
 use crate::{InstallationStrategy, SitePackages};
 
@@ -114,97 +114,29 @@ enum IncompatibleWheelHint {
 
 impl fmt::Display for IncompatibleWheelHint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let subject = CompatibilitySubject::Wheel;
         match self {
             Self::Python {
                 wheel_tags,
                 current,
-            } => write_compatibility_hint(f, wheel_tags, current.as_ref(), "using", |tag| {
-                tag.pretty()
-            }),
+            } => {
+                subject.write_tag_hint(f, wheel_tags, current.as_ref(), "using", |tag| tag.pretty())
+            }
             Self::Abi {
                 wheel_tags,
                 current,
-            } => write_compatibility_hint(f, wheel_tags, current.as_ref(), "using", |tag| {
-                tag.pretty()
-            }),
+            } => {
+                subject.write_tag_hint(f, wheel_tags, current.as_ref(), "using", |tag| tag.pretty())
+            }
             Self::FreethreadedAbi {
                 wheel_tags,
                 current,
-            } => {
-                f.write_str("You're using ")?;
-                if let Some(current) = current {
-                    write_pretty_tag(f, current, current.pretty())?;
-                } else {
-                    f.write_str("free-threaded Python")?;
-                }
-                f.write_str(", but the wheel was built for ")?;
-                write_tag_list(f, wheel_tags, |f, tag| match tag {
-                    AbiTag::Abi3 => write!(f, "the stable ABI (`{}`)", tag.cyan()),
-                    _ => {
-                        if let Some(pretty) = tag.pretty() {
-                            write!(f, "the {} ABI (`{}`)", pretty.cyan(), tag.cyan())
-                        } else {
-                            write!(f, "`{}`", tag.cyan())
-                        }
-                    }
-                })?;
-                f.write_str(", which requires a GIL-enabled interpreter")
-            }
+            } => subject.write_freethreaded_hint(f, wheel_tags, current.as_ref()),
             Self::Platform {
                 wheel_tags,
                 current,
-            } => {
-                write_compatibility_hint(f, wheel_tags, current.as_ref(), "on", |tag| tag.pretty())
-            }
+            } => subject.write_tag_hint(f, wheel_tags, current.as_ref(), "on", PlatformTag::pretty),
         }
-    }
-}
-
-fn write_compatibility_hint<T: fmt::Display, P: fmt::Display>(
-    f: &mut fmt::Formatter<'_>,
-    wheel_tags: &[T],
-    current: Option<&T>,
-    current_phrase: &str,
-    pretty: impl Fn(&T) -> Option<P>,
-) -> fmt::Result {
-    f.write_str(if current.is_some() {
-        "The wheel is compatible with "
-    } else {
-        "The wheel requires "
-    })?;
-    write_tag_list(f, wheel_tags, |f, tag| {
-        write_pretty_tag(f, tag, pretty(tag))
-    })?;
-    if let Some(current) = current {
-        write!(f, ", but you're {current_phrase} ")?;
-        write_pretty_tag(f, current, pretty(current))?;
-    }
-    Ok(())
-}
-
-fn write_tag_list<T>(
-    f: &mut fmt::Formatter<'_>,
-    tags: &[T],
-    format_tag: impl Fn(&mut fmt::Formatter<'_>, &T) -> fmt::Result,
-) -> fmt::Result {
-    for (index, tag) in tags.iter().enumerate() {
-        if index > 0 {
-            f.write_str(", ")?;
-        }
-        format_tag(f, tag)?;
-    }
-    Ok(())
-}
-
-fn write_pretty_tag(
-    f: &mut fmt::Formatter<'_>,
-    tag: impl fmt::Display,
-    pretty: Option<impl fmt::Display>,
-) -> fmt::Result {
-    if let Some(pretty) = pretty {
-        write!(f, "{} (`{}`)", pretty.cyan(), tag.cyan())
-    } else {
-        write!(f, "`{}`", tag.cyan())
     }
 }
 
