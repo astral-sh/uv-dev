@@ -168,26 +168,25 @@ impl Removal {
                 remove_file(&path)?;
             }
 
-            reporter.map(CleanReporter::on_clean);
+            if let Some(reporter) = reporter {
+                reporter.on_clean();
+            }
 
             return Ok(());
         }
 
         for entry in walkdir::WalkDir::new(&path).contents_first(true) {
             // If we hit a directory that lacks read permissions, try to make it readable.
-            if let Err(ref err) = entry {
-                if err
+            if let Err(ref err) = entry
+                && err
                     .io_error()
                     .is_some_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
-                {
-                    if let Some(dir) = err.path() {
-                        if set_readable(dir).unwrap_or(false) {
-                            // Retry the operation; if we _just_ `self.rm_rf(dir)` and continue,
-                            // `walkdir` may give us duplicate entries for the directory.
-                            return self.rm_rf(&path, reporter, skip_locked_file);
-                        }
-                    }
-                }
+                && let Some(dir) = err.path()
+                && set_readable(dir).unwrap_or(false)
+            {
+                // Retry the operation; if we _just_ `self.rm_rf(dir)` and continue,
+                // `walkdir` may give us duplicate entries for the directory.
+                return self.rm_rf(&path, reporter, skip_locked_file);
             }
 
             let entry = entry?;
@@ -240,10 +239,14 @@ impl Removal {
                 remove_file(entry.path())?;
             }
 
-            reporter.map(CleanReporter::on_clean);
+            if let Some(reporter) = reporter {
+                reporter.on_clean();
+            }
         }
 
-        reporter.map(CleanReporter::on_complete);
+        if let Some(reporter) = reporter {
+            reporter.on_complete();
+        }
 
         Ok(())
     }
@@ -298,44 +301,31 @@ fn set_not_readonly(path: &Path) -> io::Result<bool> {
 /// Like [`fs_err::remove_file`], but attempts to change the permissions to force the file to be
 /// deleted (if it is readonly).
 fn remove_file(path: &Path) -> io::Result<()> {
-    match fs_err::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(err)
-            if err.kind() == io::ErrorKind::PermissionDenied
-                && set_not_readonly(path).unwrap_or(false) =>
-        {
-            fs_err::remove_file(path)
-        }
-        Err(err) => Err(err),
-    }
+    remove_with_permission_retry(|| fs_err::remove_file(path), || set_not_readonly(path))
 }
 
 /// Like [`fs_err::remove_dir`], but attempts to change the permissions to force the directory to
 /// be deleted (if it is readonly).
 fn remove_dir(path: &Path) -> io::Result<()> {
-    match fs_err::remove_dir(path) {
-        Ok(()) => Ok(()),
-        Err(err)
-            if err.kind() == io::ErrorKind::PermissionDenied
-                && set_readable(path).unwrap_or(false) =>
-        {
-            fs_err::remove_dir(path)
-        }
-        Err(err) => Err(err),
-    }
+    remove_with_permission_retry(|| fs_err::remove_dir(path), || set_readable(path))
 }
 
 /// Like [`fs_err::remove_dir_all`], but attempts to change the permissions to force the directory
 /// to be deleted (if it is readonly).
 fn remove_dir_all(path: &Path) -> io::Result<()> {
-    match fs_err::remove_dir_all(path) {
-        Ok(()) => Ok(()),
-        Err(err)
-            if err.kind() == io::ErrorKind::PermissionDenied
-                && set_readable(path).unwrap_or(false) =>
-        {
-            fs_err::remove_dir_all(path)
+    remove_with_permission_retry(|| fs_err::remove_dir_all(path), || set_readable(path))
+}
+
+/// Retry removal after changing permissions, preserving the original error if the change fails.
+fn remove_with_permission_retry(
+    remove: impl Fn() -> io::Result<()>,
+    change_permissions: impl FnOnce() -> io::Result<bool>,
+) -> io::Result<()> {
+    remove().or_else(|err| {
+        if err.kind() == io::ErrorKind::PermissionDenied && change_permissions().unwrap_or(false) {
+            remove()
+        } else {
+            Err(err)
         }
-        Err(err) => Err(err),
-    }
+    })
 }
