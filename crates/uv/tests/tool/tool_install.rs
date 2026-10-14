@@ -20,7 +20,7 @@ use uv_static::EnvVars;
 use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{assert_path_missing, copy_dir_ignore, uv_snapshot};
 
-use crate::workspace_fixture::MixedWorkspace;
+use crate::workspace_fixture::{MixedWorkspace, WorkspaceWithChild};
 
 fn assert_tool_launcher(path: &ChildPath) {
     // On Unix, tool launchers can be symlinks to scripts in the tool environment.
@@ -896,64 +896,12 @@ fn tool_install_reinstall_converts_workspace_members_to_non_editable() -> Result
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    let root_pyproject = context.temp_dir.child("pyproject.toml");
-    root_pyproject.write_str(indoc! {
-        r#"
-        [project]
-        name = "root"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["child"]
-
-        [project.scripts]
-        root_cli = "root:main"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.sources]
-        child = { workspace = true }
-
-        [tool.uv.workspace]
-        members = ["child"]
-        "#
-    })?;
-
-    let root_src = context.temp_dir.child("src").child("root");
-    root_src.create_dir_all()?;
-    root_src.child("__init__.py").write_str(indoc! {
-        r"
-        def main():
-            import child
-            print(child.MESSAGE)
-        "
-    })?;
-
-    let child = context.temp_dir.child("child");
-    child.create_dir_all()?;
-    child.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-
-    let child_src = child.child("src").child("child");
-    child_src.create_dir_all()?;
-    let child_module = child_src.child("__init__.py");
-    child_module.write_str("MESSAGE = 'OK'\n")?;
+    let fixture = WorkspaceWithChild::new(&context)?;
 
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("--editable")
         .arg(context.temp_dir.path())
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -964,34 +912,26 @@ fn tool_install_reinstall_converts_workspace_members_to_non_editable() -> Result
     Installed 1 executable: root_cli
     ");
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    OK
-    ");
+    fixture.assert_tool_output(&context, "OK");
 
-    child_module.write_str("MESSAGE = 'PRE-REINSTALL'\n")?;
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    PRE-REINSTALL
-    ");
+    fixture
+        .child_module
+        .write_str("MESSAGE = 'PRE-REINSTALL'\n")?;
+    fixture.assert_tool_output(&context, "PRE-REINSTALL");
 
     context
         .tool_install()
         .arg("--reinstall")
         .arg(context.temp_dir.path())
-        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
         .assert()
         .success();
 
-    child_module.write_str("MESSAGE = 'POST-REINSTALL'\n")?;
+    fixture
+        .child_module
+        .write_str("MESSAGE = 'POST-REINSTALL'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    PRE-REINSTALL
-    ");
+    fixture.assert_tool_output(&context, "PRE-REINSTALL");
 
     Ok(())
 }
@@ -1001,64 +941,11 @@ fn tool_install_workspace_members_are_non_editable_by_default() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    let root_pyproject = context.temp_dir.child("pyproject.toml");
-    root_pyproject.write_str(indoc! {
-        r#"
-        [project]
-        name = "root"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["child"]
-
-        [project.scripts]
-        root_cli = "root:main"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.sources]
-        child = { workspace = true }
-
-        [tool.uv.workspace]
-        members = ["child"]
-        "#
-    })?;
-
-    let root_src = context.temp_dir.child("src").child("root");
-    root_src.create_dir_all()?;
-    root_src.child("__init__.py").write_str(indoc! {
-        r"
-        def main():
-            import child
-            print(child.MESSAGE)
-        "
-    })?;
-
-    let child = context.temp_dir.child("child");
-    child.create_dir_all()?;
-    child.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-
-    let child_src = child.child("src").child("child");
-    child_src.create_dir_all()?;
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
+    let fixture = WorkspaceWithChild::new(&context)?;
 
     uv_snapshot!(context.filters(), context.tool_install()
         .arg(context.temp_dir.path())
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -1069,21 +956,11 @@ fn tool_install_workspace_members_are_non_editable_by_default() -> Result<()> {
     Installed 1 executable: root_cli
     ");
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    OK
-    ");
+    fixture.assert_tool_output(&context, "OK");
 
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'CHANGED'\n")?;
+    fixture.child_module.write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    OK
-    ");
+    fixture.assert_tool_output(&context, "OK");
 
     Ok(())
 }
@@ -1093,65 +970,12 @@ fn tool_install_workspace_members_honor_editable_flag() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    let root_pyproject = context.temp_dir.child("pyproject.toml");
-    root_pyproject.write_str(indoc! {
-        r#"
-        [project]
-        name = "root"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["child"]
-
-        [project.scripts]
-        root_cli = "root:main"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.sources]
-        child = { workspace = true }
-
-        [tool.uv.workspace]
-        members = ["child"]
-        "#
-    })?;
-
-    let root_src = context.temp_dir.child("src").child("root");
-    root_src.create_dir_all()?;
-    root_src.child("__init__.py").write_str(indoc! {
-        r"
-        def main():
-            import child
-            print(child.MESSAGE)
-        "
-    })?;
-
-    let child = context.temp_dir.child("child");
-    child.create_dir_all()?;
-    child.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-
-    let child_src = child.child("src").child("child");
-    child_src.create_dir_all()?;
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
+    let fixture = WorkspaceWithChild::new(&context)?;
 
     uv_snapshot!(context.filters(), context.tool_install()
         .arg("--editable")
         .arg(context.temp_dir.path())
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -1162,21 +986,11 @@ fn tool_install_workspace_members_honor_editable_flag() -> Result<()> {
     Installed 1 executable: root_cli
     ");
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    OK
-    ");
+    fixture.assert_tool_output(&context, "OK");
 
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'CHANGED'\n")?;
+    fixture.child_module.write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    CHANGED
-    ");
+    fixture.assert_tool_output(&context, "CHANGED");
 
     Ok(())
 }
