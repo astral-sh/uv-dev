@@ -521,107 +521,41 @@ impl Authentication {
     /// Any existing credentials will be overridden.
     pub(crate) async fn authenticate(
         &self,
-        mut request: Request,
+        request: Request,
     ) -> Result<Request, AuthenticationError> {
         match self {
             Self::Credentials(credentials) => Ok(credentials.authenticate(request)?),
-            Self::AwsSigner(signer) => {
-                // Build an `http::Request` from the `reqwest::Request`.
-                let uri = Uri::from_str(request.url().as_str())?;
-                let mut http_req = http::Request::builder()
-                    .method(request.method().clone())
-                    .uri(uri)
-                    .body(())
-                    .map_err(|source| AuthenticationError::BuildRequest {
-                        provider: "AWS",
-                        source,
-                    })?;
-                *http_req.headers_mut() = request.headers().clone();
-
-                // Sign the parts.
-                let (mut parts, ()) = http_req.into_parts();
-                signer.sign(&mut parts, None).await.map_err(|source| {
-                    AuthenticationError::Sign {
-                        provider: "AWS",
-                        source,
-                    }
-                })?;
-
-                // Copy over the signed headers.
-                request.headers_mut().extend(parts.headers);
-
-                // Copy over the signed path and query, if any.
-                if let Some(path_and_query) = parts.uri.path_and_query() {
-                    request.url_mut().set_path(path_and_query.path());
-                    request.url_mut().set_query(path_and_query.query());
-                }
-                Ok(request)
-            }
-            Self::GcsSigner(signer) => {
-                // Build an `http::Request` from the `reqwest::Request`.
-                let uri = Uri::from_str(request.url().as_str())?;
-                let mut http_req = http::Request::builder()
-                    .method(request.method().clone())
-                    .uri(uri)
-                    .body(())
-                    .map_err(|source| AuthenticationError::BuildRequest {
-                        provider: "GCS",
-                        source,
-                    })?;
-                *http_req.headers_mut() = request.headers().clone();
-
-                // Sign the parts.
-                let (mut parts, ()) = http_req.into_parts();
-                signer.sign(&mut parts, None).await.map_err(|source| {
-                    AuthenticationError::Sign {
-                        provider: "GCS",
-                        source,
-                    }
-                })?;
-
-                // Copy over the signed headers.
-                request.headers_mut().extend(parts.headers);
-
-                // Copy over the signed path and query, if any.
-                if let Some(path_and_query) = parts.uri.path_and_query() {
-                    request.url_mut().set_path(path_and_query.path());
-                    request.url_mut().set_query(path_and_query.query());
-                }
-                Ok(request)
-            }
-            Self::AzureSigner(signer) => {
-                // Build an `http::Request` from the `reqwest::Request`.
-                let uri = Uri::from_str(request.url().as_str())?;
-                let mut http_req = http::Request::builder()
-                    .method(request.method().clone())
-                    .uri(uri)
-                    .body(())
-                    .map_err(|source| AuthenticationError::BuildRequest {
-                        provider: "Azure",
-                        source,
-                    })?;
-                *http_req.headers_mut() = request.headers().clone();
-
-                // Sign the parts.
-                let (mut parts, ()) = http_req.into_parts();
-                signer.sign(&mut parts, None).await.map_err(|source| {
-                    AuthenticationError::Sign {
-                        provider: "Azure",
-                        source,
-                    }
-                })?;
-
-                // Copy over the signed headers.
-                request.headers_mut().extend(parts.headers);
-
-                // Copy over the signed path and query, if any.
-                if let Some(path_and_query) = parts.uri.path_and_query() {
-                    request.url_mut().set_path(path_and_query.path());
-                    request.url_mut().set_query(path_and_query.query());
-                }
-                Ok(request)
-            }
+            Self::AwsSigner(signer) => Self::sign_request(signer, request, "AWS").await,
+            Self::GcsSigner(signer) => Self::sign_request(signer, request, "GCS").await,
+            Self::AzureSigner(signer) => Self::sign_request(signer, request, "Azure").await,
         }
+    }
+
+    async fn sign_request<K: reqsign::SigningCredential>(
+        signer: &reqsign::Signer<K>,
+        mut request: Request,
+        provider: &'static str,
+    ) -> Result<Request, AuthenticationError> {
+        let uri = Uri::from_str(request.url().as_str())?;
+        let mut http_request = http::Request::builder()
+            .method(request.method().clone())
+            .uri(uri)
+            .body(())
+            .map_err(|source| AuthenticationError::BuildRequest { provider, source })?;
+        *http_request.headers_mut() = request.headers().clone();
+
+        let (mut parts, ()) = http_request.into_parts();
+        signer
+            .sign(&mut parts, None)
+            .await
+            .map_err(|source| AuthenticationError::Sign { provider, source })?;
+
+        request.headers_mut().extend(parts.headers);
+        if let Some(path_and_query) = parts.uri.path_and_query() {
+            request.url_mut().set_path(path_and_query.path());
+            request.url_mut().set_query(path_and_query.query());
+        }
+        Ok(request)
     }
 }
 
