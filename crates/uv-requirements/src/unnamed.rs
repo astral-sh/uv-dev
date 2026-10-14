@@ -78,36 +78,45 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
             .await
     }
 
-    /// Infer the package name for a given "unnamed" requirement.
+    /// Resolve an unnamed requirement using its inferred package name.
     async fn resolve_requirement(
         requirement: UnnamedRequirement<VerbatimParsedUrl>,
         hasher: &HashStrategy,
         index: &InMemoryIndex,
         database: &DistributionDatabase<'a, Context>,
     ) -> Result<uv_pep508::Requirement<VerbatimParsedUrl>, Error> {
+        let name = Self::infer_name(&requirement.url, hasher, index, database).await?;
+        Ok(uv_pep508::Requirement {
+            name,
+            extras: requirement.extras,
+            version_or_url: Some(VersionOrUrl::Url(requirement.url)),
+            marker: requirement.marker,
+            origin: requirement.origin,
+        })
+    }
+
+    async fn infer_name(
+        url: &VerbatimParsedUrl,
+        hasher: &HashStrategy,
+        index: &InMemoryIndex,
+        database: &DistributionDatabase<'a, Context>,
+    ) -> Result<PackageName, Error> {
         // If the requirement is a wheel, extract the package name from the wheel filename.
         //
         // Ex) `anyio-4.3.0-py3-none-any.whl`
-        if Path::new(requirement.url.verbatim.path())
+        if Path::new(url.verbatim.path())
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("whl"))
         {
-            let filename = WheelFilename::from_str(&requirement.url.verbatim.filename()?)?;
-            return Ok(uv_pep508::Requirement {
-                name: filename.name,
-                extras: requirement.extras,
-                version_or_url: Some(VersionOrUrl::Url(requirement.url)),
-                marker: requirement.marker,
-                origin: requirement.origin,
-            });
+            let filename = WheelFilename::from_str(&url.verbatim.filename()?)?;
+            return Ok(filename.name);
         }
 
         // If the requirement is a source archive, try to extract the package name from the archive
         // filename. This isn't guaranteed to work.
         //
         // Ex) `anyio-4.3.0.tar.gz`
-        if let Some(filename) = requirement
-            .url
+        if let Some(filename) = url
             .verbatim
             .filename()
             .ok()
@@ -117,9 +126,8 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
             //   https://github.com/python/mypy/archive/refs/heads/release-1.11.zip
             //
             // These have auto-generated filenames that will almost never match the package name.
-            if requirement.url.verbatim.host() == Some(Host::Domain("github.com"))
-                && requirement
-                    .url
+            if url.verbatim.host() == Some(Host::Domain("github.com"))
+                && url
                     .verbatim
                     .path_segments()
                     .is_some_and(|mut path_segments| {
@@ -128,20 +136,14 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
             {
                 debug!(
                     "Rejecting inferred name from GitHub archive: {}",
-                    requirement.url.verbatim
+                    url.verbatim
                 );
             } else {
-                return Ok(uv_pep508::Requirement {
-                    name: filename.name,
-                    extras: requirement.extras,
-                    version_or_url: Some(VersionOrUrl::Url(requirement.url)),
-                    marker: requirement.marker,
-                    origin: requirement.origin,
-                });
+                return Ok(filename.name);
             }
         }
 
-        let source = match &requirement.url.parsed_url {
+        let source = match &url.parsed_url {
             // If the path points to a directory, attempt to read the name from static metadata.
             ParsedUrl::Directory(parsed_directory_url) => {
                 // Attempt to read a `PKG-INFO` from the directory.
@@ -155,13 +157,7 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                         path = parsed_directory_url.install_path.display(),
                         name = metadata.name
                     );
-                    return Ok(uv_pep508::Requirement {
-                        name: metadata.name,
-                        extras: requirement.extras,
-                        version_or_url: Some(VersionOrUrl::Url(requirement.url)),
-                        marker: requirement.marker,
-                        origin: requirement.origin,
-                    });
+                    return Ok(metadata.name);
                 }
 
                 // Attempt to read a `pyproject.toml` file.
@@ -180,13 +176,7 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                             path = parsed_directory_url.install_path.display(),
                             name = project.name
                         );
-                        return Ok(uv_pep508::Requirement {
-                            name: project.name,
-                            extras: requirement.extras,
-                            version_or_url: Some(VersionOrUrl::Url(requirement.url)),
-                            marker: requirement.marker,
-                            origin: requirement.origin,
-                        });
+                        return Ok(project.name);
                     }
 
                     // Read Poetry-specific metadata from the `pyproject.toml`.
@@ -199,13 +189,7 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                             path = parsed_directory_url.install_path.display(),
                             name = name
                         );
-                        return Ok(uv_pep508::Requirement {
-                            name,
-                            extras: requirement.extras,
-                            version_or_url: Some(VersionOrUrl::Url(requirement.url)),
-                            marker: requirement.marker,
-                            origin: requirement.origin,
-                        });
+                        return Ok(name);
                     }
                 }
 
@@ -221,17 +205,11 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                         path = parsed_directory_url.install_path.display(),
                         name = name
                     );
-                    return Ok(uv_pep508::Requirement {
-                        name,
-                        extras: requirement.extras,
-                        version_or_url: Some(VersionOrUrl::Url(requirement.url)),
-                        marker: requirement.marker,
-                        origin: requirement.origin,
-                    });
+                    return Ok(name);
                 }
 
                 SourceUrl::Directory(DirectorySourceUrl {
-                    url: &requirement.url.verbatim,
+                    url: &url.verbatim,
                     install_path: &parsed_directory_url.install_path,
                     editable: parsed_directory_url.editable,
                 })
@@ -242,7 +220,7 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                     DistExtension::Wheel => unreachable!(),
                 };
                 SourceUrl::Path(PathSourceUrl {
-                    url: &requirement.url.verbatim,
+                    url: &url.verbatim,
                     path: Cow::Borrowed(&parsed_path_url.install_path),
                     ext,
                 })
@@ -253,14 +231,14 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                     DistExtension::Wheel => unreachable!(),
                 };
                 SourceUrl::Direct(DirectSourceUrl {
-                    url: &requirement.url.verbatim,
+                    url: &url.verbatim,
                     subdirectory: parsed_archive_url.subdirectory.as_deref(),
                     ext,
                 })
             }
             ParsedUrl::GitDirectory(parsed_git_url) => {
                 SourceUrl::GitDirectory(GitDirectorySourceUrl {
-                    url: &requirement.url.verbatim,
+                    url: &url.verbatim,
                     git: &parsed_git_url.url,
                     subdirectory: parsed_git_url.subdirectory.as_deref(),
                 })
@@ -271,7 +249,7 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
                     DistExtension::Wheel => unreachable!(),
                 };
                 SourceUrl::GitPath(GitPathSourceUrl {
-                    url: &requirement.url.verbatim,
+                    url: &url.verbatim,
                     git: &parsed_git_url.url,
                     path: Cow::Borrowed(&parsed_git_url.install_path),
                     ext,
@@ -316,12 +294,6 @@ impl<'a, Context: BuildContext> NamedRequirementsResolver<'a, Context> {
             }
         };
 
-        Ok(uv_pep508::Requirement {
-            name,
-            extras: requirement.extras,
-            version_or_url: Some(VersionOrUrl::Url(requirement.url)),
-            marker: requirement.marker,
-            origin: requirement.origin,
-        })
+        Ok(name)
     }
 }
