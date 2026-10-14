@@ -132,30 +132,18 @@ impl MetadataRequests {
         if let Some(recorder) = &self.recorder {
             recorder.exclude_newer(name);
         }
+        let request = || Ok(Request::Package(name.clone(), index.cloned()));
         if let Some(index) = index {
-            let entry = match self
+            let registration = self
                 .index
                 .explicit()
-                .register_entry((name.clone(), index.url().clone()))
-            {
-                Registration::New(entry) => {
-                    self.sender
-                        .blocking_send(Request::Package(name.clone(), Some(index.clone())))?;
-                    entry
-                }
-                Registration::Existing(entry) => entry,
-            };
-            Ok(PendingVersions::Explicit(entry))
+                .register_entry((name.clone(), index.url().clone()));
+            self.enqueue_registered(registration, request)
+                .map(PendingVersions::Explicit)
         } else {
-            let entry = match self.index.implicit().register_entry(name.clone()) {
-                Registration::New(entry) => {
-                    self.sender
-                        .blocking_send(Request::Package(name.clone(), None))?;
-                    entry
-                }
-                Registration::Existing(entry) => entry,
-            };
-            Ok(PendingVersions::Implicit(entry))
+            let registration = self.index.implicit().register_entry(name.clone());
+            self.enqueue_registered(registration, request)
+                .map(PendingVersions::Implicit)
         }
     }
 
@@ -184,15 +172,28 @@ impl MetadataRequests {
         if let Some(recorder) = &self.recorder {
             recorder.dependency_metadata(request.name());
         }
-        let entry = match self.index.distributions().register_entry(request.id()) {
+        let registration = self.index.distributions().register_entry(request.id());
+        self.enqueue_registered(registration, || {
+            validate(&request)?;
+            Ok(request.into_request())
+        })
+        .map(RegisteredMetadata)
+    }
+
+    /// Construct and send a request only when the entry is newly registered.
+    fn enqueue_registered<T>(
+        &self,
+        registration: Registration<T>,
+        request: impl FnOnce() -> Result<Request, ResolveError>,
+    ) -> Result<T, ResolveError> {
+        let entry = match registration {
             Registration::New(entry) => {
-                validate(&request)?;
-                self.sender.blocking_send(request.into_request())?;
+                self.sender.blocking_send(request()?)?;
                 entry
             }
             Registration::Existing(entry) => entry,
         };
-        Ok(RegisteredMetadata(entry))
+        Ok(entry)
     }
 
     /// Schedule speculative candidate selection using an already-requested package version map.
