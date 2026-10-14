@@ -426,7 +426,7 @@ async fn init_project(
         no_readme,
     )?;
 
-    if let Some(workspace) = workspace {
+    if let Some(workspace) = workspace.as_deref() {
         if workspace.excludes(path)? {
             // If the member is excluded by the workspace, ignore it.
             writeln!(
@@ -464,39 +464,33 @@ async fn init_project(
                 workspace.install_path().simplified_display().cyan()
             )?;
         }
-        // Write .python-version if it doesn't exist in the workspace or if the version differs
-        if let Some(python_request) = python_pin {
-            if PythonVersionFile::discover(path, &VersionFileDiscoveryOptions::default())
+    }
+
+    if let Some(python_request) = python_pin {
+        // Standalone projects retain any local pin. Projects in a workspace reuse a matching pin
+        // from either the project or workspace root.
+        let reuse_version_file =
+            PythonVersionFile::discover(path, &VersionFileDiscoveryOptions::default())
                 .await?
-                .as_ref()
-                .is_none_or(|file| !{
-                    file.version()
-                        .is_some_and(|version| *version == python_request)
-                        && file.path().parent().is_some_and(|parent| {
-                            parent == workspace.install_path() || parent == path
-                        })
-                })
-            {
-                PythonVersionFile::new(path.join(".python-version"))
-                    .with_versions(vec![python_request.clone()])
-                    .write()
-                    .await?;
-            }
-        }
-    } else {
-        // Write .python-version if it doesn't exist in the project directory.
-        if let Some(python_request) = python_pin {
-            if PythonVersionFile::discover(path, &VersionFileDiscoveryOptions::default())
-                .await?
-                .filter(|file| file.version().is_some())
-                .as_ref()
-                .is_none_or(|file| file.path().parent().is_none_or(|parent| parent != path))
-            {
-                PythonVersionFile::new(path.join(".python-version"))
-                    .with_versions(vec![python_request.clone()])
-                    .write()
-                    .await?;
-            }
+                .is_some_and(|file| {
+                    let Some(version) = file.version() else {
+                        return false;
+                    };
+                    match workspace.as_deref() {
+                        Some(workspace) => {
+                            *version == python_request
+                                && file.path().parent().is_some_and(|parent| {
+                                    parent == workspace.install_path() || parent == path
+                                })
+                        }
+                        None => file.path().parent() == Some(path),
+                    }
+                });
+        if !reuse_version_file {
+            PythonVersionFile::new(path.join(".python-version"))
+                .with_versions(vec![python_request])
+                .write()
+                .await?;
         }
     }
 
