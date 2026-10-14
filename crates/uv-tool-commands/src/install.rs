@@ -628,7 +628,7 @@ pub async fn install(
                 )?;
                 (resolution, tool_lock)
             } else {
-                let resolution = match resolve_environment(
+                let resolution = resolve_environment(
                     tool_environment_spec(
                         spec.clone(),
                         existing_tool_lock
@@ -652,10 +652,7 @@ pub async fn install(
                     preview,
                 )
                 .await
-                {
-                    Ok(resolution) => resolution,
-                    Err(err) => return Err(UvError::from(err).into()),
-                };
+                .map_err(UvError::from)?;
                 let tool_lock = ToolLock::from_resolution(
                     &tool_dir,
                     &resolution,
@@ -761,7 +758,7 @@ pub async fn install(
             };
             (environment, Some(tool_lock))
         } else {
-            let update = match update_environment(
+            let update = update_environment(
                 environment,
                 spec,
                 Modifications::Exact,
@@ -783,10 +780,7 @@ pub async fn install(
                 preview,
             )
             .await
-            {
-                Ok(update) => update,
-                Err(err) => return Err(UvError::from(err).into()),
-            };
+            .map_err(UvError::from)?;
             (update.environment, None)
         };
 
@@ -876,7 +870,7 @@ pub async fn install(
                             interpreter.sys_executable().display()
                         );
 
-                        match resolve_environment(
+                        let resolution = resolve_environment(
                             spec.clone(),
                             resolution_scope,
                             &interpreter,
@@ -894,10 +888,8 @@ pub async fn install(
                             preview,
                         )
                         .await
-                        {
-                            Ok(resolution) => (resolution, interpreter),
-                            Err(err) => return Err(UvError::from(err).into()),
-                        }
+                        .map_err(UvError::from)?;
+                        (resolution, interpreter)
                     }
                     err => return Err(err.into()),
                 },
@@ -935,7 +927,7 @@ pub async fn install(
         }
 
         // Sync the environment with the resolved requirements.
-        match sync_environment(
+        let environment = sync_environment(
             environment,
             &resolution,
             hash_strategy,
@@ -956,10 +948,9 @@ pub async fn install(
             // If we failed to sync, remove the newly created environment.
             debug!("Failed to sync environment; removing `{}`", package_name);
             let _ = installed_tools.remove_environment(package_name);
-        }) {
-            Ok(environment) => (environment, tool_lock),
-            Err(err) => return Err(UvError::from(err).into()),
-        }
+        })
+        .map_err(UvError::from)?;
+        (environment, tool_lock)
     };
 
     finalize_tool_install(
