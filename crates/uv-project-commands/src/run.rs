@@ -481,7 +481,6 @@ pub async fn run(
 
                     match result {
                         Ok(shared_environment) => {
-                            let shared_environment = PythonEnvironment::from(shared_environment);
                             // Shared dependencies live in the base; exact synchronization removes
                             // distributions installed directly into the writable overlay.
                             let environment = if matches!(modifications, Modifications::Exact) {
@@ -510,7 +509,7 @@ pub async fn run(
                                 // Overlay installations must not shadow dependencies replaced by
                                 // a reinstall, but unrelated overlay packages remain available.
                                 let shared_packages =
-                                    SitePackages::from_environment(&shared_environment)?;
+                                    SitePackages::from_environment(shared_environment.as_ref())?;
                                 let reinstalls = SitePackages::from_environment_for_packages(
                                     &environment,
                                     shared_packages
@@ -536,7 +535,9 @@ pub async fn run(
                                 environment
                             };
                             attach_shared_environment(&environment, &shared_environment)?;
-                            shared_interpreter = Some(shared_environment.into_interpreter());
+                            shared_interpreter = Some(
+                                PythonEnvironment::from(shared_environment).into_interpreter(),
+                            );
                             Some(environment.into_interpreter())
                         }
                         Err(EnvironmentError::Resolve(err)) => {
