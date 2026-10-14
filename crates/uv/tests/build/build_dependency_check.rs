@@ -1,14 +1,13 @@
 //! Build dependency checks using local backends and offline resolution.
 
 use anyhow::Result;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use predicates::prelude::predicate;
-use uv_test::uv_snapshot;
+use uv_test::{TestContext, assert_path_missing, uv_snapshot};
 
-#[test]
-fn build_dependency_check_missing_declared_requirement() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+fn project_with_missing_backend(context: &TestContext) -> Result<ChildPath> {
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -24,6 +23,13 @@ fn build_dependency_check_missing_declared_requirement() -> Result<()> {
     project.child("backend.py").write_str(indoc! {r#"
         raise RuntimeError("backend must not be imported")
     "#})?;
+    Ok(project)
+}
+
+#[test]
+fn build_dependency_check_missing_declared_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = project_with_missing_backend(&context)?;
     uv_snapshot!(context.filters(), context.build().args([
         "--preview-features", "build-dependency-check", "--no-build-isolation",
     ]).arg("--offline").current_dir(&project), @"
@@ -33,9 +39,8 @@ fn build_dependency_check_missing_declared_requirement() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/project`
       cause: Build requirement is not satisfied: `missing-backend>=1`
     ");
-    project
-        .child("dist/project-0.1.0-py3-none-any.whl")
-        .assert(predicate::path::missing());
+    assert_path_missing(project.child("dist/project-0.1.0.tar.gz"));
+    assert_path_missing(project.child("dist/project-0.1.0-py3-none-any.whl"));
     Ok(())
 }
 
@@ -184,21 +189,7 @@ fn build_dependency_check_checks_extracted_sdist() -> Result<()> {
 #[test]
 fn build_dependency_check_package_specific_isolation() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let project = context.temp_dir.child("project");
-    project.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["missing-backend>=1"]
-        build-backend = "backend"
-        backend-path = ["."]
-    "#})?;
-    project.child("backend.py").write_str(indoc! {r#"
-        raise RuntimeError("backend must not be imported")
-    "#})?;
+    let project = project_with_missing_backend(&context)?;
     uv_snapshot!(context.filters(), context.build().args([
         "--wheel", "--offline", "--preview-features", "build-dependency-check",
         "--no-build-isolation-package", "project",
@@ -209,6 +200,7 @@ fn build_dependency_check_package_specific_isolation() -> Result<()> {
     error: Failed to build `[TEMP_DIR]/project`
       cause: Build requirement is not satisfied: `missing-backend>=1`
     ");
+    assert_path_missing(project.child("dist/project-0.1.0-py3-none-any.whl"));
     Ok(())
 }
 
