@@ -1,0 +1,38 @@
+on:
+  workflow_call:
+    inputs:
+      variant:
+        required: true
+        type: string
+      target-arch:
+        required: true
+        type: string
+      cache-prefix:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prime:
+    name: Prime cache
+    uses: $/.github/workflows/benchmark-windows-trampoline-cache.yml
+    with:
+      variant: ${{ inputs.variant }}
+      target-arch: ${{ inputs.target-arch }}
+      cache-prefix: ${{ inputs.cache-prefix }}
+
+  measure:
+    name: Measure sample ${{ matrix.sample }}
+    needs: prime
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: [1, 2, 3]
+    uses: $/.github/workflows/benchmark-windows-trampoline-cache.yml
+    with:
+      variant: ${{ inputs.variant }}
+      target-arch: ${{ inputs.target-arch }}
+      cache-prefix: ${{ inputs.cache-prefix }}
+      require-warm-cache: true

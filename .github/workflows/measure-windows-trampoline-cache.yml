@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/measure-windows-trampoline-cache.yml
+      - .github/workflows/compare-windows-trampoline-cache.yml
       - .github/workflows/benchmark-windows-trampoline-cache.yml
   workflow_dispatch:
 
@@ -15,31 +16,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  prime:
-    name: Prime ${{ matrix.variant }} on ${{ matrix.target-arch }}
+  compare:
+    name: ${{ matrix.variant }} on ${{ matrix.target-arch }}
     strategy:
       fail-fast: false
       matrix:
         variant: [baseline, improved]
         target-arch: [x86_64, i686, aarch64]
-    uses: $/.github/workflows/benchmark-windows-trampoline-cache.yml
+    uses: $/.github/workflows/compare-windows-trampoline-cache.yml
     with:
       variant: ${{ matrix.variant }}
       target-arch: ${{ matrix.target-arch }}
       cache-prefix: trampoline-measurement-${{ github.run_id }}-${{ github.run_attempt }}
-
-  measure:
-    name: Measure ${{ matrix.variant }} on ${{ matrix.target-arch }} sample ${{ matrix.sample }}
-    needs: prime
-    strategy:
-      fail-fast: false
-      matrix:
-        variant: [baseline, improved]
-        target-arch: [x86_64, i686, aarch64]
-        sample: [1, 2, 3]
-    uses: $/.github/workflows/benchmark-windows-trampoline-cache.yml
-    with:
-      variant: ${{ matrix.variant }}
-      target-arch: ${{ matrix.target-arch }}
-      cache-prefix: trampoline-measurement-${{ github.run_id }}-${{ github.run_attempt }}
-      require-warm-cache: true
