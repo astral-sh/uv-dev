@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, Bound};
 use std::fmt::{Debug, Formatter};
+use std::iter;
 use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
 
@@ -185,9 +186,26 @@ impl std::fmt::Display for ConflictEnvironment<'_> {
 }
 
 pub type ErrorTree = DerivationTree<PubGrubPackage, Range<Version>, UnavailableReason>;
-type ErrorExternal = External<PubGrubPackage, Range<Version>, UnavailableReason>;
+pub(crate) type ErrorExternal = External<PubGrubPackage, Range<Version>, UnavailableReason>;
 type ErrorDerived = Derived<PubGrubPackage, Range<Version>, UnavailableReason>;
 type ErrorTerms = Map<PubGrubPackage, Term<Range<Version>>>;
+
+/// Visit external causes in a derivation tree, traversing each first cause before the second.
+pub(crate) fn derivation_tree_externals(tree: &ErrorTree) -> impl Iterator<Item = &ErrorExternal> {
+    let mut pending = vec![tree];
+    iter::from_fn(move || {
+        while let Some(tree) = pending.pop() {
+            match tree {
+                DerivationTree::External(external) => return Some(external),
+                DerivationTree::Derived(derived) => {
+                    pending.push(&derived.cause2);
+                    pending.push(&derived.cause1);
+                }
+            }
+        }
+        None
+    })
+}
 
 /// Visit each distinct package in a derivation tree without recursive calls.
 ///
@@ -722,25 +740,17 @@ impl NoSolutionError {
     /// Given a [`DerivationTree`], identify the largest required Python version that is missing.
     pub fn find_requires_python(&self) -> LowerBound {
         let mut minimum = LowerBound::default();
-        let mut trees = vec![&*self.error];
-
-        while let Some(derivation_tree) = trees.pop() {
-            match derivation_tree {
-                DerivationTree::Derived(derived) => {
-                    trees.push(&derived.cause2);
-                    trees.push(&derived.cause1);
+        for external in derivation_tree_externals(&self.error) {
+            let External::FromDependencyOf(.., package, version) = external else {
+                continue;
+            };
+            if let PubGrubPackageInner::Python(_) = &**package
+                && let Some((lower, ..)) = version.bounding_range()
+            {
+                let lower = LowerBound::new(lower.cloned());
+                if lower > minimum {
+                    minimum = lower;
                 }
-                DerivationTree::External(External::FromDependencyOf(.., package, version)) => {
-                    if let PubGrubPackageInner::Python(_) = &**package {
-                        if let Some((lower, ..)) = version.bounding_range() {
-                            let lower = LowerBound::new(lower.cloned());
-                            if lower > minimum {
-                                minimum = lower;
-                            }
-                        }
-                    }
-                }
-                DerivationTree::External(_) => {}
             }
         }
 
