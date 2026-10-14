@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::{debug, warn};
 
 use uv_cache::{Cache, CacheBucket, WheelCache};
@@ -876,9 +877,18 @@ impl Plan {
         // If any remote distributions are not matched, but are already installed, ensure that
         // they're uninstalled as part of the right plan. (Uninstalling them as part of the left
         // plan risks uninstalling them from the environment _prior_ to the replacement being built.)
-        let (left_reinstalls, right_reinstalls) = reinstalls
-            .into_iter()
-            .partition::<Vec<_>, _>(|dist| !right_remote.iter().any(|d| d.name() == dist.name()));
+        let (left_reinstalls, right_reinstalls) =
+            if right_remote.is_empty() || reinstalls.is_empty() {
+                (reinstalls, Vec::new())
+            } else {
+                let right_names = right_remote
+                    .iter()
+                    .map(|dist| dist.name())
+                    .collect::<FxHashSet<_>>();
+                reinstalls
+                    .into_iter()
+                    .partition::<Vec<_>, _>(|dist| !right_names.contains(dist.name()))
+            };
 
         // If the right plan is non-empty, then remove extraneous distributions as part of the
         // right plan, so they're present until the very end. Otherwise, we risk removing extraneous
