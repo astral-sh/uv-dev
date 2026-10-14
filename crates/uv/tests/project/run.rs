@@ -4072,7 +4072,7 @@ fn run_script_without_build_system() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! { r#"
+    let pyproject = indoc! {r#"
         [project]
         name = "foo"
         version = "0.1.0"
@@ -4081,15 +4081,16 @@ fn run_script_without_build_system() -> Result<()> {
 
         [project.scripts]
         entry = "foo:custom_entry"
-        "#
-    })?;
+    "#};
+    pyproject_toml.write_str(pyproject)?;
 
-    let test_script = context.temp_dir.child("src/__init__.py");
-    test_script.write_str(indoc! { r#"
+    context
+        .temp_dir
+        .child("src/foo/__init__.py")
+        .write_str(indoc! {r#"
         def custom_entry():
-            print!("Hello")
-       "#
-    })?;
+            print("Hello")
+        "#})?;
 
     // TODO(lucab): this should match `entry` and warn
     // <https://github.com/astral-sh/uv/issues/7428>
@@ -4101,6 +4102,19 @@ fn run_script_without_build_system() -> Result<()> {
     error: Failed to spawn: entry
       cause: No such file or directory (os error 2)
     ");
+
+    pyproject_toml.write_str(&formatdoc! {r#"
+        {pyproject}
+        [build-system]
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
+    "#})?;
+    context
+        .run()
+        .arg("entry")
+        .assert()
+        .success()
+        .stdout("Hello\n");
 
     Ok(())
 }
