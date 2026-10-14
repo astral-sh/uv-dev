@@ -182,24 +182,26 @@ impl FromStr for PythonInstallationKey {
     type Err = PythonInstallationKeyError;
 
     fn from_str(key: &str) -> Result<Self, Self::Err> {
-        let parts = key.split('-').collect::<Vec<_>>();
-
-        // We need exactly implementation-version-os-arch-libc
-        if parts.len() != 5 {
+        let mut parts = key.split('-');
+        let [
+            Some(implementation_str),
+            Some(version_str),
+            Some(os),
+            Some(arch),
+            Some(libc),
+            None,
+        ] = std::array::from_fn(|_| parts.next())
+        else {
             return Err(PythonInstallationKeyError::ParseError(
                 key.to_string(),
                 format!(
                     "expected exactly 5 `-`-separated values, got {}",
-                    parts.len()
+                    key.split('-').count()
                 ),
             ));
-        }
-
-        let [implementation_str, version_str, os, arch, libc] = parts.as_slice() else {
-            unreachable!()
         };
 
-        let implementation = LenientImplementationName::from(*implementation_str);
+        let implementation = LenientImplementationName::from(implementation_str);
 
         let (version, variant) = match version_str.split_once('+') {
             Some((version, variant)) => {
@@ -211,7 +213,7 @@ impl FromStr for PythonInstallationKey {
                 })?;
                 (version, variant)
             }
-            None => (*version_str, PythonVariant::Default),
+            None => (version_str, PythonVariant::Default),
         };
 
         let version = PythonVersion::from_str(version).map_err(|err| {
@@ -417,6 +419,9 @@ mod tests {
         assert!(PythonInstallationKey::from_str("cpython-3.12.0-linux-x86_64").is_err());
         assert!(PythonInstallationKey::from_str("cpython-3.12.0").is_err());
         assert!(PythonInstallationKey::from_str("cpython").is_err());
+        let error =
+            PythonInstallationKey::from_str("cpython-3.12.0-linux-x86_64-gnu-extra").unwrap_err();
+        assert!(error.to_string().ends_with("got 6"));
     }
 
     #[test]
