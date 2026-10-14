@@ -1098,7 +1098,7 @@ impl Workspace {
             "Discovering workspace members for: {}",
             &workspace_root.simplified_display()
         );
-        let workspace_members = Self::collect_members_only(
+        let mut workspace_members = Self::collect_members_only(
             &workspace_root,
             &workspace_definition,
             &workspace_pyproject_toml,
@@ -1106,7 +1106,6 @@ impl Workspace {
             cache,
         )
         .await?;
-        let mut workspace_members = Arc::new(workspace_members);
 
         // For the cases such as `MemberDiscovery::None`, add the current project if missing.
         if let Some(root_member) = current_project
@@ -1121,8 +1120,7 @@ impl Workspace {
                 root_member.root.simplified_display()
             );
 
-            Arc::make_mut(&mut workspace_members)
-                .insert(root_member.project.name.clone(), root_member);
+            workspace_members.insert(root_member.project.name.clone(), root_member);
         }
 
         let workspace_sources = Self::sources_from_pyproject(&workspace_pyproject_toml);
@@ -1161,7 +1159,7 @@ impl Workspace {
 
         let workspace = Self {
             install_path: workspace_root,
-            packages: workspace_members,
+            packages: Arc::new(workspace_members),
             required_members,
             sources: workspace_sources,
             indexes: workspace_indexes,
