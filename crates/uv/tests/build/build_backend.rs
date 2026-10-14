@@ -1094,20 +1094,9 @@ fn symlinked_module_directory() -> Result<()> {
     Ok(())
 }
 
-/// Test that a symlinked file (here: license) gets included.
-#[test]
 #[cfg(unix)]
-fn symlinked_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
+fn project_with_symlinked_license(context: &TestContext) -> Result<ChildPath> {
     let project = context.temp_dir.child("project");
-    context
-        .init()
-        .arg("--lib")
-        .arg(project.path())
-        .assert()
-        .success();
-
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "project"
@@ -1119,13 +1108,21 @@ fn symlinked_file() -> Result<()> {
         build-backend = "uv_build"
         "#
     })?;
+    project.child("src/project/__init__.py").touch()?;
 
     let license_file = context.temp_dir.child("LICENSE");
     let license_symlink = project.child("LICENSE");
-
-    let license_text = "Project license";
-    license_file.write_str(license_text)?;
+    license_file.write_str("Project license")?;
     fs_err::os::unix::fs::symlink(license_file.path(), license_symlink.path())?;
+    Ok(project)
+}
+
+/// A source distribution contains the license contents, rather than a link to the build machine.
+#[test]
+#[cfg(unix)]
+fn symlinked_license_in_sdist() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = project_with_symlinked_license(&context)?;
 
     uv_snapshot!(context
         .build_backend()
@@ -1136,6 +1133,34 @@ fn symlinked_file() -> Result<()> {
     ----- stdout -----
     project-1.0.0.tar.gz
     ");
+
+    uv_snapshot!(context.python_command()
+        .args(["-I", "-c"])
+        .arg(indoc! {r#"
+            import sys
+            import tarfile
+
+            with tarfile.open(sys.argv[1], "r:gz") as archive:
+                member = archive.getmember("project-1.0.0/LICENSE")
+                print(f"regular file: {member.isfile()}")
+                print(archive.extractfile(member).read().decode())
+        "#})
+        .arg(context.temp_dir.child("project-1.0.0.tar.gz").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    regular file: True
+    Project license
+    ");
+
+    Ok(())
+}
+
+/// An installed wheel contains the license contents, rather than a link to the build machine.
+#[test]
+#[cfg(unix)]
+fn symlinked_license_in_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = project_with_symlinked_license(&context)?;
 
     uv_snapshot!(context
         .build_backend()
@@ -1168,7 +1193,7 @@ fn symlinked_file() -> Result<()> {
             .is_file()
     );
     let license = context.read(&installed_license);
-    assert_eq!(license, license_text);
+    assert_eq!(license, "Project license");
 
     Ok(())
 }
