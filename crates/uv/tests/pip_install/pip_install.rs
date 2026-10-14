@@ -32,7 +32,7 @@ use uv_install_wheel::{read_record, validate_and_heal_record};
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::{generate_source_archive, write_tar_gz};
-#[cfg(feature = "test-git")]
+#[cfg(any(not(windows), feature = "test-git"))]
 use uv_test::decode_token;
 use uv_test::find_links::FindLinksServer;
 use uv_test::package_server::PackageServer;
