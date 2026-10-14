@@ -539,10 +539,10 @@ impl Index {
     /// Retrieve the credentials for the index, either from the environment, or from the URL itself.
     pub fn credentials(&self) -> Result<Option<Credentials>, IndexCredentialsError> {
         // If the index is named, and credentials are provided via the environment, prefer those.
-        if let Some(name) = self.name.as_ref() {
-            if let Some(credentials) = Credentials::from_env(name.to_env_var()) {
-                return Ok(Some(credentials));
-            }
+        if let Some(name) = self.name.as_ref()
+            && let Some(credentials) = Credentials::from_env(name.to_env_var())
+        {
+            return Ok(Some(credentials));
         }
 
         // Otherwise, extract the credentials from the URL.
