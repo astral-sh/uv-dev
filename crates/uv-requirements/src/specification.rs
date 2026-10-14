@@ -28,6 +28,7 @@
 //!   `source_trees`.
 
 use std::collections::BTreeMap;
+use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -106,53 +107,35 @@ impl RequirementsSpecification {
     }
 
     /// Create a [`RequirementsSpecification`] from PEP 723 script metadata.
-    fn from_pep723_metadata(metadata: &Pep723Metadata) -> Self {
+    fn from_pep723_metadata(metadata: Pep723Metadata) -> Self {
         let requirements = metadata
             .dependencies
-            .as_ref()
-            .map(|dependencies| {
-                dependencies
-                    .iter()
-                    .map(|dependency| {
-                        UnresolvedRequirementSpecification::from(Requirement::from(
-                            dependency.to_owned(),
-                        ))
-                    })
-                    .collect::<Vec<UnresolvedRequirementSpecification>>()
-            })
-            .unwrap_or_default();
+            .into_iter()
+            .flatten()
+            .map(Requirement::from)
+            .map(UnresolvedRequirementSpecification::from)
+            .collect();
 
-        if let Some(tool_uv) = metadata.tool.as_ref().and_then(|tool| tool.uv.as_ref()) {
+        if let Some(tool_uv) = metadata.tool.and_then(|tool| tool.uv) {
             let constraints = tool_uv
                 .constraint_dependencies
-                .as_ref()
-                .map(|dependencies| {
-                    dependencies
-                        .iter()
-                        .map(|dependency| {
-                            NameRequirementSpecification::from(Requirement::from(
-                                dependency.to_owned(),
-                            ))
-                        })
-                        .collect::<Vec<NameRequirementSpecification>>()
-                })
-                .unwrap_or_default();
+                .into_iter()
+                .flatten()
+                .map(Requirement::from)
+                .map(NameRequirementSpecification::from)
+                .collect();
 
             let override_dependencies = tool_uv
                 .override_dependencies
-                .as_ref()
                 .into_iter()
                 .flatten()
                 .map(|dependency| match dependency {
                     OverrideDependency::Requirement(requirement) => {
-                        Override::Requirement(Requirement::from(requirement.clone()))
+                        Override::Requirement(Requirement::from(requirement))
                     }
                     OverrideDependency::Package(package) => Override::Package(PackageOverride {
-                        package: package.package.clone(),
-                        dependencies: package
-                            .dependencies
-                            .iter()
-                            .cloned()
+                        package: package.package,
+                        dependencies: Box::into_iter(package.dependencies)
                             .map(Requirement::from)
                             .collect(),
                     }),
@@ -163,42 +146,33 @@ impl RequirementsSpecification {
                 requirements,
                 constraints,
                 override_dependencies,
-                excludes: tool_uv.exclude_dependencies.clone().unwrap_or_default(),
+                excludes: tool_uv.exclude_dependencies.unwrap_or_default(),
                 index_url: tool_uv
                     .top_level
                     .index_url
-                    .as_ref()
-                    .map(|index| Index::from(index.clone()).url),
+                    .map(|index| Index::from(index).url),
                 extra_index_urls: tool_uv
                     .top_level
                     .extra_index_url
-                    .as_ref()
                     .into_iter()
-                    .flat_map(|urls| urls.iter().map(|index| Index::from(index.clone()).url))
+                    .flatten()
+                    .map(|index| Index::from(index).url)
                     .collect(),
                 no_index: tool_uv.top_level.no_index.unwrap_or_default(),
                 find_links: tool_uv
                     .top_level
                     .find_links
-                    .as_ref()
                     .into_iter()
-                    .flat_map(|urls| urls.iter().map(|index| Index::from(index.clone()).url))
+                    .flatten()
+                    .map(|index| Index::from(index).url)
                     .collect(),
                 no_binary: NoBinary::from_args(
                     tool_uv.top_level.no_binary,
-                    tool_uv
-                        .top_level
-                        .no_binary_package
-                        .clone()
-                        .unwrap_or_default(),
+                    tool_uv.top_level.no_binary_package.unwrap_or_default(),
                 ),
                 no_build: NoBuild::from_args(
                     tool_uv.top_level.no_build,
-                    tool_uv
-                        .top_level
-                        .no_build_package
-                        .clone()
-                        .unwrap_or_default(),
+                    tool_uv.top_level.no_build_package.unwrap_or_default(),
                 ),
                 ..Self::default()
             }
@@ -316,13 +290,7 @@ impl RequirementsSpecification {
                 }
             }
             RequirementsSource::Pep723Script(input) => {
-                let content = if let Some(content) = cache.get(input) {
-                    content.clone()
-                } else {
-                    let content = read_file(input, client_builder).await?;
-                    cache.insert(input.clone(), content.clone());
-                    content
-                };
+                let content = read_file_cached(input, client_builder, cache).await?;
 
                 let metadata = match Pep723Metadata::parse(content.as_bytes()) {
                     Ok(Some(script)) => script,
@@ -335,7 +303,7 @@ impl RequirementsSpecification {
                     Err(err) => return Err(err.into()),
                 };
 
-                Self::from_pep723_metadata(&metadata)
+                Self::from_pep723_metadata(metadata)
             }
             RequirementsSource::SetupPy(path) => {
                 if !path.is_file() {
@@ -376,19 +344,14 @@ impl RequirementsSpecification {
                 ));
             }
             RequirementsSource::Extensionless(input) => {
-                let content = if let Some(content) = cache.get(input) {
-                    content.clone()
-                } else {
-                    let content = read_file(input, client_builder).await?;
-                    cache.insert(input.clone(), content.clone());
-                    content
-                };
+                let content = read_file_cached(input, client_builder, cache).await?;
 
                 // Detect if it's a PEP 723 script.
                 if let Some(metadata) = Pep723Metadata::parse(content.as_bytes())? {
-                    Self::from_pep723_metadata(&metadata)
+                    Self::from_pep723_metadata(metadata)
                 } else {
                     // If it's not a PEP 723 script, assume it's a `requirements.txt` file.
+                    let content = content.to_owned();
                     let requirements_txt = RequirementsTxt::parse_str(
                         &content,
                         input.clone(),
@@ -430,46 +393,20 @@ impl RequirementsSpecification {
         let mut spec = Self::default();
         let mut cache = SourceCache::default();
 
-        // Disallow `pylock.toml` files as constraints.
-        if let Some(pylock_toml) = constraints.iter().find_map(|source| {
-            if let RequirementsSource::PylockToml(path) = source {
-                Some(path)
-            } else {
-                None
+        for (sources, role) in [
+            (constraints, "a constraint file"),
+            (overrides, "an override file"),
+            (excludes, "an exclude file"),
+        ] {
+            if let Some(pylock_toml) = sources.iter().find_map(|source| match source {
+                RequirementsSource::PylockToml(path) => Some(path),
+                _ => None,
+            }) {
+                return Err(anyhow::anyhow!(
+                    "Cannot use `{}` as {role}",
+                    pylock_toml.user_display()
+                ));
             }
-        }) {
-            return Err(anyhow::anyhow!(
-                "Cannot use `{}` as a constraint file",
-                pylock_toml.user_display()
-            ));
-        }
-
-        // Disallow `pylock.toml` files as overrides.
-        if let Some(pylock_toml) = overrides.iter().find_map(|source| {
-            if let RequirementsSource::PylockToml(path) = source {
-                Some(path)
-            } else {
-                None
-            }
-        }) {
-            return Err(anyhow::anyhow!(
-                "Cannot use `{}` as an override file",
-                pylock_toml.user_display()
-            ));
-        }
-
-        // Disallow `pylock.toml` files as excludes.
-        if let Some(pylock_toml) = excludes.iter().find_map(|source| {
-            if let RequirementsSource::PylockToml(path) = source {
-                Some(path)
-            } else {
-                None
-            }
-        }) {
-            return Err(anyhow::anyhow!(
-                "Cannot use `{}` as an exclude file",
-                pylock_toml.user_display()
-            ));
         }
 
         // If we have a `pylock.toml`, don't allow additional requirements, constraints, or
@@ -584,17 +521,7 @@ impl RequirementsSpecification {
                 spec.project = source.project;
             }
 
-            if let Some(index_url) = source.index_url {
-                if let Some(existing) = spec.index_url
-                    && CanonicalUrl::new(index_url.url().clone())
-                        != CanonicalUrl::new(existing.url().clone())
-                {
-                    return Err(anyhow::anyhow!(
-                        "Multiple index URLs specified: `{existing}` vs. `{index_url}`",
-                    ));
-                }
-                spec.index_url = Some(index_url);
-            }
+            spec.merge_index_url(source.index_url)?;
             spec.no_index |= source.no_index;
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
@@ -624,17 +551,7 @@ impl RequirementsSpecification {
             }
             spec.constraints.extend(source.constraints);
 
-            if let Some(index_url) = source.index_url {
-                if let Some(existing) = spec.index_url
-                    && CanonicalUrl::new(index_url.url().clone())
-                        != CanonicalUrl::new(existing.url().clone())
-                {
-                    return Err(anyhow::anyhow!(
-                        "Multiple index URLs specified: `{existing}` vs. `{index_url}`",
-                    ));
-                }
-                spec.index_url = Some(index_url);
-            }
+            spec.merge_index_url(source.index_url)?;
             spec.no_index |= source.no_index;
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
@@ -652,17 +569,7 @@ impl RequirementsSpecification {
             spec.override_dependencies
                 .extend(source.override_dependencies);
 
-            if let Some(index_url) = source.index_url {
-                if let Some(existing) = spec.index_url
-                    && CanonicalUrl::new(index_url.url().clone())
-                        != CanonicalUrl::new(existing.url().clone())
-                {
-                    return Err(anyhow::anyhow!(
-                        "Multiple index URLs specified: `{existing}` vs. `{index_url}`",
-                    ));
-                }
-                spec.index_url = Some(index_url);
-            }
+            spec.merge_index_url(source.index_url)?;
             spec.no_index |= source.no_index;
             spec.extra_index_urls.extend(source.extra_index_urls);
             spec.find_links.extend(source.find_links);
@@ -691,6 +598,23 @@ impl RequirementsSpecification {
         }
 
         Ok(spec)
+    }
+
+    /// Merge a source's index URL, rejecting conflicting indexes.
+    fn merge_index_url(&mut self, index_url: Option<IndexUrl>) -> Result<()> {
+        let Some(index_url) = index_url else {
+            return Ok(());
+        };
+        if let Some(existing) = &self.index_url
+            && CanonicalUrl::new(index_url.url().clone())
+                != CanonicalUrl::new(existing.url().clone())
+        {
+            return Err(anyhow::anyhow!(
+                "Multiple index URLs specified: `{existing}` vs. `{index_url}`",
+            ));
+        }
+        self.index_url = Some(index_url);
+        Ok(())
     }
 
     /// Parse an individual package requirement.
@@ -742,6 +666,18 @@ pub struct GroupsSpecification {
     pub root: PathBuf,
     /// The enabled groups.
     pub groups: Vec<PipGroupName>,
+}
+
+/// Read and cache the contents of a requirements input.
+async fn read_file_cached<'a>(
+    input: &RequirementsInput,
+    client_builder: &BaseClientBuilder<'_>,
+    cache: &'a mut SourceCache,
+) -> Result<&'a str> {
+    match cache.entry(input.clone()) {
+        Entry::Occupied(entry) => Ok(entry.into_mut()),
+        Entry::Vacant(entry) => Ok(entry.insert(read_file(input, client_builder).await?)),
+    }
 }
 
 /// Read the contents of a requirements input.

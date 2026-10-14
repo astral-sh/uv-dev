@@ -10,7 +10,7 @@ use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
 use uv_pep508::VerbatimUrl;
 use uv_requirements_txt::RequirementsTxt;
-use uv_resolver::{Preference, PreferenceError, UpgradePackages};
+use uv_resolver::Preference;
 
 #[derive(Debug, Default)]
 pub struct LockedRequirements {
@@ -43,27 +43,17 @@ pub async fn read_requirements_txt(
     // Parse the requirements from the lockfile.
     let requirements_txt = RequirementsTxt::parse(output_file, &*CWD).await?;
 
-    // Map each entry in the lockfile to a preference.
-    let preferences = requirements_txt
-        .requirements
-        .into_iter()
-        .map(Preference::from_entry)
-        .filter_map(Result::transpose)
-        .collect::<Result<Vec<_>, PreferenceError>>()?;
+    let upgrade_packages = upgrade.packages();
+    let mut preferences = Vec::new();
+    for entry in requirements_txt.requirements {
+        if let Some(preference) = Preference::from_entry(entry)?
+            && upgrade_packages.is_none_or(|packages| !packages.contains(preference.name()))
+        {
+            preferences.push(preference);
+        }
+    }
 
-    // Apply the upgrade strategy to the requirements.
-    let upgrade_packages = UpgradePackages::for_non_project(upgrade);
-
-    Ok(if upgrade.is_none() {
-        // Respect all pinned versions from the existing lockfile.
-        preferences
-    } else {
-        // Ignore all pinned versions for packages that should be upgraded.
-        preferences
-            .into_iter()
-            .filter(|preference| !upgrade_packages.contains(preference.name()))
-            .collect()
-    })
+    Ok(preferences)
 }
 
 /// Load the preferred requirements from an existing lockfile, applying the upgrade strategy.
@@ -79,8 +69,7 @@ pub fn read_lock_requirements(
 
     let upgrade_packages = lock.upgrade_packages(upgrade);
 
-    let mut preferences = Vec::new();
-    let mut git = Vec::new();
+    let mut requirements = LockedRequirements::default();
 
     for package in lock.packages() {
         // Skip the distribution if it's included in the upgrade strategy (either by explicit
@@ -91,7 +80,7 @@ pub fn read_lock_requirements(
 
         // Map each entry in the lockfile to a preference.
         if let Some(version) = package.version() {
-            preferences.push(Preference::from_locked(
+            requirements.preferences.push(Preference::from_locked(
                 package.name().clone(),
                 version.clone(),
                 package.index(install_path)?,
@@ -101,11 +90,11 @@ pub fn read_lock_requirements(
 
         // Map each entry in the lockfile to a Git SHA.
         if let Some(git_ref) = package.as_git_ref()? {
-            git.push(git_ref);
+            requirements.git.push(git_ref);
         }
     }
 
-    Ok(LockedRequirements { preferences, git })
+    Ok(requirements)
 }
 
 /// Load the preferred requirements from an existing `pylock.toml` file, applying the upgrade strategy.
@@ -123,35 +112,33 @@ pub async fn read_pylock_toml_requirements(
     let lock = info_span!("toml::from_str upgrade", path = %output_file.display())
         .in_scope(|| toml::from_str::<PylockToml>(&content))?;
 
-    let upgrade_packages = UpgradePackages::for_non_project(upgrade);
+    let upgrade_packages = upgrade.packages();
 
-    let mut preferences = Vec::new();
-    let mut git = Vec::new();
+    let mut requirements = LockedRequirements::default();
 
-    for package in &lock.packages {
-        // Skip the distribution if it's not included in the upgrade strategy.
-        if upgrade_packages.contains(&package.name) {
+    for package in lock.packages {
+        // Skip the distribution if it's included in the upgrade strategy.
+        if upgrade_packages.is_some_and(|packages| packages.contains(&package.name)) {
             continue;
-        }
-
-        // Map each entry in the lockfile to a preference.
-        if let Some(version) = package.version.as_ref() {
-            preferences.push(Preference::from_locked(
-                package.name.clone(),
-                version.clone(),
-                package
-                    .index
-                    .as_ref()
-                    .map(|index| IndexUrl::from(VerbatimUrl::from(index.clone()))),
-                vec![],
-            ));
         }
 
         // Map each entry in the lockfile to a Git SHA.
         if let Some(git_ref) = package.as_git_ref()? {
-            git.push(git_ref);
+            requirements.git.push(git_ref);
+        }
+
+        // Map each entry in the lockfile to a preference.
+        if let Some(version) = package.version {
+            requirements.preferences.push(Preference::from_locked(
+                package.name,
+                version,
+                package
+                    .index
+                    .map(|index| IndexUrl::from(VerbatimUrl::from(index))),
+                vec![],
+            ));
         }
     }
 
-    Ok(LockedRequirements { preferences, git })
+    Ok(requirements)
 }

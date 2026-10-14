@@ -125,11 +125,20 @@ pub async fn resolve(
 ) -> Result<(ResolverOutput, HashStrategy), Error> {
     let start = std::time::Instant::now();
 
-    // Resolve the requirements from the provided sources.
-    let requirements = {
-        // Partition the requirements into named and unnamed requirements.
-        let (mut requirements, unnamed): (Vec<_>, Vec<_>) =
-            requirements
+    let new_database = || {
+        DistributionDatabase::new(
+            client,
+            build_dispatch,
+            concurrency.downloads_semaphore.clone(),
+        )
+        .with_recorder(recorder.clone())
+    };
+
+    let resolve_names = async |specifications: Vec<UnresolvedRequirementSpecification>,
+                               hasher: &HashStrategy|
+           -> Result<Vec<Requirement>, Error> {
+        let (mut named, unnamed): (Vec<_>, Vec<_>) =
+            specifications
                 .into_iter()
                 .partition_map(|spec| match spec.requirement {
                     UnresolvedRequirement::Named(requirement) => {
@@ -140,41 +149,28 @@ pub async fn resolve(
                     }
                 });
 
-        // Resolve any unnamed requirements.
         if !unnamed.is_empty() {
-            requirements.extend(
-                NamedRequirementsResolver::new(
-                    hasher,
-                    index,
-                    DistributionDatabase::new(
-                        client,
-                        build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
-                    )
-                    .with_recorder(recorder.clone()),
-                )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(unnamed.into_iter())
-                .await?,
+            named.extend(
+                NamedRequirementsResolver::new(hasher, index, new_database())
+                    .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                    .resolve(unnamed.into_iter())
+                    .await?,
             );
         }
 
+        Ok(named)
+    };
+
+    // Resolve the requirements from the provided sources.
+    let requirements = {
+        let mut requirements = resolve_names(requirements, hasher).await?;
+
         // Resolve any source trees into requirements.
         if !source_trees.is_empty() {
-            let resolutions = SourceTreeResolver::new(
-                extras,
-                hasher,
-                index,
-                DistributionDatabase::new(
-                    client,
-                    build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
-                )
-                .with_recorder(recorder.clone()),
-            )
-            .with_reporter(Arc::new(ResolverReporter::from(printer)))
-            .resolve(source_trees.iter())
-            .await?;
+            let resolutions = SourceTreeResolver::new(extras, hasher, index, new_database())
+                .with_reporter(Arc::new(ResolverReporter::from(printer)))
+                .resolve(source_trees.iter())
+                .await?;
 
             // If we resolved a single project, use it for the project name.
             project = project.or_else(|| {
@@ -191,7 +187,7 @@ pub async fn resolve(
                 .filter(|extra| {
                     !resolutions
                         .iter()
-                        .any(|resolution| resolution.extras().contains(extra))
+                        .any(|resolution| resolution.provided_extras().contains(extra))
                 })
                 .collect::<Vec<_>>();
             if !unused_extras.is_empty() {
@@ -236,8 +232,8 @@ pub async fn resolve(
                 }
             }
             // Apply dependency-groups
-            for (group_name, group) in &metadata.dependency_groups {
-                if groups.contains(group_name) {
+            for (group_name, group) in metadata.dependency_groups {
+                if groups.contains(&group_name) {
                     let scope =
                         metadata
                             .name
@@ -248,14 +244,14 @@ pub async fn resolve(
                                     group: group_name.clone(),
                                 }
                             });
-                    requirements.extend(group.iter().cloned().map(|group| Requirement {
+                    requirements.extend(group.into_iter().map(|requirement| Requirement {
                         scope: scope.clone(),
                         origin: Some(RequirementOrigin::Group(
                             pyproject_path.clone(),
                             metadata.name.clone(),
                             group_name.clone(),
                         )),
-                        ..group
+                        ..requirement
                     }));
                 }
             }
@@ -265,46 +261,12 @@ pub async fn resolve(
     };
 
     // Incorporate hashes from requirements discovered while resolving source trees and groups.
-    let mut hasher = hasher
+    let hasher = hasher
         .clone()
         .augment_with_requirements(requirements.iter())?;
 
     // Resolve the overrides from the provided sources.
-    let overrides = {
-        // Partition the overrides into named and unnamed requirements.
-        let (mut overrides, unnamed): (Vec<_>, Vec<_>) =
-            overrides
-                .into_iter()
-                .partition_map(|spec| match spec.requirement {
-                    UnresolvedRequirement::Named(requirement) => {
-                        itertools::Either::Left(requirement)
-                    }
-                    UnresolvedRequirement::Unnamed(requirement) => {
-                        itertools::Either::Right(requirement)
-                    }
-                });
-
-        // Resolve any unnamed overrides.
-        if !unnamed.is_empty() {
-            overrides.extend(
-                NamedRequirementsResolver::new(
-                    &hasher,
-                    index,
-                    DistributionDatabase::new(
-                        client,
-                        build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
-                    )
-                    .with_recorder(recorder.clone()),
-                )
-                .with_reporter(Arc::new(ResolverReporter::from(printer)))
-                .resolve(unnamed.into_iter())
-                .await?,
-            );
-        }
-
-        overrides
-    };
+    let overrides = resolve_names(overrides, &hasher).await?;
 
     // Collect constraints, overrides, and excludes.
     let constraints = Constraints::from_requirements(
@@ -312,7 +274,8 @@ pub async fn resolve(
             .into_iter()
             .map(|constraint| constraint.requirement)
             .chain(upgrade.constraints().cloned()),
-    );
+    )
+    .with_recorder(recorder.clone());
     let overrides = Overrides::from_entries(
         lowered_overrides
             .into_iter()
@@ -320,44 +283,36 @@ pub async fn resolve(
             .collect(),
     )?;
     let excludes = Excludes::from_entries(excludes);
-    let modifiers = DependencyModifiers::new(overrides, excludes);
+    let modifiers = DependencyModifiers::new(overrides, excludes).with_recorder(recorder.clone());
     let preferences = Preferences::from_iter(preferences, &resolver_env);
 
     // Determine any lookahead requirements.
-    let lookaheads = match options.dependency_mode {
+    let (lookaheads, hasher) = match options.dependency_mode {
         DependencyMode::Transitive => {
-            let constraints = constraints.clone().with_recorder(recorder.clone());
-            let modifiers = modifiers.clone().with_recorder(recorder.clone());
-            let (lookaheads, updated_hasher) = LookaheadResolver::new(
+            LookaheadResolver::new(
                 &requirements,
                 &constraints,
                 &modifiers,
                 &hasher,
                 index,
-                DistributionDatabase::new(
-                    client,
-                    build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
-                )
-                .with_recorder(recorder.clone()),
+                new_database(),
             )
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
             .resolve(&resolver_env)
-            .await?;
-            hasher = updated_hasher;
-            lookaheads
+            .await?
         }
-        DependencyMode::Direct => Vec::new(),
+        DependencyMode::Direct => (Vec::new(), hasher),
     };
 
     // TODO(zanieb): Consider consuming these instead of cloning
     let exclusions = Exclusions::new(reinstall.clone(), UpgradePackages::for_non_project(upgrade));
 
-    // Create a manifest of the requirements.
+    // Package selection must not record settings consulted during setup. Resolution recording
+    // resumes after the resolver initializes selection rules from the manifest.
     let manifest = Manifest::new(
         requirements,
-        constraints,
-        modifiers,
+        constraints.with_recorder(None),
+        modifiers.with_recorder(None),
         preferences,
         project,
         workspace_members,
@@ -389,12 +344,7 @@ pub async fn resolve(
             &hasher,
             build_dispatch,
             installed_packages,
-            DistributionDatabase::new(
-                client,
-                build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            )
-            .with_recorder(recorder.clone()),
+            new_database(),
         )?
         .with_reporter(Arc::new(reporter));
 

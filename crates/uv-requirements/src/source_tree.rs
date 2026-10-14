@@ -49,12 +49,12 @@ impl SourceTree {
 
 #[derive(Debug, Clone)]
 pub struct SourceTreeResolution {
-    /// The requirements sourced from the source trees.
+    /// The requirements sourced from the source tree.
     requirements: Box<[Requirement]>,
-    /// The names of the projects that were resolved.
+    /// The name of the project that was resolved.
     project: PackageName,
-    /// The extras used when resolving the requirements.
-    extras: Box<[ExtraName]>,
+    /// The extras provided by the project.
+    provided_extras: Box<[ExtraName]>,
 }
 
 impl SourceTreeResolution {
@@ -63,9 +63,9 @@ impl SourceTreeResolution {
         &self.project
     }
 
-    /// Return the extras used when resolving the requirements.
-    pub fn extras(&self) -> &[ExtraName] {
-        &self.extras
+    /// Return the extras provided by the project.
+    pub fn provided_extras(&self) -> &[ExtraName] {
+        &self.provided_extras
     }
 
     /// Return the requirements sourced from the source tree.
@@ -119,12 +119,11 @@ impl<'a, Context: BuildContext> SourceTreeResolver<'a, Context> {
         self,
         source_trees: impl Iterator<Item = &SourceTree>,
     ) -> Result<Vec<SourceTreeResolution>> {
-        let resolutions: Vec<_> = source_trees
-            .map(async |source_tree| self.resolve_source_tree(source_tree).await)
+        source_trees
+            .map(|source_tree| self.resolve_source_tree(source_tree))
             .collect::<FuturesOrdered<_>>()
             .try_collect()
-            .await?;
-        Ok(resolutions)
+            .await
     }
 
     /// Infer the dependencies for a directory dependency.
@@ -134,34 +133,27 @@ impl<'a, Context: BuildContext> SourceTreeResolver<'a, Context> {
             RequirementOrigin::Project(source_tree.path().to_path_buf(), metadata.name.clone());
 
         // Determine the extras to include when resolving the requirements.
-        let extras = self
+        let selected_extras = self
             .extras
             .extra_names(metadata.provides_extra.iter())
             .cloned()
             .collect::<Vec<_>>();
 
-        let mut requirements = Vec::new();
-
-        // Flatten any transitive extras and include dependencies
-        // (unless something like --only-group was passed)
-        requirements.extend(
+        // Flatten transitive extras and simplify markers for the selected extras.
+        let requirements =
             FlatRequiresDist::from_requirements(metadata.requires_dist, &metadata.name)
                 .into_iter()
                 .map(|requirement| Requirement {
                     origin: Some(origin.clone()),
-                    marker: requirement.marker.simplify_extras(&extras),
+                    marker: requirement.marker.simplify_extras(&selected_extras),
                     ..requirement
-                }),
-        );
-
-        let requirements = requirements.into_boxed_slice();
-        let project = metadata.name;
-        let extras = metadata.provides_extra;
+                })
+                .collect();
 
         Ok(SourceTreeResolution {
             requirements,
-            project,
-            extras,
+            project: metadata.name,
+            provided_extras: metadata.provides_extra,
         })
     }
 
