@@ -1032,18 +1032,24 @@ impl MarkerTree {
         extras: ExtrasEnvironment,
         reporter: &mut impl Reporter,
     ) -> bool {
-        match self.kind() {
-            MarkerTreeKind::True => return true,
-            MarkerTreeKind::False => return false,
-            MarkerTreeKind::Version(marker) => {
-                for (range, tree) in marker.edges() {
-                    if range.contains(env.get_version(marker.key())) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
-                }
-            }
-            MarkerTreeKind::String(marker) => {
-                for (range, tree) in marker.children() {
+        fn find_matching_edge<R>(
+            mut edges: impl Iterator<Item = (R, MarkerTree)>,
+            mut matches: impl FnMut(R) -> bool,
+        ) -> MarkerTree {
+            edges
+                .find_map(|(range, tree)| matches(range).then_some(tree))
+                .unwrap_or(MarkerTree::FALSE)
+        }
+
+        let mut tree = self;
+        loop {
+            tree = match tree.kind() {
+                MarkerTreeKind::True => return true,
+                MarkerTreeKind::False => return false,
+                MarkerTreeKind::Version(marker) => find_matching_edge(marker.edges(), |range| {
+                    range.contains(env.get_version(marker.key()))
+                }),
+                MarkerTreeKind::String(marker) => find_matching_edge(marker.children(), |range| {
                     let l_string = env.get_string(marker.key());
 
                     if matches!(
@@ -1068,53 +1074,36 @@ impl MarkerTree {
                         }
                     }
 
-                    if range.contains(l_string) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
+                    range.contains(l_string)
+                }),
+                MarkerTreeKind::VersionString(marker) => {
+                    let Ok(version) = env.get_string(marker.key()).parse::<Version>() else {
+                        return false;
+                    };
+                    find_matching_edge(marker.edges(), |range| range.contains(&version))
                 }
-            }
-            MarkerTreeKind::VersionString(marker) => {
-                let Ok(version) = env.get_string(marker.key()).parse::<Version>() else {
-                    return false;
-                };
-                for (range, tree) in marker.edges() {
-                    if range.contains(&version) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
+                MarkerTreeKind::In(marker) => {
+                    marker.edge(marker.value().contains(env.get_string(marker.key())))
                 }
-            }
-            MarkerTreeKind::In(marker) => {
-                return marker
-                    .edge(marker.value().contains(env.get_string(marker.key())))
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
-            MarkerTreeKind::Contains(marker) => {
-                return marker
-                    .edge(env.get_string(marker.key()).contains(marker.value()))
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
-            MarkerTreeKind::Extra(marker) => {
-                return marker
-                    .edge(extras.extra().contains(marker.name().extra()))
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
-            MarkerTreeKind::List(marker) => {
-                let edge = match marker.pair() {
-                    CanonicalMarkerListPair::Extras(extra) => extras.extras().contains(extra),
-                    CanonicalMarkerListPair::DependencyGroup(dependency_group) => {
-                        extras.dependency_groups().contains(dependency_group)
-                    }
-                    // Invalid marker expression
-                    CanonicalMarkerListPair::Arbitrary { .. } => return false,
-                };
-
-                return marker
-                    .edge(edge)
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
+                MarkerTreeKind::Contains(marker) => {
+                    marker.edge(env.get_string(marker.key()).contains(marker.value()))
+                }
+                MarkerTreeKind::Extra(marker) => {
+                    marker.edge(extras.extra().contains(marker.name().extra()))
+                }
+                MarkerTreeKind::List(marker) => {
+                    let edge = match marker.pair() {
+                        CanonicalMarkerListPair::Extras(extra) => extras.extras().contains(extra),
+                        CanonicalMarkerListPair::DependencyGroup(dependency_group) => {
+                            extras.dependency_groups().contains(dependency_group)
+                        }
+                        // Invalid marker expression
+                        CanonicalMarkerListPair::Arbitrary { .. } => return false,
+                    };
+                    marker.edge(edge)
+                }
+            };
         }
-
-        false
     }
 
     /// Checks if the requirement should be activated with the given set of active extras without evaluating
