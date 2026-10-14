@@ -1,11 +1,10 @@
 use std::borrow::Cow;
 use std::fmt;
-use std::io::Read;
 use std::io::Write;
 use std::str::{FromStr, Utf8Error};
 
+use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
-use base64::read::DecoderReader;
 use base64::write::EncoderWriter;
 use http::Uri;
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
@@ -279,7 +278,7 @@ impl Credentials {
 
     /// Parse [`Credentials`] from an HTTP request, if any.
     ///
-    /// Only HTTP Basic Authentication is supported.
+    /// HTTP Basic and Bearer Authentication are supported.
     pub(crate) fn from_request(request: &Request) -> Result<Option<Self>, CredentialsFromUrlError> {
         // First, attempt to retrieve the credentials from the URL
         if let Some(credentials) = Self::from_url(request.url())? {
@@ -299,33 +298,23 @@ impl Credentials {
     /// [`None`] will be returned if another authorization scheme is detected.
     ///
     /// Panics if the authentication is not conformant to the HTTP Basic Authentication scheme:
-    /// - The contents must be base64 encoded
+    /// - The contents must be base64-encoded UTF-8
     /// - There must be a `:` separator
     fn from_header_value(header: &HeaderValue) -> Option<Self> {
         // Parse a `Basic` authentication header.
-        if let Some(mut value) = header.as_bytes().strip_prefix(b"Basic ") {
-            let mut decoder = DecoderReader::new(&mut value, &BASE64_STANDARD);
-            let mut buf = String::new();
-            decoder
-                .read_to_string(&mut buf)
+        if let Some(value) = header.as_bytes().strip_prefix(b"Basic ") {
+            let decoded = BASE64_STANDARD
+                .decode(value)
                 .expect("HTTP Basic Authentication should be base64 encoded");
-            let (username, password) = buf
+            let decoded = std::str::from_utf8(&decoded)
+                .expect("HTTP Basic Authentication credentials should be UTF-8");
+            let (username, password) = decoded
                 .split_once(':')
                 .expect("HTTP Basic Authentication should include a `:` separator");
-            let username = if username.is_empty() {
-                None
-            } else {
-                Some(username.to_string())
-            };
-            let password = if password.is_empty() {
-                None
-            } else {
-                Some(password.to_string())
-            };
-            return Some(Self::Basic {
-                username: Username::new(username),
-                password: password.map(Password),
-            });
+            return Some(Self::basic(
+                (!username.is_empty()).then(|| username.to_owned()),
+                (!password.is_empty()).then(|| password.to_owned()),
+            ));
         }
 
         // Parse a `Bearer` authentication header.
