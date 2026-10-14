@@ -11608,7 +11608,7 @@ async fn sync_explicit_index_uses_cached_wheel() -> Result<()> {
     Ok(())
 }
 
-/// Sync all members in a workspace.
+/// Sync all members, including those outside the root project's dependency graph.
 #[test]
 fn sync_all() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -11620,7 +11620,7 @@ fn sync_all() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio>3", "child"]
+        dependencies = ["anyio>3"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -11628,9 +11628,6 @@ fn sync_all() -> Result<()> {
 
         [tool.uv.workspace]
         members = ["child"]
-
-        [tool.uv.sources]
-        child = { workspace = true }
         "#,
     )?;
     context
