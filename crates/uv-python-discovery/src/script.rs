@@ -388,12 +388,11 @@ pub fn check_environment_compatibility(
         }
     }
 
-    if PythonInstallation::new(
+    if PythonInstallation::satisfies_preference_for(
+        environment.interpreter(),
         PythonSource::DiscoveredEnvironment,
-        environment.interpreter().clone(),
-    )
-    .satisfies_preference(&python_preference)
-    {
+        python_preference,
+    ) {
         trace!(
             "The virtual environment's Python interpreter meets the Python preference: `{}`",
             python_preference
