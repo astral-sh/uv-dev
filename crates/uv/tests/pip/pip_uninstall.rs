@@ -518,7 +518,7 @@ fn uninstall_record_path_traversal() -> Result<()> {
     site_packages
         .child(&traversal_record)
         .assert("I should not be deleted");
-    init_py.assert(predicates::path::is_file());
+    init_py.assert(predicates::path::is_file().follow_links(true));
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
         .arg("evilpkg"), @"

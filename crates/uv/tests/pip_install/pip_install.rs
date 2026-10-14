@@ -2283,7 +2283,7 @@ fn install_no_editable() {
     let site_packages = ChildPath::new(context.site_packages());
     site_packages
         .child("executable_file/__init__.py")
-        .assert(predicates::path::is_file());
+        .assert(predicates::path::is_file().follow_links(true));
     site_packages
         .child("executable_file.pth")
         .assert(predicates::path::missing());
@@ -2315,13 +2315,13 @@ fn install_no_editable_package() {
     let site_packages = ChildPath::new(context.site_packages());
     site_packages
         .child("executable_file/__init__.py")
-        .assert(predicates::path::is_file());
+        .assert(predicates::path::is_file().follow_links(true));
     site_packages
         .child("executable_file.pth")
         .assert(predicates::path::missing());
     site_packages
         .child("black.pth")
-        .assert(predicates::path::is_file());
+        .assert(predicates::path::is_file().follow_links(true));
 }
 
 #[test]
@@ -2348,7 +2348,7 @@ fn install_no_editable_requirements_txt() -> Result<()> {
     let site_packages = ChildPath::new(context.site_packages());
     site_packages
         .child("executable_file/__init__.py")
-        .assert(predicates::path::is_file());
+        .assert(predicates::path::is_file().follow_links(true));
     site_packages
         .child("executable_file.pth")
         .assert(predicates::path::missing());
@@ -2377,7 +2377,7 @@ fn install_no_editable_env_var() {
     let site_packages = ChildPath::new(context.site_packages());
     site_packages
         .child("executable_file/__init__.py")
-        .assert(predicates::path::is_file());
+        .assert(predicates::path::is_file().follow_links(true));
     site_packages
         .child("executable_file.pth")
         .assert(predicates::path::missing());
@@ -6253,7 +6253,7 @@ fn config_settings_path() -> Result<()> {
     // When installed without `editable_mode=compat`, the `finder.py` file should be present.
     let finder = ChildPath::new(context.site_packages())
         .child("__editable___setuptools_editable_0_1_0_finder.py");
-    finder.assert(predicates::path::is_file());
+    finder.assert(predicates::path::is_file().follow_links(true));
 
     // Reinstalling with `editable_mode=compat` should force a reinstall.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -15251,7 +15251,7 @@ fn config_settings_package() -> Result<()> {
     // When installed without `editable_mode=compat`, the `finder.py` file should be present.
     let finder = ChildPath::new(context.site_packages())
         .child("__editable___setuptools_editable_0_1_0_finder.py");
-    finder.assert(predicates::path::is_file());
+    finder.assert(predicates::path::is_file().follow_links(true));
 
     // Uninstall the package.
     uv_snapshot!(context.filters(), context.pip_uninstall()
@@ -15305,7 +15305,7 @@ fn config_settings_package() -> Result<()> {
     );
 
     // When installed without `editable_mode=compat`, the `finder.py` file should be present.
-    finder.assert(predicates::path::is_file());
+    finder.assert(predicates::path::is_file().follow_links(true));
 
     Ok(())
 }
