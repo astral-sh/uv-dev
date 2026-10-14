@@ -216,21 +216,15 @@ fn preprocess_unnamed_url<Url: UnnamedRequirementUrl>(
     // of the URL itself would be ambiguous, since it would consist of the environment variable,
     // which would expand to _more_ than the URL.
     let (url, extras) = if let Some((url, extras)) = split_extras(url) {
-        (url, Some(extras))
-    } else {
-        (url, None)
-    };
-
-    // Parse the extras, if provided.
-    let extras = if let Some(extras) = extras {
-        parse_extras_cursor(&mut Cursor::new(extras)).map_err(|err| Pep508Error {
+        let extras = parse_extras_cursor(&mut Cursor::new(extras)).map_err(|err| Pep508Error {
             message: err.message,
             start: start + url.len() + err.start,
             len: err.len,
             input: cursor.to_string(),
-        })?
+        })?;
+        (url, extras)
     } else {
-        vec![]
+        (url, Vec::new())
     };
 
     // Expand environment variables in the URL.
