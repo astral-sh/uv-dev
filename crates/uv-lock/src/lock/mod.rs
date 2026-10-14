@@ -3499,7 +3499,7 @@ impl Lock {
     }
 
     /// Return the set of packages that should be audited, respecting the
-    /// given extras and dependency group filters.
+    /// given extras, dependency groups, and optional target environment.
     ///
     /// Workspace members and packages without version information are
     /// excluded unconditionally, since neither can be meaningfully looked up
@@ -3508,6 +3508,7 @@ impl Lock {
         &'lock self,
         extras: &'lock ExtrasSpecificationWithDefaults,
         groups: &'lock DependencyGroupsWithDefaults,
+        marker_environment: Option<&MarkerEnvironment>,
         collect_filter: impl Fn(&Package) -> bool,
     ) -> Auditable<'lock> {
         // Dedupe and sort by `(name, version)` during the walk itself. Keep
@@ -3515,11 +3516,17 @@ impl Lock {
         // downstream views (e.g. index lookup) have access to the lockfile
         // package.
         let mut by_name_version: BTreeMap<(&PackageName, &Version), &Package> = BTreeMap::default();
-        self.walk_auditable(extras, groups, collect_filter, |package, version| {
-            by_name_version
-                .entry((package.name(), version))
-                .or_insert(package);
-        });
+        self.walk_auditable(
+            extras,
+            groups,
+            marker_environment,
+            collect_filter,
+            |package, version| {
+                by_name_version
+                    .entry((package.name(), version))
+                    .or_insert(package);
+            },
+        );
         let packages = by_name_version
             .into_iter()
             .map(|((_, version), package)| (package, version))
@@ -3533,13 +3540,14 @@ impl Lock {
     /// The traversal is seeded from workspace members, lock-level requirements
     /// (e.g. PEP 723 scripts), and lock-level dependency groups, then follows
     /// each reachable dependency exactly once per `(package, extra)` pair,
-    /// respecting the provided extras and dependency-group filters. The same
-    /// package may be visited more than once if it is reached through multiple
-    /// extras — callers should deduplicate as appropriate.
+    /// respecting the provided extras, dependency groups, and optional target environment.
+    /// The same package may be visited more than once if it is reached through multiple extras —
+    /// callers should deduplicate as appropriate.
     fn walk_auditable<'lock, F>(
         &'lock self,
         extras: &'lock ExtrasSpecificationWithDefaults,
         groups: &'lock DependencyGroupsWithDefaults,
+        marker_environment: Option<&MarkerEnvironment>,
         collect_filter: impl Fn(&Package) -> bool,
         mut visit: F,
     ) where
@@ -3550,7 +3558,15 @@ impl Lock {
             seen: &mut FxHashSet<(PackageIndex, Option<&'lock ExtraName>)>,
             queue: &mut VecDeque<(PackageIndex, Option<&'lock ExtraName>)>,
             dep: &'lock Dependency,
+            marker_environment: Option<&MarkerEnvironment>,
         ) {
+            // Extras and groups are selected separately, so only filter the environment portion
+            // of a dependency's marker.
+            if marker_environment.is_some_and(|environment| {
+                !dep.complexified_marker.pep508().evaluate(environment, &[])
+            }) {
+                return;
+            }
             for maybe_extra in std::iter::once(None).chain(dep.extra.iter().map(Some)) {
                 if seen.insert((dep.index, maybe_extra)) {
                     queue.push_back((dep.index, maybe_extra));
@@ -3578,14 +3594,36 @@ impl Lock {
             }
         }
 
-        // Seed from requirements attached directly to the lock (e.g., PEP 723 scripts).
-        for requirement in self.requirements() {
-            for (index, _) in self
+        // Seed from requirements attached directly to the lock, including script dependencies
+        // and dependency groups on project-less workspace roots.
+        let requirements = self.requirements().iter().chain(
+            self.dependency_groups()
+                .iter()
+                .filter(|(group, _)| groups.contains(group))
+                .flat_map(|(_, requirements)| requirements),
+        );
+        for requirement in requirements {
+            if marker_environment
+                .is_some_and(|environment| !requirement.marker.evaluate(environment, &[]))
+            {
+                continue;
+            }
+
+            for (index, package) in self
                 .packages
                 .iter()
                 .enumerate()
                 .filter(|(_, package)| package.id.name == requirement.name)
             {
+                if marker_environment.is_some_and(|environment| {
+                    !package.fork_markers.is_empty()
+                        && !package
+                            .fork_markers
+                            .iter()
+                            .any(|marker| marker.pep508().evaluate(environment, &[]))
+                }) {
+                    continue;
+                }
                 let index = PackageIndex(index);
                 if seen.insert((index, None)) {
                     queue.push_back((index, None));
@@ -3593,32 +3631,6 @@ impl Lock {
                 for extra in &*requirement.extras {
                     if seen.insert((index, Some(extra))) {
                         queue.push_back((index, Some(extra)));
-                    }
-                }
-            }
-        }
-
-        // Seed from dependency groups attached directly to the lock (e.g., project-less
-        // workspace roots).
-        for (group, requirements) in self.dependency_groups() {
-            if !groups.contains(group) {
-                continue;
-            }
-            for requirement in requirements {
-                for (index, _) in self
-                    .packages
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, package)| package.id.name == requirement.name)
-                {
-                    let index = PackageIndex(index);
-                    if seen.insert((index, None)) {
-                        queue.push_back((index, None));
-                    }
-                    for extra in &*requirement.extras {
-                        if seen.insert((index, Some(extra))) {
-                            queue.push_back((index, Some(extra)));
-                        }
                     }
                 }
             }
@@ -3649,7 +3661,7 @@ impl Lock {
                     .filter(|(group, _)| groups.contains(group))
                     .flat_map(|(_, deps)| deps)
                 {
-                    enqueue_dep(&mut seen, &mut queue, dep);
+                    enqueue_dep(&mut seen, &mut queue, dep, marker_environment);
                 }
             }
 
@@ -3666,7 +3678,7 @@ impl Lock {
             };
 
             for dep in dependencies {
-                enqueue_dep(&mut seen, &mut queue, dep);
+                enqueue_dep(&mut seen, &mut queue, dep, marker_environment);
             }
         }
     }
