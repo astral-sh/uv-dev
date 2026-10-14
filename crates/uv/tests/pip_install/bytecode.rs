@@ -2,8 +2,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
+use uv_static::EnvVars;
 use uv_test::packse::generate_wheel;
 use uv_test::{TestContext, site_packages_path};
+
+use super::wheel_fixture::write_many_files_wheel;
 
 /// Create a wheel containing exactly one Python source file.
 fn bytecode_wheel(context: &TestContext) -> Result<PathBuf> {
@@ -98,5 +101,47 @@ fn compile_bytecode_for_relative_install_root() -> Result<()> {
         &site_packages_path(&context.temp_dir.join("prefix"), "python3.12"),
         &["--prefix", "prefix"],
     );
+    Ok(())
+}
+
+/// Compile every installed source when a single-worker queue exceeds its capacity.
+#[test]
+fn compile_bytecode_queue_backpressure() -> Result<()> {
+    const SOURCE_FILES: usize = 16;
+
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
+    write_many_files_wheel(&wheel, SOURCE_FILES)?;
+    context
+        .pip_install()
+        .arg(wheel)
+        .arg("--offline")
+        .arg("--compile-bytecode")
+        .env(EnvVars::UV_CONCURRENT_INSTALLS, "1")
+        .assert()
+        .success()
+        .stderr(predicates::str::contains(format!(
+            "Bytecode compiled {SOURCE_FILES} files in "
+        )));
+
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc::indoc! {r#"
+            import importlib.util
+            import sys
+            from pathlib import Path
+
+            root = Path(sys.argv[1])
+            for index in range(int(sys.argv[2])):
+                source = root / f"module_{index:05}.py"
+                bytecode = Path(importlib.util.cache_from_source(str(source)))
+                assert source.is_file(), f"missing installed source: {source}"
+                assert bytecode.is_file(), f"missing compiled bytecode: {bytecode}"
+        "#})
+        .arg(context.site_packages().join("large_wheel"))
+        .arg(SOURCE_FILES.to_string())
+        .assert()
+        .success();
     Ok(())
 }
