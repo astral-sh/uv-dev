@@ -2654,8 +2654,8 @@ async fn lock_sdist_url_relock_hash_mismatch() -> Result<()> {
     let trusted_digest = hex::encode(Sha256::digest(&trusted));
     let replacement_digest = hex::encode(Sha256::digest(&replacement));
     let context = context
-        .with_filter((trusted_digest, "[TRUSTED_HASH]"))
-        .with_filter((replacement_digest, "[REPLACEMENT_HASH]"));
+        .with_filter((trusted_digest.clone(), "[TRUSTED_HASH]"))
+        .with_filter((replacement_digest.clone(), "[REPLACEMENT_HASH]"));
     server.serve(filename, &trusted, None).await;
     let pyproject = context.temp_dir.child("pyproject.toml");
     pyproject.write_str(&formatdoc! {r#"
@@ -2750,35 +2750,39 @@ async fn lock_sdist_url_relock_hash_mismatch() -> Result<()> {
     assert_eq!(context.read("uv.lock"), locked);
 
     // Each explicit upgrade mode releases the selected package's recorded hash.
+    let upgraded_lock = locked
+        .replace(">=3.12", ">=3.12.1")
+        .replace(&trusted_digest, &replacement_digest);
     let upgrade_output = capture_uv_snapshot!(context.filters(), context.lock().args(["--upgrade-package", "demo-pkg"]).arg("--no-cache"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
     assert!(sentinel.exists());
-    assert_ne!(context.read("uv.lock"), locked);
+    assert_eq!(context.read("uv.lock"), upgraded_lock);
     context.temp_dir.child("uv.lock").write_str(&locked)?;
     fs_err::remove_file(&sentinel)?;
 
     diff_uv_snapshot!(context.filters(), &upgrade_output, context.lock().args(["--upgrade-group", "dev"]).arg("--no-cache"), @"");
     assert!(sentinel.exists());
-    assert_ne!(context.read("uv.lock"), locked);
+    assert_eq!(context.read("uv.lock"), upgraded_lock);
     context.temp_dir.child("uv.lock").write_str(&locked)?;
     fs_err::remove_file(&sentinel)?;
 
     diff_uv_snapshot!(context.filters(), &upgrade_output, context.lock().arg("--upgrade").arg("--no-cache"), @"");
     assert!(sentinel.exists());
-    assert_ne!(context.read("uv.lock"), locked);
+    assert_eq!(context.read("uv.lock"), upgraded_lock);
     context.temp_dir.child("uv.lock").write_str(&locked)?;
     fs_err::remove_file(&sentinel)?;
 
     // A new direct URL is a new identity and does not require an upgrade flag.
     let replacement_server = PackageServer::new(&name).await;
     replacement_server.serve(filename, &replacement, None).await;
+    let replacement_url = replacement_server.file_url(filename);
     pyproject.write_str(
         &context
             .read("pyproject.toml")
-            .replace(&archive_url, &replacement_server.file_url(filename)),
+            .replace(&archive_url, &replacement_url),
     )?;
     uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
     exit_code: 0 (success)
@@ -2786,6 +2790,10 @@ async fn lock_sdist_url_relock_hash_mismatch() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
     assert!(sentinel.exists());
+    assert_eq!(
+        context.read("uv.lock"),
+        upgraded_lock.replace(&archive_url, &replacement_url)
+    );
     Ok(())
 }
 
