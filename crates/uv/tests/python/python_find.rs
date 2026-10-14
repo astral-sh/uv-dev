@@ -1,5 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
@@ -633,32 +635,48 @@ fn virtual_dependency_group() {
     ");
 }
 
+/// Assert that discovery returned the Python executable inside the expected environment.
+fn assert_venv_python(command: &mut Command, environment: &Path) -> Result<()> {
+    let output = command.assert().success().stderr("");
+    let stdout = std::str::from_utf8(&output.get_output().stdout)?;
+    let actual = Path::new(
+        stdout
+            .strip_suffix("\r\n")
+            .or_else(|| stdout.strip_suffix('\n'))
+            .expect("the interpreter path should end with a newline"),
+    );
+    let expected =
+        venv_bin_path(environment).join(format!("python{}", std::env::consts::EXE_SUFFIX));
+
+    assert!(
+        actual.is_absolute(),
+        "expected an absolute path: {actual:?}"
+    );
+    assert!(actual.is_file(), "interpreter does not exist: {actual:?}");
+    assert_eq!(actual.file_name(), expected.file_name());
+    // Resolve directory aliases without following the Python executable, which may point to a
+    // system interpreter shared by multiple environments.
+    assert_eq!(
+        dunce::canonicalize(actual.parent().expect("the interpreter has a parent"))?,
+        dunce::canonicalize(expected.parent().expect("the interpreter has a parent"))?
+    );
+    Ok(())
+}
+
 #[test]
-fn python_find_venv() {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        // Enable additional filters for Windows compatibility
-        .with_filtered_exe_suffix()
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin();
+fn python_find_venv() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     // Create a virtual environment
     uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.12").arg("-q"), @"
     exit_code: 0 (success)
     ");
 
-    // We should find it first
-    // TODO(zanieb): On Windows, this has in a different display path for virtual environments which
-    // is super annoying and requires some changes to how we represent working directories in the
-    // test context to resolve.
-    #[cfg(not(windows))]
-    uv_snapshot!(context.filters(), context.python_find(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [VENV]/[BIN]/[PYTHON]
-    ");
+    // We should find it first.
+    assert_venv_python(&mut context.python_find(), context.venv.path())?;
 
     let child_dir = context.temp_dir.child("child");
-    child_dir.create_dir_all().unwrap();
+    child_dir.create_dir_all()?;
 
     // Unless the system flag is passed
     uv_snapshot!(context.filters(), context.python_find().arg("--system"), @"
@@ -687,27 +705,24 @@ fn python_find_venv() {
     ");
 
     // We should find virtual environments from a child directory
-    #[cfg(not(windows))]
-    uv_snapshot!(context.filters(), context.python_find().current_dir(&child_dir), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [VENV]/[BIN]/[PYTHON]
-    ");
+    assert_venv_python(
+        context.python_find().current_dir(&child_dir),
+        context.venv.path(),
+    )?;
 
     // A virtual environment in the child directory takes precedence over the parent
     uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.11").arg("-q").current_dir(&child_dir), @"
     exit_code: 0 (success)
     ");
 
-    #[cfg(not(windows))]
-    uv_snapshot!(context.filters(), context.python_find().current_dir(&child_dir), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [TEMP_DIR]/child/.venv/[BIN]/[PYTHON]
-    ");
+    let child_venv = child_dir.child(".venv");
+    assert_venv_python(
+        context.python_find().current_dir(&child_dir),
+        child_venv.path(),
+    )?;
 
     // But if we delete the parent virtual environment
-    fs_err::remove_dir_all(context.temp_dir.child(".venv")).unwrap();
+    fs_err::remove_dir_all(context.venv.path())?;
 
     // And query from there... we should not find the child virtual environment
     uv_snapshot!(context.filters(), context.python_find(), @"
@@ -717,61 +732,46 @@ fn python_find_venv() {
     ");
 
     // Unless, it is requested by path
-    #[cfg(not(windows))]
-    uv_snapshot!(context.filters(), context.python_find().arg("child/.venv"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [TEMP_DIR]/child/.venv/[BIN]/[PYTHON]
-    ");
+    assert_venv_python(context.python_find().arg("child/.venv"), child_venv.path())?;
 
     // Or activated via `VIRTUAL_ENV`
-    #[cfg(not(windows))]
-    uv_snapshot!(context.filters(), context.python_find().env(EnvVars::VIRTUAL_ENV, child_dir.join(".venv").as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [TEMP_DIR]/child/.venv/[BIN]/[PYTHON]
-    ");
+    assert_venv_python(
+        context
+            .python_find()
+            .env(EnvVars::VIRTUAL_ENV, child_venv.path()),
+        child_venv.path(),
+    )?;
 
     // Or at the front of the PATH
-    #[cfg(not(windows))]
-    uv_snapshot!(context.filters(), context.python_find().env(EnvVars::UV_PYTHON_SEARCH_PATH, child_dir.join(".venv").join("bin").as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [TEMP_DIR]/child/.venv/[BIN]/[PYTHON]
-    ");
+    let child_bin = venv_bin_path(child_venv.path());
+    assert_venv_python(
+        context
+            .python_find()
+            .env(EnvVars::UV_PYTHON_SEARCH_PATH, &child_bin),
+        child_venv.path(),
+    )?;
 
     // This holds even if there are other directories before it in the path, as long as they do
     // not contain a Python executable
-    #[cfg(not(windows))]
-    {
-        let path = std::env::join_paths(&[
-            context.temp_dir.to_path_buf(),
-            child_dir.join(".venv").join("bin"),
-        ])
-        .unwrap();
-
-        uv_snapshot!(context.filters(), context.python_find().env(EnvVars::UV_PYTHON_SEARCH_PATH, path.as_os_str()), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        [TEMP_DIR]/child/.venv/[BIN]/[PYTHON]
-        ");
-    }
+    let path = std::env::join_paths([context.temp_dir.path(), child_bin.as_path()])?;
+    assert_venv_python(
+        context
+            .python_find()
+            .env(EnvVars::UV_PYTHON_SEARCH_PATH, path),
+        child_venv.path(),
+    )?;
 
     // But, if there's an executable _before_ the virtual environment — we prefer that
-    #[cfg(not(windows))]
-    {
-        let path = std::env::join_paths(
-            std::env::split_paths(&context.python_path())
-                .chain(std::iter::once(child_dir.join(".venv").join("bin"))),
-        )
-        .unwrap();
+    let path = std::env::join_paths(
+        std::env::split_paths(&context.python_path()).chain(std::iter::once(child_bin)),
+    )?;
+    uv_snapshot!(context.filters(), context.python_find().env(EnvVars::UV_PYTHON_SEARCH_PATH, path), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.11]
+    ");
 
-        uv_snapshot!(context.filters(), context.python_find().env(EnvVars::UV_PYTHON_SEARCH_PATH, path.as_os_str()), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        [PYTHON-3.11]
-        ");
-    }
+    Ok(())
 }
 
 #[test]
