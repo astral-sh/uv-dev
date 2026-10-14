@@ -456,12 +456,11 @@ fn list_outdated_index() -> Result<()> {
 
 #[test]
 #[cfg(feature = "test-pypi")]
-fn list_editable() {
+fn list_editable_filters() {
     let context = uv_test::test_context!("3.12")
         .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
         .with_filter(("  +", " "));
 
-    // Install the editable package.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-e")
         .arg(context.workspace_root.join("test/packages/poetry_editable")), @"
@@ -474,10 +473,10 @@ fn list_editable() {
      + idna==3.6
      + poetry-editable==0.1.0 (from file://[WORKSPACE]/test/packages/poetry_editable)
      + sniffio==1.3.1
-    "
-    );
+    ");
 
-    uv_snapshot!(context.filters(), context.pip_list(), @"
+    let all = uv_test::capture_uv_snapshot!(context.filters(), context.pip_list());
+    insta::assert_snapshot!(&all, @"
     exit_code: 0 (success)
     ----- stdout -----
     Package Version Editable project location
@@ -486,45 +485,29 @@ fn list_editable() {
     idna 3.6
     poetry-editable 0.1.0 [WORKSPACE]/test/packages/poetry_editable
     sniffio 1.3.1
-    "
-    );
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn list_editable_only() {
-    let context = uv_test::test_context!("3.12")
-        .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
-        .with_filter(("  +", " "));
-
-    // Install the editable package.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-e")
-        .arg(context.workspace_root.join("test/packages/poetry_editable")), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + poetry-editable==0.1.0 (from file://[WORKSPACE]/test/packages/poetry_editable)
-     + sniffio==1.3.1
-    "
+    ");
+    assert_eq!(
+        uv_test::capture_uv_snapshot!(
+            context.filters(),
+            context.pip_list().args(["--exclude", "numpy"])
+        ),
+        all,
+        "excluding an absent package should not change the listing"
     );
 
-    uv_snapshot!(context.filters(), context.pip_list()
-        .arg("--editable"), @"
+    uv_snapshot!(context.filters(), context.pip_list().arg("--editable"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Package Version Editable project location
     [UNDERLINE]
     poetry-editable 0.1.0 [WORKSPACE]/test/packages/poetry_editable
-    "
-    );
+    ");
 
-    uv_snapshot!(context.filters(), context.pip_list()
-        .arg("--exclude-editable"), @"
+    let non_editable = uv_test::capture_uv_snapshot!(
+        context.filters(),
+        context.pip_list().arg("--exclude-editable")
+    );
+    insta::assert_snapshot!(&non_editable, @"
     exit_code: 0 (success)
     ----- stdout -----
     Package Version
@@ -532,8 +515,25 @@ fn list_editable_only() {
     anyio 4.3.0
     idna 3.6
     sniffio 1.3.1
-    "
+    ");
+    assert_eq!(
+        uv_test::capture_uv_snapshot!(
+            context.filters(),
+            context.pip_list().args(["--exclude", "poetry-editable"])
+        ),
+        non_editable,
+        "excluding the editable package by name should omit its column"
     );
+
+    uv_snapshot!(context.filters(), context.pip_list()
+        .args(["--exclude", "anyio", "--exclude", "poetry-editable"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Package Version
+    [UNDERLINE]
+    idna 3.6
+    sniffio 1.3.1
+    ");
 }
 
 #[test]
@@ -550,71 +550,6 @@ fn list_conflicting_editable_filters() {
     Usage: uv pip list --cache-dir [CACHE_DIR] --editable --exclude-newer <EXCLUDE_NEWER>
 
     For more information, try '--help'.
-    "
-    );
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn list_exclude() {
-    let context = uv_test::test_context!("3.12")
-        .with_filter((r"\-\-\-\-\-\-+.*", "[UNDERLINE]"))
-        .with_filter(("  +", " "));
-
-    // Install the editable package.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-e")
-        .arg(context.workspace_root.join("test/packages/poetry_editable")), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + poetry-editable==0.1.0 (from file://[WORKSPACE]/test/packages/poetry_editable)
-     + sniffio==1.3.1
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--exclude")
-    .arg("numpy"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Package Version Editable project location
-    [UNDERLINE]
-    anyio 4.3.0
-    idna 3.6
-    poetry-editable 0.1.0 [WORKSPACE]/test/packages/poetry_editable
-    sniffio 1.3.1
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--exclude")
-    .arg("poetry-editable"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Package Version
-    [UNDERLINE]
-    anyio 4.3.0
-    idna 3.6
-    sniffio 1.3.1
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_list()
-    .arg("--exclude")
-    .arg("anyio")
-    .arg("--exclude")
-    .arg("poetry-editable"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Package Version
-    [UNDERLINE]
-    idna 3.6
-    sniffio 1.3.1
     "
     );
 }
