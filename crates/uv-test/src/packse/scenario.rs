@@ -92,10 +92,13 @@ pub struct Package {
 }
 
 /// Metadata for a single version of a package.
+///
+/// [`Default`] creates empty metadata without artifacts or a Python version requirement. An empty
+/// TOML version table follows Packse's defaults: a wheel, a source distribution, and `>=3.12`.
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct PackageMetadata {
-    /// The `Requires-Python` specifier. Defaults to `">=3.12"`.
+    /// The `Requires-Python` specifier. Defaults to `">=3.12"` when deserializing TOML.
     #[serde(default = "default_requires_python")]
     pub requires_python: Option<VersionSpecifiers>,
 
@@ -133,6 +136,16 @@ pub struct PackageMetadata {
     /// An empty list means produce only the default `py3-none-any` wheel.
     #[serde(default)]
     pub wheel_tags: Vec<WheelTag>,
+}
+
+impl PackageMetadata {
+    /// Create metadata for a wheel-only package with no Python version requirement.
+    pub fn wheel_only() -> Self {
+        Self {
+            wheel: Some(ArtifactMetadata::default()),
+            ..Self::default()
+        }
+    }
 }
 
 fn deserialize_artifact<'de, D>(
