@@ -14138,19 +14138,43 @@ fn index_with_package_versions(name: &str, versions: &[&str]) -> Result<PackseSe
     Ok(PackseServer::from_scenario(&scenario))
 }
 
+fn index_role_filters(
+    context: &TestContext,
+    default_index: &PackseServer,
+    extra_index: &PackseServer,
+) -> Vec<(String, String)> {
+    // Distinguish the indexes before the context filters normalize both server addresses.
+    [
+        (
+            regex::escape(&default_index.index_url()),
+            "[DEFAULT_INDEX]".to_string(),
+        ),
+        (
+            regex::escape(&extra_index.index_url()),
+            "[EXTRA_INDEX]".to_string(),
+        ),
+    ]
+    .into_iter()
+    .chain(
+        context
+            .filters()
+            .into_iter()
+            .map(|(pattern, replacement)| (pattern.to_string(), replacement.to_string())),
+    )
+    .collect()
+}
+
 /// A package on the extra index shadows compatible versions on the default index.
 #[test]
 fn compile_index_url_first_match_base() -> Result<()> {
     let default_index = index_with_package_versions("a", &["1.0.0", "2.0.0"])?;
     let extra_index = index_with_package_versions("a", &["1.0.0"])?;
-    let context = uv_test::test_context!("3.12")
-        .with_filter((regex::escape(&default_index.index_url()), "[DEFAULT_INDEX]"))
-        .with_filter((regex::escape(&extra_index.index_url()), "[EXTRA_INDEX]"));
+    let context = uv_test::test_context!("3.12");
 
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("a==2.0.0")?;
 
-    uv_snapshot!(context.filters(), context.pip_compile()
+    uv_snapshot!(index_role_filters(&context, &default_index, &extra_index), context.pip_compile()
         .arg("--index-url")
         .arg(default_index.index_url())
         .arg("--extra-index-url")
@@ -14175,14 +14199,12 @@ fn compile_index_url_first_match_base() -> Result<()> {
 fn compile_index_url_first_match_marker() -> Result<()> {
     let default_index = index_with_package_versions("a", &["1.0.0", "2.0.0"])?;
     let extra_index = index_with_package_versions("a", &["1.0.0"])?;
-    let context = uv_test::test_context!("3.12")
-        .with_filter((regex::escape(&default_index.index_url()), "[DEFAULT_INDEX]"))
-        .with_filter((regex::escape(&extra_index.index_url()), "[EXTRA_INDEX]"));
+    let context = uv_test::test_context!("3.12");
 
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("a==2.0.0 ; sys_platform == 'linux'")?;
 
-    uv_snapshot!(context.filters(), context.pip_compile()
+    uv_snapshot!(index_role_filters(&context, &default_index, &extra_index), context.pip_compile()
         .arg("--universal")
         .arg("--index-url")
         .arg(default_index.index_url())
@@ -14535,9 +14557,7 @@ fn emit_index_annotation_line() -> Result<()> {
 fn emit_index_annotation_multiple_indexes() -> Result<()> {
     let default_index = index_with_package_versions("a", &["1.0.0"])?;
     let extra_index = index_with_package_versions("b", &["1.0.0"])?;
-    let context = uv_test::test_context!("3.12")
-        .with_filter((regex::escape(&default_index.index_url()), "[DEFAULT_INDEX]"))
-        .with_filter((regex::escape(&extra_index.index_url()), "[EXTRA_INDEX]"));
+    let context = uv_test::test_context!("3.12");
 
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str(indoc! {r"
@@ -14545,7 +14565,7 @@ fn emit_index_annotation_multiple_indexes() -> Result<()> {
         b
     "})?;
 
-    uv_snapshot!(context.filters(), context.pip_compile()
+    uv_snapshot!(index_role_filters(&context, &default_index, &extra_index), context.pip_compile()
         .arg("requirements.in")
         .arg("--index-url")
         .arg(default_index.index_url())
