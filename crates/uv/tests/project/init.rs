@@ -1041,6 +1041,11 @@ fn init_cache() -> Result<()> {
     Initialized project `foo` at `[TEMP_DIR]/foo`
     ");
 
+    context
+        .cache_dir
+        .child("CACHEDIR.TAG")
+        .assert(predicate::path::is_file());
+
     Ok(())
 }
 
