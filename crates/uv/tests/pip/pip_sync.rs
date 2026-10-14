@@ -5417,34 +5417,6 @@ fn assert_target_distributions(context: &TestContext, target: &Path, expected: &
         .stdout(expected);
 }
 
-/// Sync to a `--target` directory without a virtual environment.
-#[test]
-fn target_system() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
-
-    // Install `iniconfig` to the target directory.
-    let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("iniconfig==2.0.0")?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.in")
-        .arg("--target")
-        .arg("target"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
-
-    // Ensure that the package is present in the target directory.
-    assert!(context.temp_dir.child("target").child("iniconfig").is_dir());
-
-    Ok(())
-}
-
 /// Sync to a `--prefix` directory.
 #[test]
 fn prefix() -> Result<()> {

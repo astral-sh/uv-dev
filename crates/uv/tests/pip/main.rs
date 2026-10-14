@@ -34,6 +34,9 @@ mod pip_sync_markers;
 #[cfg(feature = "test-python")]
 mod pip_sync_reinstall;
 
+#[cfg(feature = "test-python")]
+mod pip_sync_target;
+
 mod pip_tree;
 
 mod pip_uninstall;
