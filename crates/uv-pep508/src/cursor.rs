@@ -92,8 +92,7 @@ impl<'a> Cursor<'a> {
             return false;
         }
 
-        self.chars = remaining.chars();
-        self.pos += keyword.len();
+        self.advance_to(remaining);
         true
     }
 
@@ -101,14 +100,17 @@ impl<'a> Cursor<'a> {
     /// position and length in bytes.
     pub(crate) fn take_while(&mut self, condition: impl Fn(char) -> bool) -> (usize, usize) {
         let start = self.pos();
-        while let Some(char) = self.peek_char() {
-            if !condition(char) {
-                break;
-            }
-
-            self.next();
-        }
+        self.advance_to(self.remaining().trim_start_matches(condition));
         (start, self.pos() - start)
+    }
+
+    /// Advance to a suffix of the current unconsumed input.
+    fn advance_to(&mut self, remaining: &'a str) {
+        let consumed = self.remaining().len() - remaining.len();
+        if consumed > 0 {
+            self.pos += consumed;
+            self.chars = remaining.chars();
+        }
     }
 
     /// Consumes characters from the cursor, raising an error if it doesn't match the given token.
