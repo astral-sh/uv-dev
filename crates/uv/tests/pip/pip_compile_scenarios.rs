@@ -405,6 +405,7 @@ fn compatible_python_incompatible_override() -> Result<()> {
 ///     └── a-1.0.0
 ///         └── requires python>=3.10 (incompatible with environment)
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn incompatible_python_compatible_override_available_no_wheels() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -453,6 +454,7 @@ fn incompatible_python_compatible_override_available_no_wheels() -> Result<()> {
 ///     └── a-1.0.0
 ///         └── requires python>=3.10 (incompatible with environment)
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn incompatible_python_compatible_override_no_compatible_wheels() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -502,6 +504,7 @@ fn incompatible_python_compatible_override_no_compatible_wheels() -> Result<()> 
 ///     └── a-2.0.0
 ///         └── requires python>=3.12 (incompatible with environment)
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn incompatible_python_compatible_override_other_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -548,6 +551,7 @@ fn incompatible_python_compatible_override_other_wheel() -> Result<()> {
 ///     └── a-1.0.0
 ///         └── requires python>=3.10 (incompatible with environment)
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn incompatible_python_compatible_override_unavailable_no_wheels() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -594,6 +598,7 @@ fn incompatible_python_compatible_override_unavailable_no_wheels() -> Result<()>
 ///     └── a-1.0.0
 ///         └── requires python>=3.10 (incompatible with environment)
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn incompatible_python_compatible_override() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -640,6 +645,7 @@ fn incompatible_python_compatible_override() -> Result<()> {
 ///     └── a-1.0.0
 ///         └── requires python>=3.9.4 (incompatible with environment)
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[cfg(feature = "test-python-patch")]
 #[test]
 fn python_patch_override_no_patch() -> Result<()> {
@@ -681,6 +687,7 @@ fn python_patch_override_no_patch() -> Result<()> {
 /// └── a
 ///     └── a-1.0.0
 /// ```
+#[cfg(feature = "test-python-eol")]
 #[cfg(feature = "test-python-patch")]
 #[test]
 fn python_patch_override_patch_compatible() -> Result<()> {
