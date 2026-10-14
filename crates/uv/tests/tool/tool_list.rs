@@ -162,20 +162,32 @@ fn tool_list_outdated_respects_exclude_newer() {
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
-    // Install `black` with a persisted `exclude-newer` cutoff.
+    // The persisted cutoff selects 24.2.0, while 24.3.0 is available at the later cutoff.
     context
         .tool_install()
         .arg("black")
         .arg("--exclude-newer")
-        .arg("2024-03-25T00:00:00Z")
+        .arg("2024-03-01T00:00:00Z")
         .assert()
         .success();
 
-    // `--outdated` should respect the stored tool settings and avoid flagging upgrades that
-    // `uv tool upgrade` would intentionally skip.
-    uv_snapshot!(context.filters(), context.tool_list()
-    .arg("--outdated"), @"
+    let list_outdated = || {
+        let mut command = context.tool_list();
+        command
+            .arg("--outdated")
+            .env_remove(EnvVars::UV_EXCLUDE_NEWER);
+        command
+    };
+    list_outdated().assert().success().stdout("").stderr("");
+
+    uv_snapshot!(context.filters(), list_outdated()
+        .arg("--exclude-newer")
+        .arg("2024-03-25T00:00:00Z"), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    black v24.2.0 [latest: 24.3.0]
+    - black
+    - blackd
     ");
 }
 
