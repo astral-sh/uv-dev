@@ -141,9 +141,8 @@ impl PythonInstallation {
         mirrors: PythonDownloadMirrors<'_>,
         python_downloads_json_url: Option<&str>,
     ) -> Result<Self, Error> {
-        let downloads_enabled = preference.allows_managed()
-            && python_downloads.is_automatic()
-            && !client_builder.is_offline();
+        let downloads_enabled =
+            automatic_downloads_enabled(preference, python_downloads, client_builder.is_offline());
         let installation = find_best_python_installation(
             request,
             environments,
@@ -218,47 +217,29 @@ impl PythonInstallation {
             ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
                 .await?;
 
-        let downloads_enabled = preference.allows_managed()
-            && python_downloads.is_automatic()
-            && !client_builder.is_offline();
-
-        let download = download_request
-            .clone()
-            .with_default_arch(arch.map(PythonArchitecture::into_inner))
-            .fill()
-            .map_err(uv_python_managed::downloads::Error::from)
-            .map(|request| download_list.find(&request));
+        let downloads_enabled =
+            automatic_downloads_enabled(preference, python_downloads, client_builder.is_offline());
 
         // Regardless of whether downloads are enabled, we want to determine if the download is
         // available to power error messages. However, if downloads aren't enabled, we don't want to
         // report any errors related to them.
-        let download = match download {
-            Ok(Ok(download)) => Some(download),
+        let download = match download_request
+            .with_default_arch(arch.map(PythonArchitecture::into_inner))
+            .fill()
+            .map_err(uv_python_managed::downloads::Error::from)
+            .and_then(|request| download_list.find(&request))
+        {
+            Ok(download) => download,
+            Err(_) if !downloads_enabled => return Err(err),
             // If the download cannot be found, return the _original_ discovery error
-            Ok(Err(uv_python_managed::downloads::Error::NoDownloadFound(_))) => {
-                if downloads_enabled {
-                    debug!("No downloads are available for {request}");
-                    if matches!(request, PythonRequest::Default | PythonRequest::Any) {
-                        return Err(err);
-                    }
-                    return Err(err.with_hint(MissingPythonHint::RequiresUpdate));
+            Err(uv_python_managed::downloads::Error::NoDownloadFound(_)) => {
+                debug!("No downloads are available for {request}");
+                if matches!(request, PythonRequest::Default | PythonRequest::Any) {
+                    return Err(err);
                 }
-                None
+                return Err(err.with_hint(MissingPythonHint::RequiresUpdate));
             }
-            Err(err) | Ok(Err(err)) => {
-                if downloads_enabled {
-                    // We failed to determine the platform information
-                    return Err(err.into());
-                }
-                None
-            }
-        };
-
-        let Some(download) = download else {
-            // N.B. We should only be in this case when downloads are disabled; when downloads are
-            // enabled, we should fail eagerly when something goes wrong with the download.
-            debug_assert!(!downloads_enabled);
-            return Err(err);
+            Err(error) => return Err(error.into()),
         };
 
         // If the download is available, but not usable, we attach a hint to the original error.
@@ -350,16 +331,14 @@ impl PythonInstallation {
         installed.ensure_build_file().await?;
 
         let minor_version = installed.minor_version_key();
-        let highest_patch = installations
-            .find_all()?
-            .filter(|installation| installation.minor_version_key() == minor_version)
-            .filter_map(|installation| installation.version().patch())
-            .fold(0, std::cmp::max);
-        if installed
-            .version()
-            .patch()
-            .is_some_and(|p| p >= highest_patch)
-        {
+        let existing_installations = installations.find_all()?;
+        let is_highest_patch = installed.version().patch().is_some_and(|patch| {
+            existing_installations
+                .filter(|installation| installation.minor_version_key() == minor_version)
+                .filter_map(|installation| installation.version().patch())
+                .all(|existing_patch| patch >= existing_patch)
+        });
+        if is_highest_patch {
             installed.ensure_minor_version_link().await?;
         }
 
@@ -421,10 +400,9 @@ impl PythonInstallation {
             .is_ok_and(|installations| installations.contains(&self.interpreter))
     }
 
-    /// Whether this is a CPython installation.
-    ///
-    /// Returns false if it is an alternative implementation, e.g., PyPy.
-    pub(crate) fn is_alternative_implementation(&self) -> bool {
+    /// Whether selecting this installation requires opting in to alternative implementations.
+    /// This includes CPython installations targeting Emscripten.
+    pub(crate) fn requires_alternative_implementation_opt_in(&self) -> bool {
         !matches!(
             self.implementation(),
             LenientImplementationName::Known(ImplementationName::CPython)
@@ -667,6 +645,15 @@ impl PythonInstallation {
         let request = request.clone().into_request_for_source(self.source);
         self.interpreter.matches_version_request(&request)
     }
+}
+
+/// Whether discovery can automatically download a managed Python installation.
+fn automatic_downloads_enabled(
+    preference: PythonPreference,
+    downloads: PythonDownloads,
+    offline: bool,
+) -> bool {
+    preference.allows_managed() && downloads.is_automatic() && !offline
 }
 
 /// Find a [`PythonEnvironment`] matching the given request and preference.

@@ -72,53 +72,30 @@ pub fn report_interpreter(
     let implementation = python.implementation();
     let interpreter = python.interpreter();
 
-    if dimmed {
-        if managed {
-            writeln!(
-                printer.stderr(),
-                "{}",
-                format!(
-                    "Using {} {}{}",
-                    implementation.pretty(),
-                    interpreter.python_version(),
-                    interpreter.variant().display_suffix(),
-                )
-                .dimmed()
-            )?;
+    let message = fmt::from_fn(|formatter| {
+        write!(formatter, "Using {} ", implementation.pretty())?;
+        let version = interpreter.python_version();
+        let suffix = interpreter.variant().display_suffix();
+        if managed && !dimmed {
+            write!(formatter, "{}{}", version.cyan(), suffix.cyan())?;
         } else {
-            writeln!(
-                printer.stderr(),
-                "{}",
-                format!(
-                    "Using {} {}{} interpreter at: {}",
-                    implementation.pretty(),
-                    interpreter.python_version(),
-                    interpreter.variant().display_suffix(),
-                    interpreter.sys_executable().user_display()
-                )
-                .dimmed()
-            )?;
+            write!(formatter, "{version}{suffix}")?;
         }
-    } else {
-        if managed {
-            writeln!(
-                printer.stderr(),
-                "Using {} {}{}",
-                implementation.pretty(),
-                interpreter.python_version().cyan(),
-                interpreter.variant().display_suffix().cyan()
-            )?;
-        } else {
-            writeln!(
-                printer.stderr(),
-                "Using {} {}{} interpreter at: {}",
-                implementation.pretty(),
-                interpreter.python_version(),
-                interpreter.variant().display_suffix(),
-                interpreter.sys_executable().user_display().cyan()
-            )?;
+        if !managed {
+            let executable = interpreter.sys_executable();
+            let executable = executable.user_display();
+            if dimmed {
+                write!(formatter, " interpreter at: {executable}")?;
+            } else {
+                write!(formatter, " interpreter at: {}", executable.cyan())?;
+            }
         }
-    }
+        Ok(())
+    });
 
-    Ok(())
+    if dimmed {
+        writeln!(printer.stderr(), "{}", message.dimmed())
+    } else {
+        writeln!(printer.stderr(), "{message}")
+    }
 }

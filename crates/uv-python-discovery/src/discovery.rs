@@ -5,6 +5,7 @@ use rustc_hash::{FxBuildHasher, FxHashSet};
 use std::cmp::Reverse;
 use std::env::consts::EXE_SUFFIX;
 use std::fmt::{self, Debug, Formatter};
+use std::sync::LazyLock;
 use std::{env, io, iter};
 use std::{path::Path, path::PathBuf};
 use thiserror::Error;
@@ -73,9 +74,13 @@ impl PythonExecutableGroup {
         (!executables.is_empty()).then_some(Self(executables))
     }
 
+    fn singleton(executable: (PythonSource, PathBuf)) -> Self {
+        Self(vec![executable])
+    }
+
     fn filter(mut self, mut predicate: impl FnMut(PythonSource, &Path) -> bool) -> Option<Self> {
         self.0.retain(|(source, path)| predicate(*source, path));
-        (!self.0.is_empty()).then_some(self)
+        Self::new(self.0)
     }
 }
 
@@ -276,20 +281,15 @@ fn python_executables_from_installed<'a>(
             })
     })
     .flatten_ok()
-    .map_ok(|executable| PythonExecutableGroup(vec![executable]));
+    .map_ok(PythonExecutableGroup::singleton);
 
     let from_search_path = iter::once_with(move || {
-        let mut first = true;
+        let mut next_source = PythonSource::SearchPathFirst;
         python_executables_from_search_path(version, implementation).filter_map(move |paths| {
             let executables = paths
                 .into_iter()
                 .map(|path| {
-                    let source = if first {
-                        first = false;
-                        PythonSource::SearchPathFirst
-                    } else {
-                        PythonSource::SearchPath
-                    };
+                    let source = std::mem::replace(&mut next_source, PythonSource::SearchPath);
                     (source, path)
                 })
                 .collect();
@@ -334,7 +334,7 @@ fn python_executables_from_installed<'a>(
                     .map_err(Error::from)
             })
             .flatten_ok()
-            .map_ok(|executable| PythonExecutableGroup(vec![executable])),
+            .map_ok(PythonExecutableGroup::singleton),
         ),
         Err(err) => Box::new(iter::once(Err(Error::from(err)))),
     };
@@ -390,10 +390,10 @@ fn python_executables<'a>(
         env::var_os(EnvVars::UV_INTERNAL__PARENT_INTERPRETER)
             .into_iter()
             .map(|path| {
-                Ok(PythonExecutableGroup(vec![(
+                Ok(PythonExecutableGroup::singleton((
                     PythonSource::ParentInterpreter,
                     PathBuf::from(path),
-                )]))
+                )))
             })
     })
     .flatten();
@@ -404,16 +404,16 @@ fn python_executables<'a>(
             .into_iter()
             .map(virtualenv_python_executable)
             .map(|path| {
-                Ok(PythonExecutableGroup(vec![(
+                Ok(PythonExecutableGroup::singleton((
                     PythonSource::BaseCondaPrefix,
                     path,
-                )]))
+                )))
             })
     })
     .flatten();
 
-    let from_virtual_environments = python_executables_from_virtual_environments()
-        .map_ok(|executable| PythonExecutableGroup(vec![executable]));
+    let from_virtual_environments =
+        python_executables_from_virtual_environments().map_ok(PythonExecutableGroup::singleton);
     let from_installed =
         python_executables_from_installed(version, implementation, platform, preference);
 
@@ -471,17 +471,14 @@ fn python_executables_from_search_path<'a>(
 ) -> impl Iterator<Item = Vec<PathBuf>> + 'a {
     // `UV_PYTHON_SEARCH_PATH` can be used to override `PATH` for Python executable discovery
     let search_path = env::var_os(EnvVars::UV_PYTHON_SEARCH_PATH)
-        .unwrap_or(env::var_os(EnvVars::PATH).unwrap_or_default());
+        .or_else(|| env::var_os(EnvVars::PATH))
+        .unwrap_or_default();
 
-    let possible_names: Vec<_> = version
-        .executable_names(implementation)
-        .into_iter()
-        .map(|name| name.to_string())
-        .collect();
+    let possible_names = version.executable_names(implementation);
 
     trace!(
         "Searching PATH for executables: {}",
-        possible_names.join(", ")
+        possible_names.iter().join(", ")
     );
 
     // Split and iterate over the paths instead of using `which_all` so we can
@@ -492,14 +489,12 @@ fn python_executables_from_search_path<'a>(
     search_dirs
         .into_iter()
         .filter(|dir| dir.is_dir())
-        .flat_map(move |dir| {
-            // Clone the directory for second closure
-            let dir_clone = dir.clone();
+        .filter(move |dir| {
             trace!(
                 "Checking `PATH` directory for interpreters: {}",
                 dir.display()
             );
-            same_file::Handle::from_path(&dir)
+            same_file::Handle::from_path(dir)
                 // Skip directories we've already seen, to avoid inspecting interpreters multiple
                 // times when directories are repeated or symlinked in the `PATH`
                 .map(|handle| seen_dirs.insert(handle))
@@ -510,52 +505,48 @@ fn python_executables_from_search_path<'a>(
                 })
                 // If we cannot determine if the directory is unique, we'll assume it is
                 .unwrap_or(true)
+        })
+        .flat_map(move |dir| {
+            let minor_version_directory = dir.clone();
+            // TODO(zanieb): Consider moving `python.bat` into `possible_names` to avoid a chain
+            let batch_executables = cfg!(windows)
                 .then(|| {
-                    let minor_version_directory = dir_clone.clone();
-
-                    possible_names
-                        .clone()
+                    which::which_in_global("python.bat", Some(&dir))
                         .into_iter()
-                        .flat_map(move |name| {
-                            // Since we're just working with a single directory at a time, we collect to simplify ownership
-                            which::which_in_global(&*name, Some(&dir))
-                                .into_iter()
-                                .flatten()
-                                .filter(|path| !is_windows_store_shim(path))
-                                .map(|path| vec![path])
-                                // We have to collect since `which` requires that the regex outlives its
-                                // parameters, and the dir is local while we return the iterator.
-                                .collect::<Vec<_>>()
-                        })
-                        .chain(
-                            iter::once_with(move || {
-                                find_all_minor(implementation, version, &minor_version_directory)
-                                    .filter(|path| !is_windows_store_shim(path))
-                                    .collect::<Vec<_>>()
-                            })
-                            .filter(|paths| !paths.is_empty()),
-                        )
-                        .inspect(|paths| {
-                            for path in paths {
-                                trace!("Found possible Python executable: {}", path.display());
-                            }
-                        })
-                        .chain(
-                            // TODO(zanieb): Consider moving `python.bat` into `possible_names` to avoid a chain
-                            cfg!(windows)
-                                .then(move || {
-                                    which::which_in_global("python.bat", Some(&dir_clone))
-                                        .into_iter()
-                                        .flatten()
-                                        .map(|path| vec![path])
-                                        .collect::<Vec<_>>()
-                                })
-                                .into_iter()
-                                .flatten(),
-                        )
+                        .flatten()
+                        .map(|path| vec![path])
+                        .collect::<Vec<_>>()
                 })
                 .into_iter()
-                .flatten()
+                .flatten();
+
+            possible_names
+                .clone()
+                .into_iter()
+                .flat_map(move |name| {
+                    which::which_in_global(name.to_string(), Some(&dir))
+                        .into_iter()
+                        .flatten()
+                        .filter(|path| !is_windows_store_shim(path))
+                        .map(|path| vec![path])
+                        // Collect the search results while the iterator can borrow its inputs.
+                        .collect::<Vec<_>>()
+                })
+                .chain(
+                    iter::once_with(move || {
+                        let mut paths =
+                            find_all_minor(implementation, version, &minor_version_directory);
+                        paths.retain(|path| !is_windows_store_shim(path));
+                        paths
+                    })
+                    .filter(|paths| !paths.is_empty()),
+                )
+                .inspect(|paths| {
+                    for path in paths {
+                        trace!("Found possible Python executable: {}", path.display());
+                    }
+                })
+                .chain(batch_executables)
         })
 }
 
@@ -567,27 +558,15 @@ fn find_all_minor(
     implementation: Option<&ImplementationName>,
     version_request: &VersionRequest,
     dir: &Path,
-) -> impl Iterator<Item = PathBuf> + use<> {
+) -> Vec<PathBuf> {
     match version_request {
         &VersionRequest::Any
         | VersionRequest::Default
         | VersionRequest::Major(_, _)
         | VersionRequest::Range(_, _) => {
-            let regex = if let Some(implementation) = implementation {
-                Regex::new(&format!(
-                    r"^({}|python3)\.(?<minor>\d\d?)t?{}$",
-                    regex::escape(&implementation.to_string()),
-                    regex::escape(EXE_SUFFIX)
-                ))
-                .unwrap()
-            } else {
-                Regex::new(&format!(
-                    r"^python3\.(?<minor>\d\d?)t?{}$",
-                    regex::escape(EXE_SUFFIX)
-                ))
-                .unwrap()
-            };
-            let all_minors = fs_err::read_dir(dir)
+            static MINOR_VERSION: LazyLock<Regex> =
+                LazyLock::new(|| Regex::new(r"^(?<minor>\d\d?)t?$").unwrap());
+            fs_err::read_dir(dir)
                 .into_iter()
                 .flatten()
                 .flatten()
@@ -599,7 +578,19 @@ fn find_all_minor(
                     let Some(filename) = filename.to_str() else {
                         return false;
                     };
-                    let Some(captures) = regex.captures(filename) else {
+                    let Some((name, version)) = filename
+                        .strip_suffix(EXE_SUFFIX)
+                        .and_then(|filename| filename.split_once('.'))
+                    else {
+                        return false;
+                    };
+                    if name != "python3"
+                        && implementation
+                            .is_none_or(|implementation| name != implementation.long_name())
+                    {
+                        return false;
+                    }
+                    let Some(captures) = MINOR_VERSION.captures(version) else {
                         return false;
                     };
 
@@ -618,13 +609,12 @@ fn find_all_minor(
                     true
                 })
                 .filter(|path| is_executable(path))
-                .collect::<Vec<_>>();
-            Either::Left(all_minors.into_iter())
+                .collect()
         }
         VersionRequest::MajorMinor(_, _, _)
         | VersionRequest::MajorMinorPatch(_, _, _, _)
         | VersionRequest::MajorMinorPrerelease(_, _, _, _)
-        | VersionRequest::MajorMinorPatchPrerelease(_, _, _, _, _) => Either::Right(iter::empty()),
+        | VersionRequest::MajorMinorPatchPrerelease(_, _, _, _, _) => Vec::new(),
     }
 }
 
@@ -714,14 +704,13 @@ fn python_installations_from_executables<'a>(
         })),
         QueryStrategy::Parallel => {
             let items: Vec<Result<PythonExecutableGroup, Error>> = executables.collect();
-            let results: Vec<Vec<Result<PythonInstallation, Error>>> = items
+            let results: Vec<_> = items
                 .into_par_iter()
-                .map(|group| {
+                .flat_map_iter(|group| {
                     python_installations_from_executable_group(group, cache, strategy)
-                        .collect::<Vec<_>>()
                 })
                 .collect();
-            Box::new(results.into_iter().flatten())
+            Box::new(results.into_iter())
         }
     }
 }
@@ -778,42 +767,27 @@ fn source_satisfies_environment_preference(
     interpreter_path: &Path,
     preference: EnvironmentPreference,
 ) -> bool {
-    match preference {
-        EnvironmentPreference::Any => true,
-        EnvironmentPreference::OnlyVirtual => {
-            if source.is_maybe_virtualenv() {
-                true
-            } else {
-                debug!(
-                    "Ignoring Python interpreter at `{}`: only virtual environments allowed",
-                    interpreter_path.display()
-                );
-                false
-            }
-        }
-        EnvironmentPreference::ExplicitSystem => {
-            if source.is_maybe_virtualenv() {
-                true
-            } else {
-                debug!(
-                    "Ignoring Python interpreter at `{}`: system interpreter not explicitly requested",
-                    interpreter_path.display()
-                );
-                false
-            }
-        }
+    let (satisfied, reason) = match preference {
+        EnvironmentPreference::Any => return true,
+        EnvironmentPreference::OnlyVirtual => (
+            source.is_maybe_virtualenv(),
+            "only virtual environments allowed",
+        ),
+        EnvironmentPreference::ExplicitSystem => (
+            source.is_maybe_virtualenv(),
+            "system interpreter not explicitly requested",
+        ),
         EnvironmentPreference::OnlySystem => {
-            if source.is_maybe_system() {
-                true
-            } else {
-                debug!(
-                    "Ignoring Python interpreter at `{}`: system interpreter required",
-                    interpreter_path.display()
-                );
-                false
-            }
+            (source.is_maybe_system(), "system interpreter required")
         }
+    };
+    if !satisfied {
+        debug!(
+            "Ignoring Python interpreter at `{}`: {reason}",
+            interpreter_path.display()
+        );
     }
+    satisfied
 }
 
 /// Check if an encountered error is critical and should stop discovery.
@@ -881,18 +855,6 @@ impl Error {
     }
 }
 
-/// Create a [`PythonInstallation`] from a Python installation root directory.
-fn python_installation_from_directory(
-    path: &PathBuf,
-    cache: &Cache,
-) -> Result<PythonInstallation, uv_python_interpreter::InterpreterError> {
-    let executable = virtualenv_python_executable(path);
-    Ok(PythonInstallation {
-        source: PythonSource::ProvidedPath,
-        interpreter: Interpreter::query(&executable, cache)?,
-    })
-}
-
 /// Lazily iterate over all Python executable paths on the path with the given executable name.
 fn python_executables_with_name(
     name: &str,
@@ -909,8 +871,7 @@ fn python_installations_with_name<'a>(
     strategy: QueryStrategy,
 ) -> Box<dyn Iterator<Item = Result<PythonInstallation, Error>> + 'a> {
     python_installations_from_executables(
-        python_executables_with_name(name)
-            .map_ok(|executable| PythonExecutableGroup(vec![executable])),
+        python_executables_with_name(name).map_ok(PythonExecutableGroup::singleton),
         cache,
         strategy,
     )
@@ -957,40 +918,20 @@ fn find_python_installations_with_strategy<'a>(
     .sources(request);
 
     match request {
-        PythonRequest::File(path) => Box::new(iter::once({
+        PythonRequest::File(path) | PythonRequest::Directory(path) => Box::new(iter::once({
             if preference.allows_source(PythonSource::ProvidedPath) {
-                debug!("Checking for Python interpreter at {request}");
-                match Interpreter::query(path, cache) {
+                let interpreter = if matches!(request, PythonRequest::File(_)) {
+                    debug!("Checking for Python interpreter at {request}");
+                    Interpreter::query(path, cache)
+                } else {
+                    debug!("Checking for Python interpreter in {request}");
+                    Interpreter::query(virtualenv_python_executable(path), cache)
+                };
+                match interpreter {
                     Ok(interpreter) => Ok(Ok(PythonInstallation {
                         source: PythonSource::ProvidedPath,
                         interpreter,
                     })),
-                    Err(InterpreterError::NotFound(_) | InterpreterError::BrokenLink(_)) => {
-                        Ok(Err(PythonNotFound {
-                            request: request.clone(),
-                            python_preference: preference,
-                            environment_preference: environments,
-                        }))
-                    }
-                    Err(err) => Err(Error::Query(
-                        Box::new(err),
-                        path.clone(),
-                        PythonSource::ProvidedPath,
-                    )),
-                }
-            } else {
-                Err(Error::SourceNotAllowed(
-                    request.clone(),
-                    PythonSource::ProvidedPath,
-                    preference,
-                ))
-            }
-        })),
-        PythonRequest::Directory(path) => Box::new(iter::once({
-            if preference.allows_source(PythonSource::ProvidedPath) {
-                debug!("Checking for Python interpreter in {request}");
-                match python_installation_from_directory(path, cache) {
-                    Ok(installation) => Ok(Ok(installation)),
                     Err(InterpreterError::NotFound(_) | InterpreterError::BrokenLink(_)) => {
                         Ok(Err(PythonNotFound {
                             request: request.clone(),
@@ -1180,8 +1121,8 @@ pub fn find_all_python_installations(
 
 /// Find a Python installation that satisfies the given request.
 ///
-/// If an error is encountered while locating or inspecting a candidate installation,
-/// the error will raised instead of attempting further candidates.
+/// Critical discovery errors stop the search. The first noncritical error is returned if the
+/// search finds no usable installation.
 pub(crate) fn find_python_installation(
     request: &PythonRequest,
     environments: EnvironmentPreference,
@@ -1195,20 +1136,13 @@ pub(crate) fn find_python_installation(
     let mut first_managed = None;
     let mut first_error = None;
     for result in installations {
-        // Iterate until the first critical error or happy result
-        if !result.as_ref().err().is_none_or(Error::is_critical) {
-            // Track the first non-critical error
-            if first_error.is_none()
-                && let Err(err) = result
-            {
-                first_error = Some(err);
+        let installation = match result {
+            Ok(Ok(installation)) => installation,
+            Err(err) if !err.is_critical() => {
+                first_error.get_or_insert(err);
+                continue;
             }
-            continue;
-        }
-
-        // If it's an error, we're done.
-        let Ok(Ok(installation)) = result else {
-            return result;
+            result => return result,
         };
 
         // Check if we need to skip the interpreter because it is "not allowed", e.g., if it is a
@@ -1230,9 +1164,7 @@ pub(crate) fn find_python_installation(
             && !has_default_executable_name
         {
             debug!("Skipping pre-release installation {}", installation.key());
-            if first_prerelease.is_none() {
-                first_prerelease = Some(installation);
-            }
+            first_prerelease.get_or_insert(installation);
             continue;
         }
 
@@ -1244,17 +1176,13 @@ pub(crate) fn find_python_installation(
             && !has_default_executable_name
         {
             debug!("Skipping debug installation {}", installation.key());
-            if first_debug.is_none() {
-                first_debug = Some(installation);
-            }
+            first_debug.get_or_insert(installation);
             continue;
         }
 
-        // If it's an alternative implementation and alternative implementations aren't allowed,
-        // skip it. Note we avoid querying these interpreters at all if they're on the search path
-        // and are not requested, but other sources such as the managed installations can include
-        // them.
-        if installation.is_alternative_implementation()
+        // Unrequested alternative implementations on the search path are filtered before querying,
+        // but other sources, such as managed installations, can still yield them.
+        if installation.requires_alternative_implementation_opt_in()
             && !request.allows_alternative_implementations()
             && !installation.source.allows_alternative_implementations()
             && !has_default_executable_name
@@ -1270,9 +1198,7 @@ pub(crate) fn find_python_installation(
                 "Skipping managed installation {}: system installation preferred",
                 installation.key()
             );
-            if first_managed.is_none() {
-                first_managed = Some(installation);
-            }
+            first_managed.get_or_insert(installation);
             continue;
         }
 
@@ -1343,7 +1269,7 @@ pub(crate) async fn find_best_python_installation(
     environments: EnvironmentPreference,
     preference: PythonPreference,
     arch: Option<PythonArchitecture>,
-    downloads_enabled: bool,
+    mut allow_downloads: bool,
     client_builder: &BaseClientBuilder<'_>,
     cache: &Cache,
     reporter: Option<&dyn uv_python_managed::downloads::Reporter>,
@@ -1353,7 +1279,6 @@ pub(crate) async fn find_best_python_installation(
     debug!("Starting Python discovery for {request}");
     let original_request = request;
 
-    let mut previous_fetch_failed = false;
     let mut download_state = None;
 
     let request_without_patch = match request {
@@ -1396,8 +1321,7 @@ pub(crate) async fn find_best_python_installation(
         };
 
         // Attempt to download the version if downloads are enabled
-        if downloads_enabled
-            && !previous_fetch_failed
+        if allow_downloads
             && let Some(download_request) = PythonDownloadRequest::from_request(request)
         {
             let (client, retry_policy, download_list) =
@@ -1419,7 +1343,6 @@ pub(crate) async fn find_best_python_installation(
                 };
 
             let download = download_request
-                .clone()
                 .with_default_arch(arch.map(PythonArchitecture::into_inner))
                 .fill()
                 .map(|request| download_list.find(&request));
@@ -1439,32 +1362,25 @@ pub(crate) async fn find_best_python_installation(
                 Ok(Err(error)) => Err(error.into()),
                 Err(error) => Err(error.into()),
             };
-            if let Ok(Some(installation)) = result {
-                return Ok(installation);
-            }
-            // Emit a warning instead of failing since we may find a suitable
-            // interpreter on the system after relaxing the request further.
-            // Additionally, uv did not previously attempt downloads in this
-            // code path and we want to minimize the fatal cases for
-            // backwards compatibility.
-            // Errors encountered here are either network errors or quirky
-            // configuration problems.
-            if let Err(error) = result {
-                // If the request was for the default or any version, propagate
-                // the error as nothing else we are about to do will help the
-                // situation.
-                if matches!(request, PythonRequest::Default | PythonRequest::Any) {
+            match result {
+                Ok(Some(installation)) => return Ok(installation),
+                Ok(None) => {}
+                // Default and any-version requests cannot be relaxed further.
+                Err(error) if matches!(request, PythonRequest::Default | PythonRequest::Any) => {
                     return Err(error);
                 }
-
-                warn_user_with_chain!(
-                    anyhow::Error::from(error)
-                        .context(format!(
-                            "A managed Python download is available for {request}, but an error occurred when attempting to download it."
-                        ))
-                        .as_ref()
-                );
-                previous_fetch_failed = true;
+                Err(error) => {
+                    // A failed download must not prevent a less-specific request from matching a
+                    // system interpreter.
+                    warn_user_with_chain!(
+                        anyhow::Error::from(error)
+                            .context(format!(
+                                "A managed Python download is available for {request}, but an error occurred when attempting to download it."
+                            ))
+                            .as_ref()
+                    );
+                    allow_downloads = false;
+                }
             }
         }
 
@@ -1646,39 +1562,23 @@ impl DiscoveryPreferences {
     /// Return a string describing the sources that are considered when searching for Python with
     /// the given preferences.
     fn sources(&self, request: &PythonRequest) -> String {
-        let python_sources = self
-            .python_preference
-            .sources()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        match self.environment_preference {
-            EnvironmentPreference::Any => disjunction(
-                &["virtual environments"]
-                    .into_iter()
-                    .chain(python_sources.iter().map(String::as_str))
-                    .collect::<Vec<_>>(),
-            ),
-            EnvironmentPreference::ExplicitSystem => {
-                if request.is_explicit_system() {
-                    disjunction(
-                        &["virtual environments"]
-                            .into_iter()
-                            .chain(python_sources.iter().map(String::as_str))
-                            .collect::<Vec<_>>(),
-                    )
-                } else {
-                    disjunction(&["virtual environments"])
-                }
-            }
-            EnvironmentPreference::OnlySystem => disjunction(
-                &python_sources
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>(),
-            ),
-            EnvironmentPreference::OnlyVirtual => disjunction(&["virtual environments"]),
-        }
+        let (include_virtual, include_system) = match self.environment_preference {
+            EnvironmentPreference::Any => (true, true),
+            EnvironmentPreference::ExplicitSystem => (true, request.is_explicit_system()),
+            EnvironmentPreference::OnlySystem => (false, true),
+            EnvironmentPreference::OnlyVirtual => (true, false),
+        };
+        let virtual_source = include_virtual.then_some(Either::Left("virtual environments"));
+        let system_sources = if include_system {
+            self.python_preference.sources()
+        } else {
+            &[]
+        };
+        disjunction(
+            virtual_source
+                .into_iter()
+                .chain(system_sources.iter().map(Either::Right)),
+        )
     }
 }
 
@@ -1708,19 +1608,20 @@ impl fmt::Display for PythonNotFound {
 }
 
 /// Join a series of items with `or` separators, making use of commas when necessary.
-fn disjunction(items: &[&str]) -> String {
-    match items.len() {
-        0 => String::new(),
-        1 => items[0].to_string(),
-        2 => format!("{} or {}", items[0], items[1]),
-        _ => {
-            let last = items.last().unwrap();
-            format!(
-                "{}, or {}",
-                items.iter().take(items.len() - 1).join(", "),
-                last
-            )
-        }
+fn disjunction<T: fmt::Display>(mut items: impl DoubleEndedIterator<Item = T>) -> String {
+    let Some(first) = items.next() else {
+        return String::new();
+    };
+    let Some(last) = items.next_back() else {
+        return first.to_string();
+    };
+    if let Some(second) = items.next() {
+        format!(
+            "{first}, {}, or {last}",
+            iter::once(second).chain(items).format(", ")
+        )
+    } else {
+        format!("{first} or {last}")
     }
 }
 
