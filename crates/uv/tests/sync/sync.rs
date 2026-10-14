@@ -13810,10 +13810,10 @@ fn sync_dry_run_and_locked() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
 
-    let updated = context.read("uv.lock");
-
-    // And the lockfile should be unchanged.
-    assert_eq!(existing, updated);
+    assert_eq!(context.read("uv.lock"), existing);
+    context
+        .assert_command("import importlib.util; assert importlib.util.find_spec('iniconfig') is None")
+        .success();
 
     Ok(())
 }
@@ -13835,6 +13835,7 @@ fn sync_dry_run_and_frozen() -> Result<()> {
 
     // Lock the initial requirements.
     context.lock().assert().success();
+    let existing = context.read("uv.lock");
 
     // Update the requirements.
     pyproject_toml.write_str(
@@ -13858,6 +13859,10 @@ fn sync_dry_run_and_frozen() -> Result<()> {
      + idna==3.6
      + sniffio==1.3.1
     ");
+    assert_eq!(context.read("uv.lock"), existing);
+    context
+        .assert_command("import importlib.util; assert importlib.util.find_spec('anyio') is None")
+        .success();
 
     Ok(())
 }
