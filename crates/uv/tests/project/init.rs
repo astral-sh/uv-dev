@@ -2705,9 +2705,9 @@ fn init_non_ascii_directory() -> Result<()> {
     Ok(())
 }
 
-/// Run `uv init` with an invalid `pyproject.toml` in a parent directory.
+/// An invalid parent workspace prevents initialization unless discovery is explicitly bypassed.
 #[test]
-fn init_failure() -> Result<()> {
+fn init_invalid_parent_workspace() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     // Create an empty `pyproject.toml`.
@@ -2720,6 +2720,10 @@ fn init_failure() -> Result<()> {
     error: Failed to discover parent workspace; use `uv init --no-workspace` to ignore
       cause: No `project` table found in: [TEMP_DIR]/pyproject.toml
     ");
+    context
+        .temp_dir
+        .child("foo")
+        .assert(predicate::path::missing());
 
     uv_snapshot!(context.filters(), context.init().arg("foo").arg("--no-workspace"), @"
     exit_code: 0 (success)
@@ -2727,29 +2731,11 @@ fn init_failure() -> Result<()> {
     Initialized project `foo` at `[TEMP_DIR]/foo`
     ");
 
-    let workspace = context.read("foo/pyproject.toml");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            workspace, @r#"
-        [project]
-        name = "foo"
-        version = "0.1.0"
-        description = "Add your description here"
-        readme = "README.md"
-        requires-python = ">=3.12"
-        dependencies = []
-
-        [project.scripts]
-        foo = "foo:main"
-
-        [build-system]
-        requires = ["uv_build>=[CURRENT_VERSION],<[NEXT_BREAKING]"]
-        build-backend = "uv_build"
-        "#
-        );
-    });
+    context
+        .temp_dir
+        .child("foo/pyproject.toml")
+        .assert(predicate::path::is_file());
+    pyproject_toml.assert("");
 
     Ok(())
 }
