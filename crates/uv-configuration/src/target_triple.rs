@@ -736,14 +736,26 @@ pub enum TargetTriple {
     X8664IosSimulator,
 }
 
-/// The operating-system family of a supported target triple.
+/// The operating system of a supported target triple.
 enum TargetOs {
     Windows,
     Linux,
     Macos,
     Android,
-    Emscripten,
+    Emscripten { release: &'static str },
     Ios,
+}
+
+impl TargetOs {
+    /// Return the `platform_release` and `platform_version` markers.
+    fn platform_release_and_version(self) -> (&'static str, &'static str) {
+        match self {
+            // Emscripten reports `#1` as the platform version:
+            // https://github.com/emscripten-core/emscripten/blob/4.0.8/system/lib/libc/emscripten_syscall_stubs.c#L63
+            Self::Emscripten { release } => (release, "#1"),
+            Self::Windows | Self::Linux | Self::Macos | Self::Android | Self::Ios => ("", ""),
+        }
+    }
 }
 
 impl TargetTriple {
@@ -1370,7 +1382,7 @@ impl TargetTriple {
         }
     }
 
-    /// Classify the target independently of its architecture and platform version.
+    /// Return the target's operating system and known release.
     fn os(self) -> TargetOs {
         match self {
             Self::Windows
@@ -1445,180 +1457,11 @@ impl TargetTriple {
             | Self::LoongArch64Manylinux240 => TargetOs::Linux,
             Self::Macos | Self::Aarch64AppleDarwin | Self::X8664AppleDarwin => TargetOs::Macos,
             Self::Aarch64LinuxAndroid | Self::X8664LinuxAndroid => TargetOs::Android,
-            Self::Wasm32Pyodide2024 | Self::Wasm32Pyodide2025 => TargetOs::Emscripten,
+            // Emscripten compiler version: https://pyodide.org/en/stable/development/abi/312.html
+            Self::Wasm32Pyodide2024 => TargetOs::Emscripten { release: "3.1.58" },
+            // Emscripten compiler version: https://pyodide.org/en/stable/development/abi/313.html
+            Self::Wasm32Pyodide2025 => TargetOs::Emscripten { release: "4.0.9" },
             Self::Arm64Ios | Self::Arm64IosSimulator | Self::X8664IosSimulator => TargetOs::Ios,
-        }
-    }
-
-    /// Return the `platform_version` value for the target.
-    fn platform_version(self) -> &'static str {
-        match self {
-            Self::Windows | Self::X8664PcWindowsMsvc => "",
-            Self::Aarch64PcWindowsMsvc => "",
-            Self::Linux | Self::X8664UnknownLinuxGnu => "",
-            Self::Macos | Self::Aarch64AppleDarwin => "",
-            Self::I686PcWindowsMsvc => "",
-            Self::X8664AppleDarwin => "",
-            Self::Aarch64UnknownLinuxGnu => "",
-            Self::Aarch64UnknownLinuxMusl => "",
-            Self::X8664UnknownLinuxMusl => "",
-            Self::Riscv64UnknownLinuxGnu => "",
-            Self::S390XUnknownLinuxGnu => "",
-            Self::Powerpc64LeUnknownLinuxGnu => "",
-            Self::LoongArch64UnknownLinuxGnu => "",
-            Self::X8664Manylinux2014 => "",
-            Self::X8664Manylinux217 => "",
-            Self::X8664Manylinux228 => "",
-            Self::X8664Manylinux231 => "",
-            Self::X8664Manylinux232 => "",
-            Self::X8664Manylinux233 => "",
-            Self::X8664Manylinux234 => "",
-            Self::X8664Manylinux235 => "",
-            Self::X8664Manylinux236 => "",
-            Self::X8664Manylinux237 => "",
-            Self::X8664Manylinux238 => "",
-            Self::X8664Manylinux239 => "",
-            Self::X8664Manylinux240 => "",
-            Self::Aarch64Manylinux2014 => "",
-            Self::Aarch64Manylinux217 => "",
-            Self::Aarch64Manylinux228 => "",
-            Self::Aarch64Manylinux231 => "",
-            Self::Aarch64Manylinux232 => "",
-            Self::Aarch64Manylinux233 => "",
-            Self::Aarch64Manylinux234 => "",
-            Self::Aarch64Manylinux235 => "",
-            Self::Aarch64Manylinux236 => "",
-            Self::Aarch64Manylinux237 => "",
-            Self::Aarch64Manylinux238 => "",
-            Self::Aarch64Manylinux239 => "",
-            Self::Aarch64Manylinux240 => "",
-            Self::S390XManylinux2014 => "",
-            Self::S390XManylinux217 => "",
-            Self::S390XManylinux228 => "",
-            Self::S390XManylinux231 => "",
-            Self::S390XManylinux232 => "",
-            Self::S390XManylinux233 => "",
-            Self::S390XManylinux234 => "",
-            Self::S390XManylinux235 => "",
-            Self::S390XManylinux236 => "",
-            Self::S390XManylinux237 => "",
-            Self::S390XManylinux238 => "",
-            Self::S390XManylinux239 => "",
-            Self::S390XManylinux240 => "",
-            Self::Powerpc64LeManylinux2014 => "",
-            Self::Powerpc64LeManylinux217 => "",
-            Self::Powerpc64LeManylinux228 => "",
-            Self::Powerpc64LeManylinux231 => "",
-            Self::Powerpc64LeManylinux232 => "",
-            Self::Powerpc64LeManylinux233 => "",
-            Self::Powerpc64LeManylinux234 => "",
-            Self::Powerpc64LeManylinux235 => "",
-            Self::Powerpc64LeManylinux236 => "",
-            Self::Powerpc64LeManylinux237 => "",
-            Self::Powerpc64LeManylinux238 => "",
-            Self::Powerpc64LeManylinux239 => "",
-            Self::Powerpc64LeManylinux240 => "",
-            Self::LoongArch64Manylinux236 => "",
-            Self::LoongArch64Manylinux237 => "",
-            Self::LoongArch64Manylinux238 => "",
-            Self::LoongArch64Manylinux239 => "",
-            Self::LoongArch64Manylinux240 => "",
-            Self::Aarch64LinuxAndroid => "",
-            Self::X8664LinuxAndroid => "",
-            // This is the value Emscripten gives for its version:
-            // https://github.com/emscripten-core/emscripten/blob/4.0.8/system/lib/libc/emscripten_syscall_stubs.c#L63
-            // It doesn't really seem to mean anything? But for completeness we include it here.
-            Self::Wasm32Pyodide2024 => "#1",
-            Self::Wasm32Pyodide2025 => "#1",
-            Self::Arm64Ios => "",
-            Self::Arm64IosSimulator => "",
-            Self::X8664IosSimulator => "",
-        }
-    }
-
-    /// Return the `platform_release` value for the target.
-    fn platform_release(self) -> &'static str {
-        match self {
-            Self::Windows | Self::X8664PcWindowsMsvc => "",
-            Self::Aarch64PcWindowsMsvc => "",
-            Self::Linux | Self::X8664UnknownLinuxGnu => "",
-            Self::Macos | Self::Aarch64AppleDarwin => "",
-            Self::I686PcWindowsMsvc => "",
-            Self::X8664AppleDarwin => "",
-            Self::Aarch64UnknownLinuxGnu => "",
-            Self::Aarch64UnknownLinuxMusl => "",
-            Self::X8664UnknownLinuxMusl => "",
-            Self::Riscv64UnknownLinuxGnu => "",
-            Self::S390XUnknownLinuxGnu => "",
-            Self::Powerpc64LeUnknownLinuxGnu => "",
-            Self::LoongArch64UnknownLinuxGnu => "",
-            Self::X8664Manylinux2014 => "",
-            Self::X8664Manylinux217 => "",
-            Self::X8664Manylinux228 => "",
-            Self::X8664Manylinux231 => "",
-            Self::X8664Manylinux232 => "",
-            Self::X8664Manylinux233 => "",
-            Self::X8664Manylinux234 => "",
-            Self::X8664Manylinux235 => "",
-            Self::X8664Manylinux236 => "",
-            Self::X8664Manylinux237 => "",
-            Self::X8664Manylinux238 => "",
-            Self::X8664Manylinux239 => "",
-            Self::X8664Manylinux240 => "",
-            Self::Aarch64Manylinux2014 => "",
-            Self::Aarch64Manylinux217 => "",
-            Self::Aarch64Manylinux228 => "",
-            Self::Aarch64Manylinux231 => "",
-            Self::Aarch64Manylinux232 => "",
-            Self::Aarch64Manylinux233 => "",
-            Self::Aarch64Manylinux234 => "",
-            Self::Aarch64Manylinux235 => "",
-            Self::Aarch64Manylinux236 => "",
-            Self::Aarch64Manylinux237 => "",
-            Self::Aarch64Manylinux238 => "",
-            Self::Aarch64Manylinux239 => "",
-            Self::Aarch64Manylinux240 => "",
-            Self::S390XManylinux2014 => "",
-            Self::S390XManylinux217 => "",
-            Self::S390XManylinux228 => "",
-            Self::S390XManylinux231 => "",
-            Self::S390XManylinux232 => "",
-            Self::S390XManylinux233 => "",
-            Self::S390XManylinux234 => "",
-            Self::S390XManylinux235 => "",
-            Self::S390XManylinux236 => "",
-            Self::S390XManylinux237 => "",
-            Self::S390XManylinux238 => "",
-            Self::S390XManylinux239 => "",
-            Self::S390XManylinux240 => "",
-            Self::Powerpc64LeManylinux2014 => "",
-            Self::Powerpc64LeManylinux217 => "",
-            Self::Powerpc64LeManylinux228 => "",
-            Self::Powerpc64LeManylinux231 => "",
-            Self::Powerpc64LeManylinux232 => "",
-            Self::Powerpc64LeManylinux233 => "",
-            Self::Powerpc64LeManylinux234 => "",
-            Self::Powerpc64LeManylinux235 => "",
-            Self::Powerpc64LeManylinux236 => "",
-            Self::Powerpc64LeManylinux237 => "",
-            Self::Powerpc64LeManylinux238 => "",
-            Self::Powerpc64LeManylinux239 => "",
-            Self::Powerpc64LeManylinux240 => "",
-            Self::LoongArch64Manylinux236 => "",
-            Self::LoongArch64Manylinux237 => "",
-            Self::LoongArch64Manylinux238 => "",
-            Self::LoongArch64Manylinux239 => "",
-            Self::LoongArch64Manylinux240 => "",
-            Self::Aarch64LinuxAndroid => "",
-            Self::X8664LinuxAndroid => "",
-            // This is the Emscripten compiler version for Pyodide 2024.
-            // See https://pyodide.org/en/stable/development/abi/312.html
-            Self::Wasm32Pyodide2024 => "3.1.58",
-            // See https://pyodide.org/en/stable/development/abi/313.html
-            Self::Wasm32Pyodide2025 => "4.0.9",
-            Self::Arm64Ios => "",
-            Self::Arm64IosSimulator => "",
-            Self::X8664IosSimulator => "",
         }
     }
 
@@ -1629,7 +1472,7 @@ impl TargetTriple {
             TargetOs::Windows
             | TargetOs::Macos
             | TargetOs::Android
-            | TargetOs::Emscripten
+            | TargetOs::Emscripten { .. }
             | TargetOs::Ios => false,
         }
     }
@@ -1640,20 +1483,22 @@ impl TargetTriple {
     /// The returned [`MarkerEnvironment`] will preserve the base environment's Python version
     /// markers, but override its platform markers.
     pub fn markers(self, base: MarkerEnvironment) -> MarkerEnvironment {
-        let (os_name, platform_system, sys_platform) = match self.os() {
+        let os = self.os();
+        let (os_name, platform_system, sys_platform) = match &os {
             TargetOs::Windows => ("nt", "Windows", "win32"),
             TargetOs::Linux => ("posix", "Linux", "linux"),
             TargetOs::Macos => ("posix", "Darwin", "darwin"),
             TargetOs::Android => ("posix", "Android", "android"),
-            TargetOs::Emscripten => ("posix", "Emscripten", "emscripten"),
+            TargetOs::Emscripten { .. } => ("posix", "Emscripten", "emscripten"),
             TargetOs::Ios => ("posix", "iOS", "ios"),
         };
+        let (platform_release, platform_version) = os.platform_release_and_version();
         base.with_os_name(os_name)
             .with_platform_machine(self.platform_machine())
             .with_platform_system(platform_system)
             .with_sys_platform(sys_platform)
-            .with_platform_release(self.platform_release())
-            .with_platform_version(self.platform_version())
+            .with_platform_release(platform_release)
+            .with_platform_version(platform_version)
     }
 }
 
