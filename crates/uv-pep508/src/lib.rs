@@ -196,30 +196,38 @@ fn fmt_requirement<T: Pep508Url + Display>(
     Ok(())
 }
 
+/// A Serde visitor that parses a string without allocating a temporary copy.
+struct ParseVisitor<F> {
+    expected: &'static str,
+    parse: F,
+}
+
+impl<T, E, F> de::Visitor<'_> for ParseVisitor<F>
+where
+    F: FnOnce(&str) -> Result<T, E>,
+    E: Display,
+{
+    type Value = T;
+
+    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.expected)
+    }
+
+    fn visit_str<D: de::Error>(self, value: &str) -> Result<Self::Value, D> {
+        (self.parse)(value).map_err(D::custom)
+    }
+}
+
 /// <https://github.com/serde-rs/serde/issues/908#issuecomment-298027413>
 impl<'de, T: Pep508Url> Deserialize<'de> for Requirement<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct RequirementVisitor<T>(std::marker::PhantomData<T>);
-
-        impl<T: Pep508Url> serde::de::Visitor<'_> for RequirementVisitor<T> {
-            type Value = Requirement<T>;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a string containing a PEP 508 requirement")
-            }
-
-            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                FromStr::from_str(v).map_err(de::Error::custom)
-            }
-        }
-
-        deserializer.deserialize_str(RequirementVisitor(std::marker::PhantomData))
+        deserializer.deserialize_str(ParseVisitor {
+            expected: "a string containing a PEP 508 requirement",
+            parse: Self::from_str,
+        })
     }
 }
 
