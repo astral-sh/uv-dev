@@ -961,6 +961,23 @@ struct Project {
     dynamic: Option<Vec<String>>,
 }
 
+/// The string and table forms used by README and license metadata.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StringOrTable {
+    String(String),
+    Table(BTreeMap<String, StringOrIgnored>),
+    Ignored(de::IgnoredAny),
+}
+
+/// A non-string field can be ignored when another table form matches.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StringOrIgnored {
+    String(String),
+    Ignored(de::IgnoredAny),
+}
+
 /// The optional `project.readme` key in a pyproject.toml as specified in
 /// <https://packaging.python.org/en/latest/specifications/pyproject-toml/#readme>.
 #[derive(Debug, Clone)]
@@ -987,32 +1004,32 @@ impl<'de> Deserialize<'de> for Readme {
         D: Deserializer<'de>,
     {
         const EXPECTED: &str = "data did not match any variant of untagged enum Readme";
-        let value = toml::Value::deserialize(deserializer)?;
-        if let toml::Value::String(path) = value {
+        let value = StringOrTable::deserialize(deserializer)?;
+        if let StringOrTable::String(path) = value {
             return Ok(Self::String(PathBuf::from(path)));
         }
-        if let toml::Value::Table(mut fields) = value {
-            let Some(toml::Value::String(content_type)) = fields.remove("content-type") else {
+        if let StringOrTable::Table(mut fields) = value {
+            let Some(StringOrIgnored::String(content_type)) = fields.remove("content-type") else {
                 return Err(de::Error::custom(EXPECTED));
             };
             let charset = fields
                 .remove("charset")
                 .map(|value| {
-                    if let toml::Value::String(charset) = value {
+                    if let StringOrIgnored::String(charset) = value {
                         Ok(charset)
                     } else {
                         Err(de::Error::custom(EXPECTED))
                     }
                 })
                 .transpose()?;
-            if let Some(toml::Value::String(file)) = fields.remove("file") {
+            if let Some(StringOrIgnored::String(file)) = fields.remove("file") {
                 return Ok(Self::File {
                     file: PathBuf::from(file),
                     content_type,
                     charset,
                 });
             }
-            if let Some(toml::Value::String(text)) = fields.remove("text") {
+            if let Some(StringOrIgnored::String(text)) = fields.remove("text") {
                 return Ok(Self::Text {
                     text,
                     content_type,
@@ -1058,21 +1075,20 @@ impl<'de> Deserialize<'de> for License {
     where
         D: Deserializer<'de>,
     {
-        let value = toml::Value::deserialize(deserializer)?;
-        if let toml::Value::String(expression) = value {
+        const EXPECTED: &str = "data did not match any variant of untagged enum License";
+        let value = StringOrTable::deserialize(deserializer)?;
+        if let StringOrTable::String(expression) = value {
             return Ok(Self::Spdx(expression));
         }
-        if let toml::Value::Table(mut fields) = value {
-            if let Some(toml::Value::String(text)) = fields.remove("text") {
+        if let StringOrTable::Table(mut fields) = value {
+            if let Some(StringOrIgnored::String(text)) = fields.remove("text") {
                 return Ok(Self::Text { text });
             }
-            if let Some(toml::Value::String(file)) = fields.remove("file") {
+            if let Some(StringOrIgnored::String(file)) = fields.remove("file") {
                 return Ok(Self::File { file });
             }
         }
-        Err(de::Error::custom(
-            "data did not match any variant of untagged enum License",
-        ))
+        Err(de::Error::custom(EXPECTED))
     }
 }
 
@@ -1715,6 +1731,27 @@ mod tests {
         Description-Content-Type: text/markdown
 
         Inline readme
+        ");
+    }
+
+    #[test]
+    fn metadata_table_ignored_unsigned_integer() {
+        let contents = extend_project(indoc! {r#"
+            readme = { text = "Readme", content-type = "text/markdown", ignored = 9223372036854775808 }
+            license = { text = "License", ignored = 18446744073709551615 }
+        "#});
+        let metadata = toml::from_str::<PyProjectToml>(&contents)
+            .unwrap()
+            .to_metadata(Path::new("/do/not/read"))
+            .unwrap();
+        assert_snapshot!(metadata.core_metadata_format(), @"
+        Metadata-Version: 2.3
+        Name: hello-world
+        Version: 0.1.0
+        License: License
+        Description-Content-Type: text/markdown
+
+        Readme
         ");
     }
 
