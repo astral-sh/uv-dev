@@ -128,7 +128,7 @@ fn unzip_inner(
         .collect::<Result<Vec<_>, Error>>()?;
 
     let mut hashed_files = Vec::with_capacity(extracted.len());
-    let mut digest_directories = FxHashSet::default();
+    let mut digest_directories = Vec::new();
     for extracted in extracted {
         match extracted {
             ExtractedEntry::File {
@@ -142,7 +142,7 @@ fn unzip_inner(
                 }
             }
             ExtractedEntry::Directory(path) => {
-                digest_directories.insert(path);
+                digest_directories.push(path);
             }
         }
     }
