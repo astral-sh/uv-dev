@@ -1552,11 +1552,11 @@ fn create_venv_python_patch() {
 }
 
 #[test]
-fn file_exists() -> Result<()> {
+fn create_venv_preserves_existing_file() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a file at `.venv`. Creating a virtualenv at the same path should fail.
-    context.venv.touch()?;
+    context.venv.write_str("existing file\n")?;
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -1570,6 +1570,8 @@ fn file_exists() -> Result<()> {
       cause: File exists at `.venv`
     "
     );
+
+    assert_eq!(context.read(&context.venv), "existing file\n");
 
     Ok(())
 }
