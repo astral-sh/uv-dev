@@ -1,10 +1,11 @@
 use std::env;
-use std::fmt::{Display, Formatter};
+use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
 use crate::PythonRunnerOutput;
+use itertools::Itertools;
 use owo_colors::OwoColorize;
 use regex::regex;
 use thiserror::Error;
@@ -110,7 +111,17 @@ impl Hinted for Error {
             Self::MissingHeader(err) => Hints::from(err.cause.to_string()),
             Self::Lowering(err) => err.hints(),
             Self::RequirementsResolve(_, err) | Self::RequirementsInstall(_, err) => err.hints(),
-            _ => Hints::none(),
+            Self::Io(_)
+            | Self::InvalidSourceDist(_)
+            | Self::InvalidPyprojectTomlSyntax(_)
+            | Self::InvalidPyprojectTomlSchema(_)
+            | Self::InvalidBackendPath(_)
+            | Self::BackendPathOutsideSourceTree(_)
+            | Self::Virtualenv(_)
+            | Self::CommandFailed(_, _)
+            | Self::BuildScriptPath(_)
+            | Self::CyclicBuildDependency(_)
+            | Self::UnmatchedRuntime(_, _) => Hints::none(),
         }
     }
 }
@@ -121,6 +132,56 @@ enum MissingLibrary {
     Linker(String),
     BuildDependency(String),
     DeprecatedModule(String, Version),
+}
+
+impl MissingLibrary {
+    /// Identify a missing library from the build backend's stderr.
+    fn from_stderr(stderr: &[String]) -> Option<Self> {
+        // e.g. `pygraphviz/graphviz_wrap.c:3020:10: fatal error: graphviz/cgraph.h: No such file or directory`
+        let missing_header_re_gcc = regex!(
+            r".*\.(?:c|c..|h|h..):\d+:\d+: fatal error: (.*\.(?:h|h..)): No such file or directory"
+        );
+        // e.g. `pygraphviz/graphviz_wrap.c:3023:10: fatal error: 'graphviz/cgraph.h' file not found`
+        let missing_header_re_clang =
+            regex!(r".*\.(?:c|c..|h|h..):\d+:\d+: fatal error: '(.*\.(?:h|h..))' file not found");
+        // e.g. `pygraphviz/graphviz_wrap.c(3023): fatal error C1083: Cannot open include file: 'graphviz/cgraph.h': No such file or directory`
+        let missing_header_re_msvc = regex!(
+            r".*\.(?:c|c..|h|h..)\(\d+\): fatal error C1083: Cannot open include file: '(.*\.(?:h|h..))': No such file or directory"
+        );
+        // e.g. `/usr/bin/ld: cannot find -lncurses: No such file or directory`
+        let ld_not_found_re =
+            regex!(r"/usr/bin/ld: cannot find -l([a-zA-Z0-9]+): No such file or directory");
+        // e.g. `ModuleNotFoundError`
+        let module_not_found = regex!(r#"ModuleNotFoundError: No module named ['"]([^'"]+)['"]"#);
+
+        // Build tools can append summary lines after a diagnostic, so inspect the last ten lines.
+        stderr.iter().rev().take(10).find_map(|line| {
+            let line = line.trim();
+            if let Some((_, [header])) = missing_header_re_gcc
+                .captures(line)
+                .or_else(|| missing_header_re_clang.captures(line))
+                .or_else(|| missing_header_re_msvc.captures(line))
+                .map(|c| c.extract())
+            {
+                Some(Self::Header(header.to_string()))
+            } else if let Some((_, [library])) = ld_not_found_re.captures(line).map(|c| c.extract())
+            {
+                Some(Self::Linker(library.to_string()))
+            } else if line.contains("error: invalid command 'bdist_wheel'") {
+                Some(Self::BuildDependency("wheel".to_string()))
+            } else if line.contains("ModuleNotFoundError: No module named 'distutils'") {
+                Some(Self::DeprecatedModule(
+                    "distutils".to_string(),
+                    Version::new([3, 12]),
+                ))
+            } else {
+                let module = module_not_found.captures(line)?.get(1)?.as_str();
+                let package =
+                    crate::pipreqs::lookup_package(module).map_or(module, PackageName::as_str);
+                Some(Self::BuildDependency(package.to_owned()))
+            }
+        })
+    }
 }
 
 #[derive(Debug, Error)]
@@ -137,31 +198,23 @@ fn extract_package_name(version_id: &str) -> &str {
     // https://peps.python.org/pep-0508/#names
     // ^([A-Z0-9]|[A-Z0-9][A-Z0-9._-]*[A-Z0-9])$ with re.IGNORECASE
     // Since we're only using this for a hint, we're more lenient than what we would be doing if this was used for parsing
-    let end = version_id
-        .char_indices()
-        .take_while(|(_, char)| matches!(char, 'A'..='Z' | 'a'..='z' | '0'..='9' | '.' | '-' | '_'))
-        .last()
-        .map_or(0, |(i, c)| i + c.len_utf8());
-
-    if end == 0 {
-        version_id
-    } else {
-        &version_id[..end]
-    }
+    version_id
+        .split(|character: char| {
+            !(character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_'))
+        })
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(version_id)
 }
 
 /// Write a hint about missing build dependencies.
 fn hint_build_dependency(
     f: &mut std::fmt::Formatter<'_>,
-    display_name: &str,
+    display_name: impl Display,
     package_name: &str,
     package: &str,
 ) -> std::fmt::Result {
-    let table_key = if package_name.contains('.') {
-        format!("\"{package_name}\"")
-    } else {
-        package_name.to_string()
-    };
+    let quote = if package_name.contains('.') { "\"" } else { "" };
     write!(
         f,
         "This error likely indicates that `{}` depends on `{}`, but doesn't declare it as a build dependency. \
@@ -177,68 +230,45 @@ fn hint_build_dependency(
         package_name.cyan(),
         package.cyan(),
         "build-system.requires".green(),
-        table_key.cyan(),
+        format_args!("{quote}{package_name}{quote}").cyan(),
         package.cyan(),
-        format!("uv pip install {package}").green(),
+        format_args!("uv pip install {package}").green(),
         "--no-build-isolation".green(),
     )
+}
+
+impl MissingHeaderCause {
+    /// Write the package context for a missing system library.
+    fn fmt_package_context(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if let (Some(name), Some(version)) = (&self.package_name, &self.package_version) {
+            write!(f, " for `{}`", format_args!("{name}@{version}").cyan())
+        } else if let Some(version_id) = &self.version_id {
+            write!(f, " for `{}`", version_id.cyan())
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl Display for MissingHeaderCause {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.missing_library {
             MissingLibrary::Header(header) => {
-                if let (Some(package_name), Some(package_version)) =
-                    (&self.package_name, &self.package_version)
-                {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install a library that provides `{}` for `{}`",
-                        header.cyan(),
-                        format!("{package_name}@{package_version}").cyan(),
-                    )
-                } else if let Some(version_id) = &self.version_id {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install a library that provides `{}` for `{}`",
-                        header.cyan(),
-                        version_id.cyan(),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install a library that provides `{}`",
-                        header.cyan(),
-                    )
-                }
+                write!(
+                    f,
+                    "This error likely indicates that you need to install a library that provides `{}`",
+                    header.cyan(),
+                )?;
+                self.fmt_package_context(f)
             }
             MissingLibrary::Linker(library) => {
-                if let (Some(package_name), Some(package_version)) =
-                    (&self.package_name, &self.package_version)
-                {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install the library that provides a shared library for `{}` for `{}` (e.g., `{}`)",
-                        library.cyan(),
-                        format!("{package_name}@{package_version}").cyan(),
-                        format!("lib{library}-dev").cyan(),
-                    )
-                } else if let Some(version_id) = &self.version_id {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install the library that provides a shared library for `{}` for `{}` (e.g., `{}`)",
-                        library.cyan(),
-                        version_id.cyan(),
-                        format!("lib{library}-dev").cyan(),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "This error likely indicates that you need to install the library that provides a shared library for `{}` (e.g., `{}`)",
-                        library.cyan(),
-                        format!("lib{library}-dev").cyan(),
-                    )
-                }
+                write!(
+                    f,
+                    "This error likely indicates that you need to install the library that provides a shared library for `{}`",
+                    library.cyan(),
+                )?;
+                self.fmt_package_context(f)?;
+                write!(f, " (e.g., `{}`)", format_args!("lib{library}-dev").cyan())
             }
             MissingLibrary::BuildDependency(package) => {
                 if let (Some(package_name), Some(package_version)) =
@@ -246,7 +276,7 @@ impl Display for MissingHeaderCause {
                 {
                     hint_build_dependency(
                         f,
-                        &format!("{package_name}@{package_version}"),
+                        format_args!("{package_name}@{package_version}"),
                         package_name.as_str(),
                         package,
                     )
@@ -260,7 +290,7 @@ impl Display for MissingHeaderCause {
                         package.cyan(),
                         package.cyan(),
                         "build-system.requires".green(),
-                        format!("uv pip install {package}").green(),
+                        format_args!("uv pip install {package}").green(),
                         "--no-build-isolation".green(),
                     )
                 }
@@ -273,7 +303,7 @@ impl Display for MissingHeaderCause {
                         f,
                         "`{}` was removed from the standard library in Python {version}. Consider adding a constraint (like `{}`) to avoid building a version of `{}` that depends on `{}`.",
                         package.cyan(),
-                        format!("{package_name} >{package_version}").green(),
+                        format_args!("{package_name} >{package_version}").green(),
                         package_name.cyan(),
                         package.cyan(),
                     )
@@ -298,23 +328,25 @@ pub struct BuildBackendError {
     stderr: Vec<String>,
 }
 
-impl Display for BuildBackendError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl BuildBackendError {
+    /// Write the backend error and return whether any command output was written.
+    fn fmt_message_and_output(&self, f: &mut Formatter<'_>) -> Result<bool, fmt::Error> {
         write!(f, "{} ({})", self.message, self.exit_code)?;
 
         let mut non_empty = false;
-
-        if self.stdout.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stdout]".red(), self.stdout.join("\n"))?;
-            non_empty = true;
+        for (label, lines) in [("[stdout]", &self.stdout), ("[stderr]", &self.stderr)] {
+            if lines.iter().any(|line| !line.trim().is_empty()) {
+                write!(f, "\n\n{}\n{}", label.red(), lines.iter().format("\n"))?;
+                non_empty = true;
+            }
         }
+        Ok(non_empty)
+    }
+}
 
-        if self.stderr.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stderr]".red(), self.stderr.join("\n"))?;
-            non_empty = true;
-        }
-
-        if non_empty {
+impl Display for BuildBackendError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.fmt_message_and_output(f)? {
             writeln!(f)?;
         }
 
@@ -324,25 +356,13 @@ impl Display for BuildBackendError {
 
 #[derive(Debug, Error)]
 pub struct MissingHeaderError {
-    message: String,
-    exit_code: ExitStatus,
-    stdout: Vec<String>,
-    stderr: Vec<String>,
+    backend: BuildBackendError,
     cause: MissingHeaderCause,
 }
 
 impl Display for MissingHeaderError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.message, self.exit_code)?;
-
-        if self.stdout.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stdout]".red(), self.stdout.join("\n"))?;
-        }
-
-        if self.stderr.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", "[stderr]".red(), self.stderr.join("\n"))?;
-        }
-
+        self.backend.fmt_message_and_output(f)?;
         Ok(())
     }
 }
@@ -351,114 +371,37 @@ impl Error {
     /// Construct an [`Error`] from the output of a failed command.
     pub(crate) fn from_command_output(
         message: String,
-        output: &PythonRunnerOutput,
+        output: PythonRunnerOutput,
         level: BuildOutput,
         name: Option<&PackageName>,
         version: Option<&Version>,
         version_id: Option<&str>,
     ) -> Self {
-        // e.g. `pygraphviz/graphviz_wrap.c:3020:10: fatal error: graphviz/cgraph.h: No such file or directory`
-        let missing_header_re_gcc = regex!(
-            r".*\.(?:c|c..|h|h..):\d+:\d+: fatal error: (.*\.(?:h|h..)): No such file or directory"
-        );
-        // e.g. `pygraphviz/graphviz_wrap.c:3023:10: fatal error: 'graphviz/cgraph.h' file not found`
-        let missing_header_re_clang =
-            regex!(r".*\.(?:c|c..|h|h..):\d+:\d+: fatal error: '(.*\.(?:h|h..))' file not found");
-        // e.g. `pygraphviz/graphviz_wrap.c(3023): fatal error C1083: Cannot open include file: 'graphviz/cgraph.h': No such file or directory`
-        let missing_header_re_msvc = regex!(
-            r".*\.(?:c|c..|h|h..)\(\d+\): fatal error C1083: Cannot open include file: '(.*\.(?:h|h..))': No such file or directory"
-        );
-        // e.g. `/usr/bin/ld: cannot find -lncurses: No such file or directory`
-        let ld_not_found_re =
-            regex!(r"/usr/bin/ld: cannot find -l([a-zA-Z10-9]+): No such file or directory");
-        // e.g. `error: invalid command 'bdist_wheel'`
-        let wheel_not_found_re = regex!(r"error: invalid command 'bdist_wheel'");
-        // e.g. `ModuleNotFoundError: No module named 'distutils'`
-        let distutils_not_found_re = regex!(r"ModuleNotFoundError: No module named 'distutils'");
-        // e.g. `ModuleNotFoundError`
-        let module_not_found = regex!(r#"ModuleNotFoundError: No module named ['"]([^'"]+)['"]"#);
-
-        // In the cases I've seen it was the 5th and 3rd last line (see test case), 10 seems like a reasonable cutoff.
-        let missing_library = output.stderr.iter().rev().take(10).find_map(|line| {
-            if let Some((_, [header])) = missing_header_re_gcc
-                .captures(line.trim())
-                .or(missing_header_re_clang.captures(line.trim()))
-                .or(missing_header_re_msvc.captures(line.trim()))
-                .map(|c| c.extract())
-            {
-                Some(MissingLibrary::Header(header.to_string()))
-            } else if let Some((_, [library])) =
-                ld_not_found_re.captures(line.trim()).map(|c| c.extract())
-            {
-                Some(MissingLibrary::Linker(library.to_string()))
-            } else if wheel_not_found_re.is_match(line.trim()) {
-                Some(MissingLibrary::BuildDependency("wheel".to_string()))
-            } else if distutils_not_found_re.is_match(line.trim()) {
-                Some(MissingLibrary::DeprecatedModule(
-                    "distutils".to_string(),
-                    Version::new([3, 12]),
-                ))
-            } else if let Some(caps) = module_not_found.captures(line.trim()) {
-                if let Some(module_match) = caps.get(1) {
-                    let module_name = module_match.as_str();
-                    let package_name = match crate::pipreqs::MODULE_MAPPING.lookup(module_name) {
-                        Some(package) => package.to_string(),
-                        None => module_name.to_string(),
-                    };
-                    Some(MissingLibrary::BuildDependency(package_name))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        });
+        let missing_library = MissingLibrary::from_stderr(&output.stderr);
+        let (stdout, stderr) = match level {
+            BuildOutput::Stderr | BuildOutput::Quiet => (Vec::new(), Vec::new()),
+            BuildOutput::Debug => (output.stdout, output.stderr),
+        };
+        let backend = BuildBackendError {
+            message,
+            exit_code: output.status,
+            stdout,
+            stderr,
+        };
 
         if let Some(missing_library) = missing_library {
-            return match level {
-                BuildOutput::Stderr | BuildOutput::Quiet => {
-                    Self::MissingHeader(Box::new(MissingHeaderError {
-                        message,
-                        exit_code: output.status,
-                        stdout: vec![],
-                        stderr: vec![],
-                        cause: MissingHeaderCause {
-                            missing_library,
-                            package_name: name.cloned(),
-                            package_version: version.cloned(),
-                            version_id: version_id.map(ToString::to_string),
-                        },
-                    }))
-                }
-                BuildOutput::Debug => Self::MissingHeader(Box::new(MissingHeaderError {
-                    message,
-                    exit_code: output.status,
-                    stdout: output.stdout.clone(),
-                    stderr: output.stderr.clone(),
-                    cause: MissingHeaderCause {
-                        missing_library,
-                        package_name: name.cloned(),
-                        package_version: version.cloned(),
-                        version_id: version_id.map(ToString::to_string),
-                    },
-                })),
-            };
+            return Self::MissingHeader(Box::new(MissingHeaderError {
+                backend,
+                cause: MissingHeaderCause {
+                    missing_library,
+                    package_name: name.cloned(),
+                    package_version: version.cloned(),
+                    version_id: version_id.map(ToString::to_string),
+                },
+            }));
         }
 
-        match level {
-            BuildOutput::Stderr | BuildOutput::Quiet => Self::BuildBackend(BuildBackendError {
-                message,
-                exit_code: output.status,
-                stdout: vec![],
-                stderr: vec![],
-            }),
-            BuildOutput::Debug => Self::BuildBackend(BuildBackendError {
-                message,
-                exit_code: output.status,
-                stdout: output.stdout.clone(),
-                stderr: output.stderr.clone(),
-            }),
-        }
+        Self::BuildBackend(backend)
     }
 }
 
@@ -513,7 +456,7 @@ mod test {
 
         let err = Error::from_command_output(
             "Failed building wheel through setup.py".to_string(),
-            &output,
+            output,
             BuildOutput::Debug,
             None,
             None,
@@ -567,7 +510,7 @@ mod test {
 
         let err = Error::from_command_output(
             "Failed building wheel through setup.py".to_string(),
-            &output,
+            output,
             BuildOutput::Debug,
             None,
             None,
@@ -610,7 +553,7 @@ mod test {
 
         let err = Error::from_command_output(
             "Failed building wheel through setup.py".to_string(),
-            &output,
+            output,
             BuildOutput::Debug,
             None,
             None,
@@ -656,7 +599,7 @@ mod test {
 
         let err = Error::from_command_output(
             "Failed building wheel through setup.py".to_string(),
-            &output,
+            output,
             BuildOutput::Debug,
             Some(&PackageName::from_str("pygraphviz").unwrap()),
             Some(&Version::new([1, 11])),

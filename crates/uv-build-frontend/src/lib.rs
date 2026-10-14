@@ -306,8 +306,6 @@ pub struct SourceBuild {
     version_id: Option<String>,
     /// Whether we do a regular PEP 517 build or a PEP 660 editable build
     build_kind: BuildKind,
-    /// Whether to send build output to `stderr` or `tracing`, etc.
-    level: BuildOutput,
     /// Modified PATH that contains the `venv_bin`, `user_path` and `system_path` variables in that order
     modified_path: OsString,
     /// Environment variables to be passed in during metadata or wheel building
@@ -317,10 +315,7 @@ pub struct SourceBuild {
 }
 
 impl SourceBuild {
-    /// Create a virtual environment in which to build a source distribution, extracting the
-    /// contents from an archive if necessary.
-    ///
-    /// `source_dist` is for error reporting only.
+    /// Prepare a build environment for a source tree.
     pub async fn setup(
         source: &Path,
         subdirectory: Option<&Path>,
@@ -468,7 +463,6 @@ impl SourceBuild {
             skip_metadata_hook,
             venv,
             build_kind,
-            level,
             config_settings,
             metadata_directory: None,
             package_name,
@@ -850,13 +844,21 @@ impl SourceBuild {
 
     /// Construct an error for a failed hook from its captured output.
     fn build_hook_failure(&self, hook_prefix: &str, output: PythonRunnerOutput) -> Error {
-        Error::from_command_output(
+        self.command_failure(
             format!(
                 "Call to `{}.{hook_prefix}_{}` failed",
                 self.pep517_backend.backend, self.build_kind
             ),
-            &output,
-            self.level,
+            output,
+        )
+    }
+
+    /// Construct a command error with this build's diagnostic context.
+    fn command_failure(&self, message: String, output: PythonRunnerOutput) -> Error {
+        Error::from_command_output(
+            message,
+            output,
+            self.runner.level,
             self.package_name.as_ref(),
             self.package_version.as_ref(),
             self.version_id.as_deref(),
@@ -915,19 +917,15 @@ impl SourceBuild {
         Ok(())
     }
 
-    /// Build a distribution from an archive (`.zip` or `.tar.gz`) or source tree, and return the
-    /// location of the built distribution.
-    ///
-    /// The location will be inside `temp_dir`, i.e., you must use the distribution before dropping
-    /// the temporary directory.
+    /// Build a wheel or source distribution using `output_dir` and return the filename reported
+    /// by the backend.
     ///
     /// <https://packaging.python.org/en/latest/specifications/source-distribution-format/>
     #[instrument(skip_all, fields(version_id = self.version_id))]
-    pub async fn build(&self, wheel_dir: &Path) -> Result<String, Error> {
-        // The build scripts run with the extracted root as cwd, so they need the absolute path.
-        let wheel_dir = std::path::absolute(wheel_dir)?;
-        let filename = self.pep517_build(&wheel_dir).await?;
-        Ok(filename)
+    pub async fn build(&self, output_dir: &Path) -> Result<String, Error> {
+        // The backend runs in the source tree, so pass an absolute output path.
+        let output_dir = std::path::absolute(output_dir)?;
+        self.pep517_build(&output_dir).await
     }
 
     /// Perform a PEP 517 build for a wheel or source distribution (sdist).
@@ -1025,16 +1023,12 @@ impl SourceBuild {
             .map_err(|err| err.to_string())
             .and_then(|contents| serde_json::from_slice(&contents).map_err(|err| err.to_string()))
             .map_err(|err| {
-                Error::from_command_output(
+                self.command_failure(
                     format!(
                         "Call to `{}.{hook_prefix}_{}` failed: {}",
                         self.pep517_backend.backend, self.build_kind, err
                     ),
-                    &output,
-                    self.level,
-                    self.package_name.as_ref(),
-                    self.package_version.as_ref(),
-                    self.version_id.as_deref(),
+                    output,
                 )
             })?;
 
@@ -1084,6 +1078,7 @@ impl SourceBuildTrait for SourceBuild {
 #[derive(Debug)]
 struct PythonRunner {
     concurrent_build_slots: Arc<Semaphore>,
+    /// Controls live output and failure diagnostics.
     level: BuildOutput,
 }
 
@@ -1117,28 +1112,27 @@ impl PythonRunner {
         environment_variables: &FxHashMap<OsString, OsString>,
         modified_path: &OsString,
     ) -> Result<PythonRunnerOutput, Error> {
-        /// Read lines from a reader and store them in a buffer.
+        /// Read and capture lines from a process stream.
         async fn read_from(
-            mut reader: tokio::io::Split<tokio::io::BufReader<impl tokio::io::AsyncRead + Unpin>>,
-            mut printer: Printer,
-            buffer: &mut Vec<String>,
-        ) -> io::Result<()> {
-            loop {
-                match reader.next_segment().await? {
-                    Some(line_buf) => {
-                        let line_buf = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
-                        let line = String::from_utf8_lossy(line_buf).into();
-                        let _ = write!(printer, "{line}");
-                        buffer.push(line);
-                    }
-                    None => return Ok(()),
-                }
+            reader: impl tokio::io::AsyncRead + Unpin,
+            printer: Printer,
+        ) -> io::Result<Vec<String>> {
+            let mut reader = tokio::io::BufReader::new(reader).split(b'\n');
+            let mut lines = Vec::new();
+            while let Some(line_buf) = reader.next_segment().await? {
+                let line_buf = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
+                let line = String::from_utf8_lossy(line_buf).into_owned();
+                printer.print_line(&line);
+                lines.push(line);
             }
+            Ok(lines)
         }
 
         let _permit = self.concurrent_build_slots.acquire().await.unwrap();
 
-        let mut command = Command::new(venv.python_executable());
+        let executable = venv.python_executable();
+        let command_failed = |err| Error::CommandFailed(executable.to_path_buf(), err);
+        let mut command = Command::new(executable);
         if uv_preview::is_enabled(PreviewFeature::BuildLazyImports)
             && venv.interpreter().implementation_name() == "cpython"
             && venv.interpreter().python_tuple() >= (3, 15)
@@ -1166,41 +1160,26 @@ impl PythonRunner {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|err| Error::CommandFailed(venv.python_executable().to_path_buf(), err))?;
+            .map_err(command_failed)?;
 
-        // Create buffers to capture `stdout` and `stderr`.
-        let mut stdout_buf = Vec::with_capacity(1024);
-        let mut stderr_buf = Vec::with_capacity(1024);
-
-        // Create separate readers for `stdout` and `stderr`.
-        let stdout_reader = tokio::io::BufReader::new(child.stdout.take().unwrap()).split(b'\n');
-        let stderr_reader = tokio::io::BufReader::new(child.stderr.take().unwrap()).split(b'\n');
+        let stdout_reader = child.stdout.take().unwrap();
+        let stderr_reader = child.stderr.take().unwrap();
 
         // Asynchronously read from the in-memory pipes.
         let printer = Printer::from(self.level);
-        let result = tokio::join!(
-            read_from(stdout_reader, printer, &mut stdout_buf),
-            read_from(stderr_reader, printer, &mut stderr_buf),
+        let (stdout, stderr) = tokio::join!(
+            read_from(stdout_reader, printer),
+            read_from(stderr_reader, printer),
         );
-        match result {
-            (Ok(()), Ok(())) => {}
-            (Err(err), _) | (_, Err(err)) => {
-                return Err(Error::CommandFailed(
-                    venv.python_executable().to_path_buf(),
-                    err,
-                ));
-            }
-        }
+        let stdout = stdout.map_err(command_failed)?;
+        let stderr = stderr.map_err(command_failed)?;
 
         // Wait for the child process to finish.
-        let status = child
-            .wait()
-            .await
-            .map_err(|err| Error::CommandFailed(venv.python_executable().to_path_buf(), err))?;
+        let status = child.wait().await.map_err(command_failed)?;
 
         Ok(PythonRunnerOutput {
-            stdout: stdout_buf,
-            stderr: stderr_buf,
+            stdout,
+            stderr,
             status,
         })
     }
@@ -1226,17 +1205,23 @@ impl From<BuildOutput> for Printer {
     }
 }
 
-impl Write for Printer {
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+impl Printer {
+    fn print_line(self, line: &str) {
         match self {
             Self::Stderr => {
-                anstream::eprintln!("{s}");
+                anstream::eprintln!("{line}");
             }
             Self::Debug => {
-                debug!("{s}");
+                debug!("{line}");
             }
             Self::Quiet => {}
         }
+    }
+}
+
+impl Write for Printer {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.print_line(s);
         Ok(())
     }
 }
