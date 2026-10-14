@@ -42,7 +42,7 @@ use crate::common::{
     remove_entrypoints, tool_environment_spec,
 };
 use crate::error::ToolLockError;
-use crate::requirements::{registry_requirement, resolve_latest, resolve_names};
+use crate::requirements::{registry_requirement, resolve_latest};
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
@@ -166,6 +166,25 @@ pub async fn install(
     };
     let cache = cache.with_refresh(refresh.clone());
 
+    // Resolver settings and cache policy can change between resolution stages.
+    let resolve_names = async |requirements, settings: &ResolverSettings, cache: &Cache| {
+        crate::requirements::resolve_names(
+            requirements,
+            &interpreter,
+            settings,
+            &build_constraints,
+            &client_builder,
+            &state,
+            &concurrency,
+            cache,
+            workspace_cache,
+            printer,
+            preview,
+            lfs,
+        )
+        .await
+    };
+
     // Resolve the `--from` requirement.
     let requirement = match &request {
         // Ex) `ruff`
@@ -191,23 +210,10 @@ pub async fn install(
                 None
             };
 
-            let requirement = resolve_names(
-                requirements,
-                &interpreter,
-                &settings.resolver,
-                &build_constraints,
-                &client_builder,
-                &state,
-                &concurrency,
-                &cache,
-                workspace_cache,
-                printer,
-                preview,
-                lfs,
-            )
-            .await?
-            .pop()
-            .unwrap();
+            let requirement = resolve_names(requirements, &settings.resolver, &cache)
+                .await?
+                .pop()
+                .unwrap();
 
             // Determine if it's an entirely different package (e.g., `uv install foo --from bar`).
             if let Some(executable) = executable {
@@ -299,23 +305,7 @@ pub async fn install(
     let requirements = {
         let mut requirements = Vec::with_capacity(1 + with.len());
         requirements.push(requirement.clone());
-        requirements.extend(
-            resolve_names(
-                spec.requirements,
-                &interpreter,
-                &settings.resolver,
-                &build_constraints,
-                &client_builder,
-                &state,
-                &concurrency,
-                &cache,
-                workspace_cache,
-                printer,
-                preview,
-                lfs,
-            )
-            .await?,
-        );
+        requirements.extend(resolve_names(spec.requirements, &settings.resolver, &cache).await?);
         requirements
     };
 
@@ -352,21 +342,7 @@ pub async fn install(
         .collect::<Vec<_>>();
 
     // Resolve the overrides.
-    let receipt_overrides = resolve_names(
-        spec.overrides,
-        &interpreter,
-        &settings.resolver,
-        &build_constraints,
-        &client_builder,
-        &state,
-        &concurrency,
-        &cache,
-        workspace_cache,
-        printer,
-        preview,
-        lfs,
-    )
-    .await?;
+    let receipt_overrides = resolve_names(spec.overrides, &settings.resolver, &cache).await?;
 
     // Resolve the excludes.
     let receipt_excludes = spec.excludes;
