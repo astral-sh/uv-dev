@@ -537,55 +537,50 @@ impl ManagedPythonDownload {
             };
             let target_cache_file = python_builds_dir.join(format!("{hash_prefix}-{filename}"));
 
-            // Download the archive to the cache, or return a reader if we have it in cache.
+            // Download the archive to the cache, or open it if it is already cached.
             // TODO(konsti): We should "tee" the write so we can do the download-to-cache and unpacking
             // in one step.
-            let (reader, size): (Box<dyn AsyncRead + Unpin>, Option<u64>) =
-                match fs_err::tokio::File::open(&target_cache_file).await {
-                    Ok(file) => {
-                        debug!(
-                            "Extracting existing `{}`",
-                            target_cache_file.simplified_display()
-                        );
-                        let size = file.metadata().await?.len();
-                        let reader = Box::new(tokio::io::BufReader::new(file));
-                        (reader, Some(size))
+            let file = match fs_err::tokio::File::open(&target_cache_file).await {
+                Ok(file) => {
+                    debug!(
+                        "Extracting existing `{}`",
+                        target_cache_file.simplified_display()
+                    );
+                    file
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    // Point the user to which file is missing where and where to download it
+                    if client.connectivity().is_offline() {
+                        return Err(Error::OfflinePythonMissing {
+                            file: Box::new(self.key().clone()),
+                            url: Box::new(url.clone()),
+                            python_builds_dir,
+                        });
                     }
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                        // Point the user to which file is missing where and where to download it
-                        if client.connectivity().is_offline() {
-                            return Err(Error::OfflinePythonMissing {
-                                file: Box::new(self.key().clone()),
-                                url: Box::new(url.clone()),
-                                python_builds_dir,
-                            });
-                        }
 
-                        self.download_archive(
-                            &url,
-                            client,
-                            reporter,
-                            &python_builds_dir,
-                            &target_cache_file,
-                        )
-                        .await?;
+                    self.download_archive(
+                        &url,
+                        client,
+                        reporter,
+                        &python_builds_dir,
+                        &target_cache_file,
+                    )
+                    .await?;
 
-                        debug!("Extracting `{}`", target_cache_file.simplified_display());
-                        let file = fs_err::tokio::File::open(&target_cache_file).await?;
-                        let size = file.metadata().await?.len();
-                        let reader = Box::new(tokio::io::BufReader::new(file));
-                        (reader, Some(size))
-                    }
-                    Err(err) => return Err(err.into()),
-                };
+                    debug!("Extracting `{}`", target_cache_file.simplified_display());
+                    fs_err::tokio::File::open(&target_cache_file).await?
+                }
+                Err(err) => return Err(err.into()),
+            };
+            let size = file.metadata().await?.len();
 
             // Extract the downloaded archive into a temporary directory.
             self.extract_reader(
-                reader,
+                tokio::io::BufReader::new(file),
                 temp_dir,
                 &filename,
                 ext,
-                size,
+                Some(size),
                 reporter,
                 Direction::Extract,
                 tar_backend,
