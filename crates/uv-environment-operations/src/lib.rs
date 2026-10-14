@@ -37,8 +37,8 @@ use uv_python_types::{
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{
-    DependencyMode, FlatIndex, OptionsBuilder, Preference, PythonRequirement, ResolverEnvironment,
-    ResolverOutput,
+    DependencyMode, FlatIndex, Options, OptionsBuilder, Preference, PythonRequirement,
+    ResolverEnvironment, ResolverOutput,
 };
 use uv_scripts::Pep723ItemRef;
 use uv_settings::PythonInstallMirrors;
@@ -1337,6 +1337,18 @@ fn bind_build_isolation<'a>(
     }
 }
 
+/// Build resolver options from the environment's resolver settings.
+fn resolver_options(settings: &ResolverSettings) -> Options {
+    OptionsBuilder::new()
+        .resolution_mode(settings.resolution)
+        .prerelease(settings.prerelease.clone())
+        .fork_strategy(settings.fork_strategy)
+        .exclude_newer(settings.exclude_newer.clone())
+        .index_strategy(settings.index_strategy)
+        .build_options(settings.build_options.clone())
+        .build()
+}
+
 /// Run dependency resolution for an interpreter, returning the [`ResolverOutput`].
 pub async fn resolve_environment(
     spec: EnvironmentSpecification<'_>,
@@ -1361,9 +1373,9 @@ pub async fn resolve_environment(
         index_locations,
         index_strategy,
         keyring_provider,
-        resolution,
-        prerelease,
-        fork_strategy,
+        resolution: _,
+        prerelease: _,
+        fork_strategy: _,
         dependency_metadata,
         config_setting,
         config_settings_package,
@@ -1452,14 +1464,7 @@ pub async fn resolve_environment(
         environment.insert(PythonEnvironment::from_interpreter(interpreter.clone()))
     });
 
-    let options = OptionsBuilder::new()
-        .resolution_mode(*resolution)
-        .prerelease(prerelease.clone())
-        .fork_strategy(*fork_strategy)
-        .exclude_newer(exclude_newer.clone())
-        .index_strategy(*index_strategy)
-        .build_options(build_options.clone())
-        .build();
+    let options = resolver_options(settings);
 
     // TODO(charlie): These are all default values. We should consider whether we want to make them
     // optional on the downstream APIs.
@@ -1758,7 +1763,7 @@ pub async fn update_environment(
                 config_settings_package,
                 dependency_metadata,
                 exclude_newer,
-                fork_strategy,
+                fork_strategy: _,
                 index_locations,
                 index_strategy,
                 keyring_provider,
@@ -1767,8 +1772,8 @@ pub async fn update_environment(
                 build_hash_checking,
                 extra_build_dependencies: _,
                 extra_build_variables,
-                prerelease,
-                resolution,
+                prerelease: _,
+                resolution: _,
                 sources,
                 torch_backend,
                 cuda_driver_version,
@@ -1876,14 +1881,7 @@ pub async fn update_environment(
     // Determine whether to enable build isolation.
     let build_isolation = bind_build_isolation(build_isolation, || &venv);
 
-    let options = OptionsBuilder::new()
-        .resolution_mode(*resolution)
-        .prerelease(prerelease.clone())
-        .fork_strategy(*fork_strategy)
-        .exclude_newer(exclude_newer.clone())
-        .index_strategy(*index_strategy)
-        .build_options(build_options.clone())
-        .build();
+    let options = resolver_options(&settings.resolver);
 
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
