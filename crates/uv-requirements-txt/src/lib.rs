@@ -2920,13 +2920,13 @@ mod test {
             .unwrap_err();
         let errors = anyhow::Error::new(error).chain().join("\n");
 
-        let requirement_txt = regex::escape(&requirements_txt.path().user_display().to_string());
-        let filters = vec![(requirement_txt.as_str(), "<REQUIREMENTS_TXT>")];
-        insta::with_settings!({
-            filters => filters
-        }, {
-            insta::assert_snapshot!(errors, @"Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1");
-        });
+        assert_eq!(
+            errors,
+            format!(
+                "Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: {}:1:1",
+                requirements_txt.path().user_display()
+            )
+        );
 
         Ok(())
     }
