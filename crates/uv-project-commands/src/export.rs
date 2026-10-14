@@ -116,7 +116,7 @@ impl ExportBatch {
             entry.output_file = uv_fs::normalize_absolute_path(&std::path::absolute(
                 parent.join(&entry.output_file),
             )?)?;
-            if !outputs.insert(entry.output_file.clone()) {
+            if !outputs.insert(entry.output_file.as_path()) {
                 bail!("Duplicate export output: {}", entry.output_file.display());
             }
             if entry.all_packages && !entry.package.is_empty() {
