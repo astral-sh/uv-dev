@@ -1259,17 +1259,12 @@ fn init_vcs(path: &Path, vcs: Option<VersionControlSystem>) -> Result<()> {
 ///
 /// Currently, this only tries to get the author information from git.
 fn get_author_info(path: &Path, author_from: AuthorFrom) -> Option<Author> {
-    if matches!(author_from, AuthorFrom::None) {
-        return None;
+    match author_from {
+        AuthorFrom::None => None,
+        AuthorFrom::Auto | AuthorFrom::Git => get_author_from_git(path)
+            .inspect_err(|err| warn!("Failed to get author from git: {err}"))
+            .ok(),
     }
-    if matches!(author_from, AuthorFrom::Auto | AuthorFrom::Git) {
-        match get_author_from_git(path) {
-            Ok(author) => return Some(author),
-            Err(err) => warn!("Failed to get author from git: {err}"),
-        }
-    }
-
-    None
 }
 
 /// Fetch the default author from git configuration.
@@ -1278,36 +1273,23 @@ fn get_author_from_git(path: &Path) -> Result<Author> {
         anyhow::bail!("`git` not found in PATH")
     };
 
-    let mut name = None;
-    let mut email = None;
+    let read_config = |key: &str| -> std::io::Result<Option<String>> {
+        let output = git
+            .build_command()
+            .arg("config")
+            .arg("--get")
+            .arg(key)
+            .current_dir(path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()?;
+        Ok(output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string()))
+    };
 
-    let output = git
-        .build_command()
-        .arg("config")
-        .arg("--get")
-        .arg("user.name")
-        .current_dir(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()?;
-    if output.status.success() {
-        name = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
-    }
-
-    let output = git
-        .build_command()
-        .arg("config")
-        .arg("--get")
-        .arg("user.email")
-        .current_dir(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()?;
-    if output.status.success() {
-        email = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
-    }
-
-    let author = match (name, email) {
+    let author = match (read_config("user.name")?, read_config("user.email")?) {
         (Some(name), Some(email)) => Author::NameEmail { name, email },
         (Some(name), None) => Author::Name(name),
         (None, Some(email)) => Author::Email(email),
