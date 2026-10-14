@@ -52,16 +52,14 @@ impl LockResult {
     /// Return the resolved lockfile.
     pub fn lock(&self) -> &Lock {
         match self {
-            Self::Unchanged(lock) => lock,
-            Self::Changed(_, lock) => lock,
+            Self::Unchanged(lock) | Self::Changed(_, lock) => lock,
         }
     }
 
     /// Consume the result and return the resolved lockfile.
     pub fn into_lock(self) -> Lock {
         match self {
-            Self::Unchanged(lock) => lock,
-            Self::Changed(_, lock) => lock,
+            Self::Unchanged(lock) | Self::Changed(_, lock) => lock,
         }
     }
 }
@@ -268,10 +266,10 @@ impl<'env> LockOperation<'env> {
                 .await?;
 
                 // If the lockfile changed, write it to disk.
-                if !matches!(self.mode, LockMode::DryRun(_)) {
-                    if let LockResult::Changed(_, lock) = &result {
-                        target.commit(lock).await?;
-                    }
+                if !matches!(self.mode, LockMode::DryRun(_))
+                    && let LockResult::Changed(_, lock) = &result
+                {
+                    target.commit(lock).await?;
                 }
 
                 Ok(result)
@@ -462,12 +460,11 @@ async fn do_lock(
 
     // Collect the conflicts.
     let mut conflicts = target.conflicts()?;
-    if let LockTarget::Workspace(workspace) = target {
-        if let Some(groups) = &workspace.pyproject_toml().dependency_groups {
-            if let Some(project) = &workspace.pyproject_toml().project {
-                conflicts.expand_transitive_group_includes(&project.name, groups);
-            }
-        }
+    if let LockTarget::Workspace(workspace) = target
+        && let Some(groups) = &workspace.pyproject_toml().dependency_groups
+        && let Some(project) = &workspace.pyproject_toml().project
+    {
+        conflicts.expand_transitive_group_includes(&project.name, groups);
     }
 
     // Check if any conflicts contain project-level conflicts
