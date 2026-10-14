@@ -2066,9 +2066,7 @@ fn python_install_prerelease_specific() {
     ");
 }
 
-/// A duplicate of [`python_install`] with an isolated `UV_PYTHON_CACHE_DIR`.
-///
-/// See also, [`python_install_no_cache`].
+/// A dedicated Python archive cache permits offline reinstallation of cached versions.
 #[test]
 fn python_install_cached() {
     // Skip this test if the developer has set `UV_PYTHON_CACHE_DIR` locally since it's slow
@@ -2096,22 +2094,6 @@ fn python_install_cached() {
      + cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
     ");
 
-    let bin_python = context
-        .bin_dir
-        .child(format!("python3.15{}", std::env::consts::EXE_SUFFIX));
-
-    // The executable should be installed in the bin directory
-    bin_python.assert(predicate::path::exists());
-
-    // Should be a no-op when already installed
-    uv_snapshot!(context.filters(), context
-        .python_install()
-        .env(EnvVars::UV_PYTHON_CACHE_DIR, python_cache.as_ref()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Python is already installed. Use `uv python install <request>` to install another version.
-    ");
-
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.15"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -2131,6 +2113,11 @@ fn python_install_cached() {
      + cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
     ");
 
+    let bin_python = context
+        .bin_dir
+        .child(format!("python3.15{}", std::env::consts::EXE_SUFFIX));
+    assert_python_launcher(&context, bin_python.path(), "3.15");
+
     // 3.12 isn't cached, so it can't be installed
     let context = context.with_filter((
         r"https://[^`]+/cpython-3\.12[^`]+\.tar\.gz",
@@ -2148,7 +2135,7 @@ fn python_install_cached() {
     ");
 }
 
-/// Duplicate of [`python_install`] with the cache directory disabled.
+/// An installation without a dedicated Python archive cache cannot be repeated offline.
 #[test]
 fn python_install_no_cache() {
     // Skip this test if the developer has set `UV_PYTHON_CACHE_DIR` locally since it's slow
@@ -2170,34 +2157,6 @@ fn python_install_no_cache() {
     ----- stderr -----
     Installed Python 3.15.[LATEST] in [TIME]
      + cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
-    ");
-
-    let bin_python = context
-        .bin_dir
-        .child(format!("python3.15{}", std::env::consts::EXE_SUFFIX));
-
-    bin_python.assert(predicate::path::exists());
-
-    // Should be a no-op when already installed
-    uv_snapshot!(context.filters(), context.python_install(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Python is already installed. Use `uv python install <request>` to install another version.
-    ");
-
-    // Similarly, when a requested version is already installed
-    uv_snapshot!(context.filters(), context.python_install().arg("3.15"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Python 3.15 is already installed
-    ");
-
-    // You can opt-in to a reinstall
-    uv_snapshot!(context.filters(), context.python_install().arg("3.15").arg("--reinstall"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Installed Python 3.15.[LATEST] in [TIME]
-     ~ cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
     ");
 
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.15"), @"
