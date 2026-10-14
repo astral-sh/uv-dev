@@ -77,21 +77,24 @@ pub async fn sync_from_lock(
     } = settings;
 
     // Lower the extra build dependencies with source resolution.
+    let lower_workspace_build_dependencies = async |workspace: &Workspace| {
+        LoweredExtraBuildDependencies::from_workspace(
+            extra_build_dependencies.clone(),
+            workspace,
+            index_locations,
+            &sources,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        )
+        .await
+    };
     let extra_build_requires = match &target {
         InstallTarget::Workspace { workspace, .. }
         | InstallTarget::Project { workspace, .. }
         | InstallTarget::Projects { workspace, .. }
         | InstallTarget::NonProjectWorkspace { workspace, .. } => {
-            LoweredExtraBuildDependencies::from_workspace(
-                extra_build_dependencies.clone(),
-                workspace,
-                index_locations,
-                &sources,
-                cache,
-                workspace_cache,
-                client_builder.credentials_cache(),
-            )
-            .await?
+            lower_workspace_build_dependencies(workspace).await?
         }
         InstallTarget::Lockfile {
             root,
@@ -117,16 +120,7 @@ pub async fn sync_from_lock(
                     workspace_cache,
                 )
                 .await?;
-                LoweredExtraBuildDependencies::from_workspace(
-                    extra_build_dependencies.clone(),
-                    &workspace,
-                    index_locations,
-                    &sources,
-                    cache,
-                    workspace_cache,
-                    client_builder.credentials_cache(),
-                )
-                .await?
+                lower_workspace_build_dependencies(&workspace).await?
             } else {
                 LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
             }
