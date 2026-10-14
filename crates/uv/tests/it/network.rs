@@ -180,6 +180,22 @@ async fn mixed_error_server() -> (MockServer, String) {
 
 type StreamingResponse = hyper::Response<BoxBody<Bytes, Infallible>>;
 
+struct StreamingServerGuard {
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for StreamingServerGuard {
+    fn drop(&mut self) {
+        drop(self.shutdown.take());
+        if let Err(panic) = self.thread.take().unwrap().join()
+            && !std::thread::panicking()
+        {
+            std::panic::resume_unwind(panic);
+        }
+    }
+}
+
 /// Emit some bytes, then wait before ending the response body.
 fn delayed_body(bytes: Bytes, delay: Duration) -> BoxBody<Bytes, Infallible> {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
@@ -199,8 +215,8 @@ fn time_out_response(
 }
 
 /// Run a streaming HTTP server on its own runtime so test subprocesses cannot starve it.
-/// Dropping the guard shuts down the runtime and all connection tasks.
-fn streaming_server<F>(handler: F) -> (String, impl Drop)
+/// Dropping the guard shuts down and joins the server, propagating handler panics to the test.
+fn streaming_server<F>(handler: F) -> (String, StreamingServerGuard)
 where
     F: Fn(hyper::Request<hyper::body::Incoming>) -> Result<StreamingResponse, http::Error>
         + Send
@@ -211,19 +227,21 @@ where
     listener.set_nonblocking(true).unwrap();
     let server = format!("http://{}", listener.local_addr().unwrap());
     let handler = Arc::new(handler);
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    std::thread::spawn(move || {
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let thread = std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         runtime.block_on(async move {
             let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-            tokio::select! {
-                () = async {
-                    while let Ok((stream, _)) = listener.accept().await {
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let (stream, _) = accepted.expect("streaming server failed to accept connection");
                         let handler = handler.clone();
-                        tokio::spawn(async move {
+                        connections.spawn(async move {
                             let _ = hyper_util::server::conn::auto::Builder::new(
                                 hyper_util::rt::TokioExecutor::new(),
                             )
@@ -233,12 +251,27 @@ where
                             .await;
                         });
                     }
-                } => {}
-                _ = shutdown_rx => {}
+                    Some(result) = connections.join_next() => result.unwrap(),
+                    _ = &mut shutdown_rx => break,
+                }
+            }
+            connections.abort_all();
+            while let Some(result) = connections.join_next().await {
+                if let Err(error) = result
+                    && error.is_panic()
+                {
+                    std::panic::resume_unwind(error.into_panic());
+                }
             }
         });
     });
-    (server, shutdown_tx)
+    (
+        server,
+        StreamingServerGuard {
+            shutdown: Some(shutdown_tx),
+            thread: Some(thread),
+        },
+    )
 }
 
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
@@ -1298,15 +1331,15 @@ fn wheel_response(
     ))
 }
 
-struct WheelServer<Guard> {
+struct WheelServer {
     url: String,
-    _guard: Guard,
+    _guard: StreamingServerGuard,
     requests: Arc<DownloadRequests>,
     hash: String,
     size: usize,
 }
 
-impl<Guard> WheelServer<Guard> {
+impl WheelServer {
     fn write_lockfile(&self, context: &TestContext, declared_size: usize) -> Result<()> {
         context
             .temp_dir
@@ -1332,7 +1365,7 @@ fn wheel_server(
     context: &TestContext,
     range_response: RangeResponse,
     retries: usize,
-) -> WheelServer<impl Drop> {
+) -> WheelServer {
     let fixtures = context.workspace_root.join("test/links");
     let wheel = Bytes::from(context.read_bytes(fixtures.join(BUILD_TAG_WHEEL)));
     let hash = hex::encode(Sha256::digest(&wheel));
