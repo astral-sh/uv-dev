@@ -1,6 +1,7 @@
 use std::path::Path;
+use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild, PathCreateDir};
 use async_zip::base::write::ZipFileWriter;
@@ -1567,6 +1568,14 @@ fn workspace_metadata_lockfile_workspace_group_module_owners() -> Result<()> {
         }
         "#);
     });
+
+    let interpreter = metadata["environment"]["python"]["path"]
+        .as_str()
+        .context("workspace metadata did not report the synchronized interpreter")?;
+    Command::new(interpreter)
+        .args(["-I", "-c", "import installed_module"])
+        .assert()
+        .success();
 
     Ok(())
 }
