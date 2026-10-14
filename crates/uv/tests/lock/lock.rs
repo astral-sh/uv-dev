@@ -44006,25 +44006,30 @@ fn lock_required_environment_macos_release_python_fork() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
+const PY310_WHEEL_SCENARIO: &str = indoc! {r#"
+    name = "required-environment-generic-python-wheel"
+
+    [root]
+
+    [expected]
+    satisfiable = true
+
+    [packages.a.versions."1.0.0"]
+    sdist = false
+    wheel_tags = ["py310-none-any"]
+"#};
+
 /// Generic Python wheel tags cover later minor versions on required platforms.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_generic_python_wheel() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
-        name = "required-environment-generic-python-wheel"
-
-        [root]
-
-        [expected]
-        satisfiable = true
-
-        [packages.a.versions."1.0.0"]
-        sdist = false
-        wheel_tags = ["py310-none-any"]
-    "#})?;
-    let server = PackseServer::from_scenario(&scenario);
+    let server = PackseServer::from_scenario(&toml::from_str(PY310_WHEEL_SCENARIO)?);
     let context = uv_test::test_context!("3.12");
-    let pyproject = indoc! {r#"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -44033,11 +44038,7 @@ fn lock_required_environment_generic_python_wheel() -> Result<()> {
 
         [tool.uv]
         required-environments = ["sys_platform == 'linux' and python_version >= '3.12'"]
-    "#};
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(pyproject)?;
+    "#})?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
     exit_code: 0 (success)
@@ -44045,24 +44046,47 @@ fn lock_required_environment_generic_python_wheel() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // The same coverage applies to direct wheel URLs.
+    let package = locked_package(&context.read("uv.lock"), "a")?;
+    assert_eq!(
+        package["source"]
+            .get("registry")
+            .and_then(toml::Value::as_str),
+        Some(server.index_url().as_str())
+    );
+    Ok(())
+}
+
+/// Direct wheel URLs apply the same generic Python-tag coverage to required platforms.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_generic_python_wheel_url() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(PY310_WHEEL_SCENARIO)?);
+    let context = uv_test::test_context!("3.12");
+    let wheel_url = server.file_url("a-1.0.0-py310-none-any.whl");
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&pyproject.replace(
-            "dependencies = [\"a\"]",
-            &format!(
-                "dependencies = [\"a @ {}\"]",
-                server.file_url("a-1.0.0-py310-none-any.whl")
-            ),
-        ))?;
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<4"
+        dependencies = ["a @ {wheel_url}"]
+
+        [tool.uv]
+        required-environments = ["sys_platform == 'linux' and python_version >= '3.12'"]
+    "#})?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
-
+    let package = locked_package(&context.read("uv.lock"), "a")?;
+    assert_eq!(
+        package["source"].get("url").and_then(toml::Value::as_str),
+        Some(wheel_url.as_str())
+    );
     Ok(())
 }
 
