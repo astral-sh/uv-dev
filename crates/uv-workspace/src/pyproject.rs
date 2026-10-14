@@ -25,7 +25,7 @@ use uv_distribution_types::{
     Index, IndexName, MinimumLibcVersion, NameRequirementSpecification, RequirementSource,
 };
 use uv_fs::{PortablePathBuf, try_relative_to_if};
-use uv_git_types::GitReference;
+use uv_git_types::GitUrl;
 use uv_macros::OptionsMetadata;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_options_metadata::{OptionSet, OptionsMetadata, Visit};
@@ -1829,12 +1829,11 @@ impl Source {
         }
 
         // If we resolved a non-path source, and user specified an `--editable` flag, error.
-        if !workspace {
-            if !matches!(source, RequirementSource::Directory { .. }) {
-                if editable == Some(true) {
-                    return Err(SourceError::UnusedEditable(name.to_string()));
-                }
-            }
+        if !workspace
+            && !matches!(source, RequirementSource::Directory { .. })
+            && editable == Some(true)
+        {
+            return Err(SourceError::UnusedEditable(name.to_string()));
         }
 
         // If the source is a workspace package, error if the user tried to specify a source.
@@ -1852,10 +1851,7 @@ impl Source {
                 RequirementSource::Url { .. } => {
                     Err(SourceError::WorkspacePackageUrl(name.to_string()))
                 }
-                RequirementSource::GitDirectory { .. } => {
-                    Err(SourceError::WorkspacePackageGit(name.to_string()))
-                }
-                RequirementSource::GitPath { .. } => {
+                RequirementSource::GitDirectory { .. } | RequirementSource::GitPath { .. } => {
                     Err(SourceError::WorkspacePackageGit(name.to_string()))
                 }
                 RequirementSource::Path { .. } => {
@@ -1864,10 +1860,26 @@ impl Source {
             };
         }
 
-        let source = match source {
-            RequirementSource::Registry { index: Some(_), .. } => {
-                return Ok(None);
+        let git_source = |git: GitUrl, subdirectory, path| {
+            let rev = if rev.is_none() && tag.is_none() && branch.is_none() {
+                git.reference().as_str().map(str::to_owned)
+            } else {
+                rev
+            };
+            Self::Git {
+                rev,
+                tag,
+                branch,
+                lfs: lfs.into(),
+                git: git.url().clone(),
+                subdirectory,
+                path,
+                marker: MarkerTree::TRUE,
+                extra: None,
+                group: None,
             }
+        };
+        let source = match source {
             RequirementSource::Registry { index: None, .. } if let Some(index) = index => {
                 Self::Registry {
                     index,
@@ -1876,7 +1888,7 @@ impl Source {
                     group: None,
                 }
             }
-            RequirementSource::Registry { index: None, .. } => return Ok(None),
+            RequirementSource::Registry { .. } => return Ok(None),
             RequirementSource::Path {
                 install_path, url, ..
             } => Self::Path {
@@ -1921,82 +1933,14 @@ impl Source {
             },
             RequirementSource::GitDirectory {
                 git, subdirectory, ..
-            } => {
-                if rev.is_none() && tag.is_none() && branch.is_none() {
-                    let rev = match git.reference() {
-                        GitReference::Branch(rev) => Some(rev),
-                        GitReference::Tag(rev) => Some(rev),
-                        GitReference::BranchOrTag(rev) => Some(rev),
-                        GitReference::BranchOrTagOrCommit(rev) => Some(rev),
-                        GitReference::NamedRef(rev) => Some(rev),
-                        GitReference::DefaultBranch => None,
-                    };
-                    Self::Git {
-                        rev: rev.cloned(),
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: subdirectory.map(PortablePathBuf::from),
-                        path: None,
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                } else {
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: subdirectory.map(PortablePathBuf::from),
-                        path: None,
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                }
-            }
+            } => git_source(git, subdirectory.map(PortablePathBuf::from), None),
             RequirementSource::GitPath {
                 git, install_path, ..
-            } => {
-                if rev.is_none() && tag.is_none() && branch.is_none() {
-                    let rev = match git.reference() {
-                        GitReference::Branch(rev) => Some(rev),
-                        GitReference::Tag(rev) => Some(rev),
-                        GitReference::BranchOrTag(rev) => Some(rev),
-                        GitReference::BranchOrTagOrCommit(rev) => Some(rev),
-                        GitReference::NamedRef(rev) => Some(rev),
-                        GitReference::DefaultBranch => None,
-                    };
-                    Self::Git {
-                        rev: rev.cloned(),
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: None,
-                        path: Some(PortablePathBuf::from(install_path.as_path())),
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                } else {
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: None,
-                        path: Some(PortablePathBuf::from(install_path.as_path())),
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                }
-            }
+            } => git_source(
+                git,
+                None,
+                Some(PortablePathBuf::from(install_path.as_path())),
+            ),
         };
 
         Ok(Some(source))
@@ -2005,33 +1949,33 @@ impl Source {
     /// Return the [`MarkerTree`] for the source.
     pub fn marker(&self) -> MarkerTree {
         match self {
-            Self::Git { marker, .. } => *marker,
-            Self::Url { marker, .. } => *marker,
-            Self::Path { marker, .. } => *marker,
-            Self::Registry { marker, .. } => *marker,
-            Self::Workspace { marker, .. } => *marker,
+            Self::Git { marker, .. }
+            | Self::Url { marker, .. }
+            | Self::Path { marker, .. }
+            | Self::Registry { marker, .. }
+            | Self::Workspace { marker, .. } => *marker,
         }
     }
 
     /// Return the extra name for the source.
     pub fn extra(&self) -> Option<&ExtraName> {
         match self {
-            Self::Git { extra, .. } => extra.as_ref(),
-            Self::Url { extra, .. } => extra.as_ref(),
-            Self::Path { extra, .. } => extra.as_ref(),
-            Self::Registry { extra, .. } => extra.as_ref(),
-            Self::Workspace { extra, .. } => extra.as_ref(),
+            Self::Git { extra, .. }
+            | Self::Url { extra, .. }
+            | Self::Path { extra, .. }
+            | Self::Registry { extra, .. }
+            | Self::Workspace { extra, .. } => extra.as_ref(),
         }
     }
 
     /// Return the dependency group name for the source.
     pub fn group(&self) -> Option<&GroupName> {
         match self {
-            Self::Git { group, .. } => group.as_ref(),
-            Self::Url { group, .. } => group.as_ref(),
-            Self::Path { group, .. } => group.as_ref(),
-            Self::Registry { group, .. } => group.as_ref(),
-            Self::Workspace { group, .. } => group.as_ref(),
+            Self::Git { group, .. }
+            | Self::Url { group, .. }
+            | Self::Path { group, .. }
+            | Self::Registry { group, .. }
+            | Self::Workspace { group, .. } => group.as_ref(),
         }
     }
 }
