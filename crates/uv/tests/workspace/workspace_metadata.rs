@@ -7,6 +7,8 @@ use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
+#[cfg(feature = "test-pypi")]
+use toml_edit::DocumentMut;
 
 use uv_normalize::PackageName;
 use uv_redacted::SafeUrl;
@@ -3050,6 +3052,19 @@ fn workspace_metadata_with_excluded() -> Result<()> {
             .join("test/workspaces/albatross-project-in-excluded"),
         &workspace,
     )?;
+    assert!(
+        workspace
+            .child("excluded/bird-feeder/pyproject.toml")
+            .is_file(),
+        "fixture must contain the excluded project"
+    );
+    let pyproject = workspace.child("pyproject.toml");
+    let mut manifest = context.read(&pyproject).parse::<DocumentMut>()?;
+    manifest["tool"]["uv"]["workspace"]["members"]
+        .as_array_mut()
+        .expect("workspace fixture must define members")
+        .push("excluded/*");
+    pyproject.write_str(&manifest.to_string())?;
 
     uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)

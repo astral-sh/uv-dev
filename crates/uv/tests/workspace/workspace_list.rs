@@ -229,18 +229,27 @@ fn workspace_list_single_project() -> Result<()> {
 fn workspace_list_with_excluded() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
     let workspace = context.temp_dir.child("workspace");
+    workspace.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "albatross"
+        version = "0.1.0"
 
-    copy_dir_ignore(
-        context
-            .workspace_root
-            .join("test/workspaces/albatross-project-in-excluded"),
-        &workspace,
-    )?;
+        [tool.uv.workspace]
+        members = ["packages/*"]
+        exclude = ["packages/bird-feeder"]
+    "#})?;
+    workspace
+        .child("packages/bird-feeder/pyproject.toml")
+        .write_str("[project]\nname = \"bird-feeder\"\nversion = \"1.0.0\"\n")?;
+    workspace
+        .child("packages/seeds/pyproject.toml")
+        .write_str("[project]\nname = \"seeds\"\nversion = \"1.0.0\"\n")?;
 
     uv_snapshot!(context.filters(), context.workspace_list().current_dir(&workspace), @"
     exit_code: 0 (success)
     ----- stdout -----
     albatross
+    seeds
     "
     );
 
