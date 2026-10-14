@@ -153,7 +153,8 @@ struct TomlCredential {
     credentials: Credentials,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Do not derive `Debug`: the wire representation contains a plaintext bearer token.
+#[derive(Serialize, Deserialize)]
 struct TomlCredentialWire {
     /// The service URL for this credential.
     service: Service,
