@@ -563,7 +563,7 @@ panic = "abort"
 # Profile to build a minimally sized binary for uv-build
 [profile.minimal-size]
 inherits = "release"
-opt-level = "z"
+opt-level = "s"
 codegen-units = 1
 
 # The profile that 'cargo dist' will build with.
