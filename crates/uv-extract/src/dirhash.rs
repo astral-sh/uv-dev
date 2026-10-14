@@ -174,34 +174,26 @@ struct SeenSymlinkNode<'a> {
     previous: Option<&'a Self>,
 }
 
-struct SeenSymlinks<'a> {
-    node: Option<SeenSymlinkNode<'a>>,
-}
-
-impl<'a> SeenSymlinks<'a> {
-    fn new() -> Self {
-        Self { node: None }
-    }
-
+impl<'a> SeenSymlinkNode<'a> {
     fn iter(&self) -> impl Iterator<Item = &Path> {
-        std::iter::successors(self.node.as_ref(), |node| node.previous)
+        std::iter::successors(Some(self), |node| node.previous)
             .map(|node| node.canonical_path.as_path())
     }
 
-    fn push(&'a self, symlink_path: &Path) -> Result<Self, DirhashError> {
+    fn new(symlink_path: &Path, previous: Option<&'a Self>) -> Result<Self, DirhashError> {
         let canonical_path = canonical_path_to_symlink(symlink_path)?;
         // Walk the seen symlinks list and error out if we've seen this one before.
-        if self.iter().any(|seen| canonical_path == seen) {
-            let mut paths: Vec<PathBuf> = self.iter().map(Path::to_owned).collect();
+        if let Some(previous) = previous
+            && previous.iter().any(|seen| canonical_path == seen)
+        {
+            let mut paths: Vec<PathBuf> = previous.iter().map(Path::to_owned).collect();
             paths.reverse();
             paths.push(canonical_path);
             return Err(DirhashError::SymlinkCycle { paths });
         }
         Ok(Self {
-            node: Some(SeenSymlinkNode {
-                canonical_path,
-                previous: self.node.as_ref(),
-            }),
+            canonical_path,
+            previous,
         })
     }
 }
@@ -231,19 +223,18 @@ fn canonical_path_to_symlink(symlink_path: &Path) -> Result<PathBuf, DirhashErro
 /// it encounters a symlink cycle, it will return an error.
 pub fn dirhash_path(path: &Path) -> Result<blake3::Hash, DirhashError> {
     initialize_rayon_once();
-    let seen_symlinks = SeenSymlinks::new();
-    dirhash_path_inner(path, &seen_symlinks)
+    dirhash_path_inner(path, None)
 }
 
 // Recurse to compute a dirhash, handling symlink cycles.
 fn dirhash_path_inner(
     path: &Path,
-    seen_symlinks: &SeenSymlinks,
+    seen_symlinks: Option<&SeenSymlinkNode<'_>>,
 ) -> Result<blake3::Hash, DirhashError> {
     let metadata = fs_err::symlink_metadata(path)?;
     if metadata.is_symlink() {
-        let seen_symlinks = seen_symlinks.push(path)?;
-        dirhash_path_inner_resolved(path, &fs_err::metadata(path)?, &seen_symlinks)
+        let seen_symlinks = SeenSymlinkNode::new(path, seen_symlinks)?;
+        dirhash_path_inner_resolved(path, &fs_err::metadata(path)?, Some(&seen_symlinks))
     } else {
         dirhash_path_inner_resolved(path, &metadata, seen_symlinks)
     }
@@ -253,7 +244,7 @@ fn dirhash_path_inner(
 fn dirhash_path_inner_resolved(
     path: &Path,
     metadata: &std::fs::Metadata,
-    seen_symlinks: &SeenSymlinks,
+    seen_symlinks: Option<&SeenSymlinkNode<'_>>,
 ) -> Result<blake3::Hash, DirhashError> {
     if metadata.is_dir() {
         // This is a directory. Recurse over its contents.
