@@ -670,38 +670,7 @@ impl Workspace {
     pub fn members_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
         self.packages.iter().filter_map(|(name, member)| {
             let url = VerbatimUrl::from_absolute_path(&member.root).expect("path is valid URL");
-            Some(Requirement {
-                name: member.pyproject_toml.project.as_ref()?.name.clone(),
-                extras: Box::new([]),
-                groups: Box::new([]),
-                marker: MarkerTree::TRUE,
-                source: if member
-                    .pyproject_toml()
-                    .is_package(!self.is_required_member(name))
-                {
-                    RequirementSource::Directory {
-                        install_path: member.root.clone().into_boxed_path(),
-                        editable: Some(
-                            self.required_members
-                                .get(name)
-                                .copied()
-                                .flatten()
-                                .unwrap_or(true),
-                        ),
-                        r#virtual: Some(false),
-                        url,
-                    }
-                } else {
-                    RequirementSource::Directory {
-                        install_path: member.root.clone().into_boxed_path(),
-                        editable: Some(false),
-                        r#virtual: Some(true),
-                        url,
-                    }
-                },
-                scope: RequirementScope::Global,
-                origin: None,
-            })
+            self.member_requirement(name, member, Box::new([]), url)
         })
     }
 
@@ -777,11 +746,6 @@ impl Workspace {
         Ok(required_members)
     }
 
-    /// Whether a given workspace member is required by another member.
-    fn is_required_member(&self, name: &PackageName) -> bool {
-        self.required_members().contains_key(name)
-    }
-
     /// Returns the set of all workspace member dependency groups.
     pub fn group_requirements(&self) -> impl Iterator<Item = Requirement> + '_ {
         self.packages.iter().filter_map(|(name, member)| {
@@ -811,33 +775,34 @@ impl Workspace {
                 return None;
             }
 
-            let value = self.required_members.get(name);
-            let is_required_member = value.is_some();
-            let editability = value.copied().flatten();
+            self.member_requirement(name, member, groups.into_boxed_slice(), url)
+        })
+    }
 
-            Some(Requirement {
-                name: member.pyproject_toml.project.as_ref()?.name.clone(),
-                extras: Box::new([]),
-                groups: groups.into_boxed_slice(),
-                marker: MarkerTree::TRUE,
-                source: if member.pyproject_toml().is_package(!is_required_member) {
-                    RequirementSource::Directory {
-                        install_path: member.root.clone().into_boxed_path(),
-                        editable: Some(editability.unwrap_or(true)),
-                        r#virtual: Some(false),
-                        url,
-                    }
-                } else {
-                    RequirementSource::Directory {
-                        install_path: member.root.clone().into_boxed_path(),
-                        editable: Some(false),
-                        r#virtual: Some(true),
-                        url,
-                    }
-                },
-                scope: RequirementScope::Global,
-                origin: None,
-            })
+    /// Create the requirement for a workspace member and its selected dependency groups.
+    fn member_requirement(
+        &self,
+        name: &PackageName,
+        member: &WorkspaceMember,
+        groups: Box<[GroupName]>,
+        url: VerbatimUrl,
+    ) -> Option<Requirement> {
+        let project = member.pyproject_toml.project.as_ref()?;
+        let required = self.required_members.get(name);
+        let is_package = member.pyproject_toml().is_package(required.is_none());
+        Some(Requirement {
+            name: project.name.clone(),
+            extras: Box::new([]),
+            groups,
+            marker: MarkerTree::TRUE,
+            source: RequirementSource::Directory {
+                install_path: member.root.clone().into_boxed_path(),
+                editable: Some(is_package && required.copied().flatten().unwrap_or(true)),
+                r#virtual: Some(!is_package),
+                url,
+            },
+            scope: RequirementScope::Global,
+            origin: None,
         })
     }
 
