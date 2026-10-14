@@ -424,27 +424,6 @@ async fn token_native_auth_realm() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_real_home();
     let proxy = crate::pypi_proxy::start().await;
 
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.uri())
-        .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-    context
-        .auth_logout()
-        .arg(proxy.uri())
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-
     // Without persisted credentials
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.uri())
@@ -465,7 +444,7 @@ async fn token_native_auth_realm() -> Result<()> {
     error: Failed to fetch credentials for `public@http://[LOCALHOST]/`
     ");
 
-    // Login to the index
+    let account = NativeAuthFixture::guard_vacant_entry(proxy.uri(), Some("public"), "heron")?;
     uv_snapshot!(context.filters(), context.auth_login()
         .arg(proxy.uri())
         .arg("--username")
@@ -542,11 +521,11 @@ async fn token_native_auth_realm() -> Result<()> {
     error: Failed to fetch credentials for `public@https://192.0.2.1:1000/`
     ");
 
-    // Login to the index with a token
+    let token = NativeAuthFixture::guard_vacant_entry(proxy.uri(), None, "realm-token-secret")?;
     uv_snapshot!(context.filters(), context.auth_login()
         .arg(proxy.uri())
         .arg("--token")
-        .arg("heron")
+        .arg("realm-token-secret")
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 0 (success)
     ----- stderr -----
@@ -560,17 +539,10 @@ async fn token_native_auth_realm() -> Result<()> {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    heron
+    realm-token-secret
     ");
 
-    context
-        .auth_logout()
-        .arg(proxy.uri())
-        .arg("--username")
-        .arg("public")
-        .status()?;
-
-    // Retrieve token using URL with embedded username (no --username needed)
+    // An embedded username selects the host account credential for the child URL.
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.username_url("public", "/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
@@ -579,7 +551,8 @@ async fn token_native_auth_realm() -> Result<()> {
     heron
     ");
 
-    Ok(())
+    token.finish()?;
+    account.finish()
 }
 
 #[test]
