@@ -441,8 +441,7 @@ impl PrioritizedDist {
 
     /// Return the highest-priority distribution for the package version, if any.
     pub(crate) fn get(&self) -> Option<CompatibleDist<'_>> {
-        let best_wheel = self.0.best_wheel_index.map(|i| &self.0.wheels[i]);
-        match (&best_wheel, &self.0.source) {
+        match (self.best_wheel(), &self.0.source) {
             // If both are compatible, break ties based on the hash outcome. For example, prefer a
             // source distribution with a matching hash over a wheel with a mismatched hash. When
             // the outcomes are equivalent (e.g., both have a matching hash), prefer the wheel.
@@ -510,9 +509,7 @@ impl PrioritizedDist {
 
     /// Return the incompatibility for the best wheel, if any.
     pub(crate) fn incompatible_wheel(&self) -> Option<&IncompatibleWheel> {
-        self.0
-            .best_wheel_index
-            .map(|i| &self.0.wheels[i])
+        self.best_wheel()
             .and_then(|(_, compatibility)| match compatibility {
                 WheelCompatibility::Compatible(_, _, _) => None,
                 WheelCompatibility::Incompatible(incompatibility) => Some(incompatibility),
