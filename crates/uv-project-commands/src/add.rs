@@ -992,41 +992,30 @@ fn edits(
         };
 
         // Determine the dependency type.
-        let dependency_type = match &dependency_type {
-            DependencyType::Dev => {
-                let existing = toml.find_dependency(&requirement.name, None);
-                if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)) {
-                    // If the dependency already exists in `dependency-groups.dev`, use that.
-                    DependencyType::Group(DEV_DEPENDENCIES.clone())
-                } else if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Dev)) {
-                    // If the dependency already exists in `dev-dependencies`, use that.
-                    DependencyType::Dev
-                } else {
-                    // Otherwise, use `dependency-groups.dev`, unless it would introduce a separate table.
-                    match (toml.has_dev_dependencies(), toml.has_dependency_group(&DEV_DEPENDENCIES)) {
-                        (true, false) => DependencyType::Dev,
-                        (false, true) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                        (true, true) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                        (false, false) => DependencyType::Group(DEV_DEPENDENCIES.clone()),
-                    }
-                }
+        let dependency_type = match dependency_type {
+            DependencyType::Group(group) if group != &*DEV_DEPENDENCIES => {
+                DependencyType::Group(group.clone())
             }
-            DependencyType::Group(group) if group == &*DEV_DEPENDENCIES => {
+            DependencyType::Dev | DependencyType::Group(_) => {
                 let existing = toml.find_dependency(&requirement.name, None);
-                if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)) {
-                    // If the dependency already exists in `dependency-groups.dev`, use that.
-                    DependencyType::Group(DEV_DEPENDENCIES.clone())
-                } else if existing.iter().any(|dependency_type| matches!(dependency_type, DependencyType::Dev)) {
-                    // If the dependency already exists in `dev-dependencies`, use that.
+
+                // Prefer the dev group when the dependency exists in both places. For a new
+                // dependency, `--dev` reuses the legacy table if there is no dev group.
+                let use_legacy = !existing.iter().any(|existing| {
+                    matches!(existing, DependencyType::Group(group) if group == &*DEV_DEPENDENCIES)
+                }) && (existing.contains(&DependencyType::Dev)
+                    || (matches!(dependency_type, DependencyType::Dev)
+                        && toml.has_dev_dependencies()
+                        && !toml.has_dependency_group(&DEV_DEPENDENCIES)));
+
+                if use_legacy {
                     DependencyType::Dev
                 } else {
-                    // Otherwise, use `dependency-groups.dev`.
                     DependencyType::Group(DEV_DEPENDENCIES.clone())
                 }
             }
             DependencyType::Production => DependencyType::Production,
             DependencyType::Optional(extra) => DependencyType::Optional(extra.clone()),
-            DependencyType::Group(group) => DependencyType::Group(group.clone()),
         };
 
         // Update the `pyproject.toml`.
