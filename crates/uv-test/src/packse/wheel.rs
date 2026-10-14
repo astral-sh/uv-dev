@@ -282,10 +282,7 @@ fn build_pyproject_toml(
         "dependencies = []\n".to_string()
     } else {
         let mut dependencies = String::from("dependencies = [\n");
-        for requirement in requires {
-            writeln!(&mut dependencies, "    \"{requirement}\",")
-                .expect("writing dependencies into a string should succeed");
-        }
+        append_toml_requirements(&mut dependencies, requires);
         dependencies.push_str("]\n");
         dependencies
     };
@@ -299,10 +296,7 @@ fn build_pyproject_toml(
         for (extra_name, extra_requirements) in extras {
             writeln!(&mut optional_dependencies, "{extra_name} = [")
                 .expect("writing optional dependencies into a string should succeed");
-            for requirement in extra_requirements {
-                writeln!(&mut optional_dependencies, "    \"{requirement}\",")
-                    .expect("writing optional dependencies into a string should succeed");
-            }
+            append_toml_requirements(&mut optional_dependencies, extra_requirements);
             optional_dependencies.push_str("]\n");
         }
         optional_dependencies
@@ -336,6 +330,14 @@ fn build_pyproject_toml(
         version = "{version}"
         {dependencies}{requires_python}{optional_dependencies}{scripts}
         "#
+    }
+}
+
+fn append_toml_requirements(output: &mut String, requirements: &[Requirement]) {
+    for requirement in requirements {
+        let value = toml::Value::String(requirement.to_string());
+        writeln!(output, "    {value},")
+            .expect("writing requirements into a string should succeed");
     }
 }
 
@@ -462,6 +464,35 @@ mod tests {
         assert!(names.contains(&"my_package-1.0.0/pyproject.toml".to_string()));
         assert!(names.contains(&"my_package-1.0.0/PKG-INFO".to_string()));
         assert!(names.contains(&"my_package-1.0.0/src/my_package/__init__.py".to_string()));
+    }
+
+    #[test]
+    fn sdist_dependencies_round_trip_through_toml() {
+        let requirement = Requirement::from_str(r#"dep; os_name == 'alpha"beta\gamma'"#)
+            .expect("valid requirement");
+        let extras = BTreeMap::from([(
+            ExtraName::from_str("dev").expect("valid extra name"),
+            vec![requirement.clone()],
+        )]);
+        let pyproject = build_pyproject_toml(
+            &PackageName::from_str("pkg").expect("valid package name"),
+            &Version::from_str("1.0.0").expect("valid version"),
+            std::slice::from_ref(&requirement),
+            &extras,
+            None,
+            &[],
+        );
+        let pyproject: toml::Value = toml::from_str(&pyproject).expect("valid pyproject TOML");
+        let expected = requirement.to_string();
+
+        assert_eq!(
+            pyproject["project"]["dependencies"][0].as_str(),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            pyproject["project"]["optional-dependencies"]["dev"][0].as_str(),
+            Some(expected.as_str())
+        );
     }
 
     #[test]
