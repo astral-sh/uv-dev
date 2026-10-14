@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use async_zip::base::write::ZipFileWriter;
@@ -9,7 +10,8 @@ use indoc::indoc;
 
 use uv_cache::{Cache, CacheBucket};
 use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
-use uv_install_wheel::validate_and_heal_record;
+use uv_install_wheel::{read_record, validate_and_heal_record};
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::{apply_filters, uv_snapshot};
 
 /// Repair missing and extraneous RECORD entries before caching and installing the wheel.
@@ -106,5 +108,65 @@ fn handle_record_mismatches() -> Result<()> {
     foo/__init__.py,,22
     foo/py.typed,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
     ");
+    Ok(())
+}
+
+/// RECORD paths for relocated wheel data use forward slashes. See astral-sh/uv#14446.
+#[test]
+fn record_uses_forward_slashes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, bytes) = generate_wheel_with_files(
+        &"project".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &Default::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "project-0.1.0.data/scripts/my_script",
+                "#!python\nprint(\"Hello from script\")\n",
+            ),
+            (
+                "project-0.1.0.data/headers/project.h",
+                "#include <stdio.h>\n",
+            ),
+        ],
+    );
+    let wheel = context.temp_dir.join(filename);
+    fs_err::write(&wheel, bytes)?;
+    context
+        .pip_install()
+        .arg(wheel)
+        .arg("--offline")
+        .assert()
+        .success();
+
+    let site_packages = context.site_packages();
+    let record = read_record(File::open(
+        site_packages.join("project-0.1.0.dist-info/RECORD"),
+    )?)?;
+    for entry in &record {
+        assert!(
+            !entry.path.contains('\\'),
+            "RECORD path uses a backslash: {}",
+            entry.path
+        );
+    }
+    for (suffix, expected) in [
+        ("/my_script", "print(\"Hello from script\")"),
+        ("/project.h", "#include <stdio.h>"),
+    ] {
+        let entry = record
+            .iter()
+            .find(|entry| entry.path.ends_with(suffix))
+            .with_context(|| format!("missing relocated RECORD entry ending in {suffix}"))?;
+        let path = site_packages.join(&entry.path);
+        assert!(
+            fs_err::read_to_string(&path)?.contains(expected),
+            "unexpected contents at {}",
+            path.display()
+        );
+    }
     Ok(())
 }
