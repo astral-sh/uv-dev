@@ -265,22 +265,13 @@ impl<'a> RequirementExpander<'a> {
         let python_marker = self.python_marker;
         let python_requirement = self.python_requirement;
         // If the requirement isn't relevant for the current platform, skip it.
-        match extra {
-            Some(source_extra) => {
-                if !requirement.evaluate_markers(env.marker_environment(), &[]) {
-                    return false;
-                }
-
-                if !env.included_by_group(ConflictItemRef::from((&requirement.name, source_extra)))
-                {
-                    return false;
-                }
-            }
-            None => {
-                if !requirement.evaluate_markers(env.marker_environment(), &[]) {
-                    return false;
-                }
-            }
+        if !requirement.evaluate_markers(env.marker_environment(), &[]) {
+            return false;
+        }
+        if let Some(extra) = extra
+            && !env.included_by_group(ConflictItemRef::from((&requirement.name, extra)))
+        {
+            return false;
         }
 
         // If the requirement would not be selected with any Python version
@@ -305,6 +296,8 @@ impl<'a> RequirementExpander<'a> {
 
     /// The constraints applicable to the requirement, filtered by Python version, the markers of
     /// this fork and the requested extra.
+    ///
+    /// The requirement has already been filtered for this fork and extra.
     fn constraints_for_requirement<'data, 'parameters>(
         &'data self,
         requirement: Cow<'data, Requirement>,
@@ -316,6 +309,7 @@ impl<'a> RequirementExpander<'a> {
         let env = self.env;
         let python_marker = self.python_marker;
         let python_requirement = self.python_requirement;
+        let extras = extra.map_or(&[][..], slice::from_ref);
         self.constraints
             .get(&requirement.name)
             .into_iter()
@@ -358,23 +352,8 @@ impl<'a> RequirementExpander<'a> {
                 }
 
                 // If the constraint isn't relevant for the current platform, skip it.
-                match extra {
-                    Some(source_extra) => {
-                        if !constraint
-                            .evaluate_markers(env.marker_environment(), slice::from_ref(source_extra))
-                        {
-                            return None;
-                        }
-                        if !env.included_by_group(ConflictItemRef::from((&requirement.name, source_extra)))
-                        {
-                            return None;
-                        }
-                    }
-                    None => {
-                        if !constraint.evaluate_markers(env.marker_environment(), &[]) {
-                            return None;
-                        }
-                    }
+                if !constraint.evaluate_markers(env.marker_environment(), extras) {
+                    return None;
                 }
 
                 Some(constraint)
