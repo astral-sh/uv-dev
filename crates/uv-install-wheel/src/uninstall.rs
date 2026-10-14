@@ -38,8 +38,7 @@ pub fn uninstall_wheel(
         read_record(&mut record_file)?
     };
 
-    let mut file_count = 0usize;
-    let mut dir_count = 0usize;
+    let mut uninstall = Uninstall::default();
 
     #[cfg(windows)]
     let itself = std::env::current_exe().ok();
@@ -63,8 +62,7 @@ pub fn uninstall_wheel(
                     tracing::debug!("Detected self-delete of executable: {}", path.display());
                     match self_replace::self_delete_outside_path(site_packages) {
                         Ok(()) => {
-                            trace!("Removed file: {}", path.display());
-                            file_count += 1;
+                            uninstall.record_removed_file(&path);
                             if let Some(parent) = path.parent() {
                                 visited.insert(normalize_path(parent));
                             }
@@ -79,18 +77,14 @@ pub fn uninstall_wheel(
 
         match fs_err::remove_file(&path) {
             Ok(()) => {
-                trace!("Removed file: {}", path.display());
-                file_count += 1;
+                uninstall.record_removed_file(&path);
                 if let Some(parent) = path.parent() {
                     visited.insert(normalize_path(parent));
                 }
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => match fs_err::remove_dir_all(&path) {
-                Ok(()) => {
-                    trace!("Removed directory: {}", path.display());
-                    dir_count += 1;
-                }
+                Ok(()) => uninstall.record_removed_directory(&path),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(_) => return Err(err.into()),
             },
@@ -120,10 +114,7 @@ pub fn uninstall_wheel(
             // enough to remove it either way.
             let pycache = path.join("__pycache__");
             match fs_err::remove_dir_all(&pycache) {
-                Ok(()) => {
-                    trace!("Removed directory: {}", pycache.display());
-                    dir_count += 1;
-                }
+                Ok(()) => uninstall.record_removed_directory(&pycache),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err.into()),
             }
@@ -143,8 +134,7 @@ pub fn uninstall_wheel(
 
             fs_err::remove_dir(path)?;
 
-            trace!("Removed directory: {}", path.display());
-            dir_count += 1;
+            uninstall.record_removed_directory(path);
 
             if let Some(parent) = path.parent() {
                 path = parent;
@@ -154,10 +144,7 @@ pub fn uninstall_wheel(
         }
     }
 
-    Ok(Uninstall {
-        file_count,
-        dir_count,
-    })
+    Ok(uninstall)
 }
 
 static WARNED_FOR_RECORD_ENTRY_PACKAGE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -241,8 +228,7 @@ fn is_valid_top_level_entry(entry: &str, distribution: impl Display) -> bool {
 ///
 /// See: <https://github.com/pypa/pip/blob/41587f5e0017bcd849f42b314dc8a34a7db75621/src/pip/_internal/req/req_uninstall.py#L483>
 pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Uninstall, Error> {
-    let mut file_count = 0usize;
-    let mut dir_count = 0usize;
+    let mut uninstall = Uninstall::default();
 
     let dist_location = egg_info
         .parent()
@@ -289,8 +275,7 @@ pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Unin
         // Remove as a directory.
         match fs_err::remove_dir_all(&path) {
             Ok(()) => {
-                trace!("Removed directory: {}", path.display());
-                dir_count += 1;
+                uninstall.record_removed_directory(&path);
                 continue;
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -302,8 +287,7 @@ pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Unin
             let path = path.with_extension(extension);
             match fs_err::remove_file(&path) {
                 Ok(()) => {
-                    trace!("Removed file: {}", path.display());
-                    file_count += 1;
+                    uninstall.record_removed_file(&path);
                     break;
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -314,20 +298,14 @@ pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Unin
 
     // Remove the `.egg-info` directory.
     match fs_err::remove_dir_all(egg_info) {
-        Ok(()) => {
-            trace!("Removed directory: {}", egg_info.display());
-            dir_count += 1;
-        }
+        Ok(()) => uninstall.record_removed_directory(egg_info),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => {
             return Err(err.into());
         }
     }
 
-    Ok(Uninstall {
-        file_count,
-        dir_count,
-    })
+    Ok(uninstall)
 }
 
 fn normcase(s: &str) -> Cow<'_, str> {
@@ -344,7 +322,7 @@ static EASY_INSTALL_PTH: Mutex<()> = Mutex::new(());
 ///
 /// See: <https://github.com/pypa/pip/blob/41587f5e0017bcd849f42b314dc8a34a7db75621/src/pip/_internal/req/req_uninstall.py#L534-L552>
 pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
-    let mut file_count = 0usize;
+    let mut uninstall = Uninstall::default();
 
     // Find the target line in the `.egg-link` file.
     let contents = fs_err::read_to_string(egg_link)?;
@@ -358,10 +336,7 @@ pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
     let target_line = normcase(target_line);
 
     match fs_err::remove_file(egg_link) {
-        Ok(()) => {
-            trace!("Removed file: {}", egg_link.display());
-            file_count += 1;
-        }
+        Ok(()) => uninstall.record_removed_file(egg_link),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         Err(err) => return Err(err.into()),
     }
@@ -394,10 +369,7 @@ pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
         trace!("Removed line from `easy-install.pth`: {target_line}");
     }
 
-    Ok(Uninstall {
-        file_count,
-        dir_count: 0usize,
-    })
+    Ok(uninstall)
 }
 
 #[derive(Debug, Default)]
@@ -406,6 +378,18 @@ pub struct Uninstall {
     pub file_count: usize,
     /// The number of directories that were removed during the uninstallation.
     pub dir_count: usize,
+}
+
+impl Uninstall {
+    fn record_removed_file(&mut self, path: &Path) {
+        trace!("Removed file: {}", path.display());
+        self.file_count += 1;
+    }
+
+    fn record_removed_directory(&mut self, path: &Path) {
+        trace!("Removed directory: {}", path.display());
+        self.dir_count += 1;
+    }
 }
 
 /// Normalize a path, removing things like `.` and `..`.
