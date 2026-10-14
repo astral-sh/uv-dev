@@ -207,35 +207,29 @@ impl IncompatibleDist {
         tags: Option<&Tags>,
         requires_python: Option<AbiTag>,
     ) -> Option<String> {
+        fn example(tag: impl Display) -> String {
+            format!("(e.g., `{}`)", tag.cyan())
+        }
+
         match self {
-            Self::Wheel(incompatibility) => match incompatibility {
-                IncompatibleWheel::Tag(IncompatibleTag::Python) => {
-                    let tag = tags?.python_tag().as_ref().map(ToString::to_string)?;
-                    Some(format!("(e.g., `{tag}`)", tag = tag.cyan()))
-                }
-                IncompatibleWheel::Tag(IncompatibleTag::Abi) => {
-                    let tag = tags?.abi_tag().as_ref().map(ToString::to_string)?;
-                    Some(format!("(e.g., `{tag}`)", tag = tag.cyan()))
-                }
-                IncompatibleWheel::Tag(IncompatibleTag::FreethreadedAbi) => None,
-                IncompatibleWheel::Tag(IncompatibleTag::AbiPythonVersion) => {
-                    let tag = requires_python?;
-                    Some(format!("(e.g., `{tag}`)", tag = tag.cyan()))
-                }
-                IncompatibleWheel::Tag(IncompatibleTag::Platform) => {
-                    let tag = tags?.platform_tag().map(ToString::to_string)?;
-                    Some(format!("(e.g., `{tag}`)", tag = tag.cyan()))
-                }
-                IncompatibleWheel::Tag(IncompatibleTag::Invalid) => None,
-                IncompatibleWheel::Tag(IncompatibleTag::Variant) => None,
-                IncompatibleWheel::NoBinary => None,
-                IncompatibleWheel::Yanked(..) => None,
-                IncompatibleWheel::ExcludeNewer(..) => None,
-                IncompatibleWheel::RequiresPython(..) => None,
-                IncompatibleWheel::MissingPlatform(..) => None,
+            Self::Wheel(IncompatibleWheel::Tag(tag)) => match tag {
+                IncompatibleTag::Python => tags?.python_tag().map(example),
+                IncompatibleTag::Abi => tags?.abi_tag().map(example),
+                IncompatibleTag::AbiPythonVersion => requires_python.map(example),
+                IncompatibleTag::Platform => tags?.platform_tag().map(example),
+                IncompatibleTag::FreethreadedAbi
+                | IncompatibleTag::Invalid
+                | IncompatibleTag::Variant => None,
             },
-            Self::Source(..) => None,
-            Self::Unavailable => None,
+            Self::Wheel(
+                IncompatibleWheel::NoBinary
+                | IncompatibleWheel::Yanked(..)
+                | IncompatibleWheel::ExcludeNewer(..)
+                | IncompatibleWheel::RequiresPython(..)
+                | IncompatibleWheel::MissingPlatform(..),
+            )
+            | Self::Source(..)
+            | Self::Unavailable => None,
         }
     }
 }
