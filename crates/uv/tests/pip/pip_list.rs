@@ -595,14 +595,13 @@ fn list_exclude() {
 
     uv_snapshot!(context.filters(), context.pip_list()
     .arg("--exclude")
-    .arg("numpy")
+    .arg("anyio")
     .arg("--exclude")
     .arg("poetry-editable"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Package Version
     [UNDERLINE]
-    anyio 4.3.0
     idna 3.6
     sniffio 1.3.1
     "
