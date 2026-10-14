@@ -1,4 +1,4 @@
-use std::cmp::min;
+use std::cmp::{Reverse, min};
 use std::sync::Arc;
 
 use itertools::Itertools;
@@ -150,25 +150,19 @@ impl BatchPrefetcher {
 
     /// Log stats about how many versions we tried.
     pub(crate) fn log_tried_versions(&self) {
-        let total_versions: usize = self
-            .packages
-            .values()
-            .map(|state| state.tried_versions.len())
-            .sum();
         let mut tried_versions: Vec<_> = self
             .packages
             .iter()
             .map(|(name, state)| (name, state.tried_versions.len()))
             .collect();
-        tried_versions.sort_by(|(p1, c1), (p2, c2)| {
-            c1.cmp(c2)
-                .reverse()
-                .then(p1.to_string().cmp(&p2.to_string()))
-        });
+        let total_versions: usize = tried_versions.iter().map(|(_, count)| count).sum();
+        tried_versions.sort_unstable_by_key(|&(name, count)| (Reverse(count), name.as_str()));
         let counts = tried_versions
-            .iter()
-            .map(|(package, count)| format!("{package} {count}"))
-            .join(", ");
+            .into_iter()
+            .format_with(", ", |(package, count), f| {
+                f(&format_args!("{package} {count}"))
+            })
+            .to_string();
         debug!("Tried {total_versions} versions: {counts}");
     }
 }
