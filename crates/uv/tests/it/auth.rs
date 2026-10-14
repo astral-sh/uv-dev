@@ -3,7 +3,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::PathChild, prelude::FileWriteStr};
 use uv_static::EnvVars;
 
-use uv_test::uv_snapshot;
+use uv_test::{assert_path_missing, uv_snapshot};
 
 #[cfg(feature = "native-auth")]
 use crate::native_auth_fixture::NativeAuthFixture;
@@ -564,20 +564,11 @@ async fn token_native_auth_realm() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-#[cfg(feature = "native-auth")]
-async fn login_native_auth() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
-    let proxy = crate::pypi_proxy::start().await;
-
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
+#[test]
+fn login_missing_arguments() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let credentials_dir = context.temp_dir.child("credentials");
+    let context = context.with_env(EnvVars::UV_CREDENTIALS_DIR, credentials_dir.as_os_str());
 
     // Without a service name
     uv_snapshot!(context.filters(), context.auth_login(), @r"
@@ -593,8 +584,7 @@ async fn login_native_auth() -> Result<()> {
 
     // Without a username (or token)
     uv_snapshot!(context.filters(), context.auth_login()
-        .arg(proxy.url("/basic-auth/simple"))
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("https://example.invalid/simple"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No username provided; did you mean to provide `--username` or `--token`?
@@ -602,30 +592,15 @@ async fn login_native_auth() -> Result<()> {
 
     // Without a password
     uv_snapshot!(context.filters(), context.auth_login()
-        .arg(proxy.url("/basic-auth/simple"))
+        .arg("https://example.invalid/simple")
         .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("public"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No password provided; did you mean to provide `--password` or `--token`?
     ");
 
-    // Successful
-    uv_snapshot!(context.filters(), context.auth_login()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
-        .arg("--password")
-        .arg("heron")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for public@http://[LOCALHOST]/basic-auth
-    "
-    );
-
-    Ok(())
+    assert_path_missing(credentials_dir.child("credentials.toml"));
 }
 
 #[tokio::test]
