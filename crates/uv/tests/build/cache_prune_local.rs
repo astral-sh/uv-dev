@@ -1,6 +1,8 @@
 use anyhow::Result;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 
+use uv_cache::{Cache, CacheBucket};
 use uv_test::{assert_path_missing, uv_snapshot};
 
 /// Cache pruning should not count storage retained by another hardlink.
@@ -74,7 +76,8 @@ fn prune_physical_space_unsupported_fs() -> Result<()> {
 fn prune_python_downloads() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
 
-    let python_cache = context.cache_dir.child("python-v1");
+    let python_cache =
+        ChildPath::new(Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::Python));
     python_cache.create_dir_all()?;
     let download = python_cache.child("python.tar.gz");
     download.write_binary(b"cached Python download")?;
@@ -96,16 +99,15 @@ fn prune_python_downloads() -> Result<()> {
 fn prune_temporary_build_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_counts()
-        .with_filtered_sizes_and_units()
-        .with_filter((
-            r"\[CACHE_DIR\](\\|\/)(.*?)(\\|\/).*",
-            "[CACHE_DIR]/$2/[ENTRY]",
-        ));
+        .with_filtered_sizes_and_units();
 
     // Populate the cache with a temporary build environment.
-    let builds = context.cache_dir.child("builds-v0").child(".tmp123456");
+    let builds =
+        ChildPath::new(Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::Builds))
+            .child(".tmp123456");
     builds.create_dir_all()?;
     builds.child("pyvenv.cfg").write_str("home = /usr/bin")?;
+    let context = context.with_filtered_path(builds.path(), "BUILD_ENV");
 
     uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
     exit_code: 0 (success)
@@ -113,7 +115,7 @@ fn prune_temporary_build_environment() -> Result<()> {
     DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
     DEBUG uv [VERSION] ([COMMIT] DATE)
     Pruning cache at: [CACHE_DIR]/
-    DEBUG Removing temporary build environment: [CACHE_DIR]/builds-v0/[ENTRY]
+    DEBUG Removing temporary build environment: [BUILD_ENV]/
     Removed [N] files ([SIZE])
     ");
 
