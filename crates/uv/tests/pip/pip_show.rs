@@ -1,12 +1,12 @@
 #[cfg(any(feature = "test-python", feature = "test-pypi"))]
 use anyhow::Result;
-#[cfg(feature = "test-pypi")]
+#[cfg(any(feature = "test-python", feature = "test-pypi"))]
 use assert_cmd::prelude::*;
 #[cfg(feature = "test-python")]
 use assert_fs::fixture::ChildPath;
 #[cfg(any(feature = "test-python", feature = "test-pypi"))]
 use assert_fs::fixture::{FileWriteStr, PathChild};
-#[cfg(feature = "test-pypi")]
+#[cfg(feature = "test-python")]
 use indoc::indoc;
 
 #[cfg(feature = "test-pypi")]
@@ -14,6 +14,8 @@ use uv_static::EnvVars;
 
 #[cfg(feature = "test-pypi")]
 use uv_test::copy_dir_ignore;
+#[cfg(feature = "test-python")]
+use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::uv_snapshot;
 
 #[test]
@@ -74,10 +76,8 @@ fn show_requires_multiple() -> Result<()> {
 #[test]
 #[cfg(feature = "test-python")]
 fn show_python_version_marker() -> Result<()> {
-    use uv_test::packse::{PackseServer, scenario::Scenario};
-
     let context = uv_test::test_context!("3.12");
-    let scenario = toml::from_str::<Scenario>(indoc::indoc! {r#"
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
         name = "show-python-marker"
         [root]
         [expected]
@@ -117,32 +117,31 @@ fn show_python_version_marker() -> Result<()> {
     Ok(())
 }
 
+/// Lookup results, missing-package warnings, and quiet exit codes share the same environment.
 #[test]
-#[cfg(feature = "test-pypi")]
-fn show_found_single_package() -> Result<()> {
+#[cfg(feature = "test-python")]
+fn show_package_lookup_results() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "show-package-lookups"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.markupsafe.versions."2.1.3"]
+        [packages.pip.versions."21.3.1"]
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    let install = |requirement: &str| {
+        context
+            .pip_install()
+            .args([requirement, "--strict", "--default-index"])
+            .arg(index.index_url())
+            .assert()
+            .success();
+    };
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + markupsafe==2.1.3
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-
-    uv_snapshot!(context.filters(), context.pip_show()
-        .arg("markupsafe"), @"
+    install("MarkupSafe==2.1.3");
+    uv_snapshot!(context.filters(), context.pip_show().arg("MARKUPSAFE"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: markupsafe
@@ -150,44 +149,10 @@ fn show_found_single_package() -> Result<()> {
     Location: [SITE_PACKAGES]/
     Requires:
     Required-by:
-    "
-    );
+    ");
 
-    Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn show_found_multiple_packages() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        MarkupSafe==2.1.3
-        pip==21.3.1
-    "
-    })?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + pip==21.3.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-
-    uv_snapshot!(context.filters(), context.pip_show()
-        .arg("markupsafe")
-        .arg("pip"), @"
+    install("pip==21.3.1");
+    uv_snapshot!(context.filters(), context.pip_show().args(["markupsafe", "pip"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: markupsafe
@@ -201,45 +166,9 @@ fn show_found_multiple_packages() -> Result<()> {
     Location: [SITE_PACKAGES]/
     Requires:
     Required-by:
-    "
-    );
+    ");
 
-    Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn show_found_one_out_of_three() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        MarkupSafe==2.1.3
-        pip==21.3.1
-    "
-    })?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + pip==21.3.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-
-    uv_snapshot!(context.filters(), context.pip_show()
-        .arg("markupsafe")
-        .arg("flask")
-        .arg("django"), @"
+    uv_snapshot!(context.filters(), context.pip_show().args(["markupsafe", "flask", "django"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: markupsafe
@@ -250,90 +179,14 @@ fn show_found_one_out_of_three() -> Result<()> {
 
     ----- stderr -----
     warning: Package(s) not found for: django, flask
-    "
-    );
+    ");
 
-    Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn show_found_one_out_of_two_quiet() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        MarkupSafe==2.1.3
-        pip==21.3.1
-    "
-    })?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
+    uv_snapshot!(context.pip_show().args(["markupsafe", "flask", "--quiet"]), @"
     exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + pip==21.3.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-
-    // Flask isn't installed, but markupsafe is, so the command should succeed.
-    uv_snapshot!(context.pip_show()
-        .arg("markupsafe")
-        .arg("flask")
-        .arg("--quiet"), @"
-    exit_code: 0 (success)
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn show_empty_quiet() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        MarkupSafe==2.1.3
-        pip==21.3.1
-    "
-    })?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + pip==21.3.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-
-    // Flask isn't installed, so the command should fail.
-    uv_snapshot!(context.pip_show()
-        .arg("flask")
-        .arg("--quiet"), @"
+    ");
+    uv_snapshot!(context.pip_show().args(["flask", "--quiet"]), @"
     exit_code: 1 (failure)
-    "
-    );
-
+    ");
     Ok(())
 }
 
