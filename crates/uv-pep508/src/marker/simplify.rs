@@ -333,7 +333,7 @@ fn sort(dnf: &mut [Vec<MarkerExpression>]) {
     });
 }
 
-/// Merge any edges that lead to identical subtrees into a single range.
+/// Merge edges that lead to identical subtrees into a single range, omitting false terminals.
 fn collect_edges<'a, T>(
     map: impl ExactSizeIterator<Item = (&'a Ranges<T>, MarkerTree)>,
 ) -> IndexMap<MarkerTree, Ranges<T>, FxBuildHasher>
@@ -342,6 +342,9 @@ where
 {
     let mut paths: IndexMap<_, Ranges<_>, FxBuildHasher> = IndexMap::default();
     for (range, tree) in map {
+        if tree.is_false() {
+            continue;
+        }
         // OK because all ranges are guaranteed to be non-empty.
         let (start, end) = range.bounding_range().unwrap();
         // Combine the ranges.
