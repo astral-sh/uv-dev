@@ -3,9 +3,7 @@ use std::borrow::Cow;
 use either::Either;
 use rustc_hash::FxHashMap;
 
-use uv_distribution_types::{
-    NameRequirementSpecification, Requirement, RequirementSource, ResolutionRecorder,
-};
+use uv_distribution_types::{NameRequirementSpecification, Requirement, ResolutionRecorder};
 use uv_normalize::PackageName;
 
 use crate::dependency_modifier::apply_extra_marker;
@@ -41,10 +39,7 @@ impl Constraints {
         let mut constraints: FxHashMap<PackageName, Vec<Requirement>> = FxHashMap::default();
         for specification in &specifications {
             let requirement = &specification.requirement;
-            // Skip empty constraints.
-            if let RequirementSource::Registry { specifier, .. } = &requirement.source
-                && specifier.is_empty()
-            {
+            if requirement.source.is_empty() {
                 continue;
             }
 

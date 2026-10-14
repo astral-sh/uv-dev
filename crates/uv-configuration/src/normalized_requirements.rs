@@ -90,9 +90,7 @@ impl From<Vec<Requirement>> for NormalizedConstraints {
     /// Normalize constraints, dropping false markers and empty declarations and ignoring extras.
     fn from(mut constraints: Vec<Requirement>) -> Self {
         constraints.retain_mut(|requirement| {
-            if let RequirementSource::Registry { specifier, .. } = &requirement.source
-                && specifier.is_empty()
-            {
+            if requirement.source.is_empty() {
                 return false;
             }
             requirement.extras = Box::new([]);
