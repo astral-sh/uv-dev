@@ -400,8 +400,8 @@ fn extract_package_name(path: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-    use reqwest::StatusCode;
     use reqwest::header::{ACCEPT_RANGES, CONTENT_RANGE, RANGE};
+    use reqwest::{Client, StatusCode};
     use wiremock::MockServer;
 
     use crate::vendor::vendor_artifacts;
@@ -410,6 +410,10 @@ mod tests {
         PackseServer, Scenario, build_server_index, extract_package_name,
         mount_mismatched_distribution, sha256_hex,
     };
+
+    fn local_client() -> reqwest::Result<Client> {
+        Client::builder().no_proxy().build()
+    }
 
     #[test]
     fn extract_package_name_accepts_with_or_without_trailing_slash() {
@@ -448,7 +452,10 @@ sdist = false
 "#,
         )?;
         let server = PackseServer::from_scenario(&scenario);
-        let index: serde_json::Value = reqwest::get(format!("{}packaging/", server.index_url()))
+        let client = local_client()?;
+        let index: serde_json::Value = client
+            .get(format!("{}packaging/", server.index_url()))
+            .send()
             .await?
             .json()
             .await?;
@@ -456,7 +463,9 @@ sdist = false
         assert_eq!(index["files"].as_array().map(Vec::len), Some(1));
         let filename = "packaging-23.2-py3-none-any.whl";
         assert_eq!(index["files"][0]["filename"], filename);
-        let bytes = reqwest::get(server.file_url(filename))
+        let bytes = client
+            .get(server.file_url(filename))
+            .send()
             .await?
             .error_for_status()?
             .bytes()
@@ -492,8 +501,11 @@ wheel = false
 "#,
         )?;
         let server = PackseServer::from_scenario(&scenario);
+        let client = local_client()?;
 
-        let a: serde_json::Value = reqwest::get(format!("{}a/", server.index_url()))
+        let a: serde_json::Value = client
+            .get(format!("{}a/", server.index_url()))
+            .send()
             .await?
             .json()
             .await?;
@@ -508,7 +520,9 @@ wheel = false
         assert_eq!(a["files"][2]["filename"], "a-1.0.0.tar.gz");
         assert_eq!(a["files"][2]["upload-time"], "2024-03-23T00:00:00Z");
 
-        let b: serde_json::Value = reqwest::get(format!("{}b/", server.index_url()))
+        let b: serde_json::Value = client
+            .get(format!("{}b/", server.index_url()))
+            .send()
             .await?
             .json()
             .await?;
@@ -516,7 +530,9 @@ wheel = false
         assert_eq!(b["files"][0]["filename"], "b-1.0.0-py3-none-any.whl");
         assert_eq!(b["files"][0]["upload-time"], "2024-03-24T00:00:00Z");
 
-        let c: serde_json::Value = reqwest::get(format!("{}c/", server.index_url()))
+        let c: serde_json::Value = client
+            .get(format!("{}c/", server.index_url()))
+            .send()
             .await?
             .json()
             .await?;
@@ -545,7 +561,7 @@ sdist = false
         )?;
         let server = PackseServer::from_scenario(&scenario);
         let url = server.file_url("a-1.0.0-py3-none-any.whl");
-        let client = reqwest::Client::new();
+        let client = local_client()?;
 
         let response = client.get(&url).send().await?;
         assert_eq!(response.status(), StatusCode::OK);
@@ -618,7 +634,7 @@ sdist = false
         )
         .await;
         let url = format!("{}/files/example.whl", server.uri());
-        let client = reqwest::Client::new();
+        let client = local_client()?;
 
         let response = client.head(&url).send().await?;
         assert_eq!(response.status(), StatusCode::OK);
