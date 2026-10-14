@@ -54,8 +54,8 @@ pub(crate) fn from_state(
     let root_index = graph.add_node(ResolutionGraphNode::Root);
 
     for resolution in &mut resolutions {
-        // Add every package to the graph.
-        for (package, selected) in resolution.nodes.drain(..) {
+        // Add every package to the graph and release the fork's node buffer before processing edges.
+        for (package, selected) in std::mem::take(&mut resolution.nodes) {
             let node = ResolutionNode {
                 package,
                 version: selected.version().clone(),
