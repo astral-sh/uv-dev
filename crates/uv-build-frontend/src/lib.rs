@@ -389,7 +389,7 @@ impl SourceBuild {
 
             let resolved_requirements = Self::get_resolved_requirements(
                 build_context,
-                source_build_context.clone(),
+                &source_build_context,
                 &pep517_backend,
                 &extra_build_dependencies,
                 build_stack,
@@ -433,7 +433,7 @@ impl SourceBuild {
 
         // Create the PEP 517 build environment. If build isolation is disabled, we assume the build
         // environment is already set up.
-        let runner = PythonRunner::new(source_build_context.concurrent_build_slots.clone(), level);
+        let runner = PythonRunner::new(source_build_context.concurrent_build_slots, level);
         if let Some(resolved_requirements) = resolved_requirements {
             debug!("Creating PEP 517 build environment");
 
@@ -607,7 +607,7 @@ impl SourceBuild {
 
     async fn get_resolved_requirements(
         build_context: &impl BuildContext,
-        source_build_context: SourceBuildContext,
+        source_build_context: &SourceBuildContext,
         pep517_backend: &Pep517Backend,
         extra_build_dependencies: &[Requirement],
         build_stack: &BuildStack,
