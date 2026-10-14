@@ -1132,14 +1132,11 @@ fn invalid_build_backend_settings_are_ignored() -> Result<()> {
     Ok(())
 }
 
-/// Error when there is a relative module root outside the project root, such as
-/// `tool.uv.build-backend.module-root = ".."`.
-#[test]
-fn error_on_relative_module_root_outside_project_root() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
+fn project_with_external_module_root(context: &TestContext) -> Result<()> {
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -1152,25 +1149,48 @@ fn error_on_relative_module_root_outside_project_root() -> Result<()> {
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
+    context
+        .temp_dir
+        .child("project/__init__.py")
+        .write_str("SECRET = 'outside the project'\n")?;
+    Ok(())
+}
 
-    context.temp_dir.child("__init__.py").touch()?;
+#[test]
+fn sdist_rejects_external_module_root() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    project_with_external_module_root(&context)?;
 
-    uv_snapshot!(context.filters(), context.build(), @"
+    uv_snapshot!(context.filters(), context.build()
+        .args(["source", "--sdist", "--no-index", "--out-dir", "dist"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building source distribution...
-    error: Failed to build `[TEMP_DIR]/`
+    error: Failed to build `[TEMP_DIR]/source`
       cause: Module root must be inside the project: ..
     ");
+    assert_path_missing(context.temp_dir.child("dist/project-0.1.0.tar.gz"));
+    Ok(())
+}
 
-    uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
+#[test]
+fn wheel_rejects_external_module_root() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    project_with_external_module_root(&context)?;
+
+    uv_snapshot!(context.filters(), context.build()
+        .args(["source", "--wheel", "--no-index", "--out-dir", "dist"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building wheel...
-    error: Failed to build `[TEMP_DIR]/`
+    error: Failed to build `[TEMP_DIR]/source`
       cause: Module root must be inside the project: ..
     ");
-
+    assert_path_missing(
+        context
+            .temp_dir
+            .child("dist/project-0.1.0-py3-none-any.whl"),
+    );
     Ok(())
 }
 
