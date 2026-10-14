@@ -1801,31 +1801,30 @@ fn windows_shims() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.10", "3.9"]);
     let shim_path = context.temp_dir.child("shim");
 
-    let py39 = context
+    // Route the shim to 3.9 while the ordinary search path prefers 3.10.
+    let (version, python) = context
         .python_versions
         .last()
-        .expect("python_path_with_versions to set up the python versions");
+        .expect("Python 3.9 interpreter");
+    assert_eq!(version.to_string(), "3.9");
 
-    // We want 3.9 and the first version should be 3.10.
-    // Picking the last is necessary to prove that shims work because the python version selects
-    // the python version from the first path segment by default, so we take the last to prove it's not
-    // returning that version.
-    assert!(py39.0.to_string().contains("3.9"));
-
-    // Write the shim script that forwards the arguments to the python3.9 installation.
+    // Pass the executable through the environment so its path retains native encoding.
+    let shim_python = "UV_TEST_SHIM_PYTHON";
     fs_err::create_dir(&shim_path)?;
     fs_err::write(
         shim_path.child("python.bat"),
-        format!(
-            "@echo off\r\n{}/python.exe %*",
-            py39.1.parent().unwrap().display()
-        ),
+        format!("@echo off\r\n\"%{shim_python}%\" %*\r\n"),
+    )?;
+    let search_path = std::env::join_paths(
+        std::iter::once(shim_path.to_path_buf())
+            .chain(std::env::split_paths(&context.python_path())),
     )?;
 
     // Create a virtual environment at `.venv` with the shim
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
-        .env(EnvVars::UV_PYTHON_SEARCH_PATH, format!("{};{}", shim_path.display(), context.python_path().to_string_lossy())), @r###"
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path)
+        .env(shim_python, python), @r###"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
