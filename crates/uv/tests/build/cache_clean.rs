@@ -339,11 +339,11 @@ async fn clean_force() -> Result<()> {
         .assert()
         .success();
 
-    // When locked, `--force` should proceed without blocking
+    // Bound the wait so a regression in `--force` fails instead of hanging the test.
     let _cache = Cache::from_path(context.cache_dir.path())
         .with_exclusive_lock()
         .await?;
-    uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("--force"), @"
+    uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("--force").env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
@@ -562,13 +562,13 @@ fn clean_package_empty_shard_without_search_permission() -> Result<()> {
 }
 
 #[tokio::test]
-async fn cache_timeout() {
+async fn cache_timeout() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     // Simulate another uv process running and locking the cache, e.g., with a source build.
     let _cache = Cache::from_path(context.cache_dir.path())
         .with_exclusive_lock()
-        .await;
+        .await?;
 
     uv_snapshot!(context.filters(), context.clean().env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
     exit_code: 2 (failure)
@@ -576,6 +576,7 @@ async fn cache_timeout() {
     Cache is currently in-use, waiting for other uv processes to finish (use `--force` to override)
     error: Timeout ([TIME]) when waiting for lock on `[CACHE_DIR]/` at `[CACHE_DIR]/.lock`, is another uv process running? You can set `UV_LOCK_TIMEOUT` to increase the timeout.
     ");
+    Ok(())
 }
 
 /// `cache clean` should handle file paths normally restricted by Win32 path normalization.
