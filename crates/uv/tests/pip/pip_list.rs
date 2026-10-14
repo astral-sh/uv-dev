@@ -530,17 +530,13 @@ fn list_format_json() -> Result<()> {
     "
     );
 
-    let list = |filters: &[&str]| -> Result<Vec<serde_json::Value>> {
-        let output = context
-            .pip_list()
-            .arg("--format=json")
-            .args(filters)
-            .assert()
-            .success()
-            .stderr("");
-        Ok(serde_json::from_slice(&output.get_output().stdout)?)
-    };
-    let all = list(&[])?;
+    let output = context
+        .pip_list()
+        .arg("--format=json")
+        .assert()
+        .success()
+        .stderr("");
+    let all: Vec<serde_json::Value> = serde_json::from_slice(&output.get_output().stdout)?;
     let location = all
         .get(2)
         .and_then(|row| row.get("editable_project_location"))
@@ -568,8 +564,28 @@ fn list_format_json() -> Result<()> {
             sniffio.clone()
         ]
     );
-    assert_eq!(list(&["--editable"])?, vec![editable]);
-    assert_eq!(list(&["--exclude-editable"])?, vec![anyio, idna, sniffio]);
+
+    let editable_only = context
+        .pip_list()
+        .args(["--format=json", "--editable"])
+        .assert()
+        .success()
+        .stderr("");
+    assert_eq!(
+        serde_json::from_slice::<Vec<serde_json::Value>>(&editable_only.get_output().stdout)?,
+        vec![editable]
+    );
+
+    let non_editable = context
+        .pip_list()
+        .args(["--format=json", "--exclude-editable"])
+        .assert()
+        .success()
+        .stderr("");
+    assert_eq!(
+        serde_json::from_slice::<Vec<serde_json::Value>>(&non_editable.get_output().stdout)?,
+        vec![anyio, idna, sniffio]
+    );
     Ok(())
 }
 
