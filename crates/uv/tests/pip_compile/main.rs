@@ -17,6 +17,8 @@ mod hash_preservation;
 mod index_inputs;
 #[cfg(feature = "test-python")]
 mod marker_expression;
+#[cfg(feature = "test-python")]
+mod offline;
 #[cfg(all(feature = "test-python", unix))]
 mod output_streams;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
