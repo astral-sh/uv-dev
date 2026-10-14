@@ -835,6 +835,29 @@ impl SourceBuild {
         Ok((backend, pyproject_toml.project))
     }
 
+    /// Run a hook in the source build environment.
+    async fn run_build_hook(
+        &self,
+        hook_prefix: &str,
+        script: &str,
+    ) -> Result<PythonRunnerOutput, Error> {
+        let span = info_span!(
+            "run_python_script",
+            script = format!("{hook_prefix}_{}", self.build_kind),
+            version_id = self.version_id,
+        );
+        self.runner
+            .run_script(
+                &self.venv,
+                script,
+                &self.source_tree,
+                &self.environment_variables,
+                &self.modified_path,
+            )
+            .instrument(span)
+            .await
+    }
+
     /// Try calling `prepare_metadata_for_build_wheel` to get the metadata without executing the
     /// actual build.
     async fn get_metadata_without_build(&mut self) -> Result<Option<PathBuf>, Error> {
@@ -908,21 +931,8 @@ impl SourceBuild {
             self.config_settings.escape_for_python(),
             outfile.escape_for_python(),
         };
-        let span = info_span!(
-            "run_python_script",
-            script = format!("prepare_metadata_for_build_{}", self.build_kind),
-            version_id = self.version_id,
-        );
         let output = self
-            .runner
-            .run_script(
-                &self.venv,
-                &script,
-                &self.source_tree,
-                &self.environment_variables,
-                &self.modified_path,
-            )
-            .instrument(span)
+            .run_build_hook("prepare_metadata_for_build", &script)
             .await?;
         if !output.status.success() {
             return Err(Error::from_command_output(
@@ -1031,22 +1041,7 @@ impl SourceBuild {
             }
         };
 
-        let span = info_span!(
-            "run_python_script",
-            script = format!("build_{}", self.build_kind),
-            version_id = self.version_id,
-        );
-        let output = self
-            .runner
-            .run_script(
-                &self.venv,
-                &script,
-                &self.source_tree,
-                &self.environment_variables,
-                &self.modified_path,
-            )
-            .instrument(span)
-            .await?;
+        let output = self.run_build_hook("build", &script).await?;
         if output.status.success() {
             let distribution_filename = fs::read_to_string(&outfile)?;
             if output_dir.join(&distribution_filename).is_file() {
