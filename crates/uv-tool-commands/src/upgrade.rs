@@ -336,14 +336,16 @@ async fn upgrade_tool(
         .collect::<Vec<_>>();
     let manifest_overrides = existing_tool_receipt.overrides().to_vec();
     let manifest_excludes = existing_tool_receipt.excludes().to_vec();
-    let lock_manifest = ToolLock::manifest(
-        existing_tool_receipt.requirements(),
-        &manifest_constraints,
-        &manifest_overrides,
-        &manifest_excludes,
-        &build_constraints,
-        &settings.resolver.dependency_metadata,
-    );
+    let lock_manifest = tool_locks.then(|| {
+        ToolLock::manifest(
+            existing_tool_receipt.requirements(),
+            &manifest_constraints,
+            &manifest_overrides,
+            &manifest_excludes,
+            &build_constraints,
+            &settings.resolver.dependency_metadata,
+        )
+    });
     let build_constraints = Constraints::from_specifications(build_constraints);
 
     // Resolve the requirements.
@@ -362,7 +364,7 @@ async fn upgrade_tool(
     let tool_dir = installed_tools.tool_dir(name);
     // TODO(zanieb): When updating an existing environment, build it in the cache directory then
     // copy it into the tool directory.
-    let (environment, outcome, tool_lock) = if tool_locks {
+    let (environment, outcome, tool_lock) = if let Some(lock_manifest) = lock_manifest {
         let target_interpreter =
             requested_interpreter.unwrap_or_else(|| environment.environment().interpreter());
         let site_packages = SitePackages::from_environment(environment.environment())?;
