@@ -871,6 +871,7 @@ fn complex_namespace_packages() -> Result<()> {
     );
 
     uv_snapshot!(context.python_command()
+        .arg("-I")
         .arg("-c")
         .arg("from complex_project.part_b import two; print(two())"),
         @"
@@ -880,7 +881,7 @@ fn complex_namespace_packages() -> Result<()> {
     "
     );
 
-    // Test editable installs
+    // Install both namespace portions as editable packages.
     uv_snapshot!(
         context.filters(),
         context
@@ -904,13 +905,29 @@ fn complex_namespace_packages() -> Result<()> {
     "
     );
 
+    part_a
+        .child("src/complex_project/part_a/__init__.py")
+        .write_str(indoc! {"
+            def one():
+                return 3
+        "})?;
+    part_b
+        .child("src/complex_project/part_b/__init__.py")
+        .write_str(indoc! {"
+            from complex_project.part_a import one
+
+            def two():
+                return one() * 2 + 1
+        "})?;
+
     uv_snapshot!(context.python_command()
+        .arg("-I")
         .arg("-c")
         .arg("from complex_project.part_b import two; print(two())"),
         @"
     exit_code: 0 (success)
     ----- stdout -----
-    2
+    7
     "
     );
     Ok(())
