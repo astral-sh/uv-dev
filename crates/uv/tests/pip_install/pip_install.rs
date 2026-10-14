@@ -26,9 +26,8 @@ use wiremock::{
     matchers::{basic_auth, method, path},
 };
 
-use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
-use uv_fs::{PortablePath, Simplified};
-use uv_install_wheel::{read_record, validate_and_heal_record};
+use uv_fs::Simplified;
+use uv_install_wheel::read_record;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::{generate_source_archive, write_tar_gz};
@@ -40,8 +39,7 @@ use uv_test::package_server::PackageServer;
 use uv_test::packse::scenario::Scenario;
 use uv_test::packse::{PackseServer, WheelBuilder};
 use uv_test::{
-    DEFAULT_PYTHON_VERSION, TestContext, apply_filters, copy_dir_ignore, get_bin, uv_snapshot,
-    venv_bin_path,
+    DEFAULT_PYTHON_VERSION, TestContext, copy_dir_ignore, get_bin, uv_snapshot, venv_bin_path,
 };
 
 fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
@@ -16026,141 +16024,6 @@ fn upgrade_group_not_supported() {
     ----- stderr -----
     error: `--upgrade-group` is not supported in `uv pip` commands
     ");
-}
-
-/// Check that the RECORD in a wheel with that doesn't match its contents gets fixed before
-/// installation.
-#[test]
-fn handle_record_mismatches() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filter((
-            regex::escape(r"foo-0.1.0.dist-info/uv_cache.json,sha256=") + ".*",
-            r"foo-0.1.0.dist-info/uv_cache.json,sha256=[SHA256],[SIZE]",
-        ))
-        .with_filter((
-            regex::escape(r"foo-0.1.0.dist-info/WHEEL,sha256=") + ".*",
-            r"foo-0.1.0.dist-info/WHEEL,sha256=[SHA256],[SIZE]",
-        ));
-
-    // Build a small wheel and unpack it for modification.
-    context.init().arg("--lib").arg("foo").assert().success();
-    context.build().arg("--wheel").arg("foo").assert().success();
-    let built_wheel = context.temp_dir.join("foo/dist/foo-0.1.0-py3-none-any.whl");
-    let unpacked = context.temp_dir.join("foo-unpacked");
-    uv_extract::unzip(File::open(&built_wheel)?, &unpacked)?;
-
-    // Snapshot the current (correct) RECORD.
-    let record = unpacked.join("foo-0.1.0.dist-info/RECORD");
-    let correct_record = context.read(&record);
-    let correct_record = apply_filters(correct_record, context.filters());
-    assert_snapshot!(correct_record, @"
-    foo/__init__.py,sha256=jv2QBpHSNajIRNeADSmtqOWL9QcdUddyMK277kbp06o,49
-    foo/py.typed,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
-    foo-0.1.0.dist-info/WHEEL,sha256=[SHA256],[SIZE]
-    foo-0.1.0.dist-info/METADATA,sha256=d-PGjuBKXweF5NgWUW5yDnAjBY0lg4uFZBqcnmGtNgY,147
-    foo-0.1.0.dist-info/RECORD,,
-    ");
-
-    // Create a broken RECORD: Remove 2 files, and add a bogus one.
-    fs_err::write(
-        &record,
-        indoc! {"
-        foo/py.typed,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
-        foo-0.1.0.dist-info/WHEEL,sha256=hbX8mDThv1n7VEIpQRy6c2yAFTw4iAQlEC53gDAhHSo,80
-        foo-0.1.0.dist-info/RECORD,,
-        ../../../../etc/passwd,,0
-    "},
-    )?;
-
-    // Repack the wheel.
-    let repacked_wheel = context.temp_dir.join("foo-0.1.0-py3-none-any.whl");
-    let mut writer = ZipFileWriter::new(Vec::new());
-    for entry in WalkDir::new(&unpacked) {
-        let entry = entry?;
-        let path = entry.path();
-        let name = path.strip_prefix(&unpacked)?;
-        if name.as_os_str().is_empty() {
-            continue;
-        }
-        // Zip entries must use forward slashes, even on Windows.
-        let mut name = PortablePath::from(name).to_string();
-        if path.is_dir() {
-            name.push('/');
-            let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-            block_on(writer.write_entry_whole(entry, &[]))?;
-        } else {
-            let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-            block_on(writer.write_entry_whole(entry, &context.read_bytes(path)))?;
-        }
-    }
-    fs_err::write(&repacked_wheel, block_on(writer.close())?)?;
-
-    // Healing changes the extracted tree, so the archive ID must reflect the repaired RECORD.
-    let extracted = context.temp_dir.join("foo-extracted");
-    let (hashed_files, unhealed_tree) =
-        uv_extract::unzip_and_hash(File::open(&repacked_wheel)?, &extracted)?;
-    let unhealed_digest = DirectoryDigest::from(unhealed_tree.hash());
-    assert!(
-        validate_and_heal_record(
-            &extracted,
-            hashed_files.iter().map(|file| (file.path(), file.size())),
-            "foo",
-        )?
-        .is_some()
-    );
-    let healed_digest = DirectoryDigest::from(dirhash_path(&extracted)?);
-    assert_ne!(unhealed_digest, healed_digest);
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("--find-links")
-        .arg(context.temp_dir.as_ref())
-        .arg("--offline")
-        .arg("--preview-features")
-        .arg("content-addressed-cache")
-        .args(["--link-mode", "hardlink"])
-        .arg("foo"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + foo==0.1.0
-    "
-    );
-
-    let cache = uv_cache::Cache::from_path(context.cache_dir.path());
-    let archive = ChildPath::new(cache.bucket(uv_cache::CacheBucket::Archive));
-    archive
-        .child(unhealed_digest.as_str())
-        .assert(predicate::path::missing());
-    let healed_archive = archive.child(healed_digest.as_str());
-    healed_archive.assert(predicate::path::exists());
-
-    // Installation must not mutate the healed RECORD retained in the archive.
-    let healed_record = extracted.join("foo-0.1.0.dist-info/RECORD");
-    let cached_record = healed_archive.child("foo-0.1.0.dist-info/RECORD");
-    assert_eq!(
-        context.read_bytes(cached_record.path()),
-        context.read_bytes(healed_record)
-    );
-
-    // Read the healed RECORD.
-    let installed_record = context.read(context.site_packages().join("foo-0.1.0.dist-info/RECORD"));
-    let snapshot = apply_filters(installed_record, context.filters());
-
-    // Ensure that all expected files are present.
-    assert_snapshot!(&snapshot, @"
-    foo-0.1.0.dist-info/INSTALLER,sha256=5hhM4Q4mYTT9z6QB6PGpUAW81PGNFrYrdXMj4oM_6ak,2
-    foo-0.1.0.dist-info/METADATA,,147
-    foo-0.1.0.dist-info/RECORD,,
-    foo-0.1.0.dist-info/REQUESTED,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
-    foo-0.1.0.dist-info/WHEEL,sha256=[SHA256],[SIZE]
-    foo-0.1.0.dist-info/uv_cache.json,sha256=[SHA256],[SIZE]
-    foo/__init__.py,,49
-    foo/py.typed,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
-    ");
-
-    Ok(())
 }
 
 /// Compile installed packages without compiling the Python standard library.

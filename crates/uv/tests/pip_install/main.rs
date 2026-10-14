@@ -28,6 +28,8 @@ mod pip_install;
 #[cfg(feature = "test-python")]
 mod pylock;
 #[cfg(feature = "test-python")]
+mod record;
+#[cfg(feature = "test-python")]
 mod remote_requirements;
 
 #[cfg(feature = "test-python")]
