@@ -78,31 +78,31 @@ fn invalid_requirements_txt_requirement() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
-fn uninstall() -> Result<()> {
+fn uninstall_ignores_version_specifier() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3")?;
+    requirements_txt.write_str("ok==1.0.0")?;
 
     context
         .pip_sync()
-        .arg("requirements.txt")
+        .args(["requirements.txt", "--no-index", "--find-links"])
+        .arg(context.workspace_root.join("test/links"))
         .assert()
         .success();
 
-    context.assert_command("import markupsafe").success();
+    context.assert_installed("ok", "1.0.0");
 
     uv_snapshot!(context.pip_uninstall()
-        .arg("MarkupSafe"), @"
+        .arg("ok==999.0.0"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 1 package in [TIME]
-     - markupsafe==2.1.3
+     - ok==1.0.0
     "
     );
 
-    context.assert_not_installed("markupsafe");
+    context.assert_not_installed("ok");
 
     Ok(())
 }
