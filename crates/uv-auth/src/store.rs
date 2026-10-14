@@ -180,7 +180,7 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
     type Error = TomlCredentialError;
 
     fn try_from(value: TomlCredentialWire) -> Result<Self, Self::Error> {
-        match value.scheme {
+        let credentials = match value.scheme {
             AuthScheme::Basic => {
                 if value.username.as_deref().is_none() {
                     return Err(TomlCredentialError::BasicAuthError(
@@ -192,14 +192,10 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
                         BasicAuthError::UnexpectedToken,
                     ));
                 }
-                let credentials = Credentials::Basic {
+                Credentials::Basic {
                     username: value.username,
                     password: value.password,
-                };
-                Ok(Self {
-                    service: value.service,
-                    credentials,
-                })
+                }
             }
             AuthScheme::Bearer => {
                 if value.username.is_some() {
@@ -212,20 +208,18 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
                         BearerAuthError::UnexpectedPassword,
                     ));
                 }
-                if value.token.is_none() {
-                    return Err(TomlCredentialError::BearerAuthError(
-                        BearerAuthError::MissingToken,
-                    ));
+                let token = value.token.ok_or(TomlCredentialError::BearerAuthError(
+                    BearerAuthError::MissingToken,
+                ))?;
+                Credentials::Bearer {
+                    token: Token::new(token.into_bytes()),
                 }
-                let credentials = Credentials::Bearer {
-                    token: Token::new(value.token.unwrap().into_bytes()),
-                };
-                Ok(Self {
-                    service: value.service,
-                    credentials,
-                })
             }
-        }
+        };
+        Ok(Self {
+            service: value.service,
+            credentials,
+        })
     }
 }
 
