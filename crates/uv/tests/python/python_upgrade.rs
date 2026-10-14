@@ -218,8 +218,8 @@ fn python_upgrade_transparent_from_venv() {
 }
 
 #[test]
-fn python_upgrade_ignored_with_python_pin() {
-    let context = uv_test::test_context_with_versions!(&["3.13"])
+fn python_run_honors_patch_pin_after_transparent_upgrade() {
+    let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
         .with_managed_python_dirs()
@@ -257,7 +257,14 @@ fn python_upgrade_ignored_with_python_pin() {
      + cpython-3.10.[LATEST]-[PLATFORM] (python3.10)
     ");
 
-    // Virtual environment should continue to respect pinned patch version
+    // The environment was created before the pin and follows the upgraded minor version.
+    uv_snapshot!(context.filters(), venv_version(&context, context.interpreter()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.10.[LATEST]
+    ");
+
+    // `uv run` must still honor the older patch pin instead of selecting that environment.
     uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
