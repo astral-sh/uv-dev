@@ -341,15 +341,8 @@ impl WheelFilename {
             })
             .transpose()?;
 
-        let tags = if let Some(small) = is_small
-            .then(|| {
-                Some(WheelTagSmall {
-                    python_tag: LanguageTag::from_str(python_tag).ok()?,
-                    abi_tag: AbiTag::from_str(abi_tag).ok()?,
-                    platform_tag: PlatformTag::from_str(platform_tag).ok()?,
-                })
-            })
-            .flatten()
+        let tags = if is_small
+            && let Some(small) = WheelTagSmall::parse(python_tag, abi_tag, platform_tag)
         {
             WheelTag::Small { small }
         } else {
