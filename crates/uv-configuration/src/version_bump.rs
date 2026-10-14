@@ -1,6 +1,8 @@
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 
+use uv_pep440::{BumpCommand, PrereleaseKind};
+
 // Note that the ordering of the variants is significant, as when given a list of operations
 // to perform, we sort them and apply them in order, so users don't have to think too hard about it.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -77,6 +79,31 @@ impl FromStr for VersionBump {
 pub struct VersionBumpSpec {
     pub bump: VersionBump,
     pub value: Option<u64>,
+}
+
+impl From<VersionBumpSpec> for BumpCommand {
+    fn from(VersionBumpSpec { bump, value }: VersionBumpSpec) -> Self {
+        match bump {
+            VersionBump::Major => Self::BumpRelease { index: 0, value },
+            VersionBump::Minor => Self::BumpRelease { index: 1, value },
+            VersionBump::Patch => Self::BumpRelease { index: 2, value },
+            VersionBump::Stable => Self::MakeStable,
+            VersionBump::Alpha => Self::BumpPrerelease {
+                kind: PrereleaseKind::Alpha,
+                value,
+            },
+            VersionBump::Beta => Self::BumpPrerelease {
+                kind: PrereleaseKind::Beta,
+                value,
+            },
+            VersionBump::Rc => Self::BumpPrerelease {
+                kind: PrereleaseKind::Rc,
+                value,
+            },
+            VersionBump::Post => Self::BumpPost { value },
+            VersionBump::Dev => Self::BumpDev { value },
+        }
+    }
 }
 
 impl Display for VersionBumpSpec {
