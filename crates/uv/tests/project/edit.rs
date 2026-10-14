@@ -1845,23 +1845,17 @@ async fn add_git_lfs_offline_http_endpoint() -> Result<()> {
         .await;
     let repository = context.temp_dir.child("repository");
     repository.create_dir_all()?;
-    let git = |arguments: &[&str]| -> Result<String> {
-        let output = Command::new("git")
-            .args(arguments)
-            .current_dir(repository.path())
-            .output()?
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        Ok(String::from_utf8(output)?.trim().to_owned())
-    };
-    git(&["init", "--template="])?;
-    git(&["config", "user.name", "Alice"])?;
-    git(&["config", "user.email", "alice@example.com"])?;
-    git(&["config", "commit.gpgsign", "false"])?;
-    git(&["lfs", "install", "--local", "--skip-repo"])?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        repository.path(),
+        &["lfs", "install", "--local", "--skip-repo"],
+    )?;
     repository.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "dependency"
@@ -1875,9 +1869,9 @@ async fn add_git_lfs_offline_http_endpoint() -> Result<()> {
     repository
         .child(".lfsconfig")
         .write_str(&format!("[lfs]\nurl = {}\n", server.uri()))?;
-    git(&["add", "."])?;
-    git(&["commit", "-m", "Initial version"])?;
-    let revision = git(&["rev-parse", "HEAD"])?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Initial version"])?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let url = Url::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     context
@@ -1915,21 +1909,25 @@ async fn add_git_lfs_offline_http_endpoint() -> Result<()> {
     repository
         .child(".lfsconfig")
         .write_str(&format!("[lfs]\nurl = {url}\n"))?;
-    git(&["add", ".lfsconfig"])?;
-    git(&["commit", "-m", "Use a local LFS endpoint"])?;
-    let local_revision = git(&["rev-parse", "HEAD"])?;
+    git(repository.path(), &["add", ".lfsconfig"])?;
+    git(
+        repository.path(),
+        &["commit", "-m", "Use a local LFS endpoint"],
+    )?;
+    let local_revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     context
         .temp_dir
         .child("pyproject.toml")
         .write_str(&project.replace(&revision, &local_revision))?;
-    context
-        .lock()
-        .args(["--offline", "--no-index"])
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--no-index"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
 
     // A named branch still permits offline reuse of the cached HTTP revision's objects.
-    git(&["branch", "cached", &revision])?;
+    git(repository.path(), &["branch", "cached", &revision])?;
     context
         .temp_dir
         .child("pyproject.toml")
@@ -1953,7 +1951,7 @@ async fn add_git_lfs_offline_http_endpoint() -> Result<()> {
 
 /// Revision-local LFS endpoints apply to downloads, while cached-object copies stay local.
 #[test]
-#[cfg(all(feature = "test-git-lfs", feature = "test-pypi"))]
+#[cfg(feature = "test-git-lfs")]
 fn add_git_lfs_custom_endpoint() -> Result<()> {
     let context = uv_test::test_context!("3.13").with_git_lfs_config();
     let repository = context.temp_dir.child("repository");
@@ -1967,24 +1965,21 @@ fn add_git_lfs_custom_endpoint() -> Result<()> {
         .success();
     let endpoint_url = Url::from_directory_path(endpoint.path())
         .map_err(|()| anyhow!("invalid LFS endpoint path"))?;
-    let git = |arguments: &[&str]| -> Result<String> {
-        let output = Command::new("git")
-            .args(arguments)
-            .current_dir(repository.path())
-            .output()?
-            .assert()
-            .success()
-            .get_output()
-            .stdout
-            .clone();
-        Ok(String::from_utf8(output)?.trim().to_owned())
-    };
-    git(&["init", "--template="])?;
-    git(&["config", "user.name", "Alice"])?;
-    git(&["config", "user.email", "alice@example.com"])?;
-    git(&["config", "commit.gpgsign", "false"])?;
-    git(&["config", "uploadpack.allowFilter", "true"])?;
-    git(&["lfs", "install", "--local", "--skip-repo"])?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        repository.path(),
+        &["config", "uploadpack.allowFilter", "true"],
+    )?;
+    git(
+        repository.path(),
+        &["lfs", "install", "--local", "--skip-repo"],
+    )?;
     repository.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "dependency"
@@ -1999,10 +1994,10 @@ fn add_git_lfs_custom_endpoint() -> Result<()> {
         url = "{endpoint_url}"
     "#})?;
     repository.child("module.py").write_str("VALUE = True\n")?;
-    git(&["add", "."])?;
-    git(&["commit", "-m", "Initial version"])?;
-    let revision = git(&["rev-parse", "HEAD"])?;
-    let short_revision = git(&["rev-parse", "--short", "HEAD"])?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Initial version"])?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
+    let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
     fs_err::rename(repository.child(".git/lfs"), endpoint.child(".git/lfs"))?;
     let url = Url::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
@@ -2019,23 +2014,8 @@ fn add_git_lfs_custom_endpoint() -> Result<()> {
         [tool.uv.sources]
         dependency = {{ git = "{url}", rev = "{revision}", lfs = true }}
     "#})?;
-    let lock = || {
-        let mut command = context.lock();
-        command.args(["--offline", "--preview-features", "git-partial-fetches"]);
-        command
-    };
-    let clear_source_metadata = || -> Result<()> {
-        fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
-        for entry in fs_err::read_dir(context.cache_dir.path())? {
-            let entry = entry?;
-            if entry.file_name().to_string_lossy().starts_with("sdists-v") {
-                fs_err::remove_dir_all(entry.path())?;
-            }
-        }
-        Ok(())
-    };
     let repo_url = RepositoryUrl::parse(url.as_str())?;
-    let git_cache = context.cache_dir.child("git-v1");
+    let git_cache = context.cache_dir.child("git-v1/partial");
     let db_root = git_cache.child("db").child(cache_digest(&repo_url));
     let checkout_root = git_cache
         .child("checkouts")
@@ -2043,7 +2023,12 @@ fn add_git_lfs_custom_endpoint() -> Result<()> {
         .child(short_revision);
 
     // The Git source has no LFS objects; only the selected revision identifies their endpoint.
-    lock().assert().success();
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--preview-features", "git-partial-fetches"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
     assert!(db_root.child(".git/lfs/objects").exists());
     assert_eq!(
         fs_err::read_to_string(checkout_root.child("module.py"))?,
@@ -2056,38 +2041,65 @@ fn add_git_lfs_custom_endpoint() -> Result<()> {
         url = "{endpoint_url}"
         fetchexclude = "module.py"
     "#})?;
-    git(&["add", ".lfsconfig"])?;
-    git(&["commit", "-m", "Exclude the LFS module"])?;
-    let excluded_revision = git(&["rev-parse", "HEAD"])?;
+    git(repository.path(), &["add", ".lfsconfig"])?;
+    git(
+        repository.path(),
+        &["commit", "-m", "Exclude the LFS module"],
+    )?;
+    let excluded_revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let project = context.read("pyproject.toml");
-    clear_source_metadata()?;
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
     context
         .temp_dir
         .child("pyproject.toml")
         .write_str(&project.replace(&revision, &excluded_revision))?;
-    lock().assert().success();
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--preview-features", "git-partial-fetches"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
     assert!(fs_err::read_to_string(db_root.child(".lfsconfig"))?.contains("fetchexclude"));
 
     // Validating the earlier revision must discard that exclusion and recover the missing object.
-    clear_source_metadata()?;
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
     context
         .temp_dir
         .child("pyproject.toml")
         .write_str(&project)?;
     fs_err::remove_dir_all(db_root.child(".git/lfs/objects"))?;
     fs_err::remove_dir_all(checkout_root.path())?;
-    lock().assert().success();
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--preview-features", "git-partial-fetches"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
     assert_eq!(
         fs_err::read_to_string(checkout_root.child("module.py"))?,
         "VALUE = True\n"
     );
 
-    // A stale checkout still has .lfsconfig, but recovery must copy from the database locally.
-    clear_source_metadata()?;
+    // A stale checkout still has `.lfsconfig`, but recovery must copy from the database locally.
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
     fs_err::remove_dir_all(checkout_root.child(".git/lfs"))?;
     let unavailable_endpoint = context.temp_dir.child("unavailable-lfs-endpoint");
     fs_err::rename(endpoint.path(), unavailable_endpoint.path())?;
-    lock().assert().success();
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--preview-features", "git-partial-fetches"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
     Command::new("git")
         .args(["lfs", "fsck", "--objects", &revision])
         .current_dir(checkout_root.path())
@@ -2095,61 +2107,132 @@ fn add_git_lfs_custom_endpoint() -> Result<()> {
         .assert()
         .success();
 
-    #[cfg(unix)]
-    {
-        // Older Git LFS cannot validate cached objects, so it must attempt a fetch.
-        fs_err::rename(unavailable_endpoint.path(), endpoint.path())?;
-        clear_source_metadata()?;
-        fs_err::remove_dir_all(db_root.child(".git/lfs/objects"))?;
-        fs_err::remove_dir_all(checkout_root.child(".git/lfs/objects"))?;
-        let shim_dir = context.temp_dir.child("old-lfs");
-        shim_dir.create_dir_all()?;
-        let shim = shim_dir.child("git-lfs");
-        shim.write_str(indoc! {r#"
-            #!/bin/sh
-            if [ "$1" = fsck ] && [ "$2" = --objects ]; then
-                echo 'unknown flag: --objects' >&2
-                exit 129
-            fi
-            PATH="$GIT_LFS_TEST_ORIGINAL_PATH" exec git-lfs "$@"
-        "#})?;
-        fs_err::set_permissions(shim.path(), Permissions::from_mode(0o755))?;
-        // Git searches its helper directory before `PATH`; retain its helpers alongside the LFS shim.
-        let git_exec_path = git(&["--exec-path"])?;
-        for entry in fs_err::read_dir(&git_exec_path)? {
-            let entry = entry?;
-            if entry.file_name() != "git-lfs" {
-                uv_fs::create_symlink(entry.path(), shim_dir.path().join(entry.file_name()))?;
-            }
+    Ok(())
+}
+
+/// Check LFS cache recovery when `git lfs fsck --objects` is unavailable.
+#[test]
+#[cfg(all(feature = "test-git-lfs", unix))]
+fn add_git_lfs_old_version_cache_recovery() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_git_lfs_config();
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        repository.path(),
+        &["config", "uploadpack.allowFilter", "true"],
+    )?;
+    git(
+        repository.path(),
+        &["lfs", "install", "--local", "--skip-repo"],
+    )?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+    "#})?;
+    repository
+        .child(".gitattributes")
+        .write_str("module.py filter=lfs diff=lfs merge=lfs -text\n")?;
+    repository.child("module.py").write_str("VALUE = True\n")?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Initial version"])?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
+    let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
+    let url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository path"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["dependency"]
+
+        [tool.uv.sources]
+        dependency = {{ git = "{url}", rev = "{revision}", lfs = true }}
+    "#})?;
+    let repo_url = RepositoryUrl::parse(url.as_str())?;
+    let git_cache = context.cache_dir.child("git-v1/partial");
+    let db_root = git_cache.child("db").child(cache_digest(&repo_url));
+    let checkout_root = git_cache
+        .child("checkouts")
+        .child(cache_digest(&repo_url.with_lfs(Some(true))))
+        .child(short_revision);
+
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--preview-features", "git-partial-fetches"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // Without `fsck --objects`, uv fetches the objects instead of trusting the cache.
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
+    fs_err::remove_dir_all(db_root.child(".git/lfs/objects"))?;
+    fs_err::remove_dir_all(checkout_root.child(".git/lfs/objects"))?;
+    let shim_dir = context.temp_dir.child("old-lfs");
+    shim_dir.create_dir_all()?;
+    let shim = shim_dir.child("git-lfs");
+    shim.write_str(indoc! {r#"
+        #!/bin/sh
+        if [ "$1" = fsck ] && [ "$2" = --objects ]; then
+            echo 'unknown flag: --objects' >&2
+            exit 129
+        fi
+        PATH="$GIT_LFS_TEST_ORIGINAL_PATH" exec git-lfs "$@"
+    "#})?;
+    fs_err::set_permissions(shim.path(), Permissions::from_mode(0o755))?;
+    // Git searches its helper directory before `PATH`; retain its helpers alongside the LFS shim.
+    let git_exec_path = git(repository.path(), &["--exec-path"])?;
+    for entry in fs_err::read_dir(&git_exec_path)? {
+        let entry = entry?;
+        if entry.file_name() != "git-lfs" {
+            uv_fs::create_symlink(entry.path(), shim_dir.path().join(entry.file_name()))?;
         }
-        let original_path =
-            std::env::var_os(EnvVars::PATH).ok_or_else(|| anyhow!("PATH is not set"))?;
-        let original_path = std::env::join_paths(
-            std::iter::once(git_exec_path.into()).chain(std::env::split_paths(&original_path)),
-        )?;
-        let path = std::env::join_paths(
-            std::iter::once(shim_dir.path().to_path_buf())
-                .chain(std::env::split_paths(&original_path)),
-        )?;
-        lock()
-            .env(EnvVars::PATH, path)
-            .env("GIT_EXEC_PATH", shim_dir.path())
-            .env("GIT_LFS_TEST_ORIGINAL_PATH", original_path)
-            .assert()
-            .success();
-        Command::new("git")
-            .args(["lfs", "fsck", "--objects", &revision])
-            .current_dir(db_root.path())
-            .output()?
-            .assert()
-            .success();
-        Command::new("git")
-            .args(["lfs", "fsck", "--objects", &revision])
-            .current_dir(checkout_root.path())
-            .output()?
-            .assert()
-            .success();
     }
+    let original_path =
+        std::env::var_os(EnvVars::PATH).ok_or_else(|| anyhow!("PATH is not set"))?;
+    let original_path = std::env::join_paths(
+        std::iter::once(git_exec_path.into()).chain(std::env::split_paths(&original_path)),
+    )?;
+    let path = std::env::join_paths(
+        std::iter::once(shim_dir.path().to_path_buf()).chain(std::env::split_paths(&original_path)),
+    )?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--offline", "--preview-features", "git-partial-fetches"])
+        .env(EnvVars::PATH, path)
+        .env("GIT_EXEC_PATH", shim_dir.path())
+        .env("GIT_LFS_TEST_ORIGINAL_PATH", original_path), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Skipping Git LFS validation as Git LFS extension is outdated. Upgrade to `git-lfs>=3.0.2` or manually verify git-lfs objects were properly fetched after the current operation finishes.
+    Resolved 2 packages in [TIME]
+    ");
+    Command::new("git")
+        .args(["lfs", "fsck", "--objects", &revision])
+        .current_dir(db_root.path())
+        .output()?
+        .assert()
+        .success();
+    Command::new("git")
+        .args(["lfs", "fsck", "--objects", &revision])
+        .current_dir(checkout_root.path())
+        .output()?
+        .assert()
+        .success();
     Ok(())
 }
 
