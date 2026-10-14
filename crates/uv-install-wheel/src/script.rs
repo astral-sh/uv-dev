@@ -26,15 +26,16 @@ impl Script {
         //  between the object reference and the left square bracket, between the extra names and the square brackets and colons delimiting them,
         //  and after the right square bracket."
         // – https://packaging.python.org/en/latest/specifications/entry-points/#file-format
-        let captures = regex!(
-            r"^(?P<module>[\w\d_\-.]+)\s*:\s*(?P<function>[\w\d_\-.]+)(?:\s*\[\s*(?P<extras>(?:[^,]+,?\s*)+)\])?\s*$"
+        let (_, [module, function]) = regex!(
+            r"^(?P<module>[\w\d_\-.]+)\s*:\s*(?P<function>[\w\d_\-.]+)(?:\s*\[\s*(?:[^,]+,?\s*)+\])?\s*$"
         )
             .captures(value)
-            .ok_or_else(|| Error::InvalidWheel(format!("invalid console script: '{value}'")))?;
+            .ok_or_else(|| Error::InvalidWheel(format!("invalid console script: '{value}'")))?
+            .extract();
         Ok(Self {
             name: script_name.to_string(),
-            module: captures.name("module").unwrap().as_str().to_string(),
-            function: captures.name("function").unwrap().as_str().to_string(),
+            module: module.to_string(),
+            function: function.to_string(),
         })
     }
 
