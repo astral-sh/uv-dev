@@ -5,7 +5,10 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
-use predicates::{prelude::predicate, str::contains};
+use predicates::{
+    prelude::{PredicateStrExt, predicate},
+    str::contains,
+};
 use serde_json::json;
 use std::io;
 use std::path::Path;
@@ -3487,7 +3490,10 @@ fn run_isolated_python_version() -> Result<()> {
         context.interpreter().is_file(),
         "isolated execution removed the project interpreter"
     );
-    context.assert_file(&main).success().stdout("(3, 9)\n");
+    context
+        .assert_file(&main)
+        .success()
+        .stdout(predicate::eq("(3, 9)").trim());
 
     Ok(())
 }
