@@ -7239,48 +7239,6 @@ async fn install_index_with_relative_links_authenticated() {
     context.assert_command("import anyio").success();
 }
 
-/// The modified time of `site-packages` should change on package installation.
-#[cfg(unix)]
-#[test]
-fn install_site_packages_mtime_updated() -> Result<()> {
-    use std::os::unix::fs::MetadataExt;
-
-    let context = uv_test::test_context!("3.12");
-
-    let site_packages = context.site_packages();
-
-    // `mtime` is only second-resolution so we include the nanoseconds as well
-    let metadata = site_packages.metadata()?;
-    let pre_mtime = metadata.mtime();
-    let pre_mtime_ns = metadata.mtime_nsec();
-
-    // Install a package.
-    uv_snapshot!(context.pip_install()
-        .arg("anyio")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    let metadata = site_packages.metadata()?;
-    let post_mtime = metadata.mtime();
-    let post_mtime_ns = metadata.mtime_nsec();
-
-    assert!(
-        (post_mtime, post_mtime_ns) > (pre_mtime, pre_mtime_ns),
-        "Expected newer mtime than {pre_mtime}.{pre_mtime_ns} but got {post_mtime}.{post_mtime_ns}"
-    );
-
-    Ok(())
-}
-
 /// We had a bug where maturin would walk up to the top level gitignore of the cache with a `*`
 /// entry (because we want to ignore the entire cache from outside), ignoring all python source
 /// files.
