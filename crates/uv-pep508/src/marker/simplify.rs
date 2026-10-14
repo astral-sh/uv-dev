@@ -140,68 +140,59 @@ impl DnfCollector {
                 }
             }
             MarkerTreeKind::In(marker) => {
-                for (value, tree) in marker.children() {
-                    let operator = if value {
+                self.collect_boolean_edges(marker.children(), |value| MarkerExpression::String {
+                    key: marker.key().into(),
+                    value: ArcStr::from(marker.value()),
+                    operator: if value {
                         MarkerOperator::In
                     } else {
                         MarkerOperator::NotIn
-                    };
-
-                    let expr = MarkerExpression::String {
-                        key: marker.key().into(),
-                        value: ArcStr::from(marker.value()),
-                        operator,
-                    };
-
-                    self.collect_branch(tree, [expr]);
-                }
+                    },
+                });
             }
             MarkerTreeKind::Contains(marker) => {
-                for (value, tree) in marker.children() {
-                    let operator = if value {
+                self.collect_boolean_edges(marker.children(), |value| MarkerExpression::String {
+                    key: marker.key().into(),
+                    value: ArcStr::from(marker.value()),
+                    operator: if value {
                         MarkerOperator::Contains
                     } else {
                         MarkerOperator::NotContains
-                    };
-
-                    let expr = MarkerExpression::String {
-                        key: marker.key().into(),
-                        value: ArcStr::from(marker.value()),
-                        operator,
-                    };
-
-                    self.collect_branch(tree, [expr]);
-                }
+                    },
+                });
             }
             MarkerTreeKind::List(marker) => {
-                for (is_high, tree) in marker.children() {
-                    let expr = MarkerExpression::List {
-                        pair: marker.pair().clone(),
-                        operator: if is_high {
-                            ContainerOperator::In
-                        } else {
-                            ContainerOperator::NotIn
-                        },
-                    };
-
-                    self.collect_branch(tree, [expr]);
-                }
+                self.collect_boolean_edges(marker.children(), |value| MarkerExpression::List {
+                    pair: marker.pair().clone(),
+                    operator: if value {
+                        ContainerOperator::In
+                    } else {
+                        ContainerOperator::NotIn
+                    },
+                });
             }
             MarkerTreeKind::Extra(marker) => {
-                for (value, tree) in marker.children() {
-                    let operator = if value {
+                self.collect_boolean_edges(marker.children(), |value| MarkerExpression::Extra {
+                    name: marker.name().clone().into(),
+                    operator: if value {
                         ExtraOperator::Equal
                     } else {
                         ExtraOperator::NotEqual
-                    };
+                    },
+                });
+            }
+        }
+    }
 
-                    let expr = MarkerExpression::Extra {
-                        name: marker.name().clone().into(),
-                        operator,
-                    };
-
-                    self.collect_branch(tree, [expr]);
-                }
+    /// Collect each satisfiable Boolean edge using its corresponding expression.
+    fn collect_boolean_edges(
+        &mut self,
+        edges: impl Iterator<Item = (bool, MarkerTree)>,
+        expression: impl Fn(bool) -> MarkerExpression,
+    ) {
+        for (value, tree) in edges {
+            if !tree.is_false() {
+                self.collect_branch(tree, [expression(value)]);
             }
         }
     }
