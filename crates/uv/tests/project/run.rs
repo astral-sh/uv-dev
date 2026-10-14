@@ -3395,7 +3395,7 @@ fn run_without_output() -> Result<()> {
     Ok(())
 }
 
-/// Ensure that we can import from the root project when layering `--with` requirements.
+/// Isolated runs honor interpreter selection without replacing the project environment.
 #[test]
 fn run_isolated_python_version() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
@@ -3482,6 +3482,12 @@ fn run_isolated_python_version() -> Result<()> {
      + idna==3.6
      + sniffio==1.3.1
     ");
+
+    assert!(
+        context.interpreter().is_file(),
+        "isolated execution removed the project interpreter"
+    );
+    context.assert_file(&main).success().stdout("(3, 9)\n");
 
     Ok(())
 }
