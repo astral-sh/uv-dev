@@ -342,7 +342,7 @@ pub async fn remove(
 
     let state = state.fork();
 
-    match sync_from_lock(
+    sync_from_lock(
         target,
         venv,
         &extras,
@@ -365,10 +365,7 @@ pub async fn remove(
         MalwareCheckContext::from(&malware_settings),
     )
     .await
-    {
-        Ok(_) => {}
-        Err(err) => return Err(UvError::from(err).into()),
-    }
+    .map_err(UvError::from)?;
 
     edit.commit();
     Ok(ExitStatus::Success)
