@@ -30,6 +30,7 @@ use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
+use uv_test::subdirectory_archive::SubdirectoryArchive;
 use uv_test::{diff_snapshot, uv_snapshot, venv_bin_path};
 
 /// Add a PyPI requirement.
@@ -11758,7 +11759,8 @@ fn add_preserves_end_of_line_comment_on_updated_optional_dependency() -> Result<
 
 #[test]
 fn add_direct_url_subdirectory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let archive = SubdirectoryArchive::start()?;
+    let context = uv_test::test_context!("3.12").with_filter((archive.sha256(), "[ARCHIVE_HASH]"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -11769,7 +11771,7 @@ fn add_direct_url_subdirectory() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root"), @"
+    uv_snapshot!(context.filters(), context.add().arg(format!("root @ {}#subdirectory=packages/root", archive.url())), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
@@ -11777,7 +11779,7 @@ fn add_direct_url_subdirectory() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root==0.0.1 (from http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root)
      + sniffio==1.3.1
     ");
 
@@ -11797,7 +11799,7 @@ fn add_direct_url_subdirectory() -> Result<()> {
         ]
 
         [tool.uv.sources]
-        root = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
+        root = { url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }
         "#
         );
     });
@@ -11847,16 +11849,16 @@ fn add_direct_url_subdirectory() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "root", url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
+        requires-dist = [{ name = "root", url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
 
         [[package]]
         name = "root"
         version = "0.0.1"
-        source = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
+        source = { url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:24b55efee28d08ad3cdc58903e359e820601baa6a4a4b3424311541ebcfb09d3" }
+        sdist = { hash = "sha256:[ARCHIVE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
@@ -11885,7 +11887,8 @@ fn add_direct_url_subdirectory() -> Result<()> {
 
 #[test]
 fn add_direct_url_subdirectory_raw() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let archive = SubdirectoryArchive::start()?;
+    let context = uv_test::test_context!("3.12").with_filter((archive.sha256(), "[ARCHIVE_HASH]"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -11896,7 +11899,7 @@ fn add_direct_url_subdirectory_raw() -> Result<()> {
         dependencies = []
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root").arg("--raw-sources"), @"
+    uv_snapshot!(context.filters(), context.add().arg(format!("root @ {}#subdirectory=packages/root", archive.url())).arg("--raw-sources"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
@@ -11904,7 +11907,7 @@ fn add_direct_url_subdirectory_raw() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root==0.0.1 (from http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root)
      + sniffio==1.3.1
     ");
 
@@ -11920,7 +11923,7 @@ fn add_direct_url_subdirectory_raw() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = [
-            "root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root",
+            "root @ http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root",
         ]
         "#
         );
@@ -11971,16 +11974,16 @@ fn add_direct_url_subdirectory_raw() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "root", url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
+        requires-dist = [{ name = "root", url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
 
         [[package]]
         name = "root"
         version = "0.0.1"
-        source = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
+        source = { url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:24b55efee28d08ad3cdc58903e359e820601baa6a4a4b3424311541ebcfb09d3" }
+        sdist = { hash = "sha256:[ARCHIVE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
