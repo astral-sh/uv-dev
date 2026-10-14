@@ -5,7 +5,7 @@ use std::pin::pin;
 use std::sync::Mutex;
 
 use crate::vendor::CloneableSeekableReader;
-use crate::{Error, ExtractionDirectories, insecure_no_validate};
+use crate::{Error, ExtractionDirectories, insecure_no_validate, validate_zip_directory_entry};
 use async_zip::StoredZipEntry;
 use async_zip::base::read::seek::ZipFileReader;
 use async_zip::error::ZipError;
@@ -192,8 +192,8 @@ where
     let path = target.join(enclosed_name.as_path());
     if entry.dir()? {
         create_directory_once(directories, &path)?;
-        if hash_contents {
-            validate_directory_entry(entry, enclosed_name.as_path(), skip_validation)?;
+        if hash_contents && !skip_validation {
+            validate_zip_directory_entry(entry, enclosed_name.as_path())?;
         }
         return Ok(Some(ExtractedEntry::Directory(enclosed_name)));
     }
@@ -233,35 +233,6 @@ fn create_directory_once(
         .lock()
         .map_err(|_| directory_lock_error())?
         .create(path)
-}
-
-/// Validate the metadata for a directory entry.
-fn validate_directory_entry(
-    entry: &StoredZipEntry,
-    path: &Path,
-    skip_validation: bool,
-) -> Result<(), Error> {
-    if skip_validation {
-        return Ok(());
-    }
-
-    if entry.crc32() != 0 {
-        return Err(Error::BadCrc32 {
-            path: path.to_path_buf(),
-            computed: 0,
-            expected: entry.crc32(),
-        });
-    }
-
-    if entry.uncompressed_size() != 0 {
-        return Err(Error::BadUncompressedSize {
-            path: path.to_path_buf(),
-            computed: 0,
-            expected: entry.uncompressed_size(),
-        });
-    }
-
-    Ok(())
 }
 
 /// Extract a regular file entry and return its digest metadata.
