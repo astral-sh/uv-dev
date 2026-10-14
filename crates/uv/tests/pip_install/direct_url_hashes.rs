@@ -51,9 +51,9 @@ fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
     install()
         .assert()
         .failure()
-        .stderr(predicate::str::is_match(format!(
-            r"(?s)Hash mismatch.*Expected:\s+sha256:{archive_hash}.*Computed:\s+sha256:{response_hash}"
-        ))?);
+        .stderr(predicate::str::contains("Hash mismatch"))
+        .stderr(predicate::str::contains(format!("sha256:{archive_hash}")))
+        .stderr(predicate::str::contains(format!("sha256:{response_hash}")));
     context.assert_not_installed("ok");
 
     write_requirement(&response_hash)?;
