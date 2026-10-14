@@ -141,10 +141,6 @@ impl MissingLibrary {
         // e.g. `/usr/bin/ld: cannot find -lncurses: No such file or directory`
         let ld_not_found_re =
             regex!(r"/usr/bin/ld: cannot find -l([a-zA-Z10-9]+): No such file or directory");
-        // e.g. `error: invalid command 'bdist_wheel'`
-        let wheel_not_found_re = regex!(r"error: invalid command 'bdist_wheel'");
-        // e.g. `ModuleNotFoundError: No module named 'distutils'`
-        let distutils_not_found_re = regex!(r"ModuleNotFoundError: No module named 'distutils'");
         // e.g. `ModuleNotFoundError`
         let module_not_found = regex!(r#"ModuleNotFoundError: No module named ['"]([^'"]+)['"]"#);
 
@@ -161,9 +157,9 @@ impl MissingLibrary {
             } else if let Some((_, [library])) = ld_not_found_re.captures(line).map(|c| c.extract())
             {
                 Some(Self::Linker(library.to_string()))
-            } else if wheel_not_found_re.is_match(line) {
+            } else if line.contains("error: invalid command 'bdist_wheel'") {
                 Some(Self::BuildDependency("wheel".to_string()))
-            } else if distutils_not_found_re.is_match(line) {
+            } else if line.contains("ModuleNotFoundError: No module named 'distutils'") {
                 Some(Self::DeprecatedModule(
                     "distutils".to_string(),
                     Version::new([3, 12]),
