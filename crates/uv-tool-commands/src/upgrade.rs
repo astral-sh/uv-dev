@@ -237,15 +237,12 @@ impl UpgradeConstraint {
     fn print(&self, name: &PackageName, printer: Printer) -> Result<()> {
         match self {
             Self::PinnedVersion { version } => {
-                let name = name.to_string();
-                let reinstall_command = format!("uv tool install {name}@latest");
-
                 writeln!(
                     printer.stderr(),
                     "hint: `{}` is pinned to `{}` (installed with an exact version pin); reinstall with `{}` to upgrade to a new version.",
                     name.cyan(),
-                    version.to_string().magenta(),
-                    reinstall_command.green(),
+                    version.magenta(),
+                    format_args!("uv tool install {name}@latest").green(),
                 )?;
             }
         }
