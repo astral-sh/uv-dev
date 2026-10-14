@@ -4925,8 +4925,9 @@ fn require_hashes_find_links_invalid_hash() -> Result<()> {
     "
     );
 
-    // Third, request the correct hash, that the registry _thinks_ is correct. We should accept
-    // it, since it's already cached under this hash.
+    // Rejected downloads must not populate the archive cache. An explicit correct hash takes
+    // precedence over the incorrect hash advertised by the index.
+    assert_archive_bucket_missing(&context);
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
         .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
@@ -4946,12 +4947,7 @@ fn require_hashes_find_links_invalid_hash() -> Result<()> {
     "
     );
 
-    // Fourth, request the correct hash, that the registry _thinks_ is correct, but without the
-    // cache. We _should_ accept it, but we currently don't.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
-
+    // The explicit policy must also take precedence when refreshing the cache.
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
         .arg("--refresh")
@@ -5208,8 +5204,9 @@ fn require_hashes_registry_invalid_hash() -> Result<()> {
     "
     );
 
-    // Third, request the correct hash despite the registry's incorrect hash. The explicit policy
-    // takes precedence, and the rejected downloads must not have populated the cache.
+    // Rejected downloads must not populate the archive cache. An explicit correct hash takes
+    // precedence over the incorrect hash advertised by the index.
+    assert_archive_bucket_missing(&context);
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt
         .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
@@ -5231,10 +5228,6 @@ fn require_hashes_registry_invalid_hash() -> Result<()> {
     );
 
     // The explicit policy must also take precedence when refreshing the cache.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
-
     uv_snapshot!(context.pip_sync()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("requirements.txt")
