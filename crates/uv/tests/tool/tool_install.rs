@@ -5168,14 +5168,15 @@ fn tool_install_lock_verifies_hashes() -> Result<()> {
         .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
         .success();
+    let launcher = bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX));
+    assert_tool_launcher(&launcher);
 
     let lock_path = tool_dir.child("simple-launcher").child("uv.lock");
     let lock = context.read(&lock_path);
-    let tampered_lock = lock.replace(
+    lock_path.write_str(&lock.replace(
         "sha256:5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4",
         "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    );
-    lock_path.write_str(&tampered_lock)?;
+    ))?;
 
     uv_snapshot!(context.filters(), context.tool_install()
         .arg(&wheel)
@@ -5193,12 +5194,8 @@ fn tool_install_lock_verifies_hashes() -> Result<()> {
              Computed:
                sha256:5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4
     "#);
-    assert_eq!(context.read(lock_path), tampered_lock);
-    context
-        .external_command(bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))
-        .assert()
-        .success()
-        .stdout("Hi from the simple launcher!\n");
+    assert_path_missing(tool_dir.child("simple-launcher"));
+    assert_path_missing(launcher);
 
     Ok(())
 }
