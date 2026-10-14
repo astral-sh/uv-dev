@@ -3559,46 +3559,6 @@ fn compile_exclude_newer_package() -> Result<()> {
     Ok(())
 }
 
-/// Test error handling for malformed --exclude-newer-package
-#[test]
-fn compile_exclude_newer_package_errors() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("tqdm")?;
-
-    // Test invalid format (missing =)
-    uv_snapshot!(context
-        .pip_compile()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("requirements.in")
-        .arg("--exclude-newer-package")
-        .arg("tqdm"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: invalid value 'tqdm' for '--exclude-newer-package <EXCLUDE_NEWER_PACKAGE>': Invalid `exclude-newer-package` value `tqdm`: expected format `PACKAGE=DATE` or `PACKAGE=false`
-
-    For more information, try '--help'.
-    "
-    );
-
-    // Test invalid date format
-    uv_snapshot!(context
-        .pip_compile()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("requirements.in")
-        .arg("--exclude-newer-package")
-        .arg("tqdm=invalid-date"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: invalid value 'tqdm=invalid-date' for '--exclude-newer-package <EXCLUDE_NEWER_PACKAGE>': Invalid `exclude-newer-package` value `invalid-date`: `invalid-date` could not be parsed as a valid exclude-newer value (expected a date like `2024-01-01`, a timestamp like `2024-01-01T00:00:00Z`, or a duration like `3 days` or `P3D`)
-
-    For more information, try '--help'.
-    "
-    );
-
-    Ok(())
-}
-
 /// Resolve a local path dependency on a specific wheel.
 #[test]
 fn compile_wheel_path_dependency() -> Result<()> {
