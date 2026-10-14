@@ -991,34 +991,15 @@ fn python_find_managed() {
 #[cfg(unix)]
 #[cfg(feature = "test-python-managed")]
 fn python_required_python_major_minor() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11"]);
+    let context = context_with_only_versioned_python("3.11")?;
+    let path = &context.python_versions[0].1;
 
-    // Find the Python 3.11 executable.
-    let path = &context.python_versions.first().unwrap().1;
-
-    // Symlink it to `python3.11`.
-    let search_path = context.temp_dir.child("child");
-    search_path.create_dir_all()?;
-    fs_err::os::unix::fs::symlink(path, search_path.child("python3.11"))?;
-
-    // Some Python installations report their canonical path as `sys.executable`.
-    let expected = fs_err::canonicalize(path)?;
     for request in [">=3.11.4, <3.12", ">3.11.4, <3.12"] {
-        let output = context
-            .python_find()
-            .arg(request)
-            .env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path.path())
-            .assert()
-            .success()
-            .stderr("");
-        let found = std::str::from_utf8(&output.get_output().stdout)?
-            .strip_suffix('\n')
-            .expect("interpreter path should end with a newline");
-        assert_eq!(fs_err::canonicalize(found)?, expected, "{request}");
+        assert_discovered_interpreter(context.python_find().arg(request), path)?.stderr("");
     }
 
     // Fail to find any matching Python interpreter.
-    uv_snapshot!(context.filters(), context.python_find().arg(">3.11.255, <3.12").env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path.path()), @"
+    uv_snapshot!(context.filters(), context.python_find().arg(">3.11.255, <3.12"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python >3.11.[X], <3.12 in virtual environments, managed installations, or search path
@@ -1651,18 +1632,26 @@ fn python_find_search_path() {
     ");
 }
 
+#[cfg(unix)]
+fn context_with_only_versioned_python(version: &str) -> Result<uv_test::TestContext> {
+    let context = uv_test::test_context_with_versions!(&[version]);
+    let search_dir = context.temp_dir.child("child");
+    search_dir.create_dir_all()?;
+    fs_err::os::unix::fs::symlink(
+        &context.python_versions[0].1,
+        search_dir.child(format!("python{version}")),
+    )?;
+    Ok(context
+        .with_env(EnvVars::PATH, search_dir.as_os_str())
+        .with_env(EnvVars::UV_PYTHON_SEARCH_PATH, search_dir.as_os_str()))
+}
+
 /// Create a project whose search path contains only a versioned Python executable.
 ///
 /// Regression fixture for <https://github.com/astral-sh/uv/issues/9695>.
 #[cfg(unix)]
 fn project_with_only_versioned_python(requires_python: &str) -> Result<uv_test::TestContext> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
-    let search_dir = context.temp_dir.child("child");
-    search_dir.create_dir_all()?;
-    fs_err::os::unix::fs::symlink(
-        &context.python_versions[0].1,
-        search_dir.child("python3.12"),
-    )?;
+    let context = context_with_only_versioned_python("3.12")?;
     context
         .temp_dir
         .child("pyproject.toml")
@@ -1672,7 +1661,28 @@ fn project_with_only_versioned_python(requires_python: &str) -> Result<uv_test::
             version = "0.1.0"
             requires-python = "{requires_python}"
         "#})?;
-    Ok(context.with_env(EnvVars::UV_PYTHON_SEARCH_PATH, search_dir.as_os_str()))
+    Ok(context)
+}
+
+/// Compare interpreter identity because some Python installations report a canonical
+/// `sys.executable` instead of the discovered symlink.
+#[cfg(unix)]
+fn assert_discovered_interpreter(
+    command: &mut Command,
+    expected: &Path,
+) -> Result<assert_cmd::assert::Assert> {
+    let output = command.assert().success();
+    let found = Path::new(
+        std::str::from_utf8(&output.get_output().stdout)?
+            .strip_suffix('\n')
+            .expect("interpreter path should end with a newline"),
+    );
+    assert!(found.is_absolute(), "expected an absolute path: {found:?}");
+    assert_eq!(
+        fs_err::canonicalize(found)?,
+        fs_err::canonicalize(expected)?
+    );
+    Ok(output)
 }
 
 #[test]
@@ -1680,14 +1690,12 @@ fn project_with_only_versioned_python(requires_python: &str) -> Result<uv_test::
 fn python_find_versioned_executable_exact_minor() -> Result<()> {
     let context = project_with_only_versioned_python("==3.12")?;
 
-    uv_snapshot!(context.filters(), context.python_find(), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [TEMP_DIR]/child/python3.12
-
-    ----- stderr -----
-    warning: The resolved Python interpreter (Python 3.12.[X]) is incompatible with the project's Python requirement: `==3.12` (from `project.requires-python`)
-    "#);
+    let output =
+        assert_discovered_interpreter(&mut context.python_find(), &context.python_versions[0].1)?;
+    let stderr = std::str::from_utf8(&output.get_output().stderr)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_snapshot!(stderr, @"warning: The resolved Python interpreter (Python 3.12.[X]) is incompatible with the project's Python requirement: `==3.12` (from `project.requires-python`)");
+    });
     Ok(())
 }
 
@@ -1696,11 +1704,8 @@ fn python_find_versioned_executable_exact_minor() -> Result<()> {
 fn python_find_versioned_executable_wildcard_minor() -> Result<()> {
     let context = project_with_only_versioned_python("==3.12.*")?;
 
-    uv_snapshot!(context.filters(), context.python_find(), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [TEMP_DIR]/child/python3.12
-    "#);
+    assert_discovered_interpreter(&mut context.python_find(), &context.python_versions[0].1)?
+        .stderr("");
     Ok(())
 }
 
@@ -1709,10 +1714,7 @@ fn python_find_versioned_executable_wildcard_minor() -> Result<()> {
 fn python_find_versioned_executable_compatible_release() -> Result<()> {
     let context = project_with_only_versioned_python("~=3.12.0")?;
 
-    uv_snapshot!(context.filters(), context.python_find(), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [TEMP_DIR]/child/python3.12
-    "#);
+    assert_discovered_interpreter(&mut context.python_find(), &context.python_versions[0].1)?
+        .stderr("");
     Ok(())
 }
