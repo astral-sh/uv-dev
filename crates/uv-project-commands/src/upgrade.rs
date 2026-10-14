@@ -82,7 +82,6 @@ struct DeclarationIdentity {
 }
 
 /// An existing requirement and its proposed replacement.
-#[derive(Clone)]
 struct RequirementUpdate {
     package: PackageName,
     dependency_type: DependencyType,
@@ -92,8 +91,8 @@ struct RequirementUpdate {
 }
 
 enum DeclarationOutcome {
-    Changed(Box<RequirementUpdate>),
-    Unchanged(DeclarationIdentity),
+    Changed(PackageName),
+    Unchanged(PackageName),
     Blocked {
         declaration: DeclarationIdentity,
         reason: BlockedReason,
@@ -119,10 +118,8 @@ enum ProposeRequirementError {
 impl DeclarationOutcome {
     fn package(&self) -> &PackageName {
         match self {
-            Self::Changed(update) => &update.package,
-            Self::Unchanged(declaration) | Self::Blocked { declaration, .. } => {
-                &declaration.package
-            }
+            Self::Changed(package) | Self::Unchanged(package) => package,
+            Self::Blocked { declaration, .. } => &declaration.package,
         }
     }
 
@@ -458,7 +455,8 @@ pub async fn upgrade(
             match propose_specifiers(&selected.requirement, &selected.resolved_versions) {
                 Ok(Some(specifiers)) => specifiers,
                 Ok(None) => {
-                    declaration_outcomes.push(DeclarationOutcome::Unchanged(selected.identity()));
+                    declaration_outcomes
+                        .push(DeclarationOutcome::Unchanged(selected.package.clone()));
                     continue;
                 }
                 Err(err) => {
@@ -481,7 +479,7 @@ pub async fn upgrade(
             existing,
             replacement,
         };
-        declaration_outcomes.push(DeclarationOutcome::Changed(Box::new(update.clone())));
+        declaration_outcomes.push(DeclarationOutcome::Changed(update.package.clone()));
         updated_requirements
             .entry((
                 selected.dependency_type.toml_table_name().into_owned(),
