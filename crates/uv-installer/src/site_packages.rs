@@ -460,7 +460,7 @@ impl SitePackages {
                     .push(constraint);
                 constraints
             });
-        let mut stack = Vec::with_capacity(requirements.size_hint().0);
+        let mut stack: Vec<Cow<'_, Requirement>> = Vec::with_capacity(requirements.size_hint().0);
         let mut seen =
             FxHashSet::with_capacity_and_hasher(requirements.size_hint().0, FxBuildHasher);
 
@@ -468,11 +468,10 @@ impl SitePackages {
         for requirement in requirements.flat_map(|requirement| {
             modifiers.apply(DependencyModifierScope::Global, once(requirement))
         }) {
-            if requirement.evaluate_markers(Some(markers), &[]) {
-                let requirement = requirement.into_owned();
-                if seen.insert(requirement.clone()) {
-                    stack.push(requirement);
-                }
+            if requirement.evaluate_markers(Some(markers), &[])
+                && seen.insert(requirement.as_ref().clone())
+            {
+                stack.push(requirement);
             }
         }
 
@@ -498,7 +497,7 @@ impl SitePackages {
 
                     // Requirements were filtered with the parent extras before entering the stack.
                     if !satisfies_source(&requirement.source) {
-                        return Ok(SatisfiesResult::Unsatisfied(requirement));
+                        return Ok(SatisfiesResult::Unsatisfied(requirement.into_owned()));
                     }
 
                     // Validate that the installed version satisfies the constraints.
@@ -539,16 +538,16 @@ impl SitePackages {
                         DependencyModifierScope::Package(name, distribution.version()),
                         &dependencies,
                     ) {
-                        if dependency.evaluate_markers(Some(markers), &requirement.extras) {
-                            let dependency = dependency.into_owned();
-                            if seen.insert(dependency.clone()) {
-                                stack.push(dependency);
-                            }
+                        if dependency.evaluate_markers(Some(markers), &requirement.extras)
+                            && seen.insert(dependency.as_ref().clone())
+                        {
+                            // The queued requirement must outlive this metadata's dependency list.
+                            stack.push(Cow::Owned(dependency.into_owned()));
                         }
                     }
                 }
                 DistributionLookup::Missing | DistributionLookup::Multiple => {
-                    return Ok(SatisfiesResult::Unsatisfied(requirement));
+                    return Ok(SatisfiesResult::Unsatisfied(requirement.into_owned()));
                 }
             }
         }
