@@ -8658,72 +8658,108 @@ fn already_installed_local_version_of_remote_package() {
     );
 }
 
-/// Install a package with multiple installed distributions in a virtual environment.
+#[cfg(unix)]
+fn prepare_duplicate_installed_versions(context: &TestContext) -> Result<ChildPath> {
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let name = "a".parse()?;
+    for version in ["1.0.0", "2.0.0", "3.0.0"] {
+        let (filename, wheel) = generate_wheel(
+            &name,
+            &version.parse()?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[],
+        );
+        links.child(filename).write_binary(&wheel)?;
+    }
+    context
+        .pip_install()
+        .arg("a==1.0.0")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path())
+        .assert()
+        .success();
+
+    // Two distributions claim the same module, as can happen after a partial installation.
+    let duplicate = context.site_packages().join("a-2.0.0.dist-info");
+    fs::create_dir(&duplicate)?;
+    fs::write(
+        duplicate.join("METADATA"),
+        "Metadata-Version: 2.1\nName: a\nVersion: 2.0.0\n",
+    )?;
+    fs::write(
+        duplicate.join("RECORD"),
+        "a/__init__.py,,\na-2.0.0.dist-info/METADATA,,\na-2.0.0.dist-info/RECORD,,\n",
+    )?;
+    Ok(links)
+}
+
+/// Reinstall a requested version when multiple installed distributions claim the package.
 #[test]
 #[cfg(unix)]
-fn already_installed_multiple_versions() -> Result<()> {
-    fn prepare(context: &TestContext) -> Result<()> {
-        use uv_fs::copy_dir_all;
-
-        // Install into the base environment
-        context.pip_install().arg("anyio==3.7.0").assert().success();
-
-        // Install another version into another environment
-        let context_duplicate = uv_test::test_context!("3.12");
-        context_duplicate
-            .pip_install()
-            .arg("anyio==4.0.0")
-            .assert()
-            .success();
-
-        // Copy the second version into the first environment
-        copy_dir_all(
-            context_duplicate
-                .site_packages()
-                .join("anyio-4.0.0.dist-info"),
-            context.site_packages().join("anyio-4.0.0.dist-info"),
-        )?;
-
-        Ok(())
-    }
-
+fn already_installed_multiple_versions_pinned() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let links = prepare_duplicate_installed_versions(&context)?;
 
-    prepare(&context)?;
-
-    // Request the second anyio version again
-    // Should remove both previous versions and reinstall the second one
-    uv_snapshot!(context.filters(), context.pip_install().arg("anyio==4.0.0"), @"
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("a==2.0.0")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
+    Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Uninstalled 2 packages in [TIME]
     Installed 1 package in [TIME]
-     - anyio==3.7.0
-     ~ anyio==4.0.0
+     - a==1.0.0
+     ~ a==2.0.0
     "
     );
 
-    // Reset the test context
-    prepare(&context)?;
+    assert!(!context.site_packages().join("a-1.0.0.dist-info").exists());
+    context.assert_installed("a", "2.0.0");
+    Ok(())
+}
 
-    // Request the anyio without a version specifier
-    // This is loosely a regression test for the ordering of the installation preferences
-    // from existing site-packages
-    uv_snapshot!(context.filters(), context.pip_install().arg("anyio"), @"
+/// Resolve an unpinned requirement independently of the duplicate installed versions.
+#[test]
+#[cfg(unix)]
+fn already_installed_multiple_versions_unpinned() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = prepare_duplicate_installed_versions(&context)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("a")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
+    Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Uninstalled 2 packages in [TIME]
     Installed 1 package in [TIME]
-     - anyio==3.7.0
-     - anyio==4.0.0
-     + anyio==4.3.0
+     - a==1.0.0
+     - a==2.0.0
+     + a==3.0.0
     "
     );
 
+    for stale_version in ["1.0.0", "2.0.0"] {
+        assert!(
+            !context
+                .site_packages()
+                .join(format!("a-{stale_version}.dist-info"))
+                .exists(),
+            "a=={stale_version} metadata was left behind"
+        );
+    }
+    context.assert_installed("a", "3.0.0");
     Ok(())
 }
 
