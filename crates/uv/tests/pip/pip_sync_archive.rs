@@ -149,6 +149,7 @@ async fn sanitize_streamed_wheel_paths() -> Result<()> {
 }
 
 /// Source files with epoch mtimes must be extracted with dates usable by ZIP-based wheel builders.
+/// See <https://github.com/alexcrichton/tar-rs/issues/349>.
 #[test]
 fn tar_dont_preserve_mtime() -> Result<()> {
     let context = uv_test::test_context!("3.12");

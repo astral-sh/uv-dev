@@ -63,6 +63,8 @@ fn omit_python_patch_universal() -> Result<()> {
 }
 
 /// The emitted marker distinguishes platforms where a conditional requirement changes the output.
+/// A requirement whose marker is false on the target platform still constrains the emitted marker,
+/// since the resolved packages can differ on another platform.
 #[test]
 fn emit_marker_expression_conditional() -> Result<()> {
     let index = PackseServer::new("simple/single-package.toml");

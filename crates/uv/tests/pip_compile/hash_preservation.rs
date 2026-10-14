@@ -84,6 +84,7 @@ fn expected_requirement(version: &str, hashes: &[String]) -> String {
     format!("{}\n", lines.join(" \\\n    "))
 }
 
+/// `--generate-hashes` retains the existing hashes when the package is not upgraded.
 #[test]
 fn preserve_hashes_no_upgrade() -> Result<()> {
     let fixture = HashFixture::new();
@@ -108,6 +109,7 @@ fn preserve_hashes_no_upgrade() -> Result<()> {
     Ok(())
 }
 
+/// `--upgrade` regenerates hashes even when the pinned version does not change.
 #[test]
 fn preserve_hashes_upgrade() -> Result<()> {
     let fixture = HashFixture::new();
@@ -133,6 +135,7 @@ fn preserve_hashes_upgrade() -> Result<()> {
     Ok(())
 }
 
+/// `--generate-hashes` adds hashes to a pin that has none, without requiring an upgrade.
 #[test]
 fn preserve_hashes_no_existing_hashes() -> Result<()> {
     let fixture = HashFixture::new();
@@ -156,6 +159,7 @@ fn preserve_hashes_no_existing_hashes() -> Result<()> {
     Ok(())
 }
 
+/// Changing the requirement to a newer version regenerates the hashes.
 #[test]
 fn preserve_hashes_newer_version() -> Result<()> {
     let fixture = HashFixture::new();
