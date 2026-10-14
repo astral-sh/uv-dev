@@ -628,14 +628,10 @@ fn run_pep723_script_requires_python() -> Result<()> {
     Ok(())
 }
 
-/// When a `.python-version` is compatible with a script's `requires-python`, the `.python-version`
-/// should be used.
+/// A compatible `.python-version` overrides interpreter search order for an inline script.
 #[test]
 fn run_pep723_script_requires_python_compatible() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
-
-    let python_version = context.temp_dir.child(PYTHON_VERSION_FILENAME);
-    python_version.write_str("3.11")?;
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
@@ -648,8 +644,16 @@ fn run_pep723_script_requires_python_compatible() -> Result<()> {
        "#
     })?;
 
-    // The `.python-version` (3.11) is compatible with the script's `requires-python` (>=3.11),
-    // so it should be used.
+    uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    ");
+
+    context
+        .temp_dir
+        .child(PYTHON_VERSION_FILENAME)
+        .write_str("3.11")?;
     uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
