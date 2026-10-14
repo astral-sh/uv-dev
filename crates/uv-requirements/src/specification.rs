@@ -28,6 +28,7 @@
 //!   `source_trees`.
 
 use std::collections::BTreeMap;
+use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -316,13 +317,7 @@ impl RequirementsSpecification {
                 }
             }
             RequirementsSource::Pep723Script(input) => {
-                let content = if let Some(content) = cache.get(input) {
-                    content.clone()
-                } else {
-                    let content = read_file(input, client_builder).await?;
-                    cache.insert(input.clone(), content.clone());
-                    content
-                };
+                let content = read_file_cached(input, client_builder, cache).await?;
 
                 let metadata = match Pep723Metadata::parse(content.as_bytes()) {
                     Ok(Some(script)) => script,
@@ -376,19 +371,14 @@ impl RequirementsSpecification {
                 ));
             }
             RequirementsSource::Extensionless(input) => {
-                let content = if let Some(content) = cache.get(input) {
-                    content.clone()
-                } else {
-                    let content = read_file(input, client_builder).await?;
-                    cache.insert(input.clone(), content.clone());
-                    content
-                };
+                let content = read_file_cached(input, client_builder, cache).await?;
 
                 // Detect if it's a PEP 723 script.
                 if let Some(metadata) = Pep723Metadata::parse(content.as_bytes())? {
                     Self::from_pep723_metadata(&metadata)
                 } else {
                     // If it's not a PEP 723 script, assume it's a `requirements.txt` file.
+                    let content = content.to_owned();
                     let requirements_txt = RequirementsTxt::parse_str(
                         &content,
                         input.clone(),
@@ -703,6 +693,18 @@ pub struct GroupsSpecification {
     pub root: PathBuf,
     /// The enabled groups.
     pub groups: Vec<PipGroupName>,
+}
+
+/// Read and cache the contents of a requirements input.
+async fn read_file_cached<'a>(
+    input: &RequirementsInput,
+    client_builder: &BaseClientBuilder<'_>,
+    cache: &'a mut SourceCache,
+) -> Result<&'a str> {
+    match cache.entry(input.clone()) {
+        Entry::Occupied(entry) => Ok(entry.into_mut()),
+        Entry::Vacant(entry) => Ok(entry.insert(read_file(input, client_builder).await?)),
+    }
 }
 
 /// Read the contents of a requirements input.
