@@ -306,14 +306,9 @@ impl UniversalMarker {
         E: Borrow<ExtraName>,
         G: Borrow<GroupName>,
     {
-        let extras = extras
-            .into_iter()
-            .map(|(package, extra)| encode_package_extra(package.borrow(), extra.borrow()));
-        let groups = groups
-            .into_iter()
-            .map(|(package, group)| encode_package_group(package.borrow(), group.borrow()));
-        self.marker
-            .evaluate_only_extras(&extras.chain(groups).collect::<Vec<ExtraName>>())
+        let activated =
+            ActivatedConflictItems::new(std::iter::empty(), extras.into_iter(), groups.into_iter());
+        self.marker.evaluate_only_extras(&activated.0)
     }
 
     /// Returns the internal marker that combines both the PEP 508
