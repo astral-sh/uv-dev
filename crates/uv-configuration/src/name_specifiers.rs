@@ -79,30 +79,18 @@ pub enum PackageNameSpecifiers {
 
 impl PackageNameSpecifiers {
     pub(crate) fn from_iter(specifiers: impl Iterator<Item = PackageNameSpecifier>) -> Self {
-        let mut packages = Vec::new();
-        let mut all: bool = false;
-
+        let mut selection = Self::None;
         for specifier in specifiers {
             match specifier {
-                PackageNameSpecifier::None => {
-                    packages.clear();
-                    all = false;
-                }
-                PackageNameSpecifier::All => {
-                    all = true;
-                }
-                PackageNameSpecifier::Package(name) => {
-                    packages.push(name);
-                }
+                PackageNameSpecifier::None => selection = Self::None,
+                PackageNameSpecifier::All => selection = Self::All,
+                PackageNameSpecifier::Package(name) => match &mut selection {
+                    Self::All => {}
+                    Self::None => selection = Self::Packages(vec![name]),
+                    Self::Packages(packages) => packages.push(name),
+                },
             }
         }
-
-        if all {
-            Self::All
-        } else if packages.is_empty() {
-            Self::None
-        } else {
-            Self::Packages(packages)
-        }
+        selection
     }
 }
