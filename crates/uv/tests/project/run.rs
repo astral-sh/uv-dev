@@ -2754,8 +2754,10 @@ fn run_no_sync() -> Result<()> {
     let existing_lockfile = context.read("uv.lock");
 
     // Running with `--no-sync` should not install any requirements.
-    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("--").arg("python").arg("-c").arg("import importlib.util; assert importlib.util.find_spec('anyio') is None"), @"
+    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("--").arg("python").arg("-c").arg("import importlib.util; print(importlib.util.find_spec('anyio'))"), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    None
     ");
     assert_eq!(context.read("uv.lock"), existing_lockfile);
 
