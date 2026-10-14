@@ -249,53 +249,42 @@ pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Unin
         .expect("egg-info directory is not in a site-packages directory");
 
     // Read the `namespace_packages.txt` file, skipping empty or whitespace-only entries.
-    let namespace_packages = {
-        let namespace_packages_path = egg_info.join("namespace_packages.txt");
-        match fs_err::read_to_string(namespace_packages_path) {
-            Ok(namespace_packages) => namespace_packages
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                vec![]
-            }
-            Err(err) => return Err(err.into()),
+    let namespace_packages = match fs_err::read_to_string(egg_info.join("namespace_packages.txt")) {
+        Ok(namespace_packages) => namespace_packages,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+    let namespace_packages = namespace_packages
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<HashSet<_>>();
+
+    // Read the `top_level.txt` file.
+    let top_level_path = egg_info.join("top_level.txt");
+    let top_level = match fs_err::read_to_string(&top_level_path) {
+        Ok(top_level) => top_level,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Error::MissingTopLevel(top_level_path));
         }
+        Err(err) => return Err(err.into()),
     };
 
-    // Read the `top_level.txt` file, ignoring anything in `namespace_packages.txt`.
-    //
-    // Empty or whitespace-only entries are skipped: legacy setuptools writes `top_level.txt`
-    // with a trailing newline even when the package has no top-level modules, which
-    // `str::lines` yields as an empty string. Joining that onto `dist_location` would
-    // resolve back to `dist_location` itself (site-packages), and a subsequent
-    // `remove_dir_all` would wipe out every installed package.
-    let top_level = {
-        let top_level_path = egg_info.join("top_level.txt");
-        match fs_err::read_to_string(&top_level_path) {
-            Ok(top_level) => top_level
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .filter(|line| !namespace_packages.iter().any(|ns| ns.as_str() == *line))
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Err(Error::MissingTopLevel(top_level_path));
-            }
-            Err(err) => return Err(err.into()),
+    // Remove everything in `top_level.txt` except namespace packages.
+    for entry in top_level.lines().map(str::trim) {
+        // Empty or whitespace-only entries are skipped: legacy setuptools writes `top_level.txt`
+        // with a trailing newline even when the package has no top-level modules, which
+        // `str::lines` yields as an empty string. Joining that onto `dist_location` would
+        // resolve back to `dist_location` itself (site-packages), and a subsequent
+        // `remove_dir_all` would wipe out every installed package.
+        if entry.is_empty() || namespace_packages.contains(entry) {
+            continue;
         }
-    };
-
-    // Remove everything in `top_level.txt`.
-    for entry in top_level {
-        if !is_valid_top_level_entry(&entry, &distribution) {
+        if !is_valid_top_level_entry(entry, &distribution) {
             continue;
         }
 
-        let path = dist_location.join(&entry);
+        let path = dist_location.join(entry);
 
         // Remove as a directory.
         match fs_err::remove_dir_all(&path) {
