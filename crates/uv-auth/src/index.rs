@@ -127,6 +127,16 @@ mod tests {
     }
 
     #[test]
+    fn index_prefers_the_most_specific_matching_root() {
+        let broad = index("https://example.com/", AuthPolicy::Auto);
+        let specific = index("https://example.com/private/", AuthPolicy::Never);
+        let indexes = Indexes::from_indexes([broad, specific.clone()]);
+        let request = Url::parse("https://example.com/private/package").unwrap();
+
+        assert_eq!(indexes.index_for(&request), Some(&specific));
+    }
+
+    #[test]
     fn test_index_path_prefix_requires_segment_boundary() {
         let index = index("https://example.com/simple", AuthPolicy::Always);
 
