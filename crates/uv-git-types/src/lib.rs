@@ -162,6 +162,13 @@ impl GitUrl {
 
     /// Set the precise [`GitOid`] to use for this Git URL.
     pub fn with_precise(mut self, precise: GitOid) -> Result<Self, GitUrlParseError> {
+        self.validate_precise(precise)?;
+        self.precise = Some(precise);
+        Ok(self)
+    }
+
+    /// Check that a resolved commit agrees with an exact revision in the URL.
+    pub fn validate_precise(&self, precise: GitOid) -> Result<(), GitUrlParseError> {
         if let GitReference::BranchOrTagOrCommit(revision) = &self.reference
             && revision.parse::<GitOid>().is_ok()
             && !revision.eq_ignore_ascii_case(precise.as_str())
@@ -169,12 +176,10 @@ impl GitUrl {
             return Err(GitUrlParseError::MismatchedRevision {
                 revision: revision.clone(),
                 precise,
-                url: Box::new(self.url),
+                url: Box::new(self.url.clone()),
             });
         }
-
-        self.precise = Some(precise);
-        Ok(self)
+        Ok(())
     }
 
     /// Set the [`GitReference`] to use for this Git URL, clearing any precise commit if it changes.
