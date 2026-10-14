@@ -43,6 +43,9 @@ mod pip_sync_hashes;
 mod pip_sync_markers;
 
 #[cfg(feature = "test-python")]
+mod pip_sync_plan;
+
+#[cfg(feature = "test-python")]
 mod pip_sync_reinstall;
 
 #[cfg(feature = "test-python")]
