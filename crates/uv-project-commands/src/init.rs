@@ -43,7 +43,7 @@ use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache, WorkspaceErrorKind,
 };
 
-/// Add one or more packages to the project requirements.
+/// Initialize a project or a PEP 723 script.
 #[expect(clippy::single_match_else, clippy::fn_params_excessive_bools)]
 pub async fn init(
     project_dir: &Path,
