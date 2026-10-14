@@ -289,6 +289,7 @@ fn normalize(mut requirements: Vec<Requirement>) -> Vec<Requirement> {
         requirement.extras = extras.into_boxed_slice();
         requirement.groups.sort();
     }
+    // Package names are the primary sort key, so normalizing each group retains global order.
     requirements.sort_by(compare_requirements);
 
     let mut normalized = Vec::with_capacity(requirements.len());
@@ -311,7 +312,6 @@ fn normalize(mut requirements: Vec<Requirement>) -> Vec<Requirement> {
             ));
         }
     }
-    normalized.sort_by(compare_requirements);
     normalized
 }
 
@@ -390,6 +390,7 @@ fn normalize_package_requirements(
         normalized.extend(regions);
     }
 
+    normalized.sort_by(compare_requirements);
     normalized
 }
 
