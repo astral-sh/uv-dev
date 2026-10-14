@@ -17,7 +17,24 @@ use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 #[cfg(windows)]
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
-use uv_test::{assert_link_target, assert_path_missing, site_packages_path, uv_snapshot};
+use uv_test::{
+    TestContext, assert_link_target, assert_path_missing, site_packages_path, uv_snapshot,
+};
+
+#[track_caller]
+fn assert_venv_python_version(context: &TestContext, version: &str) {
+    context
+        .external_command(context.interpreter())
+        .args([
+            "-I",
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor} {sys.prefix != sys.base_prefix}', end='')",
+        ])
+        .assert()
+        .success()
+        .stdout(format!("{version} True"))
+        .stderr("");
+}
 
 #[track_caller]
 fn assert_no_distutils_patch(site_packages: &Path) {
@@ -907,7 +924,7 @@ fn create_venv_ignores_virtual_env_variable() -> Result<()> {
 }
 
 #[test]
-fn create_venv_reads_request_from_python_version_file() {
+fn create_venv_reads_request_from_python_version_file() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     // Without the file, we should use the first on the PATH
@@ -924,8 +941,7 @@ fn create_venv_reads_request_from_python_version_file() {
     context
         .temp_dir
         .child(PYTHON_VERSION_FILENAME)
-        .write_str("3.12")
-        .unwrap();
+        .write_str("3.12")?;
 
     uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
     exit_code: 0 (success)
@@ -936,11 +952,12 @@ fn create_venv_reads_request_from_python_version_file() {
     "
     );
 
-    context.venv.assert(predicates::path::is_dir());
+    assert_venv_python_version(&context, "3.12");
+    Ok(())
 }
 
 #[test]
-fn create_venv_reads_request_from_python_versions_file() {
+fn create_venv_reads_request_from_python_versions_file() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     // Without the file, we should use the first on the PATH
@@ -957,8 +974,7 @@ fn create_venv_reads_request_from_python_versions_file() {
     context
         .temp_dir
         .child(PYTHON_VERSIONS_FILENAME)
-        .write_str("3.12\n3.11")
-        .unwrap();
+        .write_str("3.12\n3.11")?;
 
     uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
     exit_code: 0 (success)
@@ -969,7 +985,8 @@ fn create_venv_reads_request_from_python_versions_file() {
     "
     );
 
-    context.venv.assert(predicates::path::is_dir());
+    assert_venv_python_version(&context, "3.12");
+    Ok(())
 }
 
 #[test]
@@ -1379,7 +1396,7 @@ fn create_venv_explicit_request_takes_priority_over_python_version_file() {
     "
     );
 
-    context.venv.assert(predicates::path::is_dir());
+    assert_venv_python_version(&context, "3.11");
 }
 
 #[cfg(feature = "test-pypi")]
