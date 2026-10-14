@@ -418,27 +418,24 @@ fn find_uv_bin_in_venv(python_version: &str) -> anyhow::Result<()> {
         // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
         .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
 
-    // Install in a virtual environment
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(fake_uv(&context)?), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv==0.1.0 (from file://[TEMP_DIR]/fake-uv)
-    "
-    );
+    let package = fake_uv(&context)?;
+    // Each Python version asserts the same output at these shared snapshot locations.
+    insta::allow_duplicates! {
+        uv_snapshot!(context.filters(), context.pip_install().arg(package), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + uv==0.1.0 (from file://[TEMP_DIR]/fake-uv)
+        ");
 
-    // We should find the binary in the virtual environment
-    uv_snapshot!(context.filters(), context.python_command()
-        .arg("-c")
-        .arg(TEST_SCRIPT), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [VENV]/[BIN]/uv
-    "
-    );
+        uv_snapshot!(context.filters(), context.python_command().arg("-c").arg(TEST_SCRIPT), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        [VENV]/[BIN]/uv
+        ");
+    }
 
     Ok(())
 }
