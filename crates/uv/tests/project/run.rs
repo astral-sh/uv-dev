@@ -3459,6 +3459,7 @@ fn run_without_output() -> Result<()> {
 }
 
 /// Isolated runs honor interpreter selection without replacing the project environment.
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn run_isolated_python_version() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
