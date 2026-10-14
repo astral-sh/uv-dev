@@ -62,7 +62,7 @@ use uv_requirements::{
     script_specification,
 };
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
-use uv_resolver::{DependencyMode, Preference};
+use uv_resolver::DependencyMode;
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Metadata, Pep723Script};
 use uv_settings::{
     FrozenSource, LockCheck, LockedSource, MalwareCheckSettings, PythonInstallMirrors,
@@ -912,12 +912,7 @@ pub async fn run(
                     PreferenceLocation::Lock { lock, install_path }
                 } else {
                     // Otherwise, extract preferences from the base environment.
-                    PreferenceLocation::Entries(
-                        base_site_packages
-                            .iter()
-                            .filter_map(Preference::from_installed)
-                            .collect::<Vec<_>>(),
-                    )
+                    PreferenceLocation::Installed(&base_site_packages)
                 },
             );
 
