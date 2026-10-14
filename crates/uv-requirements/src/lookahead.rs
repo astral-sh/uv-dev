@@ -211,8 +211,6 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
         };
 
         // Respect recursive extras by propagating the source extras to the dependencies.
-        let package = metadata.name.clone();
-        let version = metadata.version.clone();
         let requires_dist = Box::into_iter(metadata.requires_dist)
             .chain(
                 metadata
@@ -241,8 +239,8 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
 
         // Return the requirements from the metadata.
         Ok(Some(RequestedRequirements::new(
-            package,
-            version,
+            metadata.name,
+            metadata.version,
             requirement.extras,
             requires_dist,
             direct,
