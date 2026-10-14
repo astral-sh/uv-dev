@@ -371,40 +371,62 @@ fn make_executable(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Create the wrapper scripts in the bin folder of the venv for launching console scripts.
-pub(crate) fn write_script_entrypoints(
-    layout: &Layout,
-    relocatable: bool,
-    site_packages: &Path,
-    entrypoints: &[Script],
-    record: &mut Vec<RecordEntry>,
-    is_gui: bool,
-) -> Result<(), Error> {
-    for script in entrypoints {
-        let script = ValidatedScript::try_from_script(script, layout)?;
-        let entrypoint_relative = relative_install_path(script.as_path(), site_packages)?;
+/// Entry-point scripts with destinations validated against the installation layout.
+pub(crate) struct ValidatedEntryPoints<'script> {
+    console_scripts: Vec<ValidatedScript<'script>>,
+    gui_scripts: Vec<ValidatedScript<'script>>,
+}
 
-        // Generate the launcher script.
-        let launcher_executable = get_script_executable(&layout.sys_executable, is_gui);
-        let launcher_executable =
-            get_relocatable_executable(launcher_executable, layout, relocatable)?;
-        let launcher_python_script = get_script_launcher(
-            script.inner(),
-            &format_shebang(&launcher_executable, &layout.os_name, relocatable),
-        );
-
-        // If necessary, wrap the launcher script in a Windows launcher binary.
-        let launcher = if cfg!(windows) {
-            windows_script_launcher(&launcher_python_script, is_gui, &launcher_executable)?
-        } else {
-            launcher_python_script.into_bytes()
+impl<'script> ValidatedEntryPoints<'script> {
+    pub(crate) fn new(entrypoints: &'script EntryPoints, layout: &Layout) -> Result<Self, Error> {
+        let validate = |scripts: &'script [Script]| {
+            scripts
+                .iter()
+                .map(|script| ValidatedScript::try_from_script(script, layout))
+                .collect::<Result<_, _>>()
         };
-        write_file_recorded(site_packages, &entrypoint_relative, launcher, record)?;
 
-        #[cfg(unix)]
-        make_executable(script.as_path())?;
+        Ok(Self {
+            console_scripts: validate(&entrypoints.console_scripts)?,
+            gui_scripts: validate(&entrypoints.gui_scripts)?,
+        })
     }
-    Ok(())
+
+    /// Create wrapper scripts in the environment's scripts directory.
+    pub(crate) fn write(
+        &self,
+        layout: &Layout,
+        relocatable: bool,
+        site_packages: &Path,
+        record: &mut Vec<RecordEntry>,
+    ) -> Result<(), Error> {
+        for (scripts, is_gui) in [(&self.console_scripts, false), (&self.gui_scripts, true)] {
+            for script in scripts {
+                let entrypoint_relative = relative_install_path(script.as_path(), site_packages)?;
+
+                // Generate the launcher script.
+                let launcher_executable = get_script_executable(&layout.sys_executable, is_gui);
+                let launcher_executable =
+                    get_relocatable_executable(launcher_executable, layout, relocatable)?;
+                let launcher_python_script = get_script_launcher(
+                    script.inner(),
+                    &format_shebang(&launcher_executable, &layout.os_name, relocatable),
+                );
+
+                // If necessary, wrap the launcher script in a Windows launcher binary.
+                let launcher = if cfg!(windows) {
+                    windows_script_launcher(&launcher_python_script, is_gui, &launcher_executable)?
+                } else {
+                    launcher_python_script.into_bytes()
+                };
+                write_file_recorded(site_packages, &entrypoint_relative, launcher, record)?;
+
+                #[cfg(unix)]
+                make_executable(script.as_path())?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A parsed `WHEEL` file.

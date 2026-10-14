@@ -12,8 +12,8 @@ use uv_pypi_types::{DirectUrl, Metadata10};
 
 use crate::linker::{InstallState, LinkMode, link_wheel_files};
 use crate::wheel::{
-    LibKind, ValidatedWheel, WheelFile, dist_info_file, find_dist_info, install_data,
-    parse_scripts, read_record, write_installer_metadata, write_record, write_script_entrypoints,
+    LibKind, ValidatedEntryPoints, ValidatedWheel, WheelFile, dist_info_file, find_dist_info,
+    install_data, parse_scripts, read_record, write_installer_metadata, write_record,
 };
 use crate::{Error, Layout};
 
@@ -86,6 +86,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     let record_file = File::open(dist_info_file(wheel, &dist_info_prefix, "RECORD"))?;
     let mut record = read_record(record_file)?;
     let entrypoints = parse_scripts(wheel, &dist_info_prefix, layout.python_version.1)?;
+    let validated_entrypoints = ValidatedEntryPoints::new(&entrypoints, layout)?;
 
     trace!(?name, "Extracting wheel files");
     link_wheel_files(link_mode, site_packages, &validated_wheel, state, filename)?;
@@ -97,19 +98,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         trace!(?name, "Writing entrypoints");
 
         fs_err::create_dir_all(&layout.scheme.scripts)?;
-        for (scripts, is_gui) in [
-            (&entrypoints.console_scripts, false),
-            (&entrypoints.gui_scripts, true),
-        ] {
-            write_script_entrypoints(
-                layout,
-                relocatable,
-                site_packages,
-                scripts,
-                &mut record,
-                is_gui,
-            )?;
-        }
+        validated_entrypoints.write(layout, relocatable, site_packages, &mut record)?;
     }
 
     // Move wheel data into the interpreter's installation scheme.
