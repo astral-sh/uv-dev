@@ -195,7 +195,7 @@ impl GitRepository {
             .as_ref()
             .cloned()?
             .arg("config")
-            .arg("--type=bool")
+            .arg("--bool")
             .arg("--get-regexp")
             .arg(r"^remote\..*\.promisor$")
             .cwd(&self.path)
@@ -295,6 +295,8 @@ impl GitRepository {
             // Avoid triggering dynamic object fetches when we are only checking
             // whether a revision resolves locally.
             .env("GIT_NO_LAZY_FETCH", "1")
+            // Older Git versions ignore GIT_NO_LAZY_FETCH.
+            .env(EnvVars::GIT_ALLOW_PROTOCOL, "")
             .cwd(&self.path)
             .exec_with_output()?;
 
@@ -1064,9 +1066,11 @@ fn fetch_refspecs(
         cmd.arg(format!("--filter={PARTIAL_CLONE_FILTER}"))
             .arg(CHECKOUT_REMOTE);
     } else {
-        // A repository populated with the preview feature may retain a remote
-        // filter. Override it when fetching additional history without preview.
-        cmd.arg("--no-filter").arg(url.as_str());
+        // A partial repository can retain a remote filter when preview is disabled.
+        if repo.has_promisor_remote()? {
+            cmd.arg("--no-filter");
+        }
+        cmd.arg(url.as_str());
     }
     cmd.args(refspecs).cwd(&repo.path);
 
