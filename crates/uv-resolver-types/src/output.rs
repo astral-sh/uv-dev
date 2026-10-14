@@ -1,4 +1,7 @@
-use crate::{AnnotatedDist, DistributionMetadataIndex, MetadataResponse, Options, UniversalMarker};
+use crate::{
+    AnnotatedDist, DistributionMetadataIndex, MetadataResponse, Options, PackageNodeKind,
+    UniversalMarker,
+};
 use indexmap::IndexSet;
 use itertools::Itertools;
 use petgraph::{
@@ -13,10 +16,10 @@ use uv_distribution_types::{
     BuiltDist, Dist, Edge, Identifier, Name, Node, Requirement, RequiresPython,
     ResolutionDiagnostic, ResolvedDist, SourceDist,
 };
-use uv_normalize::{ExtraName, GroupName, PackageName};
+use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier};
 use uv_pep508::{MarkerEnvironment, MarkerTree, MarkerTreeKind};
-use uv_pypi_types::{HashDigests, ParsedUrlError};
+use uv_pypi_types::{ConflictItemRef, HashDigests, ParsedUrlError};
 /// The output of a successful resolution.
 ///
 /// Includes a complete resolution graph in which every node represents a pinned package and every
@@ -57,23 +60,15 @@ impl ResolutionGraphNode {
         }
     }
 
-    pub(crate) fn package_extra_names(&self) -> Option<(&PackageName, &ExtraName)> {
+    /// Return the extra or dependency-group conflict item activated by this node.
+    pub(crate) fn activated_conflict_item(&self) -> Option<ConflictItemRef<'_>> {
         match self {
             Self::Root => None,
-            Self::Dist(dist) => {
-                let extra = dist.kind.extra()?;
-                Some((&dist.name, extra))
-            }
-        }
-    }
-
-    pub(crate) fn package_group_names(&self) -> Option<(&PackageName, &GroupName)> {
-        match self {
-            Self::Root => None,
-            Self::Dist(dist) => {
-                let group = dist.kind.group()?;
-                Some((&dist.name, group))
-            }
+            Self::Dist(dist) => match &dist.kind {
+                PackageNodeKind::Base => None,
+                PackageNodeKind::Group(group) => Some((&dist.name, group).into()),
+                PackageNodeKind::Extra(extra) => Some((&dist.name, extra).into()),
+            },
         }
     }
 
