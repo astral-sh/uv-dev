@@ -9387,7 +9387,6 @@ fn sync_active_script_environment_json() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-git")]
 fn sync_workspace_custom_environment_path() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -9403,7 +9402,11 @@ fn sync_workspace_custom_environment_path() -> Result<()> {
     )?;
 
     // Create a workspace member
-    context.init().arg("child").assert().success();
+    context
+        .init()
+        .args(["child", "--vcs", "none"])
+        .assert()
+        .success();
 
     // Running `uv sync` should create `.venv` in the workspace root
     uv_snapshot!(context.filters(), context.sync(), @"
