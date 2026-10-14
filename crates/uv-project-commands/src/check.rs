@@ -143,37 +143,26 @@ pub async fn check(
         }
     };
 
-    if no_project {
+    if no_project || (project.is_none() && script.is_none()) {
+        let context = if no_project {
+            "alongside `--no-project`"
+        } else {
+            "outside of a project"
+        };
         for flag in extras.history().as_flags_pretty() {
-            warn_user!("`{flag}` has no effect when used alongside `--no-project`");
+            warn_user!("`{flag}` has no effect when used {context}");
         }
         for flag in groups.history().as_flags_pretty() {
-            warn_user!("`{flag}` has no effect when used alongside `--no-project`");
+            warn_user!("`{flag}` has no effect when used {context}");
         }
         if let LockCheck::Enabled(lock_check) = lock_check {
-            warn_user!("`{lock_check}` has no effect when used alongside `--no-project`");
+            warn_user!("`{lock_check}` has no effect when used {context}");
         }
         if frozen.is_some() {
-            warn_user!("`--frozen` has no effect when used alongside `--no-project`");
+            warn_user!("`--frozen` has no effect when used {context}");
         }
         if no_sync {
-            warn_user!("`--no-sync` has no effect when used alongside `--no-project`");
-        }
-    } else if project.is_none() && script.is_none() {
-        for flag in extras.history().as_flags_pretty() {
-            warn_user!("`{flag}` has no effect when used outside of a project");
-        }
-        for flag in groups.history().as_flags_pretty() {
-            warn_user!("`{flag}` has no effect when used outside of a project");
-        }
-        if let LockCheck::Enabled(lock_check) = lock_check {
-            warn_user!("`{lock_check}` has no effect when used outside of a project");
-        }
-        if frozen.is_some() {
-            warn_user!("`--frozen` has no effect when used outside of a project");
-        }
-        if no_sync {
-            warn_user!("`--no-sync` has no effect when used outside of a project");
+            warn_user!("`--no-sync` has no effect when used {context}");
         }
     }
 
