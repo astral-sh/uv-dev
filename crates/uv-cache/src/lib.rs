@@ -460,7 +460,7 @@ impl Cache {
     }
 
     /// Populate the cache scaffold.
-    fn create_base_files(root: &PathBuf) -> io::Result<()> {
+    fn create_base_files(root: &Path) -> io::Result<()> {
         // Add the CACHEDIR.TAG.
         cachedir::ensure_tag(root)?;
 
@@ -478,14 +478,13 @@ impl Cache {
         // Add an empty .gitignore to the build bucket, to ensure that the cache's own .gitignore
         // doesn't interfere with source distribution builds. Build backends (like hatchling) will
         // traverse upwards to look for .gitignore files.
-        fs_err::create_dir_all(root.join(CacheBucket::SourceDistributions.to_str()))?;
+        let source_distributions = root.join(CacheBucket::SourceDistributions.to_str());
+        fs_err::create_dir_all(&source_distributions)?;
         match fs_err::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(
-                root.join(CacheBucket::SourceDistributions.to_str())
-                    .join(".gitignore"),
-            ) {
+            .open(source_distributions.join(".gitignore"))
+        {
             Ok(_) => {}
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => (),
             Err(err) => return Err(err),
@@ -498,9 +497,7 @@ impl Cache {
         // We have to put this below the gitignore. Otherwise, if the build backend uses the rust
         // ignore crate it will walk up to the top level .gitignore and ignore its python source
         // files.
-        let phony_git = root
-            .join(CacheBucket::SourceDistributions.to_str())
-            .join(".git");
+        let phony_git = source_distributions.join(".git");
         match fs_err::OpenOptions::new()
             .create(true)
             .write(true)
