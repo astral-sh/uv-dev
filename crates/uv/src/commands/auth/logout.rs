@@ -7,6 +7,8 @@ use uv_auth::{AuthBackend, Credentials, Service, TextCredentialStore, Username};
 use uv_command_support::{ExitStatus, Printer};
 use uv_preview::Preview;
 
+use super::TOKEN_USERNAME;
+
 /// Logout from a service.
 ///
 /// If no username is provided, defaults to `__token__`.
@@ -33,17 +35,13 @@ pub(crate) async fn logout(
         }
         (Some(cli), None) => cli,
         (None, Some(url)) => url.to_string(),
-        (None, None) => "__token__".to_string(),
+        (None, None) => TOKEN_USERNAME.to_string(),
     };
     if username.is_empty() {
         bail!("Username cannot be empty");
     }
 
-    let display_url = if username == "__token__" {
-        url.without_credentials().to_string()
-    } else {
-        format!("{username}@{}", url.without_credentials())
-    };
+    let display_url = super::display_service(&service, &username);
 
     // TODO(zanieb): Consider exhaustively logging out from all backends
     match backend {
