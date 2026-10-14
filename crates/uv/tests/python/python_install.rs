@@ -19,12 +19,23 @@ use predicates::prelude::predicate;
 use tracing::debug;
 #[cfg(unix)]
 use uv_test::assert_link_target;
-use uv_test::{LATEST_PYTHON_3_12, assert_path_missing, uv_snapshot};
+use uv_test::{LATEST_PYTHON_3_12, TestContext, assert_path_missing, uv_snapshot};
 
 use uv_fs::Simplified;
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 use walkdir::WalkDir;
+
+#[track_caller]
+fn assert_python_launcher(context: &TestContext, launcher: &Path) {
+    context
+        .external_command(launcher)
+        .args(["-c", "import subprocess; print('hello world', end='')"])
+        .assert()
+        .success()
+        .stdout("hello world")
+        .stderr("");
+}
 
 #[test]
 fn python_install() {
@@ -73,13 +84,7 @@ fn python_install() {
         });
     }
 
-    // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
-        .arg("-c").arg("import subprocess; print('hello world')"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    hello world
-    ");
+    assert_python_launcher(&context, bin_python.path());
 
     // Should be a no-op when already installed
     uv_snapshot!(context.filters(), context.python_install(), @"
@@ -685,13 +690,7 @@ fn python_install_preview() {
         });
     }
 
-    // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
-        .arg("-c").arg("import subprocess; print('hello world')"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    hello world
-    ");
+    assert_python_launcher(&context, bin_python.path());
 
     // Should be a no-op when already installed
     uv_snapshot!(context.filters(), context.python_install().arg("--preview"), @"
@@ -1128,13 +1127,7 @@ fn python_install_freethreaded() {
     #[cfg(unix)]
     bin_python.assert(predicate::path::is_symlink());
 
-    // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
-        .arg("-c").arg("import subprocess; print('hello world')"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    hello world
-    ");
+    assert_python_launcher(&context, bin_python.path());
 
     // We should find it with opt-in
     uv_snapshot!(context.filters(), context.python_find().arg("3.13t"), @"
@@ -1427,13 +1420,7 @@ fn python_install_debug() {
     #[cfg(unix)]
     bin_python.assert(predicate::path::is_symlink());
 
-    // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
-        .arg("-c").arg("import subprocess; print('hello world')"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    hello world
-    ");
+    assert_python_launcher(&context, bin_python.path());
 
     // We should find it with opt-in
     uv_snapshot!(context.filters(), context.python_find().arg("3.13d"), @"
@@ -1526,13 +1513,7 @@ fn python_install_debug_freethreaded() {
     #[cfg(unix)]
     bin_python.assert(predicate::path::is_symlink());
 
-    // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
-        .arg("-c").arg("import subprocess; print('hello world')"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    hello world
-    ");
+    assert_python_launcher(&context, bin_python.path());
 
     // We should find it with opt-in
     uv_snapshot!(context.filters(), context.python_find().arg("3.13td"), @"
@@ -3569,13 +3550,7 @@ fn python_install_pyodide() {
         );
     });
 
-    // The executable should "work"
-    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
-        .arg("-c").arg("import subprocess; print('hello world')"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    hello world
-    ");
+    assert_python_launcher(&context, bin_python.path());
 
     // We should be able to find the Pyodide interpreter
     uv_snapshot!(context.filters(), context.python_find().arg("cpython-3.13.2-emscripten-wasm32-musl"), @"
