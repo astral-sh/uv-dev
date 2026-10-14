@@ -331,22 +331,20 @@ pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
     let _guard = EASY_INSTALL_PTH.lock().unwrap();
 
     let content = fs_err::read_to_string(&easy_install)?;
-    let mut new_content = String::with_capacity(content.len());
-    let mut removed = false;
-
     // https://github.com/pypa/pip/blob/41587f5e0017bcd849f42b314dc8a34a7db75621/src/pip/_internal/req/req_uninstall.py#L634
-    for line in content.lines() {
-        if !removed && line.trim() == target_line {
-            removed = true;
-        } else {
-            new_content.push_str(line);
-            new_content.push('\n');
-        }
+    let mut lines = content.lines();
+    let Some(target_index) = lines.position(|line| line.trim() == target_line) else {
+        return Ok(uninstall);
+    };
+
+    // Retain all lines before and after the first match.
+    let mut new_content = String::with_capacity(content.len());
+    for line in content.lines().take(target_index).chain(lines) {
+        new_content.push_str(line);
+        new_content.push('\n');
     }
-    if removed {
-        write_atomic_sync(&easy_install, new_content)?;
-        trace!("Removed line from `easy-install.pth`: {target_line}");
-    }
+    write_atomic_sync(&easy_install, new_content)?;
+    trace!("Removed line from `easy-install.pth`: {target_line}");
 
     Ok(uninstall)
 }
