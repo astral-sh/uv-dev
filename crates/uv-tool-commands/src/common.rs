@@ -22,8 +22,8 @@ use uv_distribution::{
     DistributionDatabase, LoweredExtraBuildDependencies, StaticMetadataDatabase,
 };
 use uv_distribution_types::{
-    DependencyMetadata, HashCollection, IndexLocations, InstalledDist, Name,
-    NameRequirementSpecification, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
+    DependencyMetadata, HashCollection, IndexLocations, Name, NameRequirementSpecification,
+    Requirement, RequiresPython, Resolution, UnresolvedRequirement,
 };
 use uv_errors::{ErrorWithHints, Hinted, Hints};
 #[cfg(unix)]
@@ -123,26 +123,26 @@ use uv_settings::ResolverSettings;
 
 use crate::error::ToolLockError;
 
-/// Return all packages which contain an executable with the given name.
-pub(super) fn matching_packages(name: &str, site_packages: &SitePackages) -> Vec<InstalledDist> {
+/// Return the names of packages that contain an executable with the given name.
+pub(super) fn matching_package_names<'a>(
+    executable: &str,
+    site_packages: &'a SitePackages,
+) -> impl Iterator<Item = &'a PackageName> {
     site_packages
         .iter()
-        .filter_map(|package| {
-            entrypoint_paths(site_packages, package.name(), package.version())
-                .ok()
-                .and_then(|entrypoints| {
-                    entrypoints
-                        .iter()
-                        .any(|entrypoint| {
-                            entrypoint
-                                .0
-                                .strip_suffix(std::env::consts::EXE_SUFFIX)
-                                .is_some_and(|stripped| stripped == name)
-                        })
-                        .then(|| package.clone())
-                })
+        .filter(move |package| {
+            entrypoint_paths(site_packages, package.name(), package.version()).is_ok_and(
+                |entrypoints| {
+                    entrypoints.iter().any(|entrypoint| {
+                        entrypoint
+                            .0
+                            .strip_suffix(std::env::consts::EXE_SUFFIX)
+                            .is_some_and(|stripped| stripped == executable)
+                    })
+                },
+            )
         })
-        .collect()
+        .map(Name::name)
 }
 
 /// Remove any entrypoints attached to the [`Tool`].
@@ -788,12 +788,11 @@ pub(super) fn finalize_tool_install(
             } else {
                 NoExecutablesError::Root {
                     package: package.clone(),
-                    matching_dependency_packages: matching_packages(
+                    matching_dependency_packages: matching_package_names(
                         package.as_ref(),
                         &site_packages,
                     )
-                    .into_iter()
-                    .map(|dist| dist.name().clone())
+                    .cloned()
                     .collect(),
                 }
             };
