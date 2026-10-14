@@ -202,10 +202,8 @@ pub async fn audit(
             ResolverInstallerOptions::from(tool.options().clone()).combine(filesystem.clone()),
         );
         let outcome = audit_lock(
-            &lock,
+            lock.auditable(&extras, &groups, None, |_| true),
             &root,
-            &extras,
-            &groups,
             &settings.resolver.index_locations,
             settings.resolver.keyring_provider,
             client_builder.clone(),

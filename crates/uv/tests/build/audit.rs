@@ -3,7 +3,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use serde_json::json;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
@@ -1811,6 +1811,84 @@ async fn audit_script_no_vulnerabilities() {
     Resolved 1 package in [TIME]
     Found no known vulnerabilities and no adverse project statuses in 1 package
     ");
+}
+
+/// Targeted audits exclude inapplicable root requirements, resolution forks, and transitive edges.
+#[tokio::test]
+async fn audit_script_target_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["common", "python-only; python_version >= '3.13'"]
+        # ///
+    "#})?;
+    context
+        .temp_dir
+        .child("script.py.lock")
+        .write_str(indoc! {r#"
+            version = 1
+            revision = 3
+            requires-python = ">=3.12"
+            resolution-markers = ["python_full_version < '3.13'", "python_full_version >= '3.13'"]
+
+            [manifest]
+            requirements = [
+                { name = "common" },
+                { name = "python-only", marker = "python_full_version >= '3.13'" },
+            ]
+
+            [[package]]
+            name = "common"
+            version = "1.0.0"
+            source = { url = "https://example.org/common-1.0.0-py3-none-any.whl" }
+            resolution-markers = ["python_full_version < '3.13'"]
+            dependencies = [{ name = "windows-only", marker = "sys_platform == 'win32'" }]
+
+            [[package]]
+            name = "common"
+            version = "2.0.0"
+            source = { url = "https://example.org/common-2.0.0-py3-none-any.whl" }
+            resolution-markers = ["python_full_version >= '3.13'"]
+
+            [[package]]
+            name = "python-only"
+            version = "1.0.0"
+            source = { url = "https://example.org/python_only-1.0.0-py3-none-any.whl" }
+
+            [[package]]
+            name = "windows-only"
+            version = "1.0.0"
+            source = { url = "https://example.org/windows_only-1.0.0-py3-none-any.whl" }
+        "#})?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .and(body_json(json!({
+            "queries": [{"package": {"name": "common", "ecosystem": "PyPI"}, "version": "1.0.0"}]
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": []}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .audit()
+        .arg("--script").arg("script.py")
+        .arg("--frozen")
+        .arg("--preview-features").arg("audit")
+        .arg("--python-version").arg("3.12")
+        .arg("--python-platform").arg("x86_64-unknown-linux-gnu")
+        .arg("--service-url").arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Found no known vulnerabilities and no adverse project statuses in 1 package
+    ");
+
+    Ok(())
 }
 
 /// Audit a PEP 723 script and find a vulnerability.
