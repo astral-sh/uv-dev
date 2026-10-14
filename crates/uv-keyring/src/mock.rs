@@ -26,7 +26,7 @@ call on the mock will operate as usual.
 use std::sync::Mutex;
 
 use crate::credential::CredentialApi;
-use crate::error::{Error, Result, decode_password};
+use crate::error::{Error, Result};
 
 /// The concrete mock credential
 ///
@@ -57,23 +57,6 @@ impl CredentialApi for MockCredential {
     /// If there is an error in the mock, it will be returned
     /// and the password will _not_ be set.  The error will
     /// be cleared, so calling again will set the password.
-    async fn set_password(&self, password: &str) -> Result<()> {
-        let mut data = self.inner.lock().expect("Can't access mock data for set");
-        let err = data.error.take();
-        match err {
-            None => {
-                data.secret = Some(password.as_bytes().to_vec());
-                Ok(())
-            }
-            Some(err) => Err(err),
-        }
-    }
-
-    /// Set a password on a mock credential.
-    ///
-    /// If there is an error in the mock, it will be returned
-    /// and the password will _not_ be set.  The error will
-    /// be cleared, so calling again will set the password.
     async fn set_secret(&self, secret: &[u8]) -> Result<()> {
         let mut data = self.inner.lock().expect("Can't access mock data for set");
         let err = data.error.take();
@@ -82,22 +65,6 @@ impl CredentialApi for MockCredential {
                 data.secret = Some(secret.to_vec());
                 Ok(())
             }
-            Some(err) => Err(err),
-        }
-    }
-
-    /// Get the password from a mock credential, if any.
-    ///
-    /// If there is an error set in the mock, it will
-    /// be returned instead of a password.
-    async fn get_password(&self) -> Result<String> {
-        let mut data = self.inner.lock().expect("Can't access mock data for get");
-        let err = data.error.take();
-        match err {
-            None => match &data.secret {
-                None => Err(Error::NoEntry),
-                Some(val) => decode_password(val.clone()),
-            },
             Some(err) => Err(err),
         }
     }
