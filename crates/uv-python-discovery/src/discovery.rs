@@ -1399,32 +1399,25 @@ pub(crate) async fn find_best_python_installation(
                 Ok(Err(error)) => Err(error.into()),
                 Err(error) => Err(error.into()),
             };
-            if let Ok(Some(installation)) = result {
-                return Ok(installation);
-            }
-            // Emit a warning instead of failing since we may find a suitable
-            // interpreter on the system after relaxing the request further.
-            // Additionally, uv did not previously attempt downloads in this
-            // code path and we want to minimize the fatal cases for
-            // backwards compatibility.
-            // Errors encountered here are either network errors or quirky
-            // configuration problems.
-            if let Err(error) = result {
-                // If the request was for the default or any version, propagate
-                // the error as nothing else we are about to do will help the
-                // situation.
-                if matches!(request, PythonRequest::Default | PythonRequest::Any) {
+            match result {
+                Ok(Some(installation)) => return Ok(installation),
+                Ok(None) => {}
+                // Default and any-version requests cannot be relaxed further.
+                Err(error) if matches!(request, PythonRequest::Default | PythonRequest::Any) => {
                     return Err(error);
                 }
-
-                warn_user_with_chain!(
-                    anyhow::Error::from(error)
-                        .context(format!(
-                            "A managed Python download is available for {request}, but an error occurred when attempting to download it."
-                        ))
-                        .as_ref()
-                );
-                previous_fetch_failed = true;
+                Err(error) => {
+                    // A failed download must not prevent a less-specific request from matching a
+                    // system interpreter.
+                    warn_user_with_chain!(
+                        anyhow::Error::from(error)
+                            .context(format!(
+                                "A managed Python download is available for {request}, but an error occurred when attempting to download it."
+                            ))
+                            .as_ref()
+                    );
+                    previous_fetch_failed = true;
+                }
             }
         }
 
