@@ -6011,39 +6011,27 @@ fn config_settings_path() -> Result<()> {
 fn reinstall_duplicate() -> Result<()> {
     use uv_fs::copy_dir_all;
 
-    // Sync a version of `pip` into a virtual environment.
+    // Install different versions of `pip` into separate virtual environments.
     let context1 = uv_test::test_context!("3.12");
-    let requirements_txt = context1.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==21.3.1")?;
-
-    // Run `pip sync`.
     context1
         .pip_install()
-        .arg("-r")
-        .arg(requirements_txt.path())
+        .arg("pip==21.3.1")
         .assert()
         .success();
 
-    // Sync a different version of `pip` into a virtual environment.
     let context2 = uv_test::test_context!("3.12");
-    let requirements_txt = context2.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==22.1.1")?;
-
-    // Run `pip sync`.
     context2
         .pip_install()
-        .arg("-r")
-        .arg(requirements_txt.path())
+        .arg("pip==22.1.1")
         .assert()
         .success();
 
-    // Copy the virtual environment to a new location.
+    // Give the first environment duplicate installed distribution metadata.
     copy_dir_all(
         context2.site_packages().join("pip-22.1.1.dist-info"),
         context1.site_packages().join("pip-22.1.1.dist-info"),
     )?;
 
-    // Run `pip install`.
     uv_snapshot!(context1.pip_install()
         .arg("pip")
         .arg("--no-deps")
@@ -6060,6 +6048,20 @@ fn reinstall_duplicate() -> Result<()> {
      + pip==24.0
     "
     );
+
+    context1
+        .assert_command(indoc! {r#"
+            import importlib.metadata
+
+            versions = sorted(
+                dist.version
+                for dist in importlib.metadata.distributions()
+                if dist.metadata.get("Name", "").lower() == "pip"
+            )
+            print(versions)
+        "#})
+        .success()
+        .stdout("['24.0']\n");
 
     Ok(())
 }
