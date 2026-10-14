@@ -803,6 +803,25 @@ async fn lock_script_environment(script: Pep723ItemRef<'_>) -> Result<LockedFile
     }
 }
 
+fn create_managed_environment(
+    root: &Path,
+    interpreter: Interpreter,
+    prompt: uv_virtualenv::Prompt,
+    relocatable: bool,
+    upgrade_policy: UpgradePolicy,
+) -> Result<PythonEnvironment, uv_virtualenv::Error> {
+    uv_virtualenv::create_venv(
+        root,
+        interpreter,
+        prompt,
+        false,
+        uv_virtualenv::OnExisting::Remove(uv_virtualenv::RemovalReason::ManagedEnvironment),
+        relocatable,
+        uv_virtualenv::Seed::Disabled,
+        upgrade_policy,
+    )
+}
+
 /// The Python environment for a project.
 #[derive(Debug)]
 pub enum ProjectEnvironment {
@@ -992,16 +1011,11 @@ impl ProjectEnvironment {
                 // Under `--dry-run`, avoid modifying the environment.
                 if dry_run.enabled() {
                     let temp_dir = cache.venv_dir()?;
-                    let environment = uv_virtualenv::create_venv(
+                    let environment = create_managed_environment(
                         temp_dir.path(),
                         interpreter,
                         prompt,
-                        false,
-                        uv_virtualenv::OnExisting::Remove(
-                            uv_virtualenv::RemovalReason::ManagedEnvironment,
-                        ),
                         uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
-                        uv_virtualenv::Seed::Disabled,
                         upgrade_policy,
                     )?;
                     return Ok(if replace_environment {
@@ -1053,16 +1067,11 @@ impl ProjectEnvironment {
                     )?;
                 }
 
-                let environment = uv_virtualenv::create_venv(
+                let environment = create_managed_environment(
                     &root,
                     interpreter,
                     prompt,
-                    false,
-                    uv_virtualenv::OnExisting::Remove(
-                        uv_virtualenv::RemovalReason::ManagedEnvironment,
-                    ),
                     uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
-                    uv_virtualenv::Seed::Disabled,
                     upgrade_policy,
                 )?;
 
@@ -1207,16 +1216,11 @@ impl ScriptEnvironment {
                 // Under `--dry-run`, avoid modifying the environment.
                 if dry_run.enabled() {
                     let temp_dir = cache.venv_dir()?;
-                    let environment = uv_virtualenv::create_venv(
+                    let environment = create_managed_environment(
                         temp_dir.path(),
                         interpreter,
                         prompt,
                         false,
-                        uv_virtualenv::OnExisting::Remove(
-                            uv_virtualenv::RemovalReason::ManagedEnvironment,
-                        ),
-                        false,
-                        uv_virtualenv::Seed::Disabled,
                         upgrade_policy,
                     )?;
                     return Ok(if root.exists() {
@@ -1244,18 +1248,8 @@ impl ScriptEnvironment {
                     root.user_display().cyan()
                 );
 
-                let environment = uv_virtualenv::create_venv(
-                    &root,
-                    interpreter,
-                    prompt,
-                    false,
-                    uv_virtualenv::OnExisting::Remove(
-                        uv_virtualenv::RemovalReason::ManagedEnvironment,
-                    ),
-                    false,
-                    uv_virtualenv::Seed::Disabled,
-                    upgrade_policy,
-                )?;
+                let environment =
+                    create_managed_environment(&root, interpreter, prompt, false, upgrade_policy)?;
 
                 Ok(if replaced {
                     Self::Replaced(environment)
