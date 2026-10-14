@@ -357,6 +357,16 @@ impl TestContext {
         self
     }
 
+    /// Mask the localized OS message following a backticked filesystem path while retaining the
+    /// error code and the operation that failed.
+    #[must_use]
+    pub fn with_filtered_path_os_error(self, code: u32) -> Self {
+        self.with_filter((
+            format!(r"(?m)(`:[ \t]+)[^`\r\n]* \(os error {code}\)(\r?)$"),
+            format!("${{1}}[OS ERROR {code}]${{2}}"),
+        ))
+    }
+
     /// Add extra standard filtering for executable suffixes on the current platform e.g.
     /// drops `.exe` on Windows.
     #[must_use]
@@ -2636,6 +2646,26 @@ mod python_discovery_tests {
 #[cfg(test)]
 mod filter_tests {
     use super::{LATEST_PYTHON_3_12, TestContext, apply_filters};
+
+    #[test]
+    fn localized_path_error_preserves_operation_and_code() {
+        let context = TestContext::new_with_versions_and_bin(&[], "uv".into())
+            .with_filtered_path_os_error(145);
+        let output = concat!(
+            "warning: failed to link `project`: failed to remove directory `fixture`: Fehler: Verzeichnis nicht leer (os error 145)\r\n",
+            "warning: unrelated operation (os error 145)\n",
+            "warning: failed to remove directory `fixture`: other error (os error 32)\n",
+        );
+
+        assert_eq!(
+            apply_filters(output.to_string(), context.filters()),
+            concat!(
+                "warning: failed to link `project`: failed to remove directory `fixture`: [OS ERROR 145]\r\n",
+                "warning: unrelated operation (os error 145)\n",
+                "warning: failed to remove directory `fixture`: other error (os error 32)\n",
+            )
+        );
+    }
 
     #[test]
     fn zero_bytecode_compilation_count_remains_visible() {
