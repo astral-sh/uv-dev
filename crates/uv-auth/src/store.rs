@@ -344,6 +344,7 @@ impl TextCredentialStore {
         // If that fails, iterate through to find a prefix match
         let request_realm = RealmRef::from(url);
         let mut best: Option<(usize, &Credentials)> = None;
+        let mut ambiguous = false;
 
         for ((service, stored_username), credential) in &self.credentials {
             let service_realm = RealmRef::from(service.url());
@@ -368,15 +369,21 @@ impl TextCredentialStore {
             if let Some((best_specificity, _)) = best {
                 match specificity.cmp(&best_specificity) {
                     Ordering::Less => continue,
-                    Ordering::Equal => return Err(LookupError::AmbiguousUsername(url.clone())),
-                    Ordering::Greater => {}
+                    Ordering::Equal => {
+                        ambiguous = true;
+                        continue;
+                    }
+                    Ordering::Greater => ambiguous = false,
                 }
             }
             best = Some((specificity, credential));
         }
 
-        // Return the most specific match
-        Ok(best.map(|(_, credential)| credential))
+        if ambiguous {
+            Err(LookupError::AmbiguousUsername(url.clone()))
+        } else {
+            Ok(best.map(|(_, credential)| credential))
+        }
     }
 
     /// Store credentials for a given service.
