@@ -118,18 +118,23 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             }
         }
 
+        let policy = self.hashes.archive_policy(&dist);
         let id = dist.distribution_id();
         let download = match in_flight.downloads.register_or_wait(&id).await {
             Some(result) => {
                 let cached = result.map_err(Error::Thread)?;
-                validate_in_flight_wheel(&dist, cached.filename())
-                    .map_err(|err| Error::from_dist(dist, err, resolution))?;
-                return Ok(cached);
+                if let Err(err) = validate_in_flight_wheel(&dist, cached.filename()) {
+                    return Err(Error::from_dist(dist, err, resolution));
+                }
+                if cached.satisfies(policy) {
+                    return Ok(cached);
+                }
+                // The earlier preparation may have used a different hash policy.
+                None
             }
-            None => PendingDownload::new(in_flight, id),
+            None => Some(PendingDownload::new(in_flight, id)),
         };
 
-        let policy = self.hashes.archive_policy(&dist);
         let result = self
             .database
             .get_or_build_wheel(&dist, self.tags, policy)
@@ -148,7 +153,9 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             })
             .map_err(|err| Error::from_dist(dist, err, resolution));
 
-        download.complete(result.as_ref().cloned().map_err(ToString::to_string));
+        if let Some(download) = download {
+            download.complete(result.as_ref().cloned().map_err(ToString::to_string));
+        }
         result
     }
 }
