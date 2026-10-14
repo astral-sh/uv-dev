@@ -396,10 +396,7 @@ fn python_pin_global_creates_parent_dirs() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
     let uv_global_config_dir = context.user_config_dir.child("uv");
 
-    assert!(
-        !uv_global_config_dir.exists(),
-        "Global config directory should not exist yet."
-    );
+    assert_path_missing(&uv_global_config_dir);
 
     uv_snapshot!(context.filters(), context.python_pin().arg("3.12").arg("--global"), @"
     exit_code: 0 (success)
@@ -407,10 +404,11 @@ fn python_pin_global_creates_parent_dirs() {
     Pinned `[UV_USER_CONFIG_DIR]/.python-version` to `3.12`
     ");
 
-    assert!(
-        uv_global_config_dir.exists(),
-        "Global config directory should be automatically created (if missing) after global pin."
+    assert_eq!(
+        context.read(uv_global_config_dir.child(PYTHON_VERSION_FILENAME)),
+        "3.12\n"
     );
+    assert_path_missing(context.temp_dir.child(PYTHON_VERSION_FILENAME));
 }
 
 /// We do not need a Python interpreter to pin without `--resolved`
