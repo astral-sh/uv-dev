@@ -736,6 +736,16 @@ pub enum TargetTriple {
     X8664IosSimulator,
 }
 
+/// The operating-system family of a supported target triple.
+enum TargetOs {
+    Windows,
+    Linux,
+    Macos,
+    Android,
+    Emscripten,
+    Ios,
+}
+
 impl TargetTriple {
     /// Return the [`Platform`] for the target.
     pub fn platform(self) -> Platform {
@@ -1360,86 +1370,83 @@ impl TargetTriple {
         }
     }
 
-    /// Return the `platform_system` value for the target.
-    fn platform_system(self) -> &'static str {
+    /// Classify the target independently of its architecture and platform version.
+    fn os(self) -> TargetOs {
         match self {
-            Self::Windows | Self::X8664PcWindowsMsvc => "Windows",
-            Self::Aarch64PcWindowsMsvc => "Windows",
-            Self::Linux | Self::X8664UnknownLinuxGnu => "Linux",
-            Self::Macos | Self::Aarch64AppleDarwin => "Darwin",
-            Self::I686PcWindowsMsvc => "Windows",
-            Self::X8664AppleDarwin => "Darwin",
-            Self::Aarch64UnknownLinuxGnu => "Linux",
-            Self::Aarch64UnknownLinuxMusl => "Linux",
-            Self::X8664UnknownLinuxMusl => "Linux",
-            Self::Riscv64UnknownLinuxGnu => "Linux",
-            Self::S390XUnknownLinuxGnu => "Linux",
-            Self::Powerpc64LeUnknownLinuxGnu => "Linux",
-            Self::LoongArch64UnknownLinuxGnu => "Linux",
-            Self::X8664Manylinux2014 => "Linux",
-            Self::X8664Manylinux217 => "Linux",
-            Self::X8664Manylinux228 => "Linux",
-            Self::X8664Manylinux231 => "Linux",
-            Self::X8664Manylinux232 => "Linux",
-            Self::X8664Manylinux233 => "Linux",
-            Self::X8664Manylinux234 => "Linux",
-            Self::X8664Manylinux235 => "Linux",
-            Self::X8664Manylinux236 => "Linux",
-            Self::X8664Manylinux237 => "Linux",
-            Self::X8664Manylinux238 => "Linux",
-            Self::X8664Manylinux239 => "Linux",
-            Self::X8664Manylinux240 => "Linux",
-            Self::Aarch64Manylinux2014 => "Linux",
-            Self::Aarch64Manylinux217 => "Linux",
-            Self::Aarch64Manylinux228 => "Linux",
-            Self::Aarch64Manylinux231 => "Linux",
-            Self::Aarch64Manylinux232 => "Linux",
-            Self::Aarch64Manylinux233 => "Linux",
-            Self::Aarch64Manylinux234 => "Linux",
-            Self::Aarch64Manylinux235 => "Linux",
-            Self::Aarch64Manylinux236 => "Linux",
-            Self::Aarch64Manylinux237 => "Linux",
-            Self::Aarch64Manylinux238 => "Linux",
-            Self::Aarch64Manylinux239 => "Linux",
-            Self::Aarch64Manylinux240 => "Linux",
-            Self::S390XManylinux2014 => "Linux",
-            Self::S390XManylinux217 => "Linux",
-            Self::S390XManylinux228 => "Linux",
-            Self::S390XManylinux231 => "Linux",
-            Self::S390XManylinux232 => "Linux",
-            Self::S390XManylinux233 => "Linux",
-            Self::S390XManylinux234 => "Linux",
-            Self::S390XManylinux235 => "Linux",
-            Self::S390XManylinux236 => "Linux",
-            Self::S390XManylinux237 => "Linux",
-            Self::S390XManylinux238 => "Linux",
-            Self::S390XManylinux239 => "Linux",
-            Self::S390XManylinux240 => "Linux",
-            Self::Powerpc64LeManylinux2014 => "Linux",
-            Self::Powerpc64LeManylinux217 => "Linux",
-            Self::Powerpc64LeManylinux228 => "Linux",
-            Self::Powerpc64LeManylinux231 => "Linux",
-            Self::Powerpc64LeManylinux232 => "Linux",
-            Self::Powerpc64LeManylinux233 => "Linux",
-            Self::Powerpc64LeManylinux234 => "Linux",
-            Self::Powerpc64LeManylinux235 => "Linux",
-            Self::Powerpc64LeManylinux236 => "Linux",
-            Self::Powerpc64LeManylinux237 => "Linux",
-            Self::Powerpc64LeManylinux238 => "Linux",
-            Self::Powerpc64LeManylinux239 => "Linux",
-            Self::Powerpc64LeManylinux240 => "Linux",
-            Self::LoongArch64Manylinux236 => "Linux",
-            Self::LoongArch64Manylinux237 => "Linux",
-            Self::LoongArch64Manylinux238 => "Linux",
-            Self::LoongArch64Manylinux239 => "Linux",
-            Self::LoongArch64Manylinux240 => "Linux",
-            Self::Aarch64LinuxAndroid => "Android",
-            Self::X8664LinuxAndroid => "Android",
-            Self::Wasm32Pyodide2024 => "Emscripten",
-            Self::Wasm32Pyodide2025 => "Emscripten",
-            Self::Arm64Ios => "iOS",
-            Self::Arm64IosSimulator => "iOS",
-            Self::X8664IosSimulator => "iOS",
+            Self::Windows
+            | Self::X8664PcWindowsMsvc
+            | Self::Aarch64PcWindowsMsvc
+            | Self::I686PcWindowsMsvc => TargetOs::Windows,
+            Self::Linux
+            | Self::X8664UnknownLinuxGnu
+            | Self::Aarch64UnknownLinuxGnu
+            | Self::Aarch64UnknownLinuxMusl
+            | Self::X8664UnknownLinuxMusl
+            | Self::Riscv64UnknownLinuxGnu
+            | Self::S390XUnknownLinuxGnu
+            | Self::Powerpc64LeUnknownLinuxGnu
+            | Self::LoongArch64UnknownLinuxGnu
+            | Self::X8664Manylinux2014
+            | Self::X8664Manylinux217
+            | Self::X8664Manylinux228
+            | Self::X8664Manylinux231
+            | Self::X8664Manylinux232
+            | Self::X8664Manylinux233
+            | Self::X8664Manylinux234
+            | Self::X8664Manylinux235
+            | Self::X8664Manylinux236
+            | Self::X8664Manylinux237
+            | Self::X8664Manylinux238
+            | Self::X8664Manylinux239
+            | Self::X8664Manylinux240
+            | Self::Aarch64Manylinux2014
+            | Self::Aarch64Manylinux217
+            | Self::Aarch64Manylinux228
+            | Self::Aarch64Manylinux231
+            | Self::Aarch64Manylinux232
+            | Self::Aarch64Manylinux233
+            | Self::Aarch64Manylinux234
+            | Self::Aarch64Manylinux235
+            | Self::Aarch64Manylinux236
+            | Self::Aarch64Manylinux237
+            | Self::Aarch64Manylinux238
+            | Self::Aarch64Manylinux239
+            | Self::Aarch64Manylinux240
+            | Self::S390XManylinux2014
+            | Self::S390XManylinux217
+            | Self::S390XManylinux228
+            | Self::S390XManylinux231
+            | Self::S390XManylinux232
+            | Self::S390XManylinux233
+            | Self::S390XManylinux234
+            | Self::S390XManylinux235
+            | Self::S390XManylinux236
+            | Self::S390XManylinux237
+            | Self::S390XManylinux238
+            | Self::S390XManylinux239
+            | Self::S390XManylinux240
+            | Self::Powerpc64LeManylinux2014
+            | Self::Powerpc64LeManylinux217
+            | Self::Powerpc64LeManylinux228
+            | Self::Powerpc64LeManylinux231
+            | Self::Powerpc64LeManylinux232
+            | Self::Powerpc64LeManylinux233
+            | Self::Powerpc64LeManylinux234
+            | Self::Powerpc64LeManylinux235
+            | Self::Powerpc64LeManylinux236
+            | Self::Powerpc64LeManylinux237
+            | Self::Powerpc64LeManylinux238
+            | Self::Powerpc64LeManylinux239
+            | Self::Powerpc64LeManylinux240
+            | Self::LoongArch64Manylinux236
+            | Self::LoongArch64Manylinux237
+            | Self::LoongArch64Manylinux238
+            | Self::LoongArch64Manylinux239
+            | Self::LoongArch64Manylinux240 => TargetOs::Linux,
+            Self::Macos | Self::Aarch64AppleDarwin | Self::X8664AppleDarwin => TargetOs::Macos,
+            Self::Aarch64LinuxAndroid | Self::X8664LinuxAndroid => TargetOs::Android,
+            Self::Wasm32Pyodide2024 | Self::Wasm32Pyodide2025 => TargetOs::Emscripten,
+            Self::Arm64Ios | Self::Arm64IosSimulator | Self::X8664IosSimulator => TargetOs::Ios,
         }
     }
 
@@ -1615,252 +1622,15 @@ impl TargetTriple {
         }
     }
 
-    /// Return the `os_name` value for the target.
-    fn os_name(self) -> &'static str {
-        match self {
-            Self::Windows | Self::X8664PcWindowsMsvc => "nt",
-            Self::Aarch64PcWindowsMsvc => "nt",
-            Self::Linux | Self::X8664UnknownLinuxGnu => "posix",
-            Self::Macos | Self::Aarch64AppleDarwin => "posix",
-            Self::I686PcWindowsMsvc => "nt",
-            Self::X8664AppleDarwin => "posix",
-            Self::Aarch64UnknownLinuxGnu => "posix",
-            Self::Aarch64UnknownLinuxMusl => "posix",
-            Self::X8664UnknownLinuxMusl => "posix",
-            Self::Riscv64UnknownLinuxGnu => "posix",
-            Self::S390XUnknownLinuxGnu => "posix",
-            Self::Powerpc64LeUnknownLinuxGnu => "posix",
-            Self::LoongArch64UnknownLinuxGnu => "posix",
-            Self::X8664Manylinux2014 => "posix",
-            Self::X8664Manylinux217 => "posix",
-            Self::X8664Manylinux228 => "posix",
-            Self::X8664Manylinux231 => "posix",
-            Self::X8664Manylinux232 => "posix",
-            Self::X8664Manylinux233 => "posix",
-            Self::X8664Manylinux234 => "posix",
-            Self::X8664Manylinux235 => "posix",
-            Self::X8664Manylinux236 => "posix",
-            Self::X8664Manylinux237 => "posix",
-            Self::X8664Manylinux238 => "posix",
-            Self::X8664Manylinux239 => "posix",
-            Self::X8664Manylinux240 => "posix",
-            Self::Aarch64Manylinux2014 => "posix",
-            Self::Aarch64Manylinux217 => "posix",
-            Self::Aarch64Manylinux228 => "posix",
-            Self::Aarch64Manylinux231 => "posix",
-            Self::Aarch64Manylinux232 => "posix",
-            Self::Aarch64Manylinux233 => "posix",
-            Self::Aarch64Manylinux234 => "posix",
-            Self::Aarch64Manylinux235 => "posix",
-            Self::Aarch64Manylinux236 => "posix",
-            Self::Aarch64Manylinux237 => "posix",
-            Self::Aarch64Manylinux238 => "posix",
-            Self::Aarch64Manylinux239 => "posix",
-            Self::Aarch64Manylinux240 => "posix",
-            Self::S390XManylinux2014 => "posix",
-            Self::S390XManylinux217 => "posix",
-            Self::S390XManylinux228 => "posix",
-            Self::S390XManylinux231 => "posix",
-            Self::S390XManylinux232 => "posix",
-            Self::S390XManylinux233 => "posix",
-            Self::S390XManylinux234 => "posix",
-            Self::S390XManylinux235 => "posix",
-            Self::S390XManylinux236 => "posix",
-            Self::S390XManylinux237 => "posix",
-            Self::S390XManylinux238 => "posix",
-            Self::S390XManylinux239 => "posix",
-            Self::S390XManylinux240 => "posix",
-            Self::Powerpc64LeManylinux2014 => "posix",
-            Self::Powerpc64LeManylinux217 => "posix",
-            Self::Powerpc64LeManylinux228 => "posix",
-            Self::Powerpc64LeManylinux231 => "posix",
-            Self::Powerpc64LeManylinux232 => "posix",
-            Self::Powerpc64LeManylinux233 => "posix",
-            Self::Powerpc64LeManylinux234 => "posix",
-            Self::Powerpc64LeManylinux235 => "posix",
-            Self::Powerpc64LeManylinux236 => "posix",
-            Self::Powerpc64LeManylinux237 => "posix",
-            Self::Powerpc64LeManylinux238 => "posix",
-            Self::Powerpc64LeManylinux239 => "posix",
-            Self::Powerpc64LeManylinux240 => "posix",
-            Self::LoongArch64Manylinux236 => "posix",
-            Self::LoongArch64Manylinux237 => "posix",
-            Self::LoongArch64Manylinux238 => "posix",
-            Self::LoongArch64Manylinux239 => "posix",
-            Self::LoongArch64Manylinux240 => "posix",
-            Self::Aarch64LinuxAndroid => "posix",
-            Self::X8664LinuxAndroid => "posix",
-            Self::Wasm32Pyodide2024 => "posix",
-            Self::Wasm32Pyodide2025 => "posix",
-            Self::Arm64Ios => "posix",
-            Self::Arm64IosSimulator => "posix",
-            Self::X8664IosSimulator => "posix",
-        }
-    }
-
-    /// Return the `sys_platform` value for the target.
-    fn sys_platform(self) -> &'static str {
-        match self {
-            Self::Windows | Self::X8664PcWindowsMsvc => "win32",
-            Self::Aarch64PcWindowsMsvc => "win32",
-            Self::Linux | Self::X8664UnknownLinuxGnu => "linux",
-            Self::Macos | Self::Aarch64AppleDarwin => "darwin",
-            Self::I686PcWindowsMsvc => "win32",
-            Self::X8664AppleDarwin => "darwin",
-            Self::Aarch64UnknownLinuxGnu => "linux",
-            Self::Aarch64UnknownLinuxMusl => "linux",
-            Self::X8664UnknownLinuxMusl => "linux",
-            Self::Riscv64UnknownLinuxGnu => "linux",
-            Self::S390XUnknownLinuxGnu => "linux",
-            Self::Powerpc64LeUnknownLinuxGnu => "linux",
-            Self::LoongArch64UnknownLinuxGnu => "linux",
-            Self::X8664Manylinux2014 => "linux",
-            Self::X8664Manylinux217 => "linux",
-            Self::X8664Manylinux228 => "linux",
-            Self::X8664Manylinux231 => "linux",
-            Self::X8664Manylinux232 => "linux",
-            Self::X8664Manylinux233 => "linux",
-            Self::X8664Manylinux234 => "linux",
-            Self::X8664Manylinux235 => "linux",
-            Self::X8664Manylinux236 => "linux",
-            Self::X8664Manylinux237 => "linux",
-            Self::X8664Manylinux238 => "linux",
-            Self::X8664Manylinux239 => "linux",
-            Self::X8664Manylinux240 => "linux",
-            Self::Aarch64Manylinux2014 => "linux",
-            Self::Aarch64Manylinux217 => "linux",
-            Self::Aarch64Manylinux228 => "linux",
-            Self::Aarch64Manylinux231 => "linux",
-            Self::Aarch64Manylinux232 => "linux",
-            Self::Aarch64Manylinux233 => "linux",
-            Self::Aarch64Manylinux234 => "linux",
-            Self::Aarch64Manylinux235 => "linux",
-            Self::Aarch64Manylinux236 => "linux",
-            Self::Aarch64Manylinux237 => "linux",
-            Self::Aarch64Manylinux238 => "linux",
-            Self::Aarch64Manylinux239 => "linux",
-            Self::Aarch64Manylinux240 => "linux",
-            Self::S390XManylinux2014 => "linux",
-            Self::S390XManylinux217 => "linux",
-            Self::S390XManylinux228 => "linux",
-            Self::S390XManylinux231 => "linux",
-            Self::S390XManylinux232 => "linux",
-            Self::S390XManylinux233 => "linux",
-            Self::S390XManylinux234 => "linux",
-            Self::S390XManylinux235 => "linux",
-            Self::S390XManylinux236 => "linux",
-            Self::S390XManylinux237 => "linux",
-            Self::S390XManylinux238 => "linux",
-            Self::S390XManylinux239 => "linux",
-            Self::S390XManylinux240 => "linux",
-            Self::Powerpc64LeManylinux2014 => "linux",
-            Self::Powerpc64LeManylinux217 => "linux",
-            Self::Powerpc64LeManylinux228 => "linux",
-            Self::Powerpc64LeManylinux231 => "linux",
-            Self::Powerpc64LeManylinux232 => "linux",
-            Self::Powerpc64LeManylinux233 => "linux",
-            Self::Powerpc64LeManylinux234 => "linux",
-            Self::Powerpc64LeManylinux235 => "linux",
-            Self::Powerpc64LeManylinux236 => "linux",
-            Self::Powerpc64LeManylinux237 => "linux",
-            Self::Powerpc64LeManylinux238 => "linux",
-            Self::Powerpc64LeManylinux239 => "linux",
-            Self::Powerpc64LeManylinux240 => "linux",
-            Self::LoongArch64Manylinux236 => "linux",
-            Self::LoongArch64Manylinux237 => "linux",
-            Self::LoongArch64Manylinux238 => "linux",
-            Self::LoongArch64Manylinux239 => "linux",
-            Self::LoongArch64Manylinux240 => "linux",
-            Self::Aarch64LinuxAndroid => "android",
-            Self::X8664LinuxAndroid => "android",
-            Self::Wasm32Pyodide2024 => "emscripten",
-            Self::Wasm32Pyodide2025 => "emscripten",
-            Self::Arm64Ios => "ios",
-            Self::Arm64IosSimulator => "ios",
-            Self::X8664IosSimulator => "ios",
-        }
-    }
-
     /// Return `true` if the platform is compatible with manylinux.
     pub fn manylinux_compatible(self) -> bool {
-        match self {
-            Self::Windows | Self::X8664PcWindowsMsvc => false,
-            Self::Aarch64PcWindowsMsvc => false,
-            Self::Linux | Self::X8664UnknownLinuxGnu => true,
-            Self::Macos | Self::Aarch64AppleDarwin => false,
-            Self::I686PcWindowsMsvc => false,
-            Self::X8664AppleDarwin => false,
-            Self::Aarch64UnknownLinuxGnu => true,
-            Self::Aarch64UnknownLinuxMusl => true,
-            Self::X8664UnknownLinuxMusl => true,
-            Self::Riscv64UnknownLinuxGnu => true,
-            Self::S390XUnknownLinuxGnu => true,
-            Self::Powerpc64LeUnknownLinuxGnu => true,
-            Self::LoongArch64UnknownLinuxGnu => true,
-            Self::X8664Manylinux2014 => true,
-            Self::X8664Manylinux217 => true,
-            Self::X8664Manylinux228 => true,
-            Self::X8664Manylinux231 => true,
-            Self::X8664Manylinux232 => true,
-            Self::X8664Manylinux233 => true,
-            Self::X8664Manylinux234 => true,
-            Self::X8664Manylinux235 => true,
-            Self::X8664Manylinux236 => true,
-            Self::X8664Manylinux237 => true,
-            Self::X8664Manylinux238 => true,
-            Self::X8664Manylinux239 => true,
-            Self::X8664Manylinux240 => true,
-            Self::Aarch64Manylinux2014 => true,
-            Self::Aarch64Manylinux217 => true,
-            Self::Aarch64Manylinux228 => true,
-            Self::Aarch64Manylinux231 => true,
-            Self::Aarch64Manylinux232 => true,
-            Self::Aarch64Manylinux233 => true,
-            Self::Aarch64Manylinux234 => true,
-            Self::Aarch64Manylinux235 => true,
-            Self::Aarch64Manylinux236 => true,
-            Self::Aarch64Manylinux237 => true,
-            Self::Aarch64Manylinux238 => true,
-            Self::Aarch64Manylinux239 => true,
-            Self::Aarch64Manylinux240 => true,
-            Self::S390XManylinux2014 => true,
-            Self::S390XManylinux217 => true,
-            Self::S390XManylinux228 => true,
-            Self::S390XManylinux231 => true,
-            Self::S390XManylinux232 => true,
-            Self::S390XManylinux233 => true,
-            Self::S390XManylinux234 => true,
-            Self::S390XManylinux235 => true,
-            Self::S390XManylinux236 => true,
-            Self::S390XManylinux237 => true,
-            Self::S390XManylinux238 => true,
-            Self::S390XManylinux239 => true,
-            Self::S390XManylinux240 => true,
-            Self::Powerpc64LeManylinux2014 => true,
-            Self::Powerpc64LeManylinux217 => true,
-            Self::Powerpc64LeManylinux228 => true,
-            Self::Powerpc64LeManylinux231 => true,
-            Self::Powerpc64LeManylinux232 => true,
-            Self::Powerpc64LeManylinux233 => true,
-            Self::Powerpc64LeManylinux234 => true,
-            Self::Powerpc64LeManylinux235 => true,
-            Self::Powerpc64LeManylinux236 => true,
-            Self::Powerpc64LeManylinux237 => true,
-            Self::Powerpc64LeManylinux238 => true,
-            Self::Powerpc64LeManylinux239 => true,
-            Self::Powerpc64LeManylinux240 => true,
-            Self::LoongArch64Manylinux236 => true,
-            Self::LoongArch64Manylinux237 => true,
-            Self::LoongArch64Manylinux238 => true,
-            Self::LoongArch64Manylinux239 => true,
-            Self::LoongArch64Manylinux240 => true,
-            Self::Aarch64LinuxAndroid => false,
-            Self::X8664LinuxAndroid => false,
-            Self::Wasm32Pyodide2024 => false,
-            Self::Wasm32Pyodide2025 => false,
-            Self::Arm64Ios => false,
-            Self::Arm64IosSimulator => false,
-            Self::X8664IosSimulator => false,
+        match self.os() {
+            TargetOs::Linux => true,
+            TargetOs::Windows
+            | TargetOs::Macos
+            | TargetOs::Android
+            | TargetOs::Emscripten
+            | TargetOs::Ios => false,
         }
     }
 
@@ -1870,10 +1640,18 @@ impl TargetTriple {
     /// The returned [`MarkerEnvironment`] will preserve the base environment's Python version
     /// markers, but override its platform markers.
     pub fn markers(self, base: MarkerEnvironment) -> MarkerEnvironment {
-        base.with_os_name(self.os_name())
+        let (os_name, platform_system, sys_platform) = match self.os() {
+            TargetOs::Windows => ("nt", "Windows", "win32"),
+            TargetOs::Linux => ("posix", "Linux", "linux"),
+            TargetOs::Macos => ("posix", "Darwin", "darwin"),
+            TargetOs::Android => ("posix", "Android", "android"),
+            TargetOs::Emscripten => ("posix", "Emscripten", "emscripten"),
+            TargetOs::Ios => ("posix", "iOS", "ios"),
+        };
+        base.with_os_name(os_name)
             .with_platform_machine(self.platform_machine())
-            .with_platform_system(self.platform_system())
-            .with_sys_platform(self.sys_platform())
+            .with_platform_system(platform_system)
+            .with_sys_platform(sys_platform)
             .with_platform_release(self.platform_release())
             .with_platform_version(self.platform_version())
     }
