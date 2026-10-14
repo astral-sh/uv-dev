@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::fmt::{self, Display, Formatter};
 
 use rustc_hash::FxHashSet;
@@ -107,9 +108,12 @@ impl Indexes {
         index_urls
     }
 
-    /// Get the index for a URL if one exists.
+    /// Get the most specific index for a URL, keeping the first match among equally specific roots.
     pub(crate) fn index_for(&self, url: &Url) -> Option<&Index> {
-        self.0.iter().find(|&index| index.is_prefix_for(url))
+        self.0
+            .iter()
+            .filter(|index| index.is_prefix_for(url))
+            .min_by_key(|index| Reverse(index.root_url.path().len()))
     }
 }
 
