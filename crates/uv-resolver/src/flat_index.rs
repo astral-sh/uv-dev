@@ -193,15 +193,12 @@ impl FlatDistributions {
             return SourceDistCompatibility::Incompatible(IncompatibleSource::NotPep625Filename);
         }
 
-        // Check if hashes line up
-        let hash_policy = hasher.archive_policy_for_package(&filename.name, &filename.version);
-        let hash = if hash_policy.requires_validation() {
-            HashComparison::compare(hash_policy, hashes)
-        } else {
-            HashComparison::Matched
-        };
-
-        SourceDistCompatibility::Compatible(hash)
+        SourceDistCompatibility::Compatible(Self::compare_hashes(
+            hasher,
+            &filename.name,
+            &filename.version,
+            hashes,
+        ))
     }
 
     fn wheel_compatibility(
@@ -233,18 +230,27 @@ impl FlatDistributions {
             None => None,
         };
 
-        // Check if hashes line up.
-        let hash_policy = hasher.archive_policy_for_package(&filename.name, &filename.version);
-        let hash = if hash_policy.requires_validation() {
-            HashComparison::compare(hash_policy, hashes)
-        } else {
-            HashComparison::Matched
-        };
+        let hash = Self::compare_hashes(hasher, &filename.name, &filename.version, hashes);
 
         // Break ties with the build tag.
         let build_tag = filename.build_tag().cloned();
 
         WheelCompatibility::Compatible(hash, priority, build_tag)
+    }
+
+    /// Compare flat-index archive hashes when validation is required.
+    fn compare_hashes(
+        hasher: &HashStrategy,
+        name: &PackageName,
+        version: &Version,
+        hashes: &[HashDigest],
+    ) -> HashComparison {
+        let hash_policy = hasher.archive_policy_for_package(name, version);
+        if hash_policy.requires_validation() {
+            HashComparison::compare(hash_policy, hashes)
+        } else {
+            HashComparison::Matched
+        }
     }
 }
 
