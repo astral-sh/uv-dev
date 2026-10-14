@@ -119,31 +119,28 @@ pub enum UnavailableVersion {
 
 impl UnavailableVersion {
     pub(crate) fn singular_message(&self) -> String {
-        match self {
-            Self::UnsatisfiableDependency(requirement) => {
-                format!("depends on {requirement}")
-            }
-            Self::IncompatibleDist(invalid_dist) => invalid_dist.singular_message(),
-            Self::InvalidMetadata => format!("has {self}"),
-            Self::InconsistentMetadata => format!("has {self}"),
-            Self::InvalidStructure => format!("has {self}"),
-            Self::Offline => format!("needs {self}"),
-            Self::RequiresPython(..) => format!("requires {self}"),
-            Self::Network(..) => format!("could not be fetched from the network (`{self}`)"),
-        }
+        self.inflected_message(false)
     }
 
     pub(crate) fn plural_message(&self) -> String {
-        match self {
-            Self::UnsatisfiableDependency(requirement) => format!("depend on {requirement}"),
-            Self::IncompatibleDist(invalid_dist) => invalid_dist.plural_message(),
-            Self::InvalidMetadata => format!("have {self}"),
-            Self::InconsistentMetadata => format!("have {self}"),
-            Self::InvalidStructure => format!("have {self}"),
-            Self::Offline => format!("need {self}"),
-            Self::RequiresPython(..) => format!("require {self}"),
-            Self::Network(..) => format!("could not be fetched from the network (`{self}`)"),
-        }
+        self.inflected_message(true)
+    }
+
+    fn inflected_message(&self, plural: bool) -> String {
+        let (singular_verb, plural_verb) = match self {
+            Self::UnsatisfiableDependency(_) => ("depends on", "depend on"),
+            Self::IncompatibleDist(invalid_dist) => invalid_dist.message_verbs(),
+            Self::InvalidMetadata | Self::InconsistentMetadata | Self::InvalidStructure => {
+                ("has", "have")
+            }
+            Self::Offline => ("needs", "need"),
+            Self::RequiresPython(..) => ("requires", "require"),
+            Self::Network(..) => {
+                return format!("could not be fetched from the network (`{self}`)");
+            }
+        };
+        let verb = if plural { plural_verb } else { singular_verb };
+        format!("{verb} {self}")
     }
 
     pub(crate) fn context_message(

@@ -166,18 +166,8 @@ pub enum IncompatibleDist {
 }
 
 impl IncompatibleDist {
-    pub(crate) fn singular_message(&self) -> String {
-        let (verb, _) = self.message_verbs();
-        format!("{verb} {self}")
-    }
-
-    pub(crate) fn plural_message(&self) -> String {
-        let (_, verb) = self.message_verbs();
-        format!("{verb} {self}")
-    }
-
     /// The singular and plural verbs introducing this incompatibility.
-    fn message_verbs(&self) -> (&'static str, &'static str) {
+    pub(crate) fn message_verbs(&self) -> (&'static str, &'static str) {
         match self {
             Self::Wheel(
                 IncompatibleWheel::NoBinary
