@@ -86,7 +86,11 @@ async fn cloud_auth_challenge() -> wiremock::MockServer {
 }
 
 #[tokio::test]
-#[cfg(feature = "native-auth")]
+#[cfg(all(
+    feature = "native-auth",
+    feature = "test-python",
+    feature = "test-pypi"
+))]
 async fn add_package_native_auth_realm() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_real_home();
     let proxy = crate::pypi_proxy::start().await;
@@ -185,7 +189,11 @@ async fn add_package_native_auth_realm() -> Result<()> {
 }
 
 #[tokio::test]
-#[cfg(feature = "native-auth")]
+#[cfg(all(
+    feature = "native-auth",
+    feature = "test-python",
+    feature = "test-pypi"
+))]
 async fn add_package_native_auth() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_real_home();
     let proxy = crate::pypi_proxy::start().await;
