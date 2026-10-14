@@ -26,6 +26,9 @@ mod cache;
 
 mod cache_clean;
 
+#[cfg(feature = "test-python")]
+mod cache_file_store;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod cache_prune;
 
