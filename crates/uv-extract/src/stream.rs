@@ -747,10 +747,11 @@ async fn untar_in_tokio_tar(
     while let Some(entry) = pinned.next().await {
         // Unpack the file into the destination directory.
         let mut file = entry?;
+        let entry_type = file.header().entry_type();
 
         // On Windows, skip symlink entries, as they're not supported. pip recursively copies the
         // symlink target instead.
-        if cfg!(windows) && file.header().entry_type().is_symlink() {
+        if cfg!(windows) && entry_type.is_symlink() {
             warn!(
                 "Skipping symlink in tar archive: {}",
                 file.path()?.display()
@@ -758,13 +759,14 @@ async fn untar_in_tokio_tar(
             continue;
         }
 
-        let entry_type = file.header().entry_type();
-
         // Unpack the file into the destination directory.
         let unpacked_at = file.unpack_in_raw(&dst, &mut memo).await?;
+        if !(entry_type.is_file() || entry_type.is_hard_link()) {
+            continue;
+        }
 
-        // Collect file paths (excluding directories) that were unpacked successfully.
-        if unpacked_at.is_some() && (entry_type.is_file() || entry_type.is_hard_link()) {
+        // Collect file paths that were unpacked successfully.
+        if unpacked_at.is_some() {
             let relpath = file.path()?.into_owned();
             let size = file.effective_size();
             files.push(UnhashedFile::new(relpath, size));
@@ -776,20 +778,17 @@ async fn untar_in_tokio_tar(
             use std::fs::Permissions;
             use std::os::unix::fs::PermissionsExt;
 
-            if entry_type.is_file() || entry_type.is_hard_link() {
-                let mode = file.header().mode()?;
-                let has_any_executable_bit = mode & 0o111;
-                if has_any_executable_bit != 0 {
-                    if let Some(path) = unpacked_at.as_deref() {
-                        let permissions = fs_err::tokio::metadata(&path).await?.permissions();
-                        if permissions.mode() & 0o111 != 0o111 {
-                            fs_err::tokio::set_permissions(
-                                &path,
-                                Permissions::from_mode(permissions.mode() | 0o111),
-                            )
-                            .await?;
-                        }
-                    }
+            let mode = file.header().mode()?;
+            if mode & 0o111 != 0
+                && let Some(path) = unpacked_at.as_deref()
+            {
+                let permissions = fs_err::tokio::metadata(path).await?.permissions();
+                if permissions.mode() & 0o111 != 0o111 {
+                    fs_err::tokio::set_permissions(
+                        path,
+                        Permissions::from_mode(permissions.mode() | 0o111),
+                    )
+                    .await?;
                 }
             }
         }
