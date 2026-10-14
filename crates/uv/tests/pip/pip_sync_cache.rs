@@ -8,6 +8,7 @@ use uv_redacted::SafeUrl;
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
 
 use uv_test::archive::generate_source_archive;
+use uv_test::packse::generate_wheel;
 use uv_test::uv_snapshot;
 
 const SOURCE_ARCHIVE: &str = "source_distribution-0.0.1.tar.gz";
@@ -19,6 +20,17 @@ fn source_distribution_archive(marker: &Path) -> Result<Vec<u8>> {
         "",
         Some(marker),
     )
+}
+
+async fn artifact_downloads(server: &MockServer, filename: &str) -> usize {
+    let artifact_path = format!("/{filename}");
+    server
+        .received_requests()
+        .await
+        .expect("request recording is enabled")
+        .iter()
+        .filter(|request| request.method.as_str() == "GET" && request.url.path() == artifact_path)
+        .count()
 }
 
 /// Reuse a direct URL source build until its package cache entry is removed.
@@ -160,6 +172,89 @@ async fn install_registry_source_dist_cached() -> Result<()> {
     ");
     context.assert_installed("source_distribution", "0.0.1");
     marker.assert(predicates::path::is_file());
+    Ok(())
+}
+
+/// A cached direct URL wheel is not downloaded again until its package cache entry is removed.
+#[tokio::test]
+async fn install_url_built_dist_cached() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_file_counts()
+        .with_filtered_sizes_and_units();
+    let (filename, wheel) = generate_wheel(
+        &"tqdm".parse()?,
+        &"4.66.1".parse()?,
+        &[],
+        &Default::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let server = MockServer::start().await;
+    Mock::given(path(format!("/{filename}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "max-age=3600")
+                .set_body_bytes(wheel),
+        )
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!("tqdm @ {}/{filename}", server.uri()))?;
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tqdm==4.66.1 (from http://[LOCALHOST]/tqdm-4.66.1-py3-none-any.whl)
+    ");
+    context.assert_installed("tqdm", "4.66.1");
+    let initial_downloads = artifact_downloads(&server, &filename).await;
+    assert!(
+        initial_downloads > 0,
+        "the initial install must fetch the wheel"
+    );
+
+    context.reset_venv();
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tqdm==4.66.1 (from http://[LOCALHOST]/tqdm-4.66.1-py3-none-any.whl)
+    ");
+    context.assert_installed("tqdm", "4.66.1");
+    assert_eq!(
+        artifact_downloads(&server, &filename).await,
+        initial_downloads
+    );
+
+    context.reset_venv();
+    uv_snapshot!(context.filters(), context.clean().arg("tqdm"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Removed [N] files ([SIZE])
+    ");
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .args(["requirements.txt", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tqdm==4.66.1 (from http://[LOCALHOST]/tqdm-4.66.1-py3-none-any.whl)
+    ");
+    context.assert_installed("tqdm", "4.66.1");
+    assert!(
+        artifact_downloads(&server, &filename).await > initial_downloads,
+        "clearing the package cache must fetch the wheel again"
+    );
     Ok(())
 }
 
