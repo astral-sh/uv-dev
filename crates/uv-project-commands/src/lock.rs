@@ -50,6 +50,29 @@ pub(crate) fn resolve_lock_mode(
     }
 }
 
+/// Select the lock mode for commands that consume a lockfile.
+///
+/// Workspace lockfiles may be created or updated; script lockfiles are only updated if they exist.
+pub(crate) fn lock_mode_for_read<'env>(
+    target: LockTarget<'_>,
+    interpreter: Option<&'env Interpreter>,
+    frozen: Option<FrozenSource>,
+    lock_check: LockCheck,
+) -> LockMode<'env> {
+    if let Some(frozen) = frozen {
+        return LockMode::Frozen(frozen.into());
+    }
+
+    let dry_run = matches!(lock_check, LockCheck::Disabled)
+        && matches!(target, LockTarget::Script(_))
+        && !target.lock_path().is_file();
+    resolve_lock_mode(
+        interpreter.expect("a non-frozen lock operation requires an interpreter"),
+        lock_check,
+        dry_run,
+    )
+}
+
 /// Resolve the project requirements into a lockfile.
 pub async fn lock(
     project_dir: &Path,

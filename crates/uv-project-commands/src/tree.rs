@@ -19,7 +19,7 @@ use uv_environment_operations::{
     EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
 use uv_lock::{PackageMap, TreeDisplay, TreeJsonTarget};
-use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockOperation, LockTarget};
 use uv_normalize::{DefaultGroups, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -213,16 +213,8 @@ pub async fn tree(
     let lock = match source {
         TreeSource::Lockfile(workspace) => workspace.lock(),
         TreeSource::Manifest(target) => {
-            let mode = if let Some(frozen_source) = frozen {
-                LockMode::Frozen(frozen_source.into())
-            } else if let LockCheck::Enabled(lock_check) = lock_check {
-                LockMode::Locked(interpreter.as_ref().unwrap(), lock_check)
-            } else if matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file() {
-                // If we're locking a script, avoid creating a lockfile if it doesn't already exist.
-                LockMode::DryRun(interpreter.as_ref().unwrap())
-            } else {
-                LockMode::Write(interpreter.as_ref().unwrap())
-            };
+            let mode =
+                crate::lock::lock_mode_for_read(target, interpreter.as_ref(), frozen, lock_check);
             let state = UniversalState::default();
             resolved_lock = Box::pin(
                 LockOperation::new(
