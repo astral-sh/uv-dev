@@ -104,15 +104,11 @@ impl TextStoreMode {
             .ok()?;
 
         match TextCredentialStore::read(&path).await {
-            Ok((store, _lock)) => {
+            Ok((Some(store), _lock)) => {
                 debug!("Loaded credential file `{}`", path.display());
                 Some(store)
             }
-            Err(err)
-                if err
-                    .as_io_error()
-                    .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
-            {
+            Ok((None, _lock)) => {
                 debug!("No credentials file found at `{}`", path.display());
                 None
             }
