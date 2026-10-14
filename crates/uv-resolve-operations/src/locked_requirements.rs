@@ -10,7 +10,7 @@ use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
 use uv_pep508::VerbatimUrl;
 use uv_requirements_txt::RequirementsTxt;
-use uv_resolver::{Preference, PreferenceError, UpgradePackages};
+use uv_resolver::{Preference, PreferenceError};
 
 #[derive(Debug, Default)]
 pub struct LockedRequirements {
@@ -51,9 +51,8 @@ pub async fn read_requirements_txt(
         .filter_map(Result::transpose)
         .collect::<Result<Vec<_>, PreferenceError>>()?;
 
-    if !upgrade.is_none() {
+    if let Some(upgrade_packages) = upgrade.packages() {
         // Ignore all pinned versions for packages that should be upgraded.
-        let upgrade_packages = UpgradePackages::for_non_project(upgrade);
         preferences.retain(|preference| !upgrade_packages.contains(preference.name()));
     }
 
@@ -116,13 +115,13 @@ pub async fn read_pylock_toml_requirements(
     let lock = info_span!("toml::from_str upgrade", path = %output_file.display())
         .in_scope(|| toml::from_str::<PylockToml>(&content))?;
 
-    let upgrade_packages = UpgradePackages::for_non_project(upgrade);
+    let upgrade_packages = upgrade.packages();
 
     let mut requirements = LockedRequirements::default();
 
     for package in lock.packages {
         // Skip the distribution if it's included in the upgrade strategy.
-        if upgrade_packages.contains(&package.name) {
+        if upgrade_packages.is_some_and(|packages| packages.contains(&package.name)) {
             continue;
         }
 
