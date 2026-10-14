@@ -15,6 +15,9 @@ mod minimum_libc;
 
 mod no_project;
 
+#[cfg(feature = "test-python")]
+mod source_validation;
+
 #[cfg(all(
     feature = "test-python",
     feature = "test-pypi",
