@@ -68,6 +68,7 @@ mod error;
 pub use error::EnvironmentError;
 pub mod install_target;
 pub mod malware;
+pub mod overlay;
 mod sync;
 pub use sync::{store_credentials_from_target, sync_from_lock};
 
