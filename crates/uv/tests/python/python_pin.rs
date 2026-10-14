@@ -7,7 +7,6 @@ use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use assert_cmd::assert::OutputAssertExt;
 #[cfg(unix)]
 use assert_fs::fixture::SymlinkToFile;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
