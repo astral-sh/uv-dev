@@ -843,19 +843,19 @@ impl SourceBuild {
             .instrument(span)
             .await?;
         if !output.status.success() {
-            return Err(self.build_hook_failure(hook_prefix, output));
+            return Err(self.build_hook_failure(hook_prefix, &output));
         }
         Ok(output)
     }
 
     /// Construct an error for a failed hook from its captured output.
-    fn build_hook_failure(&self, hook_prefix: &str, output: PythonRunnerOutput) -> Error {
+    fn build_hook_failure(&self, hook_prefix: &str, output: &PythonRunnerOutput) -> Error {
         Error::from_command_output(
             format!(
                 "Call to `{}.{hook_prefix}_{}` failed",
                 self.pep517_backend.backend, self.build_kind
             ),
-            &output,
+            output,
             self.level,
             self.package_name.as_ref(),
             self.package_version.as_ref(),
@@ -977,7 +977,7 @@ impl SourceBuild {
             return Ok(distribution_filename);
         }
 
-        Err(self.build_hook_failure(hook_prefix, output))
+        Err(self.build_hook_failure(hook_prefix, &output))
     }
 
     /// Discover and lower additional requirements declared by the build backend.
