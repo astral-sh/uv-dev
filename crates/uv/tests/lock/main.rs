@@ -14,6 +14,9 @@ mod lock;
 mod lockfile_format;
 
 #[cfg(all(feature = "test-python", feature = "test-universal"))]
+mod marker_normalization;
+
+#[cfg(all(feature = "test-python", feature = "test-universal"))]
 mod minimum_libc;
 
 mod no_project;
