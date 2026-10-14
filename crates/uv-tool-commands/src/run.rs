@@ -21,7 +21,6 @@ use uv_configuration::{
     Overrides, TargetTriple, ToolRunCommand,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
     IndexUrl, Name, NameRequirementSpecification, Requirement, RequirementSource,
     UnresolvedRequirement, UnresolvedRequirementSpecification,
@@ -48,7 +47,7 @@ use uv_command_support::{
     ExitStatus, Printer, UvError, child::read_env_files, child::run_to_completion,
 };
 
-use crate::common::{ToolPython, matching_packages, refine_interpreter};
+use crate::common::{ToolPython, matching_package_names, refine_interpreter};
 use crate::error::ToolError;
 use crate::requirements::{registry_requirement, resolve_latest};
 use crate::{Target, ToolRequest};
@@ -562,8 +561,8 @@ struct ExecutableProviderHints<'a> {
     from: &'a Requirement,
     /// The packages in the [`PythonEnvironment`] the command will run in
     site_packages: &'a SitePackages,
-    /// The packages with matching executable names
-    packages: Vec<InstalledDist>,
+    /// The names of packages that provide the executable
+    packages: Vec<&'a PackageName>,
     /// The source of the invocation, for suggestions to the user
     invocation_source: ToolRunCommand,
 }
@@ -575,7 +574,7 @@ impl<'a> ExecutableProviderHints<'a> {
         site_packages: &'a SitePackages,
         invocation_source: ToolRunCommand,
     ) -> Self {
-        let packages = matching_packages(executable, site_packages);
+        let packages = matching_package_names(executable, site_packages).collect();
         ExecutableProviderHints {
             executable,
             from,
@@ -587,10 +586,9 @@ impl<'a> ExecutableProviderHints<'a> {
 
     /// If the executable is not provided by the expected package.
     fn not_from_expected(&self) -> bool {
-        !self
-            .packages
+        self.packages
             .iter()
-            .any(|package| package.name() == &self.from.name)
+            .all(|&package| package != &self.from.name)
     }
 
     /// If the executable is not provided by any package.
@@ -647,7 +645,7 @@ impl std::fmt::Display for ExecutableProviderHints<'_> {
                     writeln!(f, "\nUse `{}` instead.", suggested_command.green().bold())?;
                 }
             }
-            [package] if package.name() == &from.name => {
+            [package] if *package == &from.name => {
                 write!(
                     f,
                     "An executable named `{}` is provided by package `{}`",
@@ -656,24 +654,20 @@ impl std::fmt::Display for ExecutableProviderHints<'_> {
                 )?;
             }
             [package] => {
-                let suggested_command = format!(
-                    "{invocation_source} --from {} {}",
-                    package.name(),
-                    executable
-                );
+                let suggested_command =
+                    format!("{invocation_source} --from {package} {executable}");
                 write!(
                     f,
                     "An executable named `{}` is not provided by package `{}` but is available via the dependency `{}`. Consider using `{}` instead.",
                     executable.cyan(),
                     from.name.cyan(),
-                    package.name().cyan(),
+                    package.cyan(),
                     suggested_command.green()
                 )?;
             }
             packages => {
                 let provided_by = packages
                     .iter()
-                    .map(uv_distribution_types::Name::name)
                     .map(|name| format!("- {}", name.cyan()))
                     .join("\n");
                 if self.not_from_expected() {
