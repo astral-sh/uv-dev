@@ -1,7 +1,6 @@
 //! Build dependency hash verification for tool commands.
 
 use std::collections::BTreeMap;
-use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
@@ -101,30 +100,17 @@ fn assert_receipt_constraint(context: &TestContext, specifier: &str, hash: &str)
         .assert(predicate::str::contains(expected));
 }
 
-fn install(context: &TestContext, requirement: &str) -> Command {
-    let mut command = context.tool_install();
-    command
-        .arg(requirement)
-        .args(["--no-index", "--find-links", "wheels"])
-        .args(["--build-constraint", "constraints.txt", "--no-cache"])
-        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str());
-    command
-}
-
-fn upgrade(context: &TestContext) -> Command {
-    let mut command = context.tool_upgrade();
-    command
-        .args(["hash-tool", "--reinstall", "--no-cache"])
-        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str());
-    command
-}
-
 #[test]
 fn install_persists_trusted_build_hash_for_upgrade() -> Result<()> {
     let (context, hash) = build_hash_context()?;
     let constraints = write_hashed_constraint(&context, "build-dependency==1.0.0", &hash)?;
 
-    uv_snapshot!(context.filters(), install(&context, "hash-tool @ ./project").arg("--no-preview"), @"
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("hash-tool @ ./project")
+        .args(["--no-index", "--find-links", "wheels"])
+        .args(["--build-constraint", "constraints.txt", "--no-cache"])
+        .arg("--no-preview")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -151,7 +137,10 @@ fn install_persists_trusted_build_hash_for_upgrade() -> Result<()> {
 
     fs_err::remove_file(&constraints)?;
     fs_err::remove_file(context.temp_dir.child("project/backend-executed"))?;
-    uv_snapshot!(context.filters(), upgrade(&context).arg("--no-preview"), @"
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .args(["hash-tool", "--reinstall", "--no-cache"])
+        .arg("--no-preview")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Modified hash-tool environment
@@ -170,16 +159,24 @@ fn locked_install_persists_trusted_build_hash_for_upgrade() -> Result<()> {
     let (context, hash) = build_hash_context()?;
     let constraints = write_hashed_constraint(&context, "build-dependency==1.0.0", &hash)?;
 
-    install(&context, "hash-tool @ ./project")
+    context
+        .tool_install()
+        .arg("hash-tool @ ./project")
+        .args(["--no-index", "--find-links", "wheels"])
+        .args(["--build-constraint", "constraints.txt", "--no-cache"])
         .arg("--preview-features=tool-install-locks")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str())
         .assert()
         .success();
     assert_receipt_constraint(&context, "==1.0.0", &hash);
 
     fs_err::remove_file(&constraints)?;
     fs_err::remove_file(context.temp_dir.child("project/backend-executed"))?;
-    upgrade(&context)
+    context
+        .tool_upgrade()
+        .args(["hash-tool", "--reinstall", "--no-cache"])
         .arg("--preview-features=tool-install-locks")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str())
         .assert()
         .success();
     context
@@ -197,8 +194,12 @@ fn install_requires_build_hash_before_importing_backend() -> Result<()> {
         .child("constraints.txt")
         .write_str("build-dependency==1.0.0\n")?;
 
-    uv_snapshot!(context.filters(), install(&context, "hash-tool @ ./project")
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("hash-tool @ ./project")
+        .args(["--no-index", "--find-links", "wheels"])
+        .args(["--build-constraint", "constraints.txt", "--no-cache"])
         .arg("--no-preview")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str())
         .env(EnvVars::UV_REQUIRE_BUILD_HASHES, "true"), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -220,7 +221,12 @@ fn install_rejects_mismatched_build_hash_before_importing_backend() -> Result<()
     let (context, _) = build_hash_context()?;
     write_hashed_constraint(&context, "build-dependency==1.0.0", WRONG_HASH)?;
 
-    uv_snapshot!(context.filters(), install(&context, "hash-tool @ ./project").arg("--no-preview"), @"
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("hash-tool @ ./project")
+        .args(["--no-index", "--find-links", "wheels"])
+        .args(["--build-constraint", "constraints.txt", "--no-cache"])
+        .arg("--no-preview")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str()), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to build `hash-tool @ file://[TEMP_DIR]/project`
@@ -246,8 +252,13 @@ fn locked_install_rejects_mismatched_build_hash_before_importing_backend() -> Re
     let (context, _) = build_hash_context()?;
     write_hashed_constraint(&context, "build-dependency==1.0.0", WRONG_HASH)?;
 
-    install(&context, "hash-tool @ ./project")
+    context
+        .tool_install()
+        .arg("hash-tool @ ./project")
+        .args(["--no-index", "--find-links", "wheels"])
+        .args(["--build-constraint", "constraints.txt", "--no-cache"])
         .arg("--preview-features=tool-install-locks")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str())
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -265,7 +276,12 @@ fn install_rejects_mismatched_build_hash_during_name_inference() -> Result<()> {
     let (context, _) = build_hash_context()?;
     write_hashed_constraint(&context, "build-dependency==1.0.0", WRONG_HASH)?;
 
-    uv_snapshot!(context.filters(), install(&context, "./project").arg("--no-preview"), @"
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("./project")
+        .args(["--no-index", "--find-links", "wheels"])
+        .args(["--build-constraint", "constraints.txt", "--no-cache"])
+        .arg("--no-preview")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to install requirements from `build-system.requires`
@@ -320,8 +336,13 @@ fn install_ignores_unpinned_build_hash_during_upgrade() -> Result<()> {
     let (context, _) = build_hash_context()?;
     let constraints = write_hashed_constraint(&context, "build-dependency>=1.0.0", WRONG_HASH)?;
 
-    install(&context, "hash-tool @ ./project")
+    context
+        .tool_install()
+        .arg("hash-tool @ ./project")
+        .args(["--no-index", "--find-links", "wheels"])
+        .args(["--build-constraint", "constraints.txt", "--no-cache"])
         .arg("--no-preview")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str())
         .assert()
         .success();
     insta::with_settings!({ filters => context.filters() }, {
@@ -342,7 +363,13 @@ fn install_ignores_unpinned_build_hash_during_upgrade() -> Result<()> {
 
     fs_err::remove_file(&constraints)?;
     fs_err::remove_file(context.temp_dir.child("project/backend-executed"))?;
-    upgrade(&context).arg("--no-preview").assert().success();
+    context
+        .tool_upgrade()
+        .args(["hash-tool", "--reinstall", "--no-cache"])
+        .arg("--no-preview")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str())
+        .assert()
+        .success();
     context
         .temp_dir
         .child("project/backend-executed")
@@ -355,16 +382,24 @@ fn locked_install_ignores_unpinned_build_hash_during_upgrade() -> Result<()> {
     let (context, _) = build_hash_context()?;
     let constraints = write_hashed_constraint(&context, "build-dependency>=1.0.0", WRONG_HASH)?;
 
-    install(&context, "hash-tool @ ./project")
+    context
+        .tool_install()
+        .arg("hash-tool @ ./project")
+        .args(["--no-index", "--find-links", "wheels"])
+        .args(["--build-constraint", "constraints.txt", "--no-cache"])
         .arg("--preview-features=tool-install-locks")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str())
         .assert()
         .success();
     assert_receipt_constraint(&context, ">=1.0.0", WRONG_HASH);
 
     fs_err::remove_file(&constraints)?;
     fs_err::remove_file(context.temp_dir.child("project/backend-executed"))?;
-    upgrade(&context)
+    context
+        .tool_upgrade()
+        .args(["hash-tool", "--reinstall", "--no-cache"])
         .arg("--preview-features=tool-install-locks")
+        .env(EnvVars::PATH, context.temp_dir.child("bin").as_os_str())
         .assert()
         .success();
     context
