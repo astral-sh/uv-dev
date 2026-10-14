@@ -10872,6 +10872,7 @@ fn export_batch_lock_modes() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
+        dependencies = []
 
         [dependency-groups]
         dev = []
@@ -10905,18 +10906,31 @@ fn export_batch_lock_modes() -> Result<()> {
     assert_snapshot!(context.read("dev.txt"), @"");
     assert_snapshot!(context.read("legacy.txt"), @"");
 
-    // Make the lock stale and seed an output to check that `--locked` leaves both untouched.
+    // Add an exportable dependency so the stale lock and current manifest produce different files.
+    let wheel_filename = "ok-1.0.0-py3-none-any.whl";
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links")
+            .join(wheel_filename),
+        context.temp_dir.child(wheel_filename),
+    )?;
+    let stale_pyproject = pyproject.replace("dependencies = []", "dependencies = [\"ok\"]");
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&pyproject.replace("0.1.0", "0.2.0"))?;
+        .write_str(&formatdoc! {r#"
+            {stale_pyproject}
+            [tool.uv.sources]
+            ok = {{ path = "{wheel_filename}" }}
+        "#})?;
     context.temp_dir.child("dev.txt").write_str("original")?;
     uv_snapshot!(context.filters(), context.export()
         .arg("--locked").arg("--batch").arg("batch.toml")
         .arg("--preview-features").arg("batch-export"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
     hint: To update the lockfile, run `uv lock`.
@@ -10934,17 +10948,19 @@ fn export_batch_lock_modes() -> Result<()> {
     // A normal export refreshes the lock, so a subsequent `--locked` export succeeds.
     uv_snapshot!(context.filters(), context.export()
         .arg("--batch").arg("batch.toml")
+        .args(["--no-header", "--no-hashes", "--no-annotate"])
         .arg("--preview-features").arg("batch-export"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     ");
+    assert_snapshot!(context.read("dev.txt"), @"./ok-1.0.0-py3-none-any.whl");
     uv_snapshot!(context.filters(), context.export()
         .arg("--locked").arg("--batch").arg("batch.toml")
         .arg("--preview-features").arg("batch-export"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 1 package in [TIME]
+    Resolved 2 packages in [TIME]
     ");
 
     Ok(())
