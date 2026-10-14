@@ -15,6 +15,7 @@ mod cross_device;
 mod dependency_metadata;
 #[cfg(feature = "test-python")]
 mod direct_url_hashes;
+mod editable_input;
 #[cfg(feature = "test-python")]
 mod entrypoints;
 #[cfg(feature = "test-python")]
