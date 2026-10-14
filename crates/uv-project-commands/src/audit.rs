@@ -15,7 +15,7 @@ use uv_dispatch::UniversalState;
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
-use uv_lock_operations::{LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::ResolverMarkerEnvironment;
@@ -155,16 +155,7 @@ pub async fn audit(
     };
 
     // Determine the lock mode.
-    let mode = if let Some(frozen_source) = frozen {
-        LockMode::Frozen(frozen_source.into())
-    } else if let LockCheck::Enabled(lock_check) = lock_check {
-        LockMode::Locked(interpreter.as_ref().unwrap(), lock_check)
-    } else if matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file() {
-        // If we're locking a script, avoid creating a lockfile if it doesn't already exist.
-        LockMode::DryRun(interpreter.as_ref().unwrap())
-    } else {
-        LockMode::Write(interpreter.as_ref().unwrap())
-    };
+    let mode = crate::lock::lock_mode_for_read(target, interpreter.as_ref(), frozen, lock_check);
 
     // Initialize any shared state.
     let state = UniversalState::default();

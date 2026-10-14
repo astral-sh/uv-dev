@@ -27,6 +27,7 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::init_script_python_requirement;
+use uv_python_interpreter::Interpreter;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -35,6 +36,29 @@ use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::ScriptPath;
+
+/// Select the lock mode for commands that consume a lockfile.
+///
+/// Workspace lockfiles may be created or updated; script lockfiles are only updated if they exist.
+pub(crate) fn lock_mode_for_read<'env>(
+    target: LockTarget<'_>,
+    interpreter: Option<&'env Interpreter>,
+    frozen: Option<FrozenSource>,
+    lock_check: LockCheck,
+) -> LockMode<'env> {
+    if let Some(frozen) = frozen {
+        return LockMode::Frozen(frozen.into());
+    }
+
+    let dry_run = matches!(lock_check, LockCheck::Disabled)
+        && matches!(target, LockTarget::Script(_))
+        && !target.lock_path().is_file();
+    LockMode::from_settings(
+        interpreter.expect("a non-frozen lock operation requires an interpreter"),
+        lock_check,
+        dry_run,
+    )
+}
 
 /// Resolve the project requirements into a lockfile.
 pub async fn lock(
