@@ -1380,7 +1380,7 @@ pub enum RunCommand {
     PythonGuiScript(PathBuf, Vec<OsString>),
     /// Execute a Python package containing a `__main__.py` file.
     /// If an entrypoint with the target name is installed in the environment, it is preferred.
-    PythonPackage(OsString, PathBuf, Vec<OsString>),
+    PythonPackage(PathBuf, Vec<OsString>),
     /// Execute a Python [zipapp](https://docs.python.org/3/library/zipapp.html).
     PythonZipapp(PathBuf, Vec<OsString>),
     /// Execute a `python` script provided via `stdin`.
@@ -1533,12 +1533,7 @@ impl ParsedRunCommand {
                 args,
             )))
         } else if is_dir && target_path.join("__main__.py").is_file() {
-            let target_path = target_path.to_path_buf();
-            Ok(Self::Ready(RunCommand::PythonPackage(
-                target,
-                target_path,
-                args,
-            )))
+            Ok(Self::Ready(RunCommand::PythonPackage(target.into(), args)))
         } else if is_file && is_python_zipapp(target_path) {
             Ok(Self::Ready(RunCommand::PythonZipapp(target.into(), args)))
         } else {
@@ -1663,8 +1658,8 @@ impl RunCommand {
                 process.args(args);
                 process
             }
-            Self::PythonPackage(target, path, args) => {
-                let name = PathBuf::from(target).with_extension(std::env::consts::EXE_EXTENSION);
+            Self::PythonPackage(target, args) => {
+                let name = target.with_extension(std::env::consts::EXE_EXTENSION);
                 let entrypoint = interpreter.scripts().join(name);
 
                 // If the target is an installed, executable script — prefer that
@@ -1675,7 +1670,7 @@ impl RunCommand {
                 // Otherwise, invoke `python <module>`
                 } else {
                     let mut process = Command::new(interpreter.sys_executable());
-                    process.arg(path);
+                    process.arg(target);
                     process.args(args);
                     process
                 }
@@ -1758,8 +1753,8 @@ impl RunCommand {
         let parent = match self {
             Self::PythonScript(target, _)
             | Self::PythonGuiScript(target, _)
-            | Self::PythonZipapp(target, _) => target.parent(),
-            Self::PythonPackage(_, path, _) => path.parent(),
+            | Self::PythonZipapp(target, _)
+            | Self::PythonPackage(target, _) => target.parent(),
             Self::Python(_)
             | Self::PythonModule(..)
             | Self::PythonStdin(..)
@@ -1783,7 +1778,7 @@ impl std::fmt::Display for RunCommand {
                 }
                 Ok(())
             }
-            Self::PythonPackage(target, _path, args) => {
+            Self::PythonPackage(target, args) => {
                 write!(f, "{}", target.to_string_lossy())?;
                 for arg in args {
                     write!(f, " {}", arg.to_string_lossy())?;
