@@ -2,6 +2,7 @@
 #![allow(dead_code, unreachable_pub)]
 
 pub mod archive;
+mod download;
 pub mod find_links;
 mod http_server;
 pub mod package_server;
@@ -11,6 +12,7 @@ pub mod pypi_proxy;
 mod snapshot;
 mod vendor;
 
+pub use download::download_to_disk;
 pub use path::{assert_link_target, assert_path_missing};
 #[doc(hidden)]
 pub use snapshot::{INSTA_FILTERS, run_and_format_silent};
@@ -28,11 +30,9 @@ use assert_cmd::assert::{Assert, OutputAssertExt};
 use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild, PathCreateDir, SymlinkToFile};
 use base64::{Engine, prelude::BASE64_STANDARD as base64};
-use futures::StreamExt;
 use indoc::{formatdoc, indoc};
 use itertools::Itertools;
 use predicates::prelude::predicate;
-use tokio::io::AsyncWriteExt;
 use walkdir::WalkDir;
 
 use uv_cache::{Cache, CacheBucket};
@@ -2304,31 +2304,6 @@ pub fn decode_token(content: &[&str]) -> String {
                 .to_string()
         })
         .join("_")
-}
-
-/// Simulates `reqwest::blocking::get` but returns bytes directly, and disables
-/// certificate verification, passing through the `BaseClient`
-#[tokio::main(flavor = "current_thread")]
-pub async fn download_to_disk(url: &str, path: &Path) {
-    let trusted_hosts: Vec<_> = env::var(EnvVars::UV_INSECURE_HOST)
-        .unwrap_or_default()
-        .split(' ')
-        .map(|h| uv_configuration::TrustedHost::from_str(h).unwrap())
-        .collect();
-
-    let client = uv_client::BaseClientBuilder::default()
-        .allow_insecure_host(trusted_hosts)
-        .build()
-        .expect("failed to build base client");
-    let url = url.parse().unwrap();
-    let response = client.for_host(&url).get(url).send().await.unwrap();
-
-    let mut file = fs_err::tokio::File::create(path).await.unwrap();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        file.write_all(&chunk.unwrap()).await.unwrap();
-    }
-    file.sync_all().await.unwrap();
 }
 
 /// A guard that sets a directory to read-only and restores original permissions when dropped.
