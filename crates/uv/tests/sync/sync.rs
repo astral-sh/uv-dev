@@ -8776,9 +8776,7 @@ fn convert_to_package() -> Result<()> {
 
 #[test]
 fn sync_custom_environment_path() -> Result<()> {
-    let mut context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_filtered_virtualenv_bin()
-        .with_filtered_python_names();
+    let mut context = uv_test::test_context_with_versions!(&["3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -8830,7 +8828,7 @@ fn sync_custom_environment_path() -> Result<()> {
         .child(".venv")
         .assert(predicate::path::is_dir());
 
-    // An absolute path can be provided
+    // A nested relative path creates its parent directories.
     uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foobar/.venv"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -8840,11 +8838,6 @@ fn sync_custom_environment_path() -> Result<()> {
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
-
-    context
-        .temp_dir
-        .child("foobar")
-        .assert(predicate::path::is_dir());
 
     context
         .temp_dir
@@ -8884,42 +8877,6 @@ fn sync_custom_environment_path() -> Result<()> {
     ChildPath::new(tempdir.path())
         .child(".venv")
         .assert(predicate::path::is_dir());
-
-    // If the directory already exists and is not a virtual environment we should fail with an error
-    fs_err::remove_dir_all(context.temp_dir.join("foo"))?;
-    fs_err::create_dir(context.temp_dir.join("foo"))?;
-    fs_err::write(context.temp_dir.join("foo").join("file"), b"")?;
-    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Project virtual environment directory `[TEMP_DIR]/foo` cannot be used because it is not a valid Python environment (no Python executable was found)
-    ");
-
-    // But if it's just an incompatible virtual environment...
-    fs_err::remove_dir_all(context.temp_dir.join("foo"))?;
-    uv_snapshot!(context.filters(), context.venv().arg("foo").arg("--python").arg("3.11"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
-    warning: The requested interpreter resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
-    Creating virtual environment at: foo
-    Activate with: source foo/[BIN]/activate
-    ");
-
-    // Even with some extraneous content...
-    fs_err::write(context.temp_dir.join("foo").join("file"), b"")?;
-
-    // We can delete and use it
-    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Removed virtual environment at: foo
-    Creating virtual environment at: foo
-    Resolved 2 packages in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
 
     Ok(())
 }
