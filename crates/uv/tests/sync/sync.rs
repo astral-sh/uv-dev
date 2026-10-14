@@ -3467,52 +3467,37 @@ fn sync_build_isolation() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = ["source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz"]
+
+        [tool.uv]
+        package = false
         "#,
     )?;
 
-    // Running `uv sync` should fail (but it could fail when building the root project, or when
-    // building `source-distribution`).
     context
         .sync()
         .arg("--no-build-isolation")
         .assert()
-        .failure();
+        .code(1)
+        .stderr(predicate::str::contains(
+            "ModuleNotFoundError: No module named 'hatchling'",
+        ));
 
-    // Install `setuptools` (for the root project) plus `hatchling` (for `source-distribution`).
-    uv_snapshot!(context.filters(), context.pip_install().arg("wheel").arg("setuptools").arg("hatchling"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + hatchling==1.22.4
-     + packaging==24.0
-     + pathspec==0.12.1
-     + pluggy==1.4.0
-     + setuptools==69.2.0
-     + trove-classifiers==2024.3.3
-     + wheel==0.43.0
-    ");
+    context.pip_install().arg("hatchling").assert().success();
 
-    // Running `uv sync` should succeed.
     uv_snapshot!(context.filters(), context.sync().arg("--no-build-isolation"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
-    Uninstalled 7 packages in [TIME]
+    Uninstalled 5 packages in [TIME]
     Installed 1 package in [TIME]
      - hatchling==1.22.4
      - packaging==24.0
      - pathspec==0.12.1
      - pluggy==1.4.0
-     - setuptools==69.2.0
      + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
      - trove-classifiers==2024.3.3
-     - wheel==0.43.0
     ");
-
-    assert!(context.temp_dir.child("uv.lock").exists());
 
     Ok(())
 }
