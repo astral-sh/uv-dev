@@ -27,11 +27,8 @@ fn write_project(context: &TestContext) -> Result<ChildPath> {
     Ok(project)
 }
 
-/// Output controls must suppress the intended messages without skipping either build stage.
-#[test]
-fn build_output_controls() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let project = write_project(&context)?;
+fn write_noisy_project(context: &TestContext) -> Result<ChildPath> {
+    let project = write_project(context)?;
     project
         .child(WHEEL)
         .write_binary(&context.read_bytes(context.workspace_root.join("test/links").join(WHEEL)))?;
@@ -61,55 +58,84 @@ fn build_output_controls() -> Result<()> {
             return wheel
     "#})?;
 
-    let build = |output_dir: &str| {
-        let mut command = context.build();
-        command.args(["project", "--offline", "--out-dir", output_dir]);
-        command
-    };
-    let assert_artifacts = |output_dir: &str| {
-        for filename in [SDIST, WHEEL] {
-            context
-                .temp_dir
-                .child(output_dir)
-                .child(filename)
-                .assert(predicate::path::is_file());
-        }
-    };
+    Ok(project)
+}
 
-    build("visible").assert().success().stdout("").stderr(
-        predicate::str::contains("backend: build_sdist")
-            .and(predicate::str::contains("backend: build_wheel")),
-    );
-    assert_artifacts("visible");
+fn assert_artifacts(context: &TestContext) {
+    let dist = context.temp_dir.child("dist");
+    dist.child(SDIST).assert(predicate::path::is_file());
+    dist.child(WHEEL).assert(predicate::path::is_file());
+}
 
-    build("quiet")
-        .arg("--quiet")
-        .assert()
-        .success()
-        .stdout("")
-        .stderr("");
-    assert_artifacts("quiet");
+#[test]
+fn build_shows_backend_output() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = write_noisy_project(&context)?;
 
-    uv_snapshot!(context.filters(), build("flag").arg("--no-build-logs"), @"
+    uv_snapshot!(context.filters(), context.build()
+        .arg(project.path())
+        .args(["--offline", "--out-dir", "dist"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building source distribution...
+    backend: build_sdist
+    Building wheel from source distribution...
+    backend: build_wheel
+    Successfully built dist/ok-1.0.0.tar.gz
+    Successfully built dist/ok-1.0.0-py3-none-any.whl
+    ");
+    assert_artifacts(&context);
+    Ok(())
+}
+
+#[test]
+fn build_quiet() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = write_noisy_project(&context)?;
+
+    uv_snapshot!(context.build()
+        .arg(project.path())
+        .args(["--offline", "--out-dir", "dist", "--quiet"]), @"exit_code: 0 (success)");
+    assert_artifacts(&context);
+    Ok(())
+}
+
+#[test]
+fn build_no_build_logs() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = write_noisy_project(&context)?;
+
+    uv_snapshot!(context.filters(), context.build()
+        .arg(project.path())
+        .args(["--offline", "--out-dir", "dist", "--no-build-logs"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Building source distribution...
     Building wheel from source distribution...
-    Successfully built flag/ok-1.0.0.tar.gz
-    Successfully built flag/ok-1.0.0-py3-none-any.whl
+    Successfully built dist/ok-1.0.0.tar.gz
+    Successfully built dist/ok-1.0.0-py3-none-any.whl
     ");
-    assert_artifacts("flag");
+    assert_artifacts(&context);
+    Ok(())
+}
 
-    uv_snapshot!(context.filters(), build("env").env(EnvVars::UV_HIDE_BUILD_OUTPUT, "1"), @"
+#[test]
+fn build_hide_build_output_env_var() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = write_noisy_project(&context)?;
+
+    uv_snapshot!(context.filters(), context.build()
+        .arg(project.path())
+        .args(["--offline", "--out-dir", "dist"])
+        .env(EnvVars::UV_HIDE_BUILD_OUTPUT, "1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Building source distribution...
     Building wheel from source distribution...
-    Successfully built env/ok-1.0.0.tar.gz
-    Successfully built env/ok-1.0.0-py3-none-any.whl
+    Successfully built dist/ok-1.0.0.tar.gz
+    Successfully built dist/ok-1.0.0-py3-none-any.whl
     ");
-    assert_artifacts("env");
-
+    assert_artifacts(&context);
     Ok(())
 }
 
@@ -125,18 +151,18 @@ fn hide_build_output_on_failure() -> Result<()> {
             print("FOO=" + os.environ["FOO"], file=sys.stderr, flush=True)
             raise RuntimeError("Build failed intentionally!")
     "#})?;
-    let build = || {
-        let mut command = context.build();
-        command.args(["project", "--offline"]).env("FOO", "bar");
-        command
-    };
-
-    build()
+    context
+        .build()
+        .args(["project", "--offline"])
+        .env("FOO", "bar")
         .assert()
         .code(2)
         .stderr(predicate::str::contains("FOO=bar"));
 
-    uv_snapshot!(context.filters(), build().env(EnvVars::UV_HIDE_BUILD_OUTPUT, "1"), @"
+    uv_snapshot!(context.filters(), context.build()
+        .args(["project", "--offline"])
+        .env("FOO", "bar")
+        .env(EnvVars::UV_HIDE_BUILD_OUTPUT, "1"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building source distribution...
