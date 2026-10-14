@@ -14636,85 +14636,91 @@ fn install_in_prefix_symlinked_wheel_data_directory() -> Result<()> {
     Ok(())
 }
 
+fn wheel_with_reserved_script(context: &TestContext, reserved_path: &str) -> Result<PathBuf> {
+    let (filename, wheel) = generate_wheel_with_files(
+        &"foo".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("foo-0.1.0.data/data/harmless.txt", "this must not be moved"),
+            (reserved_path, "this must not replace python"),
+        ],
+    );
+    let path = context.temp_dir.join(filename);
+    fs::write(&path, wheel)?;
+    Ok(path)
+}
+
 #[test]
-fn reject_reserved_wheel_data_script_name() -> Result<()> {
-    let interpreter = if cfg!(windows) {
-        "python.exe"
-    } else {
-        "python"
-    };
-    let scripts = if cfg!(windows) { "Scripts" } else { "bin" };
+fn reject_reserved_wheel_scripts_data_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = wheel_with_reserved_script(&context, "foo-0.1.0.data/scripts/python")?;
 
-    allow_duplicates! {
-        for data_path in ["python", "python.py", "Python.exe", "python.EXE", "Python.PY"]
-            .into_iter()
-            .flat_map(|executable| {
-                [
-                    format!("foo-0.1.0.data/scripts/{executable}"),
-                    format!("foo-0.1.0.data/data/{scripts}/{executable}"),
-                ]
-            })
-        {
-            let context = uv_test::test_context!("3.12").with_filter((
-                r"got: `(?:Python\.(?:exe|PY)|python(?:\.EXE|\.py)?)`",
-                "got: `python`",
-            ));
-            let wheel = context.temp_dir.join("foo-0.1.0-py3-none-any.whl");
-            let record = formatdoc! {"
-                foo/__init__.py,,
-                foo-0.1.0.dist-info/METADATA,,
-                foo-0.1.0.dist-info/WHEEL,,
-                foo-0.1.0.dist-info/RECORD,,
-                foo-0.1.0.data/data/harmless.txt,,
-                {data_path},,
-            "};
-            let mut writer = ZipFileWriter::new(Vec::new());
-            for (name, contents) in [
-                ("foo/__init__.py", ""),
-                (
-                    "foo-0.1.0.dist-info/METADATA",
-                    indoc! {"
-                        Metadata-Version: 2.1
-                        Name: foo
-                        Version: 0.1.0
-                    "},
-                ),
-                (
-                    "foo-0.1.0.dist-info/WHEEL",
-                    indoc! {"
-                        Wheel-Version: 1.0
-                        Root-Is-Purelib: true
-                        Tag: py3-none-any
-                    "},
-                ),
-                ("foo-0.1.0.dist-info/RECORD", record.as_str()),
-                ("foo-0.1.0.data/data/harmless.txt", "this must not be moved"),
-                (data_path.as_str(), "this must not replace python"),
-            ] {
-                let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
-                block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
-            }
-            fs_err::write(&wheel, block_on(writer.close())?)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
+      cause: Scripts must not use the reserved name `python`, got: `python`
+    ");
 
-            uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
-        exit_code: 2 (failure)
-        ----- stderr -----
-        Resolved 1 package in [TIME]
-        Prepared 1 package in [TIME]
-        error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
-          cause: Scripts must not use the reserved name `python`, got: `python`
-            ");
+    Command::new(context.interpreter())
+        .arg("--version")
+        .assert()
+        .success();
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("foo")
+        .assert(predicates::path::missing());
+    site_packages
+        .child("foo-0.1.0.dist-info")
+        .assert(predicates::path::missing());
+    context
+        .venv
+        .child("harmless.txt")
+        .assert(predicates::path::missing());
 
-            Command::new(venv_bin_path(&context.venv).join(interpreter))
-                .arg("--version")
-                .assert()
-                .success();
-            assert!(!context.site_packages().join("foo").exists());
-            assert!(!context.site_packages().join("foo-0.1.0.dist-info").exists());
-            assert!(!context.venv.join("harmless.txt").exists());
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
+    Ok(())
+}
+
+#[test]
+fn reject_reserved_wheel_prefix_data_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let scripts = venv_bin_path(&context.venv);
+    let script_path = format!(
+        "foo-0.1.0.data/data/{}/Python.EXE",
+        scripts.strip_prefix(context.venv.path())?.display()
+    );
+    let wheel = wheel_with_reserved_script(&context, &script_path)?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(wheel), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: foo-0.1.0-py3-none-any.whl (foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl))
+      cause: Scripts must not use the reserved name `python`, got: `Python.EXE`
+    ");
+
+    Command::new(context.interpreter())
+        .arg("--version")
+        .assert()
+        .success();
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("foo")
+        .assert(predicates::path::missing());
+    site_packages
+        .child("foo-0.1.0.dist-info")
+        .assert(predicates::path::missing());
+    context
+        .venv
+        .child("harmless.txt")
+        .assert(predicates::path::missing());
 
     Ok(())
 }
