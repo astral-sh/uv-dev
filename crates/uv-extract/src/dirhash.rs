@@ -87,21 +87,21 @@ async fn read_exact_or_eof(
     mut reader: Pin<&mut impl AsyncRead>,
     mut buf: &mut [u8],
 ) -> io::Result<usize> {
-    let mut bytes_read = 0;
+    let length = buf.len();
     loop {
         match reader.read(buf).await {
-            Ok(0) => return Ok(bytes_read),
+            Ok(0) => break,
             Ok(n) => {
-                bytes_read += n;
-                if n == buf.len() {
-                    return Ok(bytes_read);
-                }
                 buf = &mut buf[n..];
+                if buf.is_empty() {
+                    break;
+                }
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(e) => return Err(e),
         }
     }
+    Ok(length - buf.len())
 }
 
 /// Copy all the bytes from an async reader to an async writer while computing their BLAKE3 hash.
