@@ -477,25 +477,17 @@ fn parse_name<T: Pep508Url>(cursor: &mut Cursor) -> Result<PackageName, Pep508Er
 
     if let Some((index, char)) = cursor.next() {
         if !matches!(char, 'A'..='Z' | 'a'..='z' | '0'..='9') {
-            // Check if the user added a filesystem path without a package name. pip supports this
-            // in `requirements.txt`, but it doesn't adhere to the PEP 508 grammar.
-            let mut clone = cursor.clone().at(start);
-            return if looks_like_unnamed_requirement(&mut clone) {
-                Err(Pep508Error::unnamed_requirement(
-                    &clone,
-                    start,
-                    "/path/to/file",
-                ))
-            } else {
-                Err(Pep508Error {
-                    message: Pep508ErrorSource::String(format!(
-                        "Expected package name starting with an alphanumeric character, found `{char}`"
-                    )),
-                    start: index,
-                    len: char.len_utf8(),
-                    input: cursor.to_string(),
-                })
-            };
+            if let Some(err) = unnamed_requirement_error(cursor, start, "/path/to/file") {
+                return Err(err);
+            }
+            return Err(Pep508Error {
+                message: Pep508ErrorSource::String(format!(
+                    "Expected package name starting with an alphanumeric character, found `{char}`"
+                )),
+                start: index,
+                len: char.len_utf8(),
+                input: cursor.to_string(),
+            });
         }
     } else {
         return Err(Pep508Error {
@@ -524,12 +516,16 @@ fn parse_name<T: Pep508Url>(cursor: &mut Cursor) -> Result<PackageName, Pep508Er
     Ok(PackageName::from_str(cursor.slice(start, len)).unwrap())
 }
 
-/// Parse a potential URL from the [`Cursor`], advancing the [`Cursor`] to the end of the URL.
-///
-/// Returns `true` if the URL appears to be a viable unnamed requirement, and `false` otherwise.
-fn looks_like_unnamed_requirement(cursor: &mut Cursor) -> bool {
+/// Diagnose a URL or path without a package name, which requirements files permit but PEP 508 does
+/// not. The diagnostic spans the potential URL without advancing the parser.
+fn unnamed_requirement_error<T: Pep508Url>(
+    cursor: &Cursor,
+    start: usize,
+    example: &str,
+) -> Option<Pep508Error<T>> {
+    let mut cursor = cursor.clone().at(start);
     // Read the entire path.
-    let (start, len) = cursor.take_while(|char| !char.is_whitespace());
+    let (_, len) = cursor.take_while(|char| !char.is_whitespace());
     let url = cursor.slice(start, len);
 
     // Expand any environment variables in the path.
@@ -540,34 +536,13 @@ fn looks_like_unnamed_requirement(cursor: &mut Cursor) -> bool {
         .map(|(url, _)| url)
         .unwrap_or(&expanded);
 
-    // Analyze the path.
-    let mut chars = url.chars();
-
-    let Some(first_char) = chars.next() else {
-        return false;
-    };
-
-    // Ex) `/bin/ls`
-    if first_char == '\\' || first_char == '/' || first_char == '.' {
-        return true;
-    }
-
-    // Ex) `https://` or `C:`
-    if split_scheme(url).is_some() {
-        return true;
-    }
-
-    // Ex) `foo/bar`
-    if url.contains('/') || url.contains('\\') {
-        return true;
-    }
-
-    // Ex) `foo.tar.gz`
-    if looks_like_archive(url) {
-        return true;
-    }
-
-    false
+    let first_char = url.chars().next()?;
+    (matches!(first_char, '\\' | '/' | '.')
+        || split_scheme(url).is_some()
+        || url.contains('/')
+        || url.contains('\\')
+        || looks_like_archive(url))
+    .then(|| Pep508Error::unnamed_requirement(&cursor, start, example))
 }
 
 /// Returns `true` if a file looks like an archive.
@@ -965,26 +940,17 @@ fn parse_pep508_requirement<T: Pep508Url>(
         // No requirements / any version
         Some(';') | None => None,
         Some(other) => {
-            // Rewind to the start of the version specifier, to see if the user added a URL without
-            // a package name. pip supports this in `requirements.txt`, but it doesn't adhere to
-            // the PEP 508 grammar.
-            let mut clone = cursor.clone().at(start);
-            return if looks_like_unnamed_requirement(&mut clone) {
-                Err(Pep508Error::unnamed_requirement(
-                    &clone,
-                    start,
-                    "https://...",
-                ))
-            } else {
-                Err(Pep508Error {
-                    message: Pep508ErrorSource::String(format!(
-                        "Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `{other}`"
-                    )),
-                    start: cursor.pos(),
-                    len: other.len_utf8(),
-                    input: cursor.to_string(),
-                })
-            };
+            if let Some(err) = unnamed_requirement_error(cursor, start, "https://...") {
+                return Err(err);
+            }
+            return Err(Pep508Error {
+                message: Pep508ErrorSource::String(format!(
+                    "Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `{other}`"
+                )),
+                start: cursor.pos(),
+                len: other.len_utf8(),
+                input: cursor.to_string(),
+            });
         }
     };
 
