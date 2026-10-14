@@ -104,6 +104,19 @@ fn create_venv_ksh() {
 }
 
 #[test]
+fn reset_fixture_venv_ignores_project_configuration() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let marker = context.venv.child("before-reset");
+    marker.touch()?;
+    context.temp_dir.child("uv.toml").write_str("invalid = [")?;
+
+    context.reset_venv();
+
+    assert_path_missing(marker);
+    Ok(())
+}
+
+#[test]
 fn create_venv_skips_distutils_patch_on_py310() {
     let context = uv_test::test_context_with_versions!(&["3.10"]);
 
