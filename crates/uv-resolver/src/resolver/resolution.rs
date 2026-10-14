@@ -1,4 +1,4 @@
-use std::fmt::Write;
+use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
@@ -180,45 +180,7 @@ impl Resolution<'_> {
                     .unwrap_or("ROOT"),
                 edge.to.package.name,
             );
-            // The unwraps below are OK because `write`ing to
-            // a String can never fail (except for OOM).
-            let mut msg = String::new();
-            write!(
-                msg,
-                "{}",
-                edge.from
-                    .as_ref()
-                    .map_or(&*MIN_VERSION, |node| &node.version)
-            )
-            .unwrap();
-            if let Some(extra) = edge
-                .from
-                .as_ref()
-                .and_then(|node| node.package.kind.extra())
-            {
-                write!(msg, " (extra: {extra})").unwrap();
-            }
-            if let Some(dev) = edge
-                .from
-                .as_ref()
-                .and_then(|node| node.package.kind.group())
-            {
-                write!(msg, " (group: {dev})").unwrap();
-            }
-
-            write!(msg, " -> ").unwrap();
-
-            write!(msg, "{}", edge.to.version).unwrap();
-            if let Some(extra) = edge.to.package.kind.extra() {
-                write!(msg, " (extra: {extra})").unwrap();
-            }
-            if let Some(dev) = edge.to.package.kind.group() {
-                write!(msg, " (group: {dev})").unwrap();
-            }
-            if let Some(marker) = edge.marker.contents() {
-                write!(msg, " ; {marker}").unwrap();
-            }
-            trace!("Resolution edge:     {msg}");
+            trace!("Resolution edge:     {}", TraceResolutionEdge(edge));
         }
     }
 }
@@ -257,5 +219,34 @@ impl ResolutionDependencyEdge {
         // markers here. Instead, those are computed via
         // a traversal on the resolution graph.
         UniversalMarker::new(self.marker, ConflictMarker::TRUE)
+    }
+}
+
+/// The version and virtual-package details of a resolution edge.
+struct TraceResolutionEdge<'a>(&'a ResolutionDependencyEdge);
+
+impl Display for TraceResolutionEdge<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        fn write_node(f: &mut Formatter<'_>, node: Option<&ResolutionNode>) -> fmt::Result {
+            let Some(node) = node else {
+                return write!(f, "{}", *MIN_VERSION);
+            };
+
+            write!(f, "{}", node.version)?;
+            match &node.package.kind {
+                PackageNodeKind::Base => Ok(()),
+                PackageNodeKind::Extra(extra) => write!(f, " (extra: {extra})"),
+                PackageNodeKind::Group(group) => write!(f, " (group: {group})"),
+            }
+        }
+
+        let edge = self.0;
+        write_node(f, edge.from.as_ref())?;
+        f.write_str(" -> ")?;
+        write_node(f, Some(&edge.to))?;
+        if let Some(marker) = edge.marker.contents() {
+            write!(f, " ; {marker}")?;
+        }
+        Ok(())
     }
 }
