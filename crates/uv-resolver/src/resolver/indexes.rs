@@ -56,7 +56,11 @@ impl Indexes {
     }
 
     /// Return the explicit index used for a package in the given fork.
-    pub(crate) fn get(&self, name: &PackageName, env: &ResolverEnvironment) -> Vec<&IndexMetadata> {
+    pub(crate) fn get(
+        &self,
+        name: &PackageName,
+        env: &ResolverEnvironment,
+    ) -> impl Iterator<Item = &IndexMetadata> {
         if let Some(recorder) = &self.recorder {
             recorder.source_policy(name);
         }
