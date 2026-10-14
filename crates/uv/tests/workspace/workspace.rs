@@ -1156,10 +1156,11 @@ fn workspace_nonempty_member_no_pyproject() -> Result<()> {
     Ok(())
 }
 
-/// Ensure that workspace discovery ignores hidden directories.
+/// Workspace discovery ignores hidden directories without a `pyproject.toml`, even when they
+/// contain visible files.
 #[cfg(feature = "test-universal")]
 #[test]
-fn workspace_hidden_files() -> Result<()> {
+fn workspace_hidden_directory_without_pyproject() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     // Build the main workspace ...
@@ -1183,8 +1184,8 @@ fn workspace_hidden_files() -> Result<()> {
     "};
     make_project(&workspace.join("packages").join("b"), "b", deps)?;
 
-    // ... and a hidden c.
-    fs_err::create_dir_all(workspace.join("packages").join(".c"))?;
+    // A visible file distinguishes the hidden-directory rule from the empty-directory rule.
+    workspace.child("packages/.c/README.md").write_str("# c")?;
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
     exit_code: 0 (success)
