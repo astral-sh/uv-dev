@@ -1,6 +1,5 @@
 use std::io;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 
 use async_zip::base::read::cd::{CentralDirectoryEntry, Entry};
 use async_zip::error::ZipError;
@@ -741,8 +740,7 @@ async fn untar_in_tokio_tar(
     let mut files = Vec::new();
 
     let mut entries = archive.entries()?;
-    let mut pinned = Pin::new(&mut entries);
-    while let Some(entry) = pinned.next().await {
+    while let Some(entry) = entries.next().await {
         // Unpack the file into the destination directory.
         let mut file = entry?;
         let entry_type = file.header().entry_type();
