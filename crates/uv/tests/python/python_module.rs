@@ -406,10 +406,9 @@ fn find_uv_bin_error_message() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "test-python-eol")]
-#[test]
-fn find_uv_bin_py38() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.8")
+/// Exercise venv-installed binary discovery with the requested Python version.
+fn find_uv_bin_in_venv(python_version: &str) -> anyhow::Result<()> {
+    let context = uv_test::test_context!(python_version)
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
@@ -441,220 +440,40 @@ fn find_uv_bin_py38() -> anyhow::Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(feature = "test-python-eol")]
+#[test]
+fn find_uv_bin_py38() -> anyhow::Result<()> {
+    find_uv_bin_in_venv("3.8")
 }
 
 #[test]
 fn find_uv_bin_py39() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.9")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
-
-    // Install in a virtual environment
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(fake_uv(&context)?), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv==0.1.0 (from file://[TEMP_DIR]/fake-uv)
-    "
-    );
-
-    // We should find the binary in the virtual environment
-    uv_snapshot!(context.filters(), context.python_command()
-        .arg("-c")
-        .arg(TEST_SCRIPT), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [VENV]/[BIN]/uv
-    "
-    );
-
-    Ok(())
+    find_uv_bin_in_venv("3.9")
 }
 
 #[test]
 fn find_uv_bin_py310() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.10")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
-
-    // Install in a virtual environment
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(fake_uv(&context)?), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv==0.1.0 (from file://[TEMP_DIR]/fake-uv)
-    "
-    );
-
-    // We should find the binary in the virtual environment
-    uv_snapshot!(context.filters(), context.python_command()
-        .arg("-c")
-        .arg(TEST_SCRIPT), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [VENV]/[BIN]/uv
-    "
-    );
-
-    Ok(())
+    find_uv_bin_in_venv("3.10")
 }
 
 #[test]
 fn find_uv_bin_py311() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.11")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
-
-    // Install in a virtual environment
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(fake_uv(&context)?), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv==0.1.0 (from file://[TEMP_DIR]/fake-uv)
-    "
-    );
-
-    // We should find the binary in the virtual environment
-    uv_snapshot!(context.filters(), context.python_command()
-        .arg("-c")
-        .arg(TEST_SCRIPT), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [VENV]/[BIN]/uv
-    "
-    );
-
-    Ok(())
+    find_uv_bin_in_venv("3.11")
 }
 
 #[test]
 fn find_uv_bin_py312() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
-
-    // Install in a virtual environment
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(fake_uv(&context)?), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv==0.1.0 (from file://[TEMP_DIR]/fake-uv)
-    "
-    );
-
-    // We should find the binary in the virtual environment
-    uv_snapshot!(context.filters(), context.python_command()
-        .arg("-c")
-        .arg(TEST_SCRIPT), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [VENV]/[BIN]/uv
-    "
-    );
-
-    Ok(())
+    find_uv_bin_in_venv("3.12")
 }
 
 #[test]
 fn find_uv_bin_py313() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.13")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
-
-    // Install in a virtual environment
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(fake_uv(&context)?), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv==0.1.0 (from file://[TEMP_DIR]/fake-uv)
-    "
-    );
-
-    // We should find the binary in the virtual environment
-    uv_snapshot!(context.filters(), context.python_command()
-        .arg("-c")
-        .arg(TEST_SCRIPT), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [VENV]/[BIN]/uv
-    "
-    );
-
-    Ok(())
+    find_uv_bin_in_venv("3.13")
 }
 
 #[test]
 fn find_uv_bin_py314() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.14")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
-
-    // Install in a virtual environment
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(fake_uv(&context)?), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv==0.1.0 (from file://[TEMP_DIR]/fake-uv)
-    "
-    );
-
-    // We should find the binary in the virtual environment
-    uv_snapshot!(context.filters(), context.python_command()
-        .arg("-c")
-        .arg(TEST_SCRIPT), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [VENV]/[BIN]/uv
-    "
-    );
-
-    Ok(())
+    find_uv_bin_in_venv("3.14")
 }
