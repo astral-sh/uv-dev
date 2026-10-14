@@ -196,6 +196,7 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
         nodes.sort_unstable_by_key(|(index, node)| (node.to_comparator(), *index));
 
         // Print out the dependency graph.
+        let mut dependents = Vec::new();
         for (index, node) in nodes {
             // Display the node itself.
             let mut line = node
@@ -217,16 +218,15 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
             // package (e.g., `# via mypy`).
             if self.include_annotations {
                 // Display all dependents (i.e., all packages that depend on the current package).
-                let dependents = {
-                    let mut dependents = graph
+                dependents.clear();
+                dependents.extend(
+                    graph
                         .edges_directed(index, Direction::Incoming)
                         .map(|edge| &graph[edge.source()])
-                        .map(uv_distribution_types::Name::name)
-                        .collect::<Vec<_>>();
-                    dependents.sort_unstable();
-                    dependents.dedup();
-                    dependents
-                };
+                        .map(uv_distribution_types::Name::name),
+                );
+                dependents.sort_unstable();
+                dependents.dedup();
 
                 // Include all external sources (e.g., requirements files).
                 let default = BTreeSet::default();
