@@ -6,7 +6,10 @@ use itertools::Itertools;
 use rustc_hash::FxHashMap;
 
 use uv_normalize::{ExtraName, GroupName, InvalidNameError, PackageName};
-use uv_pep508::{ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree};
+use uv_pep508::{
+    ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree,
+    MarkerValueExtra,
+};
 use uv_pypi_types::{ConflictItem, ConflictKind, Conflicts, Inference};
 
 #[derive(Debug, thiserror::Error)]
@@ -177,139 +180,47 @@ impl UniversalMarker {
         if conflicts.marker.is_true() {
             return;
         }
-        let self_marker = self.marker;
-        self.marker = conflicts.marker;
-        self.marker = self.marker.implies(self_marker);
-        self.pep508 = self.marker.without_extras();
+        *self = Self::from_combined(conflicts.marker.implies(self.marker));
     }
 
     /// If all inference sets reduce to the same marker, simplify the marker using that knowledge.
     pub(crate) fn unify_inference_sets(&mut self, conflict_sets: &[BTreeSet<Inference>]) {
-        let mut previous_marker = None;
+        let initial_marker = self.marker;
+        let mut branch_markers = conflict_sets
+            .iter()
+            .map(|conflict_set| conflict_set.iter().fold(initial_marker, apply_inference));
 
-        for conflict_set in conflict_sets {
-            let mut marker = self.marker;
-            for inference in conflict_set {
-                let extra = encode_conflict_item(&inference.item);
-
-                marker = if inference.included {
-                    marker.simplify_extras_with(|candidate| *candidate == extra)
-                } else {
-                    marker.simplify_not_extras_with(|candidate| *candidate == extra)
-                };
-            }
-            if let Some(previous_marker) = &previous_marker {
-                if previous_marker != &marker {
-                    return;
-                }
-            } else {
-                previous_marker = Some(marker);
-            }
-        }
-
-        if let Some(all_branches_marker) = previous_marker {
-            self.marker = all_branches_marker;
-            self.pep508 = self.marker.without_extras();
+        if let Ok(marker) = branch_markers.all_equal_value() {
+            *self = Self::from_combined(marker);
         }
     }
 
-    /// Assumes that a given extra/group for the given package is activated.
+    /// Assume every inferred conflict item, projecting the resulting marker once.
+    pub(crate) fn assume_inferences<'a>(
+        &mut self,
+        mut inferences: impl Iterator<Item = &'a Inference>,
+    ) {
+        let Some(first) = inferences.next() else {
+            return;
+        };
+        let marker = apply_inference(self.marker, first);
+        *self = Self::from_combined(inferences.fold(marker, apply_inference));
+    }
+
+    /// Assumes that the given conflict item is activated.
     ///
     /// This may simplify the conflicting marker component of this universal
     /// marker.
     pub fn assume_conflict_item(&mut self, item: &ConflictItem) {
-        match *item.kind() {
-            ConflictKind::Extra(ref extra) => self.assume_extra(item.package(), extra),
-            ConflictKind::Group(ref group) => self.assume_group(item.package(), group),
-            ConflictKind::Project => self.assume_project(item.package()),
-        }
+        *self = Self::from_combined(apply_conflict_assumption(self.marker, item, true));
     }
 
-    /// Assumes that a given extra/group for the given package is not
-    /// activated.
+    /// Assumes that the given conflict item is not activated.
     ///
     /// This may simplify the conflicting marker component of this universal
     /// marker.
     pub fn assume_not_conflict_item(&mut self, item: &ConflictItem) {
-        match *item.kind() {
-            ConflictKind::Extra(ref extra) => self.assume_not_extra(item.package(), extra),
-            ConflictKind::Group(ref group) => self.assume_not_group(item.package(), group),
-            ConflictKind::Project => self.assume_not_project(item.package()),
-        }
-    }
-
-    /// Assumes that the "production" dependencies for the given project are
-    /// activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_project(&mut self, package: &PackageName) {
-        let extra = encode_project(package);
-        self.marker = self
-            .marker
-            .simplify_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that the "production" dependencies for the given project are
-    /// not activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_not_project(&mut self, package: &PackageName) {
-        let extra = encode_project(package);
-        self.marker = self
-            .marker
-            .simplify_not_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given extra for the given package is activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_extra(&mut self, package: &PackageName, extra: &ExtraName) {
-        let extra = encode_package_extra(package, extra);
-        self.marker = self
-            .marker
-            .simplify_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given extra for the given package is not activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_not_extra(&mut self, package: &PackageName, extra: &ExtraName) {
-        let extra = encode_package_extra(package, extra);
-        self.marker = self
-            .marker
-            .simplify_not_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given group for the given package is activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_group(&mut self, package: &PackageName, group: &GroupName) {
-        let extra = encode_package_group(package, group);
-        self.marker = self
-            .marker
-            .simplify_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
-    }
-
-    /// Assumes that a given group for the given package is not activated.
-    ///
-    /// This may simplify the conflicting marker component of this universal
-    /// marker.
-    fn assume_not_group(&mut self, package: &PackageName, group: &GroupName) {
-        let extra = encode_package_group(package, group);
-        self.marker = self
-            .marker
-            .simplify_not_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
+        *self = Self::from_combined(apply_conflict_assumption(self.marker, item, false));
     }
 
     /// Returns true if this universal marker will always evaluate to `true`.
@@ -380,20 +291,19 @@ impl UniversalMarker {
     }
 
     /// Returns true if the marker always evaluates to true if the given set of extras is activated.
-    pub(crate) fn evaluate_only_extras<P, E, G>(self, extras: &[(P, E)], groups: &[(P, G)]) -> bool
+    pub(crate) fn evaluate_only_extras<P, E, G>(
+        self,
+        extras: impl IntoIterator<Item = (P, E)>,
+        groups: impl IntoIterator<Item = (P, G)>,
+    ) -> bool
     where
         P: Borrow<PackageName>,
         E: Borrow<ExtraName>,
         G: Borrow<GroupName>,
     {
-        let extras = extras
-            .iter()
-            .map(|(package, extra)| encode_package_extra(package.borrow(), extra.borrow()));
-        let groups = groups
-            .iter()
-            .map(|(package, group)| encode_package_group(package.borrow(), group.borrow()));
-        self.marker
-            .evaluate_only_extras(&extras.chain(groups).collect::<Vec<ExtraName>>())
+        let activated =
+            ActivatedConflictItems::new(std::iter::empty(), extras.into_iter(), groups.into_iter());
+        self.marker.evaluate_only_extras(&activated.0)
     }
 
     /// Returns the internal marker that combines both the PEP 508
@@ -484,19 +394,7 @@ impl ConflictMarker {
 
     /// Creates a new conflict marker from the declared conflicts provided.
     pub fn from_conflicts(conflicts: &Conflicts) -> Self {
-        if conflicts.is_empty() {
-            return Self::TRUE;
-        }
-        let mut marker = Self::TRUE;
-        for set in conflicts.iter() {
-            for (item1, item2) in set.iter().tuple_combinations() {
-                let pair = Self::from_conflict_item(item1)
-                    .negate()
-                    .or(Self::from_conflict_item(item2).negate());
-                marker = marker.and(pair);
-            }
-        }
-        marker
+        Self::from_filtered_conflicts(conflicts, |_| true)
     }
 
     /// Construct only conflict constraints observable in the provided markers.
@@ -514,17 +412,25 @@ impl ConflictMarker {
             });
         }
 
+        Self::from_filtered_conflicts(conflicts, |item| {
+            referenced.contains(&encode_conflict_item(item))
+        })
+    }
+
+    /// Require at most one included item from each conflict set to be active.
+    fn from_filtered_conflicts(
+        conflicts: &Conflicts,
+        include: impl Fn(&ConflictItem) -> bool,
+    ) -> Self {
         let mut marker = Self::TRUE;
         for set in conflicts.iter() {
-            for (first, second) in set
-                .iter()
-                .filter(|item| referenced.contains(&encode_conflict_item(item)))
-                .tuple_combinations()
-            {
-                let pair = Self::from_conflict_item(first)
-                    .negate()
-                    .or(Self::from_conflict_item(second).negate());
-                marker = marker.and(pair);
+            let mut all_previous_inactive = Self::TRUE;
+            for (previous, current) in set.iter().filter(|item| include(item)).tuple_windows() {
+                all_previous_inactive =
+                    all_previous_inactive.and(Self::from_conflict_item(previous).negate());
+                // The current item can be active only if every earlier item is inactive.
+                marker = marker
+                    .and(all_previous_inactive.or(Self::from_conflict_item(current).negate()));
             }
         }
         marker
@@ -543,31 +449,29 @@ impl ConflictMarker {
     /// Create a conflict marker that is true only when the production
     /// dependencies for the given package are activated.
     fn project(package: &PackageName) -> Self {
-        let operator = uv_pep508::ExtraOperator::Equal;
-        let name = uv_pep508::MarkerValueExtra::Extra(encode_project(package));
-        let expr = uv_pep508::MarkerExpression::Extra { operator, name };
-        let marker = MarkerTree::expression(expr);
-        Self { marker }
+        Self::from_encoded_extra(encode_project(package))
     }
 
     /// Create a conflict marker that is true only when the given extra for the
     /// given package is activated.
     fn extra(package: &PackageName, extra: &ExtraName) -> Self {
-        let operator = uv_pep508::ExtraOperator::Equal;
-        let name = uv_pep508::MarkerValueExtra::Extra(encode_package_extra(package, extra));
-        let expr = uv_pep508::MarkerExpression::Extra { operator, name };
-        let marker = MarkerTree::expression(expr);
-        Self { marker }
+        Self::from_encoded_extra(encode_package_extra(package, extra))
     }
 
     /// Create a conflict marker that is true only when the given group for the
     /// given package is activated.
     fn group(package: &PackageName, group: &GroupName) -> Self {
-        let operator = uv_pep508::ExtraOperator::Equal;
-        let name = uv_pep508::MarkerValueExtra::Extra(encode_package_group(package, group));
-        let expr = uv_pep508::MarkerExpression::Extra { operator, name };
-        let marker = MarkerTree::expression(expr);
-        Self { marker }
+        Self::from_encoded_extra(encode_package_group(package, group))
+    }
+
+    /// Create the activation marker for an encoded conflict item.
+    fn from_encoded_extra(extra: ExtraName) -> Self {
+        Self {
+            marker: MarkerTree::expression(MarkerExpression::Extra {
+                operator: ExtraOperator::Equal,
+                name: MarkerValueExtra::Extra(extra),
+            }),
+        }
     }
 
     /// Returns a new conflict marker that is the negation of this one.
@@ -614,24 +518,24 @@ impl ConflictMarker {
     pub fn filter_rules(
         self,
     ) -> Result<(Vec<ConflictItem>, Vec<ConflictItem>), ConflictMarkerError> {
-        let (mut raw_include, mut raw_exclude) = (vec![], vec![]);
+        let (mut include, mut exclude) = (Ok(Vec::new()), Ok(Vec::new()));
         self.marker.visit_extras(|op, extra| {
-            match op {
-                MarkerOperator::Equal => raw_include.push(extra.to_owned()),
-                MarkerOperator::NotEqual => raw_exclude.push(extra.to_owned()),
+            let result = match op {
+                MarkerOperator::Equal => &mut include,
+                MarkerOperator::NotEqual => &mut exclude,
                 // OK by the contract of `MarkerTree::visit_extras`.
                 _ => unreachable!(),
+            };
+            let Ok(items) = result else {
+                return;
+            };
+            match ParsedRawExtra::parse(extra).and_then(|parsed| parsed.to_conflict_item()) {
+                Ok(item) => items.push(item),
+                Err(err) => *result = Err(err),
             }
         });
-        let include = raw_include
-            .into_iter()
-            .map(|extra| ParsedRawExtra::parse(&extra).and_then(|parsed| parsed.to_conflict_item()))
-            .collect::<Result<Vec<_>, _>>()?;
-        let exclude = raw_exclude
-            .into_iter()
-            .map(|extra| ParsedRawExtra::parse(&extra).and_then(|parsed| parsed.to_conflict_item()))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok((include, exclude))
+        // Report inclusion errors before exclusion errors, regardless of traversal order.
+        Ok((include?, exclude?))
     }
 }
 
@@ -639,6 +543,25 @@ impl std::fmt::Debug for ConflictMarker {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // This is a little more succinct than the default.
         write!(f, "ConflictMarker({:?})", self.marker)
+    }
+}
+
+fn apply_inference(marker: MarkerTree, inference: &Inference) -> MarkerTree {
+    apply_conflict_assumption(marker, &inference.item, inference.included)
+}
+
+/// Simplify a marker by assuming that one conflict item is active or inactive.
+fn apply_conflict_assumption(
+    marker: MarkerTree,
+    item: &ConflictItem,
+    included: bool,
+) -> MarkerTree {
+    let extra = encode_conflict_item(item);
+    let matches = |candidate: &ExtraName| *candidate == extra;
+    if included {
+        marker.simplify_extras_with(matches)
+    } else {
+        marker.simplify_not_extras_with(matches)
     }
 }
 
@@ -795,8 +718,27 @@ impl<'a> ParsedRawExtra<'a> {
     }
 }
 
-/// Resolve the conflict markers in a [`MarkerTree`] based on the conditions under which each
-/// conflict item is known to be true.
+/// Looks up an encoded conflict marker without scanning and encoding every known conflict.
+fn find_encoded_conflict(
+    name: &ExtraName,
+    known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
+) -> Option<MarkerTree> {
+    if known_conflicts.is_empty()
+        || !matches!(
+            name.as_str().split_once('-'),
+            Some(("project" | "extra" | "group", _))
+        )
+    {
+        return None;
+    }
+    let item = ParsedRawExtra::parse(name).ok()?.to_conflict_item().ok()?;
+    let marker = *known_conflicts.get(&item)?;
+    // Decoding accepts some noncanonical spellings, which may instead name a scoped package extra.
+    (encode_conflict_item(&item) == *name).then_some(marker)
+}
+
+/// Resolve unencoded package extras and conflict-encoded project, extra, and group markers in a
+/// [`MarkerTree`] based on the conditions under which each item is known to be true.
 ///
 /// For example, if the `cpu` extra is known to be enabled when `sys_platform == 'darwin'`, then
 /// given the combined marker `python_version >= '3.8' and extra == 'extra-7-project-cpu'`, this
@@ -804,12 +746,10 @@ impl<'a> ParsedRawExtra<'a> {
 ///
 /// If a conflict item isn't present in the map of known conflicts, it's assumed to be false in all
 /// environments.
-/// Resolve unencoded package extra markers and conflict-encoded extra markers in a
-/// [`MarkerTree`] based on the conditions under which each item is known to be true.
 ///
 /// When `scope_package` is set, unencoded package extras like `extra == 'cpu'` are interpreted
-/// relative to that package. Conflict-encoded extras and groups are resolved independent of
-/// `scope_package`.
+/// relative to that package. Conflict-encoded markers are resolved independently of this scope
+/// and take precedence over unencoded extras.
 pub fn resolve_activated_extras(
     marker: MarkerTree,
     scope_package: Option<&PackageName>,
@@ -822,124 +762,40 @@ pub fn resolve_activated_extras(
     let mut transformed = MarkerTree::FALSE;
 
     // Convert the marker to DNF, then re-build it.
-    for dnf in marker.to_dnf() {
-        let mut or = MarkerTree::TRUE;
+    for term in marker.to_dnf() {
+        let mut conjunction = MarkerTree::TRUE;
 
-        for marker in dnf {
+        for marker in term {
             let MarkerExpression::Extra {
                 ref operator,
                 ref name,
             } = marker
             else {
-                or = or.and(MarkerTree::expression(marker));
+                conjunction = conjunction.and(MarkerTree::expression(marker));
                 continue;
             };
 
             let Some(name) = name.as_extra() else {
-                or = or.and(MarkerTree::expression(marker));
+                conjunction = conjunction.and(MarkerTree::expression(marker));
                 continue;
             };
 
-            // Given an extra marker (like `extra == 'extra-7-project-cpu'`), search for the
-            // corresponding conflict; once found, inline the marker of conditions under which the
-            // conflict is known to be true.
-            let mut found = false;
-            for (conflict_item, conflict_marker) in known_conflicts {
-                // Search for the conflict item as an extra.
-                if let Some(extra) = conflict_item.extra() {
-                    let package = conflict_item.package();
-                    let encoded = encode_package_extra(package, extra);
-                    if encoded == *name {
-                        match operator {
-                            ExtraOperator::Equal => {
-                                or = or.and(*conflict_marker);
-                                found = true;
-                                break;
-                            }
-                            ExtraOperator::NotEqual => {
-                                or = or.and(conflict_marker.negate());
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Search for the conflict item as a group.
-                if let Some(group) = conflict_item.group() {
-                    let package = conflict_item.package();
-                    let encoded = encode_package_group(package, group);
-                    if encoded == *name {
-                        match operator {
-                            ExtraOperator::Equal => {
-                                or = or.and(*conflict_marker);
-                                found = true;
-                                break;
-                            }
-                            ExtraOperator::NotEqual => {
-                                or = or.and(conflict_marker.negate());
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Search for the conflict item as a project.
-                if conflict_item.extra().is_none() && conflict_item.group().is_none() {
-                    let package = conflict_item.package();
-                    let encoded = encode_project(package);
-                    if encoded == *name {
-                        match operator {
-                            ExtraOperator::Equal => {
-                                or = or.and(*conflict_marker);
-                                found = true;
-                                break;
-                            }
-                            ExtraOperator::NotEqual => {
-                                or = or.and(conflict_marker.negate());
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Search for an unencoded package extra in the current package scope.
-            if !found {
-                if let Some(package) = scope_package {
-                    let conflict_item = ConflictItem::from((package.clone(), name.clone()));
-                    if let Some(conflict_marker) = known_conflicts.get(&conflict_item) {
-                        match operator {
-                            ExtraOperator::Equal => {
-                                or = or.and(*conflict_marker);
-                                found = true;
-                            }
-                            ExtraOperator::NotEqual => {
-                                or = or.and(conflict_marker.negate());
-                                found = true;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // If we didn't find the marker in the list of known conflicts, assume it's always
-            // false.
-            if !found {
-                match operator {
-                    ExtraOperator::Equal => {
-                        or = or.and(MarkerTree::FALSE);
-                    }
-                    ExtraOperator::NotEqual => {
-                        or = or.and(MarkerTree::TRUE);
-                    }
-                }
-            }
+            let conflict_marker = find_encoded_conflict(name, known_conflicts)
+                .or_else(|| {
+                    let package = scope_package?;
+                    known_conflicts
+                        .get(&ConflictItem::from((package.clone(), name.clone())))
+                        .copied()
+                })
+                .unwrap_or(MarkerTree::FALSE);
+            let resolved = match operator {
+                ExtraOperator::Equal => conflict_marker,
+                ExtraOperator::NotEqual => conflict_marker.negate(),
+            };
+            conjunction = conjunction.and(resolved);
         }
 
-        transformed = transformed.or(or);
+        transformed = transformed.or(conjunction);
     }
 
     transformed
@@ -1128,7 +984,7 @@ mod tests {
                 .collect::<Vec<(PackageName, ExtraName)>>();
             let groups = Vec::<(PackageName, GroupName)>::new();
             assert!(
-                !UniversalMarker::new(MarkerTree::TRUE, cm).evaluate_only_extras(&extras, &groups),
+                !UniversalMarker::new(MarkerTree::TRUE, cm).evaluate_only_extras(extras, groups),
                 "expected `{extra_names:?}` to evaluate to `false` in `{cm:?}`"
             );
         }
@@ -1151,7 +1007,7 @@ mod tests {
                 .collect::<Vec<(PackageName, ExtraName)>>();
             let groups = Vec::<(PackageName, GroupName)>::new();
             assert!(
-                UniversalMarker::new(MarkerTree::TRUE, cm).evaluate_only_extras(&extras, &groups),
+                UniversalMarker::new(MarkerTree::TRUE, cm).evaluate_only_extras(extras, groups),
                 "expected `{extra_names:?}` to evaluate to `true` in `{cm:?}`"
             );
         }
@@ -1247,5 +1103,20 @@ mod tests {
         let cm = MarkerTree::from_str("python_version >= '3.10' and extra == 'bar'").unwrap();
         let cm = resolve_activated_extras(cm, Some(&package), &known_conflicts);
         assert!(cm.is_false());
+    }
+
+    #[test]
+    fn resolve_noncanonical_conflict_as_scoped_extra() {
+        let known_conflicts = create_known_conflicts([
+            ("foo", "sys_platform == 'darwin'"),
+            ("extra-03-pkg-foo", "sys_platform == 'linux'"),
+        ]);
+        let marker = MarkerTree::from_str("extra == 'extra-03-pkg-foo'").unwrap();
+        let resolved =
+            resolve_activated_extras(marker, Some(&create_package("pkg")), &known_conflicts);
+        assert_eq!(
+            resolved,
+            MarkerTree::from_str("sys_platform == 'linux'").unwrap()
+        );
     }
 }
