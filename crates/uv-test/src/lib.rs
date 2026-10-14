@@ -2208,7 +2208,7 @@ fn create_venv_from_executable<P: AsRef<Path>>(
         .current_dir(path.as_ref().parent().unwrap())
         .assert()
         .success();
-    ChildPath::new(path.as_ref()).assert(predicate::path::is_dir());
+    ChildPath::new(path.as_ref()).assert(predicate::path::is_dir().follow_links(true));
 }
 
 /// Create a `PATH` with the requested Python versions available in order.
