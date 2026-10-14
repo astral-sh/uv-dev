@@ -14118,7 +14118,7 @@ requires-python = ">3.8"
     Ok(())
 }
 
-fn index_with_a_versions(versions: &[&str]) -> Result<PackseServer> {
+fn index_with_package_versions(name: &str, versions: &[&str]) -> Result<PackseServer> {
     let versions = versions
         .iter()
         .map(|version| {
@@ -14134,15 +14134,15 @@ fn index_with_a_versions(versions: &[&str]) -> Result<PackseServer> {
     let mut scenario = Scenario::empty();
     scenario
         .packages
-        .insert(PackageName::from_str("a")?, Package { versions });
+        .insert(PackageName::from_str(name)?, Package { versions });
     Ok(PackseServer::from_scenario(&scenario))
 }
 
 /// A package on the extra index shadows compatible versions on the default index.
 #[test]
 fn compile_index_url_first_match_base() -> Result<()> {
-    let default_index = index_with_a_versions(&["1.0.0", "2.0.0"])?;
-    let extra_index = index_with_a_versions(&["1.0.0"])?;
+    let default_index = index_with_package_versions("a", &["1.0.0", "2.0.0"])?;
+    let extra_index = index_with_package_versions("a", &["1.0.0"])?;
     let context = uv_test::test_context!("3.12")
         .with_filter((regex::escape(&default_index.index_url()), "[DEFAULT_INDEX]"))
         .with_filter((regex::escape(&extra_index.index_url()), "[EXTRA_INDEX]"));
@@ -14173,8 +14173,8 @@ fn compile_index_url_first_match_base() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn compile_index_url_first_match_marker() -> Result<()> {
-    let default_index = index_with_a_versions(&["1.0.0", "2.0.0"])?;
-    let extra_index = index_with_a_versions(&["1.0.0"])?;
+    let default_index = index_with_package_versions("a", &["1.0.0", "2.0.0"])?;
+    let extra_index = index_with_package_versions("a", &["1.0.0"])?;
     let context = uv_test::test_context!("3.12")
         .with_filter((regex::escape(&default_index.index_url()), "[DEFAULT_INDEX]"))
         .with_filter((regex::escape(&extra_index.index_url()), "[EXTRA_INDEX]"));
@@ -14206,7 +14206,7 @@ fn compile_index_url_first_match_marker() -> Result<()> {
 #[tokio::test]
 async fn compile_index_url_first_match_all_versions() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let default_index = index_with_a_versions(&["1.0.0"])?;
+    let default_index = index_with_package_versions("a", &["1.0.0"])?;
     let extra_index = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/simple/a/"))
@@ -14241,8 +14241,8 @@ async fn compile_index_url_first_match_all_versions() -> Result<()> {
 #[test]
 fn compile_index_url_fallback() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let default_index = index_with_a_versions(&["2.0.0"])?;
-    let extra_index = index_with_a_versions(&["1.0.0"])?;
+    let default_index = index_with_package_versions("a", &["2.0.0"])?;
+    let extra_index = index_with_package_versions("a", &["1.0.0"])?;
 
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("a==2.0.0")?;
@@ -14275,8 +14275,8 @@ fn compile_index_url_fallback() -> Result<()> {
 #[test]
 fn compile_index_url_fallback_prefer_extra() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let default_index = index_with_a_versions(&["2.0.0"])?;
-    let extra_index = index_with_a_versions(&["1.0.0"])?;
+    let default_index = index_with_package_versions("a", &["2.0.0"])?;
+    let extra_index = index_with_package_versions("a", &["1.0.0"])?;
 
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("a")?;
@@ -14309,8 +14309,8 @@ fn compile_index_url_fallback_prefer_extra() -> Result<()> {
 #[test]
 fn compile_index_url_unsafe_highest() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let default_index = index_with_a_versions(&["2.0.0"])?;
-    let extra_index = index_with_a_versions(&["1.0.0"])?;
+    let default_index = index_with_package_versions("a", &["2.0.0"])?;
+    let extra_index = index_with_package_versions("a", &["1.0.0"])?;
 
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("a")?;
@@ -14343,8 +14343,8 @@ fn compile_index_url_unsafe_highest() -> Result<()> {
 #[test]
 fn compile_index_url_unsafe_lowest() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let default_index = index_with_a_versions(&["1.0.0"])?;
-    let extra_index = index_with_a_versions(&["2.0.0"])?;
+    let default_index = index_with_package_versions("a", &["1.0.0"])?;
+    let extra_index = index_with_package_versions("a", &["2.0.0"])?;
 
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("a<100")?;
@@ -14533,38 +14533,38 @@ fn emit_index_annotation_line() -> Result<()> {
 /// `--emit-index-annotation` where packages are pulled from two distinct indexes.
 #[test]
 fn emit_index_annotation_multiple_indexes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let default_index = index_with_package_versions("a", &["1.0.0"])?;
+    let extra_index = index_with_package_versions("b", &["1.0.0"])?;
+    let context = uv_test::test_context!("3.12")
+        .with_filter((regex::escape(&default_index.index_url()), "[DEFAULT_INDEX]"))
+        .with_filter((regex::escape(&extra_index.index_url()), "[EXTRA_INDEX]"));
 
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str(indoc! {r"
-        httpcore
-        requests
+        a
+        b
     "})?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("requirements.in")
+        .arg("--index-url")
+        .arg(default_index.index_url())
         .arg("--extra-index-url")
-        .arg("https://test.pypi.org/simple")
+        .arg(extra_index.index_url())
         .arg("--emit-index-annotation"), @"
     exit_code: 0 (success)
     ----- stdout -----
     # This file was autogenerated by uv via the following command:
     #    uv pip compile --cache-dir [CACHE_DIR] requirements.in --emit-index-annotation
-    certifi==2016.8.8
-        # via httpcore
-        # from https://test.pypi.org/simple
-    h11==0.14.0
-        # via httpcore
-        # from https://pypi.org/simple
-    httpcore==1.0.4
+    a==1.0.0
         # via -r requirements.in
-        # from https://pypi.org/simple
-    requests==2.5.4.1
+        # from [DEFAULT_INDEX]
+    b==1.0.0
         # via -r requirements.in
-        # from https://test.pypi.org/simple
+        # from [EXTRA_INDEX]
 
     ----- stderr -----
-    Resolved 4 packages in [TIME]
+    Resolved 2 packages in [TIME]
     "
     );
 
