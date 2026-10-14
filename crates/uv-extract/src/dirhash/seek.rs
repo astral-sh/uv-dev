@@ -288,7 +288,9 @@ where
     let entry = &job.archive.file().entries()[file_number];
     let size = entry.uncompressed_size();
     let expected_crc32 = entry.crc32();
-    let unix_permissions = entry.unix_permissions();
+    let executable = entry
+        .unix_permissions()
+        .is_some_and(|mode| mode & 0o111 != 0);
     let writer = buffered_file_writer(outfile, size);
 
     // Keep the hashing state out of ordinary extraction, and pin both futures here to avoid
@@ -310,13 +312,15 @@ where
         skip_validation,
     )?;
     #[cfg(unix)]
-    preserve_executable_bit(path, unix_permissions)?;
+    if executable {
+        set_executable_bits(path)?;
+    }
 
     Ok(ExtractedEntry::File {
         path: enclosed_name,
         size,
         digest,
-        executable: unix_permissions.is_some_and(|mode| mode & 0o111 != 0),
+        executable,
     })
 }
 
@@ -362,20 +366,12 @@ fn validate_file_entry(
 }
 
 #[cfg(unix)]
-/// Preserve executable permissions according to pip's wheel extraction behavior.
-fn preserve_executable_bit(path: &Path, unix_permissions: Option<u16>) -> Result<(), Error> {
+/// Set executable permissions according to pip's wheel extraction behavior.
+fn set_executable_bits(path: &Path) -> Result<(), Error> {
     use std::fs::Permissions;
     use std::os::unix::fs::PermissionsExt;
 
-    let Some(mode) = unix_permissions else {
-        return Ok(());
-    };
-
     // https://github.com/pypa/pip/blob/3898741e29b7279e7bffe044ecfbe20f6a438b1e/src/pip/_internal/utils/unpacking.py#L88-L100
-    if mode & 0o111 == 0 {
-        return Ok(());
-    }
-
     let permissions = fs_err::metadata(path).map_err(Error::Io)?.permissions();
     if permissions.mode() & 0o111 == 0o111 {
         return Ok(());
