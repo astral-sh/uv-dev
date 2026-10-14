@@ -226,102 +226,97 @@ impl SitePackages {
                 // There are multiple installed distributions for the same package.
                 diagnostics.push(SitePackagesDiagnostic::DuplicatePackage {
                     package: package.clone(),
-                    paths: std::iter::once(distribution.install_path().to_owned())
-                        .chain(std::iter::once(conflict.install_path().to_owned()))
-                        .chain(distributions.map(|dist| dist.install_path().to_owned()))
+                    paths: [distribution, conflict]
+                        .into_iter()
+                        .chain(distributions)
+                        .map(|dist| dist.install_path().to_owned())
                         .collect(),
                 });
                 continue;
             }
 
-            for index in indexes {
-                let Some(distribution) = &self.distributions[*index] else {
+            // Determine the dependencies for the given package.
+            let metadata = if let Some(metadata) =
+                dependency_metadata.get(package, Some(distribution.version()))
+            {
+                Cow::Owned(metadata)
+            } else {
+                let Ok(metadata) = distribution.read_metadata() else {
+                    diagnostics.push(SitePackagesDiagnostic::MetadataUnavailable {
+                        package: package.clone(),
+                        path: distribution.install_path().to_owned(),
+                    });
                     continue;
                 };
+                Cow::Borrowed(metadata)
+            };
 
-                // Determine the dependencies for the given package.
-                let metadata = if let Some(metadata) =
-                    dependency_metadata.get(package, Some(distribution.version()))
-                {
-                    Cow::Owned(metadata)
-                } else {
-                    let Ok(metadata) = distribution.read_metadata() else {
-                        diagnostics.push(SitePackagesDiagnostic::MetadataUnavailable {
+            // Ignore Python upper bounds, as we do during resolution.
+            if let Some(requires_python) = metadata.requires_python.as_ref()
+                && !python_requirement.is_contained_by(requires_python)
+            {
+                diagnostics.push(SitePackagesDiagnostic::IncompatiblePythonVersion {
+                    package: package.clone(),
+                    version: self.interpreter.python_version().clone(),
+                    requires_python: requires_python.clone(),
+                });
+            }
+
+            // Verify that the package is compatible with the current tags.
+            match distribution.read_tags() {
+                Ok(Some(wheel_tags)) => {
+                    if !wheel_tags.is_compatible(tags) {
+                        // TODO(charlie): Show the expanded tag hint, that explains _why_ it doesn't match.
+                        diagnostics.push(SitePackagesDiagnostic::IncompatiblePlatform {
                             package: package.clone(),
-                            path: distribution.install_path().to_owned(),
                         });
-                        continue;
-                    };
-                    Cow::Borrowed(metadata)
-                };
-
-                // Ignore Python upper bounds, as we do during resolution.
-                if let Some(requires_python) = metadata.requires_python.as_ref()
-                    && !python_requirement.is_contained_by(requires_python)
-                {
-                    diagnostics.push(SitePackagesDiagnostic::IncompatiblePythonVersion {
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    diagnostics.push(SitePackagesDiagnostic::TagsUnavailable {
                         package: package.clone(),
-                        version: self.interpreter.python_version().clone(),
-                        requires_python: requires_python.clone(),
+                        path: distribution.install_path().to_owned(),
                     });
                 }
+            }
 
-                // Verify that the package is compatible with the current tags.
-                match distribution.read_tags() {
-                    Ok(Some(wheel_tags)) => {
-                        if !wheel_tags.is_compatible(tags) {
-                            // TODO(charlie): Show the expanded tag hint, that explains _why_ it doesn't match.
-                            diagnostics.push(SitePackagesDiagnostic::IncompatiblePlatform {
-                                package: package.clone(),
-                            });
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(_) => {
-                        diagnostics.push(SitePackagesDiagnostic::TagsUnavailable {
-                            package: package.clone(),
-                            path: distribution.install_path().to_owned(),
-                        });
-                    }
+            // Verify that the dependencies are installed.
+            for dependency in &metadata.requires_dist {
+                if !dependency.evaluate_markers(markers, &[]) {
+                    continue;
                 }
 
-                // Verify that the dependencies are installed.
-                for dependency in &metadata.requires_dist {
-                    if !dependency.evaluate_markers(markers, &[]) {
-                        continue;
+                let installed = self.get_packages(&dependency.name);
+                match installed.as_slice() {
+                    [] => {
+                        // No version installed.
+                        diagnostics.push(SitePackagesDiagnostic::MissingDependency {
+                            package: package.clone(),
+                            requirement: dependency.clone(),
+                        });
                     }
-
-                    let installed = self.get_packages(&dependency.name);
-                    match installed.as_slice() {
-                        [] => {
-                            // No version installed.
-                            diagnostics.push(SitePackagesDiagnostic::MissingDependency {
-                                package: package.clone(),
-                                requirement: dependency.clone(),
-                            });
-                        }
-                        [installed] => {
-                            match &dependency.version_or_url {
-                                None | Some(VersionOrUrl::Url(_)) => {
-                                    // Nothing to do (accept any installed version).
-                                }
-                                Some(VersionOrUrl::VersionSpecifier(version_specifier)) => {
-                                    // The installed version doesn't satisfy the requirement.
-                                    if !version_specifier.contains(installed.version()) {
-                                        diagnostics.push(
-                                            SitePackagesDiagnostic::IncompatibleDependency {
-                                                package: package.clone(),
-                                                version: installed.version().clone(),
-                                                requirement: dependency.clone(),
-                                            },
-                                        );
-                                    }
+                    [installed] => {
+                        match &dependency.version_or_url {
+                            None | Some(VersionOrUrl::Url(_)) => {
+                                // Nothing to do (accept any installed version).
+                            }
+                            Some(VersionOrUrl::VersionSpecifier(version_specifier)) => {
+                                // The installed version doesn't satisfy the requirement.
+                                if !version_specifier.contains(installed.version()) {
+                                    diagnostics.push(
+                                        SitePackagesDiagnostic::IncompatibleDependency {
+                                            package: package.clone(),
+                                            version: installed.version().clone(),
+                                            requirement: dependency.clone(),
+                                        },
+                                    );
                                 }
                             }
                         }
-                        _ => {
-                            // There are multiple installed distributions for the same package.
-                        }
+                    }
+                    _ => {
+                        // There are multiple installed distributions for the same package.
                     }
                 }
             }
