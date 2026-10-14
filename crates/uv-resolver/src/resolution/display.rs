@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::hash::Hash;
 
 use owo_colors::OwoColorize;
 use petgraph::visit::EdgeRef;
@@ -8,7 +9,6 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use uv_configuration::AnnotationStyle;
 use uv_distribution_types::{DistributionMetadata, Name, SourceAnnotation, SourceAnnotations};
 use uv_normalize::PackageName;
-use uv_pep508::MarkerTree;
 
 use crate::resolution::{RequirementsTxtDist, ResolutionGraphNode};
 use crate::{ResolverEnvironment, ResolverOutput};
@@ -342,63 +342,38 @@ type RequirementsTxtGraph<'dist> = Graph<RequirementsTxtDist<'dist>, (), Directe
 ///
 /// We also remove the root node, to simplify the graph structure.
 fn combine_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGraph<'dist> {
-    /// Return the key for a node.
-    fn version_marker<'dist>(dist: &'dist RequirementsTxtDist) -> (&'dist PackageName, MarkerTree) {
-        (dist.name(), dist.markers)
-    }
-
-    let mut next = RequirementsTxtGraph::with_capacity(graph.node_count(), graph.edge_count());
-    let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
-
-    // Re-add the nodes to the reduced graph.
-    for index in graph.node_indices() {
-        let DisplayResolutionGraphNode::Dist(dist) = &graph[index] else {
-            continue;
-        };
-
-        // In the `requirements.txt` output, we want a flat installation list, so we need to use
-        // the reachability markers instead of the edge markers.
-        match inverse.entry(version_marker(dist)) {
-            std::collections::hash_map::Entry::Occupied(entry) => {
-                let index = *entry.get();
-                let node: &mut RequirementsTxtDist = &mut next[index];
-                node.extras.extend(dist.extras.iter().cloned());
-                node.extras.sort_unstable();
-                node.extras.dedup();
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let index = next.add_node(dist.clone());
-                entry.insert(index);
-            }
-        }
-    }
-
-    // Re-add the edges to the reduced graph.
-    for edge in graph.edge_indices() {
-        let (source, target) = graph.edge_endpoints(edge).unwrap();
-        let DisplayResolutionGraphNode::Dist(source_node) = &graph[source] else {
-            continue;
-        };
-        let DisplayResolutionGraphNode::Dist(target_node) = &graph[target] else {
-            continue;
-        };
-        let source = inverse[&version_marker(source_node)];
-        let target = inverse[&version_marker(target_node)];
-
-        next.update_edge(source, target, ());
-    }
-
-    next
+    reduce_graph(
+        graph,
+        |dist| (dist.name(), dist.markers),
+        |node, dist| {
+            node.extras.extend(dist.extras.iter().cloned());
+            node.extras.sort_unstable();
+            node.extras.dedup();
+        },
+    )
 }
 
 /// Reduce the graph, such that all nodes for a single package are combined, with extras
 /// removed.
 ///
 /// For example, `flask`, `flask[async]`, and `flask[dotenv]` should be reduced into a single
-/// `flask` node, with a conjunction of their markers.
+/// `flask` node, with a disjunction of their markers.
 ///
 /// We also remove the root node, to simplify the graph structure.
 fn strip_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGraph<'dist> {
+    reduce_graph(graph, DistributionMetadata::version_id, |node, dist| {
+        node.extras.clear();
+        // A package must be included wherever either merged node was reachable.
+        node.markers = node.markers.or(dist.markers);
+    })
+}
+
+/// Merge nodes with the same key and remove the root.
+fn reduce_graph<'graph, 'dist, K: Eq + Hash>(
+    graph: &'graph IntermediatePetGraph<'dist>,
+    key: impl Fn(&'graph RequirementsTxtDist<'dist>) -> K,
+    merge: impl Fn(&mut RequirementsTxtDist<'dist>, &'graph RequirementsTxtDist<'dist>),
+) -> RequirementsTxtGraph<'dist> {
     let mut next = RequirementsTxtGraph::with_capacity(graph.node_count(), graph.edge_count());
     let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
 
@@ -410,18 +385,9 @@ fn strip_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGr
 
         // In the `requirements.txt` output, we want a flat installation list, so we need to use
         // the reachability markers instead of the edge markers.
-        match inverse.entry(dist.version_id()) {
+        match inverse.entry(key(dist)) {
             std::collections::hash_map::Entry::Occupied(entry) => {
-                let index = *entry.get();
-                let node: &mut RequirementsTxtDist = &mut next[index];
-                node.extras.clear();
-                // Consider:
-                // ```
-                // foo[bar]==1.0.0; sys_platform == 'linux'
-                // foo==1.0.0; sys_platform != 'linux'
-                // ```
-                // In this case, we want to write `foo==1.0.0; sys_platform == 'linux' or sys_platform == 'windows'`
-                node.markers = node.markers.or(dist.markers);
+                merge(&mut next[*entry.get()], dist);
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
                 let index = next.add_node(dist.clone());
@@ -439,8 +405,8 @@ fn strip_extras<'dist>(graph: &IntermediatePetGraph<'dist>) -> RequirementsTxtGr
         let DisplayResolutionGraphNode::Dist(target_node) = &graph[target] else {
             continue;
         };
-        let source = inverse[&source_node.version_id()];
-        let target = inverse[&target_node.version_id()];
+        let source = inverse[&key(source_node)];
+        let target = inverse[&key(target_node)];
 
         next.update_edge(source, target, ());
     }
