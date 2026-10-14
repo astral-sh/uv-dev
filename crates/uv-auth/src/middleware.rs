@@ -915,6 +915,38 @@ mod tests {
         Ok(())
     }
 
+    #[test(tokio::test)]
+    async fn test_cached_credentials_distinguish_empty_path_segments() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let root = Url::parse(&server.uri())?;
+        let cache = CredentialsCache::new();
+        cache.store_credentials(
+            DisplaySafeUrl::ref_cast(&root.join("private//index")?),
+            Credentials::basic(Some("user".into()), Some("password".into())),
+        );
+        let client = test_client_builder()
+            .with(AuthMiddleware::new().with_cache(cache))
+            .build();
+        client
+            .get(root.join("private/index/package")?)
+            .send()
+            .await?;
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            !requests[0]
+                .headers
+                .contains_key(reqwest::header::AUTHORIZATION)
+        );
+        Ok(())
+    }
+
     /// Without seeding the cache, authenticated requests are not cached
     #[test(tokio::test)]
     async fn test_credentials_in_url_no_seed() -> Result<(), Error> {
