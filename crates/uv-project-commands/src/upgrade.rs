@@ -714,7 +714,7 @@ fn validate_requirements(
     }
 
     for package in packages {
-        let sources = project
+        let Some(sources) = project
             .current_project()
             .pyproject_toml()
             .tool
@@ -722,37 +722,35 @@ fn validate_requirements(
             .and_then(|tool| tool.uv.as_ref())
             .and_then(|uv| uv.sources.as_ref())
             .and_then(|sources| sources.inner().get(package))
-            .or_else(|| project.workspace().sources().get(package));
-        let applies_to_selected_requirement = |source| {
-            requirements.iter().any(|selected| {
-                selected.package == *package
-                    && source_is_applicable(
-                        source,
-                        &selected.dependency_type,
-                        selected.effective_marker,
-                    )
-            })
+            .or_else(|| project.workspace().sources().get(package))
+        else {
+            continue;
         };
-        if sources.is_some_and(|sources| {
-            sources.iter().any(|source| {
-                applies_to_selected_requirement(source)
-                    && matches!(source, Source::Git { rev: Some(_), .. })
+        let mut unsupported_sources = sources
+            .iter()
+            .filter(|source| {
+                !matches!(source, Source::Registry { .. })
+                    && requirements.iter().any(|selected| {
+                        selected.package == *package
+                            && source_is_applicable(
+                                source,
+                                &selected.dependency_type,
+                                selected.effective_marker,
+                            )
+                    })
             })
-        }) {
+            .peekable();
+        if unsupported_sources.peek().is_none() {
+            continue;
+        }
+        if unsupported_sources.any(|source| matches!(source, Source::Git { rev: Some(_), .. })) {
             bail!(
                 "Dependency `{package}` is pinned to a Git revision and cannot be upgraded commit-to-commit"
             );
         }
-        if sources.is_some_and(|sources| {
-            sources.iter().any(|source| {
-                applies_to_selected_requirement(source)
-                    && !matches!(source, Source::Registry { .. })
-            })
-        }) {
-            bail!(
-                "Dependency `{package}` uses a non-registry source in `tool.uv.sources` and cannot be upgraded"
-            );
-        }
+        bail!(
+            "Dependency `{package}` uses a non-registry source in `tool.uv.sources` and cannot be upgraded"
+        );
     }
 
     Ok(())
