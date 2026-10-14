@@ -10,6 +10,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 
 use crate::Overrides;
+use crate::dependency_modifier::select_scoped_entry;
 
 /// A set of exclusions that applies to the dependencies of a specific package version.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
@@ -233,13 +234,12 @@ impl Excludes {
                 if let Some(recorder) = &self.recorder {
                     recorder.scoped_exclusion(package);
                 }
-                self.scoped.get(package).is_some_and(|entries| {
-                    entries
-                        .iter()
-                        .find(|entry| entry.version.as_ref() == Some(version))
-                        .or_else(|| entries.iter().find(|entry| entry.version.is_none()))
-                        .is_some_and(|entry| entry.excludes.contains(dependency))
-                })
+                self.scoped
+                    .get(package)
+                    .and_then(|entries| {
+                        select_scoped_entry(entries, version, |entry| entry.version.as_ref())
+                    })
+                    .is_some_and(|entry| entry.excludes.contains(dependency))
             })
     }
 }
