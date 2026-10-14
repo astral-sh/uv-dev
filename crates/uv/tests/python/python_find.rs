@@ -753,6 +753,7 @@ fn python_find_venv_executable_precedence() -> Result<()> {
 
     // Discover environments containing only `python`.
     fs_err::remove_file(&python3)?;
+    fs_err::remove_file(python.with_file_name("python3.12"))?;
     uv_snapshot!(context.filters(), context.python_find(), @"
     exit_code: 0 (success)
     ----- stdout -----
