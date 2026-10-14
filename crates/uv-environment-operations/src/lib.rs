@@ -94,76 +94,57 @@ impl std::fmt::Display for ConflictError {
             .join(", ");
 
         // If all the conflicts are of the same kind, show a more succinct error.
-        if self
+        let (shared_kind, description) = if self
             .conflicts
             .iter()
             .all(|conflict| matches!(conflict.kind(), ConflictKind::Extra(..)))
         {
-            write!(
-                f,
-                "Extras {} are incompatible with the declared conflicts: {{{set}}}",
-                conjunction(
-                    self.conflicts
-                        .iter()
-                        .map(|conflict| match conflict.kind() {
-                            ConflictKind::Extra(extra) => format!("`{extra}`"),
-                            ConflictKind::Group(..) | ConflictKind::Project => unreachable!(),
-                        })
-                        .collect()
-                )
-            )
+            (Some("Extras "), "declared conflicts")
         } else if self
             .conflicts
             .iter()
             .all(|conflict| matches!(conflict.kind(), ConflictKind::Group(..)))
         {
-            write!(
-                f,
-                "Groups {} are incompatible with the conflicts: {{{set}}}",
-                conjunction(
-                    self.conflicts
-                        .iter()
-                        .map(|conflict| match conflict.kind() {
-                            ConflictKind::Group(group)
-                                if self.groups.contains_because_default(group) =>
-                                format!("`{group}` (enabled by default)"),
-                            ConflictKind::Group(group) => format!("`{group}`"),
-                            ConflictKind::Extra(..) | ConflictKind::Project => unreachable!(),
-                        })
-                        .collect()
-                )
-            )
+            (Some("Groups "), "conflicts")
         } else {
-            write!(
-                f,
-                "{} are incompatible with the declared conflicts: {{{set}}}",
-                conjunction(
-                    self.conflicts
-                        .iter()
-                        .enumerate()
-                        .map(|(i, conflict)| {
-                            let conflict = match conflict.kind() {
-                                ConflictKind::Project => {
-                                    format!("package `{}`", conflict.package())
-                                }
-                                ConflictKind::Extra(extra) => format!("extra `{extra}`"),
-                                ConflictKind::Group(group)
-                                    if self.groups.contains_because_default(group) =>
-                                {
-                                    format!("group `{group}` (enabled by default)")
-                                }
-                                ConflictKind::Group(group) => format!("group `{group}`"),
-                            };
-                            if i == 0 {
-                                capitalize(&conflict)
-                            } else {
-                                conflict
-                            }
-                        })
-                        .collect()
-                )
-            )
-        }
+            (None, "declared conflicts")
+        };
+
+        let conflicts = self
+            .conflicts
+            .iter()
+            .enumerate()
+            .map(|(index, conflict)| {
+                let (kind, name, enabled_by_default): (&str, &str, bool) = match conflict.kind() {
+                    ConflictKind::Project => ("package ", conflict.package().as_ref(), false),
+                    ConflictKind::Extra(extra) => ("extra ", extra.as_ref(), false),
+                    ConflictKind::Group(group) => (
+                        "group ",
+                        group.as_ref(),
+                        self.groups.contains_because_default(group),
+                    ),
+                };
+                let kind = if shared_kind.is_none() { kind } else { "" };
+                let default_suffix = if enabled_by_default {
+                    " (enabled by default)"
+                } else {
+                    ""
+                };
+                let conflict = format!("{kind}`{name}`{default_suffix}");
+                if index == 0 && shared_kind.is_none() {
+                    capitalize(&conflict)
+                } else {
+                    conflict
+                }
+            })
+            .collect();
+
+        write!(
+            f,
+            "{}{} are incompatible with the {description}: {{{set}}}",
+            shared_kind.unwrap_or_default(),
+            conjunction(conflicts)
+        )
     }
 }
 
