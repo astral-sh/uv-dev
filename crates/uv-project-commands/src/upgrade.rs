@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use itertools::Itertools;
+use rustc_hash::FxHashSet;
 
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
@@ -247,7 +248,7 @@ pub async fn upgrade(
         None
     };
     let DeclarationSelection {
-        active: requirements,
+        active: mut requirements,
         skipped,
         packages: mut selected_packages,
     } = select_requirements(&project, &packages, &exclude, fallback_interpreter.as_ref())?;
@@ -255,33 +256,30 @@ pub async fn upgrade(
     validate_requirements(&project, &requirements, &selected_packages)?;
     let mut declaration_outcomes = Vec::new();
     let conflicts = project.workspace().conflicts()?;
-    let mut requirements = requirements
-        .into_iter()
-        .filter_map(|selected| {
-            let Some(extra) = selected.requirement.marker.top_level_extra_name() else {
-                return Some(selected);
-            };
-            if conflicts.contains(project.project_name(), extra.as_ref()) {
+    requirements.retain(
+        |selected| match selected.requirement.marker.top_level_extra_name() {
+            Some(extra) if conflicts.contains(project.project_name(), extra.as_ref()) => {
                 declaration_outcomes.push(DeclarationOutcome::Blocked {
                     declaration: selected.identity(),
                     reason: BlockedReason::ConflictExtra {
                         extra: extra.to_string(),
                     },
                 });
-                None
-            } else {
-                Some(selected)
+                false
             }
-        })
-        .collect::<Vec<_>>();
-    selected_packages.retain(|package| {
-        requirements
-            .iter()
-            .any(|selected| selected.package == *package)
-    });
+            _ => true,
+        },
+    );
     if requirements.is_empty() {
         render_declaration_outcomes(&declaration_outcomes, printer)?;
         return Ok(ExitStatus::Success);
+    }
+    if !declaration_outcomes.is_empty() {
+        let active_packages = requirements
+            .iter()
+            .map(|selected| &selected.package)
+            .collect::<FxHashSet<_>>();
+        selected_packages.retain(|package| active_packages.contains(package));
     }
     settings.upgrade = Upgrade::from_packages(selected_packages.clone());
     let refresh = Refresh::from(settings.upgrade.clone());
