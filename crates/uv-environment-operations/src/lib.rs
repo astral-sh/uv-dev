@@ -1356,7 +1356,7 @@ pub async fn resolve_environment(
     interpreter: &Interpreter,
     python_platform: Option<&TargetTriple>,
     source_tree_editable_policy: SourceTreeEditablePolicy,
-    build_constraints: Constraints,
+    build_constraints: &Constraints,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
     state: &PlatformState,
@@ -1475,7 +1475,7 @@ pub async fn resolve_environment(
         EnvironmentResolution::Universal => HashStrategy::collect(HashCollection::Url),
     };
     let build_hasher = HashStrategy::from_constraints(
-        &build_constraints,
+        build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
         *build_hash_checking,
     )?;
@@ -1531,7 +1531,7 @@ pub async fn resolve_environment(
     let resolve_dispatch = BuildDispatch::new(
         &client,
         cache,
-        &build_constraints,
+        build_constraints,
         interpreter,
         index_locations,
         &flat_index,
