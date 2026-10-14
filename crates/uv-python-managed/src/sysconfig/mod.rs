@@ -141,30 +141,32 @@ fn patch_sysconfigdata(mut data: SysconfigData, real_prefix: &Path) -> Sysconfig
         s.split_whitespace()
             .map(|part| {
                 if part == "/install" {
-                    real_prefix.display().to_string()
+                    Cow::Owned(real_prefix.display().to_string())
                 } else if let Some(rest) = part.strip_prefix("/install/") {
-                    real_prefix.join(rest).display().to_string()
+                    Cow::Owned(real_prefix.join(rest).display().to_string())
                 } else {
-                    part.to_string()
+                    Cow::Borrowed(part)
                 }
             })
-            .collect::<Vec<_>>()
             .join(" ")
     }
 
     /// Remove any references to `-isysroot` in a whitespace-separated string.
     fn remove_isysroot(s: &str) -> String {
         // If we see `-isysroot`, drop it and the next part.
-        let mut parts = s.split_whitespace().peekable();
-        let mut result = Vec::with_capacity(parts.size_hint().0);
+        let mut parts = s.split_whitespace();
+        let mut result = String::with_capacity(s.len());
         while let Some(part) = parts.next() {
             if part == "-isysroot" {
                 parts.next();
             } else {
-                result.push(part);
+                if !result.is_empty() {
+                    result.push(' ');
+                }
+                result.push_str(part);
             }
         }
-        result.join(" ")
+        result
     }
 
     // Patch each value, as needed.

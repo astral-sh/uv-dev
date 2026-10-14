@@ -1,3 +1,5 @@
+use itertools::Itertools;
+
 /// Replacement mode for sysconfig values.
 #[derive(Debug)]
 pub(crate) enum ReplacementMode {
@@ -19,7 +21,6 @@ impl ReplacementEntry {
             ReplacementMode::Partial { from } => entry
                 .split_whitespace()
                 .map(|word| if word == from { &self.to } else { word })
-                .collect::<Vec<_>>()
                 .join(" "),
             ReplacementMode::Full => self.to.clone(),
         }
