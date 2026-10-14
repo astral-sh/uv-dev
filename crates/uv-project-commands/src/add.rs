@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::Path;
@@ -584,104 +585,24 @@ pub async fn add(
             debug!("Pinning all requirements to index: `{index}`");
         });
 
-    // Determine whether to use workspace mode.
-    let use_workspace = match workspace {
-        Some(workspace) => workspace,
-        None => {
-            // Check if we're in a project (not a script), and if any requirements are path
-            // dependencies within the workspace.
-            if let EditTarget::Project(ref project) = target {
-                let workspace_root = project.workspace().install_path();
-                requirements.iter().any(|req| {
-                    if let RequirementSource::Directory { install_path, .. } = &req.source {
-                        let absolute_path = if install_path.is_absolute() {
-                            install_path.to_path_buf()
-                        } else {
-                            project.root().join(install_path)
-                        };
-                        absolute_path.starts_with(workspace_root)
-                    } else {
-                        false
-                    }
-                })
-            } else {
-                false
-            }
-        }
-    };
-
-    // If workspace mode is enabled, add any members to the `workspace` section of the
-    // `pyproject.toml` file.
-    if use_workspace {
-        let mut modified = false;
-        let EditTarget::Project(project) = target else {
-            unreachable!("`--workspace` and `--script` are conflicting options");
-        };
-
-        let mut toml = PyProjectTomlMut::from_toml(
-            &project.workspace().pyproject_toml().raw,
-            DependencyTarget::PyProjectToml,
-        )?;
-
-        // Check each requirement to see if it's a path dependency
-        for requirement in &requirements {
-            if let RequirementSource::Directory { install_path, .. } = &requirement.source {
-                let absolute_path = if install_path.is_absolute() {
-                    install_path.to_path_buf()
-                } else {
-                    project.root().join(install_path)
-                };
-
-                // Either `--workspace` was provided explicitly, or it was omitted but the path is
-                // within the workspace root.
-                let use_workspace = workspace.unwrap_or_else(|| {
-                    absolute_path.starts_with(project.workspace().install_path())
-                });
-                if !use_workspace {
-                    continue;
-                }
-
-                // If the project is already a member of the workspace, skip it.
-                if project.workspace().includes(&absolute_path)? {
-                    continue;
-                }
-
-                let relative_path = absolute_path
-                    .strip_prefix(project.workspace().install_path())
-                    .unwrap_or(&absolute_path);
-
-                toml.add_workspace(relative_path)?;
-                modified |= true;
-
-                writeln!(
-                    printer.stderr(),
-                    "Added `{}` to workspace members",
-                    relative_path.user_display().cyan()
-                )?;
-            }
-        }
-
-        // If we modified the workspace root, we need to reload it entirely, since this can impact
-        // the discovered members, etc.
-        target = if modified {
-            let workspace_content = toml.to_string();
-            fs_err::write(
-                project.workspace().install_path().join("pyproject.toml"),
-                &workspace_content,
-            )?;
-
-            EditTarget::Project(
-                VirtualProject::discover(
-                    project.root(),
-                    &DiscoveryOptions::default(),
-                    cache,
-                    &WorkspaceCache::default(),
-                )
-                .await?,
+    match (&target, workspace) {
+        (EditTarget::Project(project), None | Some(true)) => {
+            if let Some(project) = add_workspace_members(
+                project,
+                &requirements,
+                workspace == Some(true),
+                cache,
+                printer,
             )
-        } else {
-            EditTarget::Project(project)
+            .await?
+            {
+                target = EditTarget::Project(project);
+            }
         }
+        (EditTarget::Script(_), Some(true)) => {
+            unreachable!("`--workspace` and `--script` are conflicting options");
+        }
+        (EditTarget::Project(_), Some(false)) | (EditTarget::Script(_), None | Some(false)) => {}
     }
 
     let mut toml = match &target {
@@ -849,6 +770,73 @@ pub async fn add(
                 .into())
         }
     }
+}
+
+/// Add eligible directory requirements to the workspace and reload it when membership changes.
+async fn add_workspace_members(
+    project: &VirtualProject,
+    requirements: &[Requirement],
+    explicit_workspace: bool,
+    cache: &Cache,
+    printer: Printer,
+) -> Result<Option<VirtualProject>> {
+    let workspace_root = project.workspace().install_path();
+    let mut candidate_paths = requirements
+        .iter()
+        .filter_map(|requirement| {
+            let RequirementSource::Directory { install_path, .. } = &requirement.source else {
+                return None;
+            };
+            let absolute_path = if install_path.is_absolute() {
+                Cow::Borrowed(install_path.as_ref())
+            } else {
+                Cow::Owned(project.root().join(install_path))
+            };
+            (explicit_workspace || absolute_path.starts_with(workspace_root))
+                .then_some(absolute_path)
+        })
+        .peekable();
+
+    if !explicit_workspace && candidate_paths.peek().is_none() {
+        return Ok(None);
+    }
+
+    let mut toml = PyProjectTomlMut::from_toml(
+        &project.workspace().pyproject_toml().raw,
+        DependencyTarget::PyProjectToml,
+    )?;
+    let mut modified = false;
+    for absolute_path in candidate_paths {
+        if project.workspace().includes(&absolute_path)? {
+            continue;
+        }
+
+        let relative_path = absolute_path
+            .strip_prefix(workspace_root)
+            .unwrap_or(&absolute_path);
+        toml.add_workspace(relative_path)?;
+        modified = true;
+        writeln!(
+            printer.stderr(),
+            "Added `{}` to workspace members",
+            relative_path.user_display().cyan()
+        )?;
+    }
+    if !modified {
+        return Ok(None);
+    }
+
+    let workspace_content = toml.to_string();
+    fs_err::write(workspace_root.join("pyproject.toml"), &workspace_content)?;
+    Ok(Some(
+        VirtualProject::discover(
+            project.root(),
+            &DiscoveryOptions::default(),
+            cache,
+            &WorkspaceCache::default(),
+        )
+        .await?,
+    ))
 }
 
 fn standard_library_package(
