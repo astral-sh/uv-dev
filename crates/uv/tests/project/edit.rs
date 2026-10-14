@@ -8573,6 +8573,30 @@ fn version_interrupt_reverts_existing_lock() -> Result<()> {
     Ok(())
 }
 
+/// Create a local dependency that resolves from static metadata but fails during installation.
+fn write_uninstallable_dependency(context: &TestContext, name: &str) -> Result<()> {
+    let package = context.temp_dir.child(name);
+    package.child("pyproject.toml").write_str(&formatdoc! {r#"
+        [project]
+        name = "{name}"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [build-system]
+        requires = []
+        build-backend = "fixture_backend"
+        backend-path = ["."]
+    "#})?;
+    package.child("fixture_backend.py").write_str(indoc! {r#"
+        def get_requires_for_build_wheel(config_settings=None):
+            raise SystemExit("intentional fixture build failure")
+
+        get_requires_for_build_editable = get_requires_for_build_wheel
+    "#})?;
+    Ok(())
+}
+
 /// Revert changes to the `pyproject.toml` and `uv.lock` when the `add` operation fails.
 #[test]
 fn fail_to_add_revert_project() -> Result<()> {
@@ -8588,48 +8612,21 @@ fn fail_to_add_revert_project() -> Result<()> {
         requires-python = ">=3.12"
         dependencies = []
     "#})?;
+    let original_manifest = context.read("pyproject.toml");
 
-    // Add a dependency on a package that declares static metadata (so can always resolve), but
-    // can't be installed.
-    let pyproject_toml = context.temp_dir.child("child/pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-    "#})?;
-    context
-        .temp_dir
-        .child("child")
-        .child("setup.py")
-        .write_str("1/0")?;
+    write_uninstallable_dependency(&context, "child")?;
 
     uv_snapshot!(context.filters(), context.add().arg("./child").arg("--no-workspace"), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
+    Resolved 2 packages in [TIME]
     error: Failed to add dependencies
       cause: Failed to build `child @ file://[TEMP_DIR]/child`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta.get_requires_for_build_wheel` failed (exit status: 1)
+      cause: Call to `fixture_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
-             Traceback (most recent call last):
-               File "<string>", line 14, in <module>
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 325, in get_requires_for_build_wheel
-                 return self._get_build_requires(config_settings, requirements=['wheel'])
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 295, in _get_build_requires
-                 self.run_setup()
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 311, in run_setup
-                 exec(code, locals())
-               File "<string>", line 1, in <module>
-             ZeroDivisionError: division by zero
+             intentional fixture build failure
 
     hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
@@ -8637,25 +8634,7 @@ fn fail_to_add_revert_project() -> Result<()> {
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "#);
-
-    let pyproject_toml = context.read("pyproject.toml");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            pyproject_toml, @r#"
-        [project]
-        name = "parent"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = []
-        "#
-        );
-    });
-
-    // The lockfile should not exist, even though resolution succeeded.
-    assert!(!context.temp_dir.join("uv.lock").exists());
+    assert_edit_rolled_back(&context, &original_manifest, None);
 
     Ok(())
 }
@@ -8687,27 +8666,9 @@ fn fail_to_edit_revert_project() -> Result<()> {
      + iniconfig==2.0.0
     ");
 
-    let before = context.read("uv.lock");
-
-    // Add a dependency on a package that declares static metadata (so can always resolve), but
-    // can't be installed.
-    let pyproject_toml = context.temp_dir.child("child/pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-    "#})?;
-    context
-        .temp_dir
-        .child("child")
-        .child("setup.py")
-        .write_str("1/0")?;
+    let original_manifest = context.read("pyproject.toml");
+    let original_lock = context.read("uv.lock");
+    write_uninstallable_dependency(&context, "child")?;
 
     uv_snapshot!(context.filters(), context.add().arg("./child").arg("--no-workspace"), @r#"
     exit_code: 1 (failure)
@@ -8716,20 +8677,10 @@ fn fail_to_edit_revert_project() -> Result<()> {
     error: Failed to add dependencies
       cause: Failed to build `child @ file://[TEMP_DIR]/child`
       cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta.get_requires_for_build_wheel` failed (exit status: 1)
+      cause: Call to `fixture_backend.get_requires_for_build_wheel` failed (exit status: 1)
 
              [stderr]
-             Traceback (most recent call last):
-               File "<string>", line 14, in <module>
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 325, in get_requires_for_build_wheel
-                 return self._get_build_requires(config_settings, requirements=['wheel'])
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 295, in _get_build_requires
-                 self.run_setup()
-               File "[CACHE_DIR]/builds-v0/[TMP]/[PYTHON-LIB]/site-packages/setuptools/build_meta.py", line 311, in run_setup
-                 exec(code, locals())
-               File "<string>", line 1, in <module>
-             ZeroDivisionError: division by zero
+             intentional fixture build failure
 
     hint: `child` was included because `parent` (v0.1.0) depends on `child`
 
@@ -8737,28 +8688,7 @@ fn fail_to_edit_revert_project() -> Result<()> {
 
     hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
     "#);
-
-    let pyproject_toml = context.read("pyproject.toml");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            pyproject_toml, @r#"
-        [project]
-        name = "parent"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = [
-            "iniconfig>=2.0.0",
-        ]
-        "#
-        );
-    });
-
-    // The lockfile should exist, but be unchanged.
-    let after = context.read("uv.lock");
-    assert_eq!(before, after);
+    assert_edit_rolled_back(&context, &original_manifest, Some(&original_lock));
 
     Ok(())
 }
