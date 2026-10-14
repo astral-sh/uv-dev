@@ -90,25 +90,7 @@ impl KeyringProvider {
             return Ok(false);
         };
 
-        // Ensure we strip credentials from the URL before storing
-        let url = url.without_credentials();
-
-        // If there's no path, we'll perform a host-level login
-        let target = if let Some(host) = url.host_str().filter(|_| !url.path().is_empty()) {
-            let mut target = String::new();
-            if url.scheme() != "https" {
-                target.push_str(url.scheme());
-                target.push_str("://");
-            }
-            target.push_str(host);
-            if let Some(port) = url.port() {
-                target.push(':');
-                target.push_str(&port.to_string());
-            }
-            target
-        } else {
-            url.to_string()
-        };
+        let target = Self::service_name(url);
 
         match &self.backend {
             KeyringProviderBackend::Native => {
@@ -140,25 +122,7 @@ impl KeyringProvider {
     /// Only the native keyring provider is supported at this time.
     #[instrument(skip_all, fields(url = % url.to_string(), username))]
     pub async fn remove(&self, url: &DisplaySafeUrl, username: &str) -> Result<(), Error> {
-        // Ensure we strip credentials from the URL before storing
-        let url = url.without_credentials();
-
-        // If there's no path, we'll perform a host-level login
-        let target = if let Some(host) = url.host_str().filter(|_| !url.path().is_empty()) {
-            let mut target = String::new();
-            if url.scheme() != "https" {
-                target.push_str(url.scheme());
-                target.push_str("://");
-            }
-            target.push_str(host);
-            if let Some(port) = url.port() {
-                target.push(':');
-                target.push_str(&port.to_string());
-            }
-            target
-        } else {
-            url.to_string()
-        };
+        let target = Self::service_name(url);
 
         match &self.backend {
             KeyringProviderBackend::Native => {
@@ -186,6 +150,26 @@ impl KeyringProvider {
         entry.delete_credential().await?;
         trace!("Removed credentials for {username}@{service_name} from system keyring");
         Ok(())
+    }
+
+    /// Return the credential-free service name used to store and remove keyring entries.
+    fn service_name(url: &DisplaySafeUrl) -> String {
+        let url = url.without_credentials();
+        if let Some(host) = url.host_str().filter(|_| !url.path().is_empty()) {
+            let mut service = String::new();
+            if url.scheme() != "https" {
+                service.push_str(url.scheme());
+                service.push_str("://");
+            }
+            service.push_str(host);
+            if let Some(port) = url.port() {
+                service.push(':');
+                service.push_str(&port.to_string());
+            }
+            service
+        } else {
+            url.to_string()
+        }
     }
 
     /// Fetch credentials for the given [`Url`] from the keyring.
@@ -431,6 +415,18 @@ impl KeyringProvider {
 mod tests {
     use super::*;
     use url::Url;
+
+    #[test]
+    fn keyring_service_names() {
+        for (url, expected) in [
+            ("https://user:secret@example.com/simple", "example.com"),
+            ("http://example.com:8080/simple", "http://example.com:8080"),
+            ("mailto:user@example.com", "mailto:user@example.com"),
+        ] {
+            let url = DisplaySafeUrl::parse(url).unwrap();
+            assert_eq!(KeyringProvider::service_name(&url), expected);
+        }
+    }
 
     #[tokio::test]
     #[cfg_attr(
