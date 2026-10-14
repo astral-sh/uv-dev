@@ -539,50 +539,52 @@ impl PrioritizedDist {
         // relative to the filtered list.
         let mut adjusted_wheels = Vec::with_capacity(self.0.wheels.len());
         let mut adjusted_best_index = 0;
-        for (i, (wheel, compatibility)) in self.0.wheels.iter().enumerate() {
-            if compatibility.is_excluded() {
-                continue;
-            }
+        for (i, wheel) in self.included_wheels() {
             if i == best_wheel_index {
                 adjusted_best_index = adjusted_wheels.len();
             }
             adjusted_wheels.push(wheel.clone());
         }
 
-        let sdist = self
-            .0
-            .source
-            .as_ref()
-            .filter(|(_, compatibility)| !compatibility.is_excluded())
-            .map(|(sdist, _)| sdist.clone());
         Some(RegistryBuiltDist {
             wheels: adjusted_wheels,
             best_wheel_index: adjusted_best_index,
-            sdist,
+            sdist: self.included_source().cloned(),
         })
     }
 
     /// If this prioritized dist has an sdist, then this creates a source
     /// distribution.
     pub(crate) fn source_dist(&self) -> Option<RegistrySourceDist> {
-        let mut sdist = self
-            .0
-            .source
-            .as_ref()
-            .filter(|(_, compatibility)| !compatibility.is_excluded())
-            .map(|(sdist, _)| sdist.clone())?;
+        let mut sdist = self.included_source().cloned()?;
         assert!(
             sdist.wheels.is_empty(),
             "source distribution should not have any wheels yet"
         );
         sdist.wheels = self
-            .0
-            .wheels
-            .iter()
-            .filter(|(_, compatibility)| !compatibility.is_excluded())
-            .map(|(wheel, _)| wheel.clone())
+            .included_wheels()
+            .map(|(_, wheel)| wheel.clone())
             .collect();
         Some(sdist)
+    }
+
+    /// Return the non-excluded source distribution, if any.
+    fn included_source(&self) -> Option<&RegistrySourceDist> {
+        self.0
+            .source
+            .as_ref()
+            .filter(|(_, compatibility)| !compatibility.is_excluded())
+            .map(|(sdist, _)| sdist)
+    }
+
+    /// Return non-excluded wheels with their original indices.
+    fn included_wheels(&self) -> impl Iterator<Item = (usize, &RegistryBuiltWheel)> {
+        self.0
+            .wheels
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, compatibility))| !compatibility.is_excluded())
+            .map(|(index, (wheel, _))| (index, wheel))
     }
 
     /// Returns the "best" wheel in this prioritized distribution, if one
