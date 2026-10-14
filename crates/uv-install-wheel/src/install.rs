@@ -160,7 +160,8 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     }
 
     trace!(?name, "Writing record");
-    write_record(site_packages, &dist_info_prefix, record)?;
+    let record_path = dist_info_file(site_packages, &dist_info_prefix, "RECORD");
+    write_record(&record_path, record)?;
 
     Ok(())
 }
