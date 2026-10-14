@@ -18,7 +18,7 @@ use insta::assert_snapshot;
 use uv_platform::{Arch, Os};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 use uv_static::EnvVars;
-use uv_test::uv_snapshot;
+use uv_test::{assert_path_missing, uv_snapshot};
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 /// Pinning through a symlink must not replace a special file at its target.
@@ -907,7 +907,7 @@ fn python_pin_rm_versions() -> Result<()> {
     ----- stdout -----
     Removed Python version file at `.python-versions`
     ");
-    assert!(!local_versions.exists());
+    assert_path_missing(&local_versions);
 
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
     exit_code: 2 (failure)
@@ -924,7 +924,7 @@ fn python_pin_rm_versions() -> Result<()> {
     ----- stdout -----
     Removed global Python pin at `[UV_USER_CONFIG_DIR]/.python-versions`
     ");
-    assert!(!global_versions.exists());
+    assert_path_missing(&global_versions);
 
     Ok(())
 }

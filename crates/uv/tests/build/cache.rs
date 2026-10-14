@@ -18,7 +18,7 @@ use uv_fs::PortablePath;
 use uv_fs::create_symlink;
 use uv_test::archive::generate_source_archive;
 use uv_test::package_server::PackageServer;
-use uv_test::{TestContext, get_bin, uv_snapshot};
+use uv_test::{TestContext, assert_path_missing, get_bin, uv_snapshot};
 
 /// A custom cache directory must configure commands and snapshot filters together.
 #[test]
@@ -471,7 +471,7 @@ fn binary_payloads_stay_in_archive_without_preview_local() -> Result<()> {
      + binary-payload==0.1.0 (from file://[TEMP_DIR]/binary_payload-0.1.0-py3-none-any.whl)
     ");
 
-    assert!(!context.cache_dir.child("files-v0").exists());
+    assert_path_missing(context.cache_dir.child("files-v0"));
     let archive_files = context.cache_files(CacheBucket::Archive)?;
     let archive_binary = archive_files
         .iter()
@@ -504,7 +504,7 @@ async fn binary_payloads_stay_in_archive_without_preview_streaming() -> Result<(
      + binary-payload==0.1.0 (from http://[LOCALHOST]/binary_payload-0.1.0-py3-none-any.whl)
     ");
 
-    assert!(!context.cache_dir.child("files-v0").exists());
+    assert_path_missing(context.cache_dir.child("files-v0"));
     let archive_files = context.cache_files(CacheBucket::Archive)?;
     let archive_binary = archive_files
         .iter()
@@ -797,7 +797,7 @@ fn binary_payloads_use_archive_file_store() -> Result<()> {
     ----- stderr -----
     Removed [N] files ([SIZE])
     ");
-    assert!(!archive.exists());
+    assert_path_missing(&archive);
     assert_eq!(
         context.cache_files(CacheBucket::Files)?,
         vec![object.clone()]
