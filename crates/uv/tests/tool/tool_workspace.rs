@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
@@ -345,6 +343,7 @@ fn tool_install_workspace_members_honor_source_editable_flag() -> Result<()> {
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
+    let executable = bin_dir.child(format!("root_cli{}", std::env::consts::EXE_SUFFIX));
 
     let root_pyproject = context.temp_dir.child("pyproject.toml");
     root_pyproject.write_str(indoc! {
@@ -414,7 +413,7 @@ fn tool_install_workspace_members_honor_source_editable_flag() -> Result<()> {
     Installed 1 executable: root_cli
     ");
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command(executable.path()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     ROOT OK
@@ -430,7 +429,7 @@ fn tool_install_workspace_members_honor_source_editable_flag() -> Result<()> {
         "
     })?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command(executable.path()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     ROOT OK
@@ -440,7 +439,7 @@ fn tool_install_workspace_members_honor_source_editable_flag() -> Result<()> {
         .child("__init__.py")
         .write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command(executable.path()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     ROOT CHANGED
@@ -455,6 +454,7 @@ fn tool_upgrade_preserves_workspace_member_non_editability() -> Result<()> {
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
+    let executable = bin_dir.child(format!("root_cli{}", std::env::consts::EXE_SUFFIX));
 
     let root_pyproject = context.temp_dir.child("pyproject.toml");
     let write_root_manifest = |version: &str| {
@@ -520,7 +520,7 @@ fn tool_upgrade_preserves_workspace_member_non_editability() -> Result<()> {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command(executable.path()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.0 OK
@@ -530,7 +530,7 @@ fn tool_upgrade_preserves_workspace_member_non_editability() -> Result<()> {
         .child("__init__.py")
         .write_str("MESSAGE = 'PRE-UPGRADE'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command(executable.path()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.0 OK
@@ -544,7 +544,7 @@ fn tool_upgrade_preserves_workspace_member_non_editability() -> Result<()> {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command(executable.path()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.1 OK
@@ -554,7 +554,7 @@ fn tool_upgrade_preserves_workspace_member_non_editability() -> Result<()> {
         .child("__init__.py")
         .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command(executable.path()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     0.1.1 OK
