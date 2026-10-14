@@ -1,6 +1,7 @@
 pub use crate::github::GitHubRepository;
 pub use crate::oid::{GitOid, OidParseError};
 pub use crate::reference::GitReference;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::sync::LazyLock;
 
@@ -293,27 +294,15 @@ impl TryFrom<DisplaySafeUrl> for GitUrl {
 impl From<GitUrl> for DisplaySafeUrl {
     fn from(git: GitUrl) -> Self {
         let mut url = git.url;
-
-        // If we have a precise commit, add `@` and the commit hash to the URL.
-        if let Some(precise) = git.precise {
-            let path = format!("{}@{}", url.path(), precise);
+        let revision = git
+            .precise
+            .as_ref()
+            .map(|precise| Cow::Borrowed(precise.as_str()))
+            .or_else(|| git.reference.as_url_rev());
+        if let Some(revision) = revision {
+            let path = format!("{}@{revision}", url.path());
             url.set_path(&path);
-        } else {
-            // Otherwise, add the branch or tag name.
-            match git.reference {
-                GitReference::Branch(rev)
-                | GitReference::Tag(rev)
-                | GitReference::BranchOrTag(rev)
-                | GitReference::NamedRef(rev)
-                | GitReference::BranchOrTagOrCommit(rev) => {
-                    let rev = GitReference::encode_rev(&rev);
-                    let path = format!("{}@{}", url.path(), rev);
-                    url.set_path(&path);
-                }
-                GitReference::DefaultBranch => {}
-            }
         }
-
         url
     }
 }
