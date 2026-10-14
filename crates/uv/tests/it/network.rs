@@ -1,25 +1,18 @@
-use std::convert::Infallible;
-use std::future::ready;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild};
+use assert_fs::fixture::{FileWriteStr, PathChild};
 use bytes::Bytes;
 use http::StatusCode;
 use http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
-use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, StreamBody};
-use hyper::body::Frame;
-use hyper::service::service_fn;
-use hyper_util::rt::TokioIo;
+use http_body_util::BodyExt;
 use indoc::{formatdoc, indoc};
 use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio_stream::wrappers::ReceiverStream;
 use wiremock::matchers::{any, method};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -27,6 +20,11 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::{TestContext, uv_snapshot};
+
+use super::network_fixtures::{
+    StreamingResponse, StreamingServerGuard, connection_reset, delayed_body, http_error_server,
+    io_error_server, streaming_server, time_out_response,
+};
 
 const BUILD_TAG_WHEEL: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
 
@@ -90,7 +88,6 @@ async fn start_connect_tunnel_proxy() -> (std::net::SocketAddr, Arc<AtomicUsize>
 }
 
 /// Serve a local package through the same host as the requested index.
-#[cfg(feature = "test-python")]
 async fn mock_build_tag_index(context: &TestContext, server: &MockServer) {
     use wiremock::matchers::path;
 
@@ -127,34 +124,6 @@ async fn mock_build_tag_index(context: &TestContext, server: &MockServer) {
         .await;
 }
 
-fn connection_reset(_request: &wiremock::Request) -> io::Error {
-    io::Error::new(io::ErrorKind::ConnectionReset, "Connection reset by peer")
-}
-
-/// Answers with a retryable HTTP status 500.
-async fn http_error_server() -> (MockServer, String) {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(StatusCode::INTERNAL_SERVER_ERROR))
-        .mount(&server)
-        .await;
-
-    let mock_server_uri = server.uri();
-    (server, mock_server_uri)
-}
-
-/// Answers with a retryable connection reset IO error.
-async fn io_error_server() -> (MockServer, String) {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with_err(connection_reset)
-        .mount(&server)
-        .await;
-
-    let mock_server_uri = server.uri();
-    (server, mock_server_uri)
-}
-
 /// Return two connection resets followed by two HTTP 500 responses across the initial request
 /// and three retries.
 async fn mixed_error_server() -> (MockServer, String) {
@@ -176,102 +145,6 @@ async fn mixed_error_server() -> (MockServer, String) {
 
     let mock_server_uri = server.uri();
     (server, mock_server_uri)
-}
-
-type StreamingResponse = hyper::Response<BoxBody<Bytes, Infallible>>;
-
-struct StreamingServerGuard {
-    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Drop for StreamingServerGuard {
-    fn drop(&mut self) {
-        drop(self.shutdown.take());
-        if let Err(panic) = self.thread.take().unwrap().join()
-            && !std::thread::panicking()
-        {
-            std::panic::resume_unwind(panic);
-        }
-    }
-}
-
-/// Emit some bytes, then wait before ending the response body.
-fn delayed_body(bytes: Bytes, delay: Duration) -> BoxBody<Bytes, Infallible> {
-    let (tx, rx) = tokio::sync::mpsc::channel(1);
-    tokio::spawn(async move {
-        let _ = tx.send(Ok(Frame::data(bytes))).await;
-        tokio::time::sleep(delay).await;
-    });
-    StreamBody::new(ReceiverStream::new(rx)).boxed()
-}
-
-fn time_out_response(
-    _request: hyper::Request<hyper::body::Incoming>,
-) -> Result<StreamingResponse, http::Error> {
-    hyper::Response::builder()
-        .header("Content-Type", "text/html")
-        .body(delayed_body(Bytes::new(), Duration::from_mins(1)))
-}
-
-/// Run a streaming HTTP server on its own runtime so test subprocesses cannot starve it.
-/// Dropping the guard shuts down and joins the server, propagating handler panics to the test.
-fn streaming_server<F>(handler: F) -> (String, StreamingServerGuard)
-where
-    F: Fn(hyper::Request<hyper::body::Incoming>) -> Result<StreamingResponse, http::Error>
-        + Send
-        + Sync
-        + 'static,
-{
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let server = format!("http://{}", listener.local_addr().unwrap());
-    let handler = Arc::new(handler);
-    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    let thread = std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async move {
-            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-            let mut connections = tokio::task::JoinSet::new();
-            loop {
-                tokio::select! {
-                    accepted = listener.accept() => {
-                        let (stream, _) = accepted.expect("streaming server failed to accept connection");
-                        let handler = handler.clone();
-                        connections.spawn(async move {
-                            let _ = hyper_util::server::conn::auto::Builder::new(
-                                hyper_util::rt::TokioExecutor::new(),
-                            )
-                            .serve_connection(TokioIo::new(stream), service_fn(move |request| {
-                                ready(handler(request))
-                            }))
-                            .await;
-                        });
-                    }
-                    Some(result) = connections.join_next() => result.unwrap(),
-                    _ = &mut shutdown_rx => break,
-                }
-            }
-            connections.abort_all();
-            while let Some(result) = connections.join_next().await {
-                if let Err(error) = result
-                    && error.is_panic()
-                {
-                    std::panic::resume_unwind(error.into_panic());
-                }
-            }
-        });
-    });
-    (
-        server,
-        StreamingServerGuard {
-            shutdown: Some(shutdown_tx),
-            thread: Some(thread),
-        },
-    )
 }
 
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
@@ -551,91 +424,6 @@ async fn direct_url_mixed_error() {
     ");
 }
 
-fn write_python_downloads_json(context: &TestContext, mock_server_uri: &String) -> ChildPath {
-    let python_downloads_json = context.temp_dir.child("python_downloads.json");
-    let interpreter = json!({
-        "cpython-3.10.0-darwin-aarch64-none": {
-            "arch": {
-                "family": "aarch64",
-                "variant": null
-            },
-            "libc": "none",
-            "major": 3,
-            "minor": 10,
-            "name": "cpython",
-            "os": "darwin",
-            "patch": 0,
-            "prerelease": "",
-            "sha256": null,
-            "url": format!("{mock_server_uri}/astral-sh/python-build-standalone/releases/download/20211017/cpython-3.10.0-aarch64-apple-darwin-pgo%2Blto-20211017T1616.tar.zst"),
-            "variant": null
-        }
-    });
-    python_downloads_json
-        .write_str(&serde_json::to_string(&interpreter).unwrap())
-        .unwrap();
-    python_downloads_json
-}
-
-/// Check the Python install error message when the server returns HTTP status 500, a retryable
-/// error.
-#[tokio::test]
-async fn python_install_http_500() {
-    let context = uv_test::test_context!("3.12")
-        .without_python_download_cache()
-        .with_filtered_python_keys()
-        .with_filtered_exe_suffix()
-        .with_managed_python_dirs();
-
-    let (_server_drop_guard, mock_server_uri) = http_error_server().await;
-
-    let python_downloads_json = write_python_downloads_json(&context, &mock_server_uri);
-
-    uv_snapshot!(context.filters(), context
-        .python_install()
-        .arg("cpython-3.10.0-darwin-aarch64-none")
-        .arg("--python-downloads-json-url")
-        .arg(python_downloads_json.path())
-        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to install cpython-3.10.0-[PLATFORM]
-      cause: Request failed after 3 retries in [TIME]
-      cause: Failed to download `http://[LOCALHOST]/astral-sh/python-build-standalone/releases/download/20211017/cpython-3.10.0-[PLATFORM]-pgo%2Blto-20211017T1616.tar.zst`
-      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/astral-sh/python-build-standalone/releases/download/20211017/cpython-3.10.0-[PLATFORM]-pgo%2Blto-20211017T1616.tar.zst)
-    ");
-}
-
-/// Check the Python install error message when the server returns a retryable IO error.
-#[tokio::test]
-async fn python_install_io_error() {
-    let context = uv_test::test_context!("3.12")
-        .without_python_download_cache()
-        .with_filtered_python_keys()
-        .with_filtered_exe_suffix()
-        .with_managed_python_dirs();
-
-    let (_server_drop_guard, mock_server_uri) = io_error_server().await;
-
-    let python_downloads_json = write_python_downloads_json(&context, &mock_server_uri);
-
-    uv_snapshot!(context.filters(), context
-        .python_install()
-        .arg("cpython-3.10.0-darwin-aarch64-none")
-        .arg("--python-downloads-json-url")
-        .arg(python_downloads_json.path())
-        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to install cpython-3.10.0-[PLATFORM]
-      cause: Request failed after 3 retries in [TIME]
-      cause: Failed to download `http://[LOCALHOST]/astral-sh/python-build-standalone/releases/download/20211017/cpython-3.10.0-[PLATFORM]-pgo%2Blto-20211017T1616.tar.zst`
-      cause: error sending request for url (http://[LOCALHOST]/astral-sh/python-build-standalone/releases/download/20211017/cpython-3.10.0-[PLATFORM]-pgo%2Blto-20211017T1616.tar.zst)
-      cause: client error (SendRequest)
-      cause: connection closed before message completed
-    ");
-}
-
 #[tokio::test]
 async fn install_http_retries() {
     let context = uv_test::test_context!("3.12");
@@ -772,94 +560,7 @@ async fn rfc9457_problem_details_license_violation() {
     ");
 }
 
-/// Test that invalid proxy URL in uv.toml produces a helpful error message.
-#[tokio::test]
-async fn proxy_invalid_url_in_uv_toml() {
-    let context = uv_test::test_context!("3.12");
-
-    let uv_toml = context.temp_dir.child("uv.toml");
-    uv_toml
-        .write_str(indoc::indoc! {r#"
-            http-proxy = "ftp://proxy.example.com:8080"
-        "#})
-        .unwrap();
-
-    uv_snapshot!(context.filters(), context
-        .pip_install()
-        .arg("iniconfig")
-        .env_remove(EnvVars::HTTP_PROXY)
-        .env_remove(EnvVars::HTTPS_PROXY), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to parse: uv.toml
-      cause: TOML parse error at line 1, column 14
-               |
-             1 | http-proxy = "ftp://proxy.example.com:8080"
-               |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-             invalid proxy URL scheme `ftp` in `ftp://proxy.example.com:8080/`: expected http, https, socks5, or socks5h
-    "#);
-}
-
-/// Test that invalid proxy URL (not a URL) in uv.toml produces a helpful error message.
-#[tokio::test]
-async fn proxy_invalid_url_not_a_url_in_uv_toml() {
-    let context = uv_test::test_context!("3.12");
-
-    let uv_toml = context.temp_dir.child("uv.toml");
-    uv_toml
-        .write_str(indoc::indoc! {r#"
-            http-proxy = "not a valid url"
-        "#})
-        .unwrap();
-
-    uv_snapshot!(context.filters(), context
-        .pip_install()
-        .arg("iniconfig")
-        .env_remove(EnvVars::HTTP_PROXY)
-        .env_remove(EnvVars::HTTPS_PROXY), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to parse: uv.toml
-      cause: TOML parse error at line 1, column 14
-               |
-             1 | http-proxy = "not a valid url"
-               |              ^^^^^^^^^^^^^^^^^
-             invalid proxy URL: invalid international domain name
-    "#);
-}
-
-/// Test that a SOCKS proxy URL without a host produces a configuration error.
-#[test]
-fn proxy_url_without_host() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    context
-        .temp_dir
-        .child("proxy.toml")
-        .write_str("http-proxy = \"socks5:foo\"\n")?;
-    context.temp_dir.child("requirements.in").write_str("")?;
-
-    uv_snapshot!(context.filters(), context
-        .pip_compile()
-        .arg("requirements.in")
-        .arg("--offline")
-        .arg("--config-file")
-        .arg("proxy.toml"), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to parse: proxy.toml
-      cause: TOML parse error at line 1, column 14
-               |
-             1 | http-proxy = "socks5:foo"
-               |              ^^^^^^^^^^^^
-             invalid proxy URL: empty host
-    "#);
-
-    Ok(())
-}
-
 /// Test that valid proxy URL in uv.toml routes requests through the proxy.
-#[cfg(feature = "test-python")]
 #[tokio::test]
 async fn proxy_valid_url_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
@@ -945,7 +646,6 @@ async fn proxy_https_proxy_in_uv_toml() {
 }
 
 /// Test that no-proxy in uv.toml bypasses the proxy for specified hosts.
-#[cfg(feature = "test-python")]
 #[tokio::test]
 async fn proxy_no_proxy_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
@@ -1002,7 +702,6 @@ no-proxy = ["{target_host}"]
 }
 
 /// Test that proxy URLs without a scheme in uv.toml default to http://.
-#[cfg(feature = "test-python")]
 #[tokio::test]
 async fn proxy_schemeless_url_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
@@ -1150,28 +849,6 @@ async fn retry_read_timeout_index() {
     error: Request failed after 1 retry in [TIME]
       cause: Failed to fetch: http://[LOCALHOST]/tqdm/
       cause: error decoding response body for url (http://[LOCALHOST]/tqdm/)
-      cause: request or response body error
-      cause: operation timed out
-    ");
-}
-
-#[tokio::test]
-async fn retry_read_timeout_python_downloads_json() {
-    let context = uv_test::test_context!("3.12").with_fast_http_retry();
-
-    let (server, _guard) = streaming_server(time_out_response);
-
-    uv_snapshot!(context.filters(), context
-        .python_list()
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
-        .arg("--python-downloads-json-url")
-        .arg(&server), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Error while fetching remote python downloads json from `http://[LOCALHOST]/`
-      cause: Request failed after 1 retry in [TIME]
-      cause: Failed to download `http://[LOCALHOST]/`
-      cause: error decoding response body for url (http://[LOCALHOST]/)
       cause: request or response body error
       cause: operation timed out
     ");
