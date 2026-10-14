@@ -1,6 +1,7 @@
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{env, io, panic};
 
@@ -31,6 +32,14 @@ struct BytecodeWorkers {
     _script_directory: TempDir,
     sender: Sender<PathBuf>,
     source_files: usize,
+}
+
+/// Immutable settings shared by all bytecode compilation workers.
+struct BytecodeWorkerContext {
+    directory: PathBuf,
+    interpreter: PathBuf,
+    script: PathBuf,
+    timeout: Option<Duration>,
 }
 
 /// A ready Python bytecode compiler and its communication streams.
@@ -113,20 +122,20 @@ fn spawn_workers(
 
     // Running Python with an actual file will produce better error messages.
     let script_directory = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let pip_compileall_py = script_directory.path().join("pip_compileall.py");
+    let script = script_directory.path().join("pip_compileall.py");
     let timeout = compile_timeout()?;
+    let context = Arc::new(BytecodeWorkerContext {
+        directory: dir.to_path_buf(),
+        interpreter: python_executable.to_path_buf(),
+        script,
+        timeout,
+    });
     debug!("Starting {} bytecode compilation workers", worker_count);
     let mut worker_handles = Vec::with_capacity(worker_count);
     for _ in 0..worker_count {
         let (tx, rx) = oneshot::channel();
 
-        let worker = worker(
-            dir.to_path_buf(),
-            python_executable.to_path_buf(),
-            pip_compileall_py.to_path_buf(),
-            receiver.clone(),
-            timeout,
-        );
+        let worker = worker(Arc::clone(&context), receiver.clone());
 
         // Spawn each worker on a dedicated thread.
         std::thread::Builder::new()
@@ -302,13 +311,10 @@ pub async fn compile_files(
 }
 
 async fn worker(
-    dir: PathBuf,
-    interpreter: PathBuf,
-    pip_compileall_py: PathBuf,
+    context: Arc<BytecodeWorkerContext>,
     receiver: Receiver<PathBuf>,
-    timeout: Option<Duration>,
 ) -> Result<(), CompileError> {
-    fs_err::tokio::write(&pip_compileall_py, COMPILEALL_SCRIPT)
+    fs_err::tokio::write(&context.script, COMPILEALL_SCRIPT)
         .await
         .map_err(CompileError::TempFile)?;
 
@@ -320,7 +326,8 @@ async fn worker(
         loop {
             // If the interpreter started successful, return it, else retry.
             if let Some(child) =
-                launch_bytecode_compiler(&dir, &interpreter, &pip_compileall_py).await?
+                launch_bytecode_compiler(&context.directory, &context.interpreter, &context.script)
+                    .await?
             {
                 break Ok::<_, CompileError>(child);
             }
@@ -334,7 +341,7 @@ async fn worker(
         stdin,
         mut stdout,
         mut stderr,
-    } = if let Some(duration) = timeout {
+    } = if let Some(duration) = context.timeout {
         tokio::time::timeout(duration, wait_until_ready)
             .await
             .map_err(|_| CompileError::StartupTimeout(duration))??
@@ -348,7 +355,7 @@ async fn worker(
         Ok(child_stderr_collected)
     });
 
-    let result = worker_main_loop(receiver, stdin, &mut stdout, timeout).await;
+    let result = worker_main_loop(receiver, stdin, &mut stdout, context.timeout).await;
     // Reap the process to avoid zombies.
     let _ = child.kill().await;
 
@@ -369,7 +376,7 @@ async fn worker(
             Ok(()) => {
                 debug!(
                     "Bytecode compilation `python` at `{}` stderr:\n{}\n---",
-                    interpreter.user_display(),
+                    context.interpreter.user_display(),
                     stderr
                 );
                 Ok(())
