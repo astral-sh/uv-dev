@@ -825,6 +825,23 @@ fn init_script_python_version_file() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn init_script_no_pin_python_ignores_invalid_version_file() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_binary(&[0xff])?;
+
+    uv_snapshot!(context.filters(), context.init().args(["--script", "--no-pin-python", "ignored.py"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Initialized script at `ignored.py`
+    ");
+
+    Ok(())
+}
+
 // Init script should create parent directories if they don't exist
 #[test]
 fn init_script_create_directory() -> Result<()> {
