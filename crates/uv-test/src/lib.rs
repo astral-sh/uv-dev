@@ -1212,7 +1212,7 @@ impl TestContext {
 
     /// Create a command for an external program with the test environment.
     pub fn external_command(&self, program: impl AsRef<Path>) -> Command {
-        let mut command = Self::new_command_with(program.as_ref());
+        let mut command = Command::new(program.as_ref());
         self.add_shared_env(&mut command, false);
         command
     }
@@ -1284,6 +1284,8 @@ impl TestContext {
 
     /// Only the environment variables of [`TestContext::add_shared_options`].
     pub fn add_shared_env(&self, command: &mut Command, activate_venv: bool) {
+        Self::clear_host_environment(command);
+
         // Push the test context bin to the front of the PATH
         let path = env::join_paths(std::iter::once(self.bin_dir.to_path_buf()).chain(
             env::split_paths(&env::var(EnvVars::PATH).unwrap_or_default()),
@@ -1806,7 +1808,7 @@ impl TestContext {
             );
         }
 
-        let mut command = Self::new_command_with(&interpreter);
+        let mut command = Command::new(&interpreter);
         command
             // Our tests change files in <1s, so we must disable CPython bytecode caching or we'll get stale files
             // https://github.com/python/cpython/issues/75953
@@ -2073,10 +2075,9 @@ impl TestContext {
         }
     }
 
-    /// Creates a new `Command` that is intended to be suitable for use in
-    /// all tests.
+    /// Create a command for the uv binary, before applying the shared test environment.
     fn new_command(&self) -> Command {
-        Self::new_command_with(&self.uv_bin)
+        Command::new(&self.uv_bin)
     }
 
     /// Creates a new `Command` that is intended to be suitable for use in
@@ -2086,7 +2087,27 @@ impl TestContext {
     /// test host settings.
     fn new_command_with(bin: &Path) -> Command {
         let mut command = Command::new(bin);
+        Self::clear_host_environment(&mut command);
+        command
+    }
 
+    /// Remove inherited host settings without erasing explicit command overrides.
+    fn clear_host_environment(command: &mut Command) {
+        let explicit_environment: Vec<_> = command
+            .get_envs()
+            .map(|(name, _)| name.to_owned())
+            .collect();
+        let is_explicit = |name: &str| {
+            explicit_environment.iter().any(|explicit| {
+                if cfg!(windows) {
+                    explicit
+                        .to_str()
+                        .is_some_and(|explicit| explicit.eq_ignore_ascii_case(name))
+                } else {
+                    explicit == name
+                }
+            })
+        };
         let passthrough = [
             // For linux distributions
             EnvVars::PATH,
@@ -2108,18 +2129,17 @@ impl TestContext {
             EnvVars::UV_SYSTEM_CERTS,
         ];
 
-        for env_var in EnvVars::all_names()
-            .iter()
-            .filter(|name| !passthrough.contains(name))
-        {
-            command.env_remove(env_var);
+        for name in EnvVars::all_names().iter().copied() {
+            if !passthrough.contains(&name) && !is_explicit(name) {
+                command.env_remove(name);
+            }
         }
 
-        if let Some(rust_log) = env::var_os(EnvVars::UV_INTERNAL__TEST_RUST_LOG) {
+        if !is_explicit(EnvVars::RUST_LOG)
+            && let Some(rust_log) = env::var_os(EnvVars::UV_INTERNAL__TEST_RUST_LOG)
+        {
             command.env(EnvVars::RUST_LOG, rust_log);
         }
-
-        command
     }
 }
 
@@ -2344,6 +2364,41 @@ impl Drop for ReadOnlyDirectoryGuard {
         let _ = fs_err::set_permissions(
             &self.path,
             std::fs::Permissions::from_mode(self.original_mode),
+        );
+    }
+}
+
+#[cfg(test)]
+mod command_environment_tests {
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    use uv_static::EnvVars;
+
+    use super::TestContext;
+
+    #[test]
+    fn applies_isolation_to_manually_constructed_command() {
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
+        let mut command = Command::new("uv");
+        let offline = if cfg!(windows) {
+            "uv_offline"
+        } else {
+            EnvVars::UV_OFFLINE
+        };
+        command.env(offline, "1");
+
+        context.add_shared_env(&mut command, false);
+
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| name == EnvVars::UV_INDEX_URL && value.is_none())
+        );
+        assert!(
+            command.get_envs().any(|(name, value)| {
+                name == offline && value.is_some_and(|value| value == "1")
+            })
         );
     }
 }
