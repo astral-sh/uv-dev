@@ -21,7 +21,6 @@ mod build_fast_path;
 #[cfg(feature = "test-python")]
 mod build_output;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod cache;
 
 mod cache_clean;
