@@ -200,8 +200,7 @@ fn validate_in_flight_wheel(
         });
     }
     if let Some(version) = dist.version()
-        && *version != filename.version
-        && *version != filename.version.clone().without_local()
+        && !filename.matches_version(version)
     {
         return Err(uv_distribution::Error::WheelMetadataVersionMismatch {
             given: version.clone(),
