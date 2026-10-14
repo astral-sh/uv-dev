@@ -3701,7 +3701,7 @@ fn python_install_compile_bytecode() -> anyhow::Result<()> {
 }
 
 #[test]
-fn python_install_compile_bytecode_existing() {
+fn python_install_compile_bytecode_existing() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -3724,10 +3724,11 @@ fn python_install_compile_bytecode_existing() {
     Python 3.14 is already installed
     Bytecode compiled [COUNT] files in [TIME]
     ");
+    assert_cpython_bytecode_compiled(&context, "3.14")
 }
 
 #[test]
-fn python_install_compile_bytecode_upgrade() {
+fn python_install_compile_bytecode_upgrade() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -3751,6 +3752,7 @@ fn python_install_compile_bytecode_upgrade() {
      + cpython-3.13.[LATEST]-[PLATFORM] (python3.13)
     Bytecode compiled [COUNT] files in [TIME]
     ");
+    assert_cpython_bytecode_compiled(&context, "3.14")
 }
 
 #[test]
