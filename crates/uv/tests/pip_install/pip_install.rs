@@ -12267,7 +12267,7 @@ fn install_git_submodule_remote_relative() {
     ");
 }
 
-/// Modify a project to use a `src` layout.
+/// Switch an editable project from a `src` layout to a flat layout.
 #[test]
 fn change_layout_src() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -12295,7 +12295,7 @@ fn change_layout_src() -> Result<()> {
         .child("src")
         .child("project")
         .child("__init__.py")
-        .touch()?;
+        .write_str("__version__ = '0.1.0'\n")?;
 
     // Installing should build the package.
     uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt"), @"
@@ -12308,6 +12308,7 @@ fn change_layout_src() -> Result<()> {
      + project==0.1.0 (from file://[TEMP_DIR]/)
     "
     );
+    context.assert_installed("project", "0.1.0");
 
     // Reinstalling should have no effect.
     uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt"), @"
@@ -12324,7 +12325,7 @@ fn change_layout_src() -> Result<()> {
         .temp_dir
         .child("project")
         .child("__init__.py")
-        .touch()?;
+        .write_str("__version__ = '0.1.0'\n")?;
 
     // Installing should rebuild the package.
     uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt"), @"
@@ -12337,6 +12338,8 @@ fn change_layout_src() -> Result<()> {
      ~ project==0.1.0 (from file://[TEMP_DIR]/)
     "
     );
+    // Probe the environment in isolation so the working directory cannot mask a stale editable path.
+    context.assert_installed("project", "0.1.0");
 
     // Reinstalling should have no effect.
     uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("requirements.txt"), @"
