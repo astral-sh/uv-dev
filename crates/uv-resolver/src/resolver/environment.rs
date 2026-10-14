@@ -420,20 +420,6 @@ impl ResolverEnvironment {
                 include,
                 exclude,
             } => {
-                let format_conflict_item = |conflict_item: &ConflictItem| {
-                    format!(
-                        "{}{}",
-                        conflict_item.package(),
-                        match conflict_item.kind() {
-                            ConflictKind::Extra(extra) => format!("[{extra}]"),
-                            ConflictKind::Group(group) => {
-                                format!("[group:{group}]")
-                            }
-                            ConflictKind::Project => String::new(),
-                        }
-                    )
-                };
-
                 if markers.is_true() && include.is_empty() && exclude.is_empty() {
                     return None;
                 }
@@ -442,29 +428,23 @@ impl ResolverEnvironment {
                 if !markers.is_true() {
                     descriptors.push(format!("markers: {markers:?}"));
                 }
-                if !include.is_empty() {
-                    descriptors.push(format!(
-                        "included: {}",
-                        // Sort to ensure stable error messages
-                        include
-                            .iter()
-                            .map(format_conflict_item)
-                            .collect::<BTreeSet<_>>()
-                            .into_iter()
-                            .join(", "),
-                    ));
-                }
-                if !exclude.is_empty() {
-                    descriptors.push(format!(
-                        "excluded: {}",
-                        // Sort to ensure stable error messages
-                        exclude
-                            .iter()
-                            .map(format_conflict_item)
-                            .collect::<BTreeSet<_>>()
-                            .into_iter()
-                            .join(", "),
-                    ));
+                for (label, conflicts) in [("included", include), ("excluded", exclude)] {
+                    if conflicts.is_empty() {
+                        continue;
+                    }
+                    // Sort the formatted items to ensure stable error messages.
+                    let items = conflicts
+                        .iter()
+                        .map(|item| {
+                            let package = item.package();
+                            match item.kind() {
+                                ConflictKind::Extra(extra) => format!("{package}[{extra}]"),
+                                ConflictKind::Group(group) => format!("{package}[group:{group}]"),
+                                ConflictKind::Project => package.to_string(),
+                            }
+                        })
+                        .collect::<BTreeSet<_>>();
+                    descriptors.push(format!("{label}: {}", items.into_iter().format(", ")));
                 }
 
                 Some(format!("split ({})", descriptors.join("; ")))
