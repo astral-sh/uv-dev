@@ -166,7 +166,7 @@ fn tool_uninstall_missing_receipt() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
-    let tool_dir = context.temp_dir.child("tools");
+    let environment = context.temp_dir.child("tools/black");
 
     // Install `black`
     context
@@ -175,13 +175,14 @@ fn tool_uninstall_missing_receipt() {
         .assert()
         .success();
 
-    fs_err::remove_file(tool_dir.join("black").join("uv-receipt.toml")).unwrap();
+    fs_err::remove_file(environment.child("uv-receipt.toml")).unwrap();
 
     uv_snapshot!(context.filters(), context.tool_uninstall().arg("black"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Removed dangling environment for `black`
     ");
+    assert_path_missing(environment);
 }
 
 #[test]
@@ -189,7 +190,7 @@ fn tool_uninstall_multiple_names_with_missing_receipt() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
-    let tool_dir = context.temp_dir.child("tools");
+    let environment = context.temp_dir.child("tools/black");
 
     // Install `black`
     context
@@ -200,7 +201,7 @@ fn tool_uninstall_multiple_names_with_missing_receipt() {
 
     context.tool_install().arg("ruff==0.3.4").assert().success();
 
-    fs_err::remove_file(tool_dir.join("black").join("uv-receipt.toml")).unwrap();
+    fs_err::remove_file(environment.child("uv-receipt.toml")).unwrap();
 
     uv_snapshot!(context.filters(), context.tool_uninstall().arg("black").arg("ruff"), @"
     exit_code: 0 (success)
@@ -208,6 +209,7 @@ fn tool_uninstall_multiple_names_with_missing_receipt() {
     Removed dangling environment for `black`
     Uninstalled 1 executable: ruff
     ");
+    assert_path_missing(environment);
 
     // After uninstalling both tools, neither should be listed.
     uv_snapshot!(context.filters(), context.tool_list(), @"
@@ -222,7 +224,7 @@ fn tool_uninstall_all_missing_receipt() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
-    let tool_dir = context.temp_dir.child("tools");
+    let environment = context.temp_dir.child("tools/black");
 
     // Install `black`
     context
@@ -231,11 +233,12 @@ fn tool_uninstall_all_missing_receipt() {
         .assert()
         .success();
 
-    fs_err::remove_file(tool_dir.join("black").join("uv-receipt.toml")).unwrap();
+    fs_err::remove_file(environment.child("uv-receipt.toml")).unwrap();
 
     uv_snapshot!(context.filters(), context.tool_uninstall().arg("--all"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Removed dangling environment for `black`
     ");
+    assert_path_missing(environment);
 }
