@@ -1236,6 +1236,22 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         Ok(Some(ResolverVersion::Unforked(version.clone())))
     }
 
+    /// Return available versions or record why the package was unavailable.
+    fn record_package_availability<'response>(
+        &self,
+        name: &PackageName,
+        response: &'response VersionsResponse,
+    ) -> Option<&'response [VersionMap]> {
+        let reason = match response {
+            VersionsResponse::Found(version_maps) => return Some(version_maps),
+            VersionsResponse::NoIndex => UnavailablePackage::NoIndex,
+            VersionsResponse::Offline => UnavailablePackage::Offline,
+            VersionsResponse::NotFound => UnavailablePackage::NotFound,
+        };
+        self.unavailable_packages.pin().insert(name.clone(), reason);
+        None
+    }
+
     /// Given a candidate registry requirement, choose the next version in range to try, or `None`
     /// if there is no version in this range.
     fn choose_version_registry<'index>(
@@ -1258,27 +1274,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         let index = index.map(IndexMetadata::url);
         visited.insert(name.clone());
 
-        let version_maps = match *versions_response {
-            VersionsResponse::Found(ref version_maps) => version_maps.as_slice(),
-            VersionsResponse::NoIndex => {
-                self.unavailable_packages
-                    .pin()
-                    .insert(name.clone(), UnavailablePackage::NoIndex);
-                &[]
-            }
-            VersionsResponse::Offline => {
-                self.unavailable_packages
-                    .pin()
-                    .insert(name.clone(), UnavailablePackage::Offline);
-                &[]
-            }
-            VersionsResponse::NotFound => {
-                self.unavailable_packages
-                    .pin()
-                    .insert(name.clone(), UnavailablePackage::NotFound);
-                &[]
-            }
-        };
+        let version_maps = self
+            .record_package_availability(name, &versions_response)
+            .unwrap_or_default();
 
         debug!("Searching for a compatible version of {package} ({range})");
 
@@ -2131,30 +2129,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     .wait()
                     .await;
 
-                let version_map = match *versions_response {
-                    VersionsResponse::Found(ref version_map) => version_map,
-                    // Short-circuit if we did not find any versions for the package
-                    VersionsResponse::NoIndex => {
-                        self.unavailable_packages
-                            .pin()
-                            .insert(package_name.clone(), UnavailablePackage::NoIndex);
-
-                        return Ok(None);
-                    }
-                    VersionsResponse::Offline => {
-                        self.unavailable_packages
-                            .pin()
-                            .insert(package_name.clone(), UnavailablePackage::Offline);
-
-                        return Ok(None);
-                    }
-                    VersionsResponse::NotFound => {
-                        self.unavailable_packages
-                            .pin()
-                            .insert(package_name.clone(), UnavailablePackage::NotFound);
-
-                        return Ok(None);
-                    }
+                let Some(version_maps) =
+                    self.record_package_availability(&package_name, &versions_response)
+                else {
+                    return Ok(None);
                 };
 
                 // We don't have access to the fork state when prefetching.
@@ -2165,7 +2143,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 let Some(candidate) = self.selector.select(
                     &package_name,
                     &range,
-                    version_map,
+                    version_maps,
                     &self.preferences,
                     &self.installed_packages,
                     &self.exclusions,
@@ -2182,7 +2160,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 };
 
                 // If the registry provided metadata for this distribution, use it.
-                for version_map in version_map {
+                for version_map in version_maps {
                     if let Some(metadata) = version_map.get_metadata(candidate.version()) {
                         let dist = dist.for_resolution();
                         if version_map.index() == dist.index() {
