@@ -1,18 +1,16 @@
-#[cfg(any(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 use anyhow::Result;
-#[cfg(any(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 use assert_cmd::prelude::*;
 #[cfg(feature = "test-python")]
-use assert_fs::fixture::ChildPath;
-#[cfg(any(feature = "test-python", feature = "test-pypi"))]
-use assert_fs::fixture::{FileWriteStr, PathChild};
+use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild};
 #[cfg(feature = "test-python")]
 use indoc::indoc;
 
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 use uv_static::EnvVars;
 
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 use uv_test::copy_dir_ignore;
 #[cfg(feature = "test-python")]
 use uv_test::packse::{PackseServer, scenario::Scenario};
@@ -20,7 +18,7 @@ use uv_test::uv_snapshot;
 
 #[test]
 fn show_empty() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.pip_show(), @"
     exit_code: 1 (failure)
@@ -31,7 +29,7 @@ fn show_empty() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn show_requires_multiple() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -191,7 +189,7 @@ fn show_package_lookup_results() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn show_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -301,7 +299,7 @@ fn show_strict_validates_entire_environment() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn show_files() {
     let context = uv_test::test_context!("3.12");
 
@@ -372,7 +370,7 @@ fn show_files() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn show_target() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -418,7 +416,7 @@ fn show_target() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn show_prefix() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
