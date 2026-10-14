@@ -11,21 +11,29 @@ use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
 #[test]
-fn audit_offline() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+fn audit_offline_flag() {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.filters(), context.audit().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Auditing requires network access and cannot be performed in offline mode
     ");
+}
 
+#[test]
+fn audit_offline_environment() {
+    let context = uv_test::test_context_with_versions!(&[]);
     uv_snapshot!(context.filters(), context.audit().env(EnvVars::UV_OFFLINE, "1"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Auditing requires network access and cannot be performed in offline mode
     ");
+}
 
+#[test]
+fn audit_offline_configuration() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
     context.temp_dir.child("uv.toml").write_str(indoc! {"
         offline = true
     "})?;
