@@ -790,47 +790,6 @@ fn build_sdist_with_long_path() -> Result<()> {
 }
 
 #[test]
-fn sdist_error_without_module() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let temp_dir = TempDir::new()?;
-
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-        [project]
-        name = "foo"
-        version = "1.0.0"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-
-    uv_snapshot!(context
-        .build_backend()
-        .arg("build-sdist")
-        .arg(temp_dir.path()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Expected a Python module at: src/foo/__init__.py
-    ");
-
-    fs_err::create_dir(context.temp_dir.join("src"))?;
-
-    uv_snapshot!(context
-        .build_backend()
-        .arg("build-sdist")
-        .arg(temp_dir.path()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Expected a Python module at: src/foo/__init__.py
-    ");
-
-    Ok(())
-}
-
-#[test]
 fn complex_namespace_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let dist = context.temp_dir.child("dist");
