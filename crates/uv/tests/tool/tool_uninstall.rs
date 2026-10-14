@@ -1,32 +1,11 @@
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{ChildPath, FileWriteBin, FileWriteStr, PathChild};
+use assert_fs::fixture::{FileWriteStr, PathChild};
 
 use uv_static::EnvVars;
-use uv_test::packse::generate_wheel;
-use uv_test::{TestContext, assert_path_missing, uv_snapshot};
+use uv_test::{assert_path_missing, uv_snapshot};
 
-/// Create a local wheel for a tool with known entry points.
-fn local_tool_wheel(context: &TestContext, name: &str, entry_points: &[&str]) -> Result<ChildPath> {
-    let entry_points = entry_points
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    let (filename, contents) = generate_wheel(
-        &name.parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &entry_points,
-    );
-    let wheel = context.temp_dir.child(filename);
-    wheel.write_binary(&contents)?;
-    Ok(wheel)
-}
+use crate::tool_fixture::local_tool_wheel;
 
 #[test]
 fn tool_uninstall() -> Result<()> {
