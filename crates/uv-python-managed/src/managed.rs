@@ -1,6 +1,6 @@
 use core::fmt;
 use std::borrow::Cow;
-use std::cmp::{Ordering, Reverse};
+use std::cmp::Ordering;
 use std::ffi::OsStr;
 use std::io::{self, Write};
 #[cfg(windows)]
@@ -156,17 +156,13 @@ impl ManagedPythonInstallations {
 
         // Support `toolchains` -> `python` migration transparently.
         if !root.exists()
-            && root
-                .parent()
-                .is_some_and(|parent| parent.join("toolchains").exists())
+            && let Some(deprecated) = root.parent().map(|parent| parent.join("toolchains"))
+            && deprecated.exists()
         {
-            let deprecated = root.parent().unwrap().join("toolchains");
             // Move the deprecated directory to the new location.
             fs::rename(&deprecated, root)?;
-            // Create a link or junction to at the old location
+            // Create a link or junction at the old location.
             uv_fs::replace_symlink(root, &deprecated)?;
-        } else {
-            fs::create_dir_all(root)?;
         }
 
         // Create the directory, if it doesn't exist.
@@ -235,7 +231,7 @@ impl ManagedPythonInstallations {
                     })
                     .ok()
             })
-            .sorted_unstable_by_key(|installation| Reverse(installation.key().clone())))
+            .sorted_unstable_by(|left, right| right.key().cmp(left.key())))
     }
 
     /// Iterate over Python installations that support the current platform.
