@@ -556,8 +556,8 @@ fn add_remove() -> Result<()> {
         .arg("--strict")
         .assert()
         .success();
+    context.assert_command("import iniconfig").success();
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tomli==2.0.1")?;
 
     uv_snapshot!(context.pip_sync()
@@ -575,7 +575,7 @@ fn add_remove() -> Result<()> {
     );
 
     context.assert_command("import tomli").success();
-    context.assert_command("import markupsafe").failure();
+    context.assert_not_installed("iniconfig");
 
     Ok(())
 }
