@@ -17,6 +17,7 @@ use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonPreference, PythonRequest, Target,
 };
 
+use crate::environment::apply_target_or_prefix;
 use crate::reporters::report_target_environment;
 use uv_command_support::ExitStatus;
 use uv_command_support::Printer;
@@ -45,22 +46,9 @@ pub fn pip_freeze(
         cache,
     )?;
 
-    // Apply any `--target` or `--prefix` directories.
-    let environment = if let Some(target) = target {
-        debug!(
-            "Using `--target` directory at `{}`",
-            target.root().user_display()
-        );
-        environment.with_target(target)?
-    } else if let Some(prefix) = prefix {
-        debug!(
-            "Using `--prefix` directory at `{}`",
-            prefix.root().user_display()
-        );
-        environment.with_prefix(prefix)?
-    } else {
-        environment
-    };
+    let environment = apply_target_or_prefix(environment, target, prefix, |flag, path| {
+        debug!("Using `{flag}` directory at `{}`", path.user_display());
+    })?;
 
     report_target_environment(&environment, cache, printer)?;
 
