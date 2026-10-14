@@ -13,6 +13,7 @@ use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
+use predicates::prelude::predicate;
 
 #[cfg(target_os = "linux")]
 use std::process::Command;
@@ -26,7 +27,17 @@ use uv_static::EnvVars;
 
 #[cfg(unix)]
 use uv_test::assert_link_target;
-use uv_test::{assert_path_missing, uv_snapshot};
+use uv_test::{TestContext, assert_path_missing, uv_snapshot};
+
+fn assert_cache_cleared(context: &TestContext) -> Result<()> {
+    let lock = context.cache_dir.child(".lock");
+    lock.assert(predicate::path::is_file());
+    let remaining = fs_err::read_dir(&context.cache_dir)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(remaining, [lock.to_path_buf()]);
+    Ok(())
+}
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn cached_response<'a>(responses: &'a [PathBuf], filename: &str) -> &'a Path {
@@ -72,7 +83,7 @@ fn clean_all() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
 
-    assert!(context.cache_dir.child(".lock").is_file());
+    assert_cache_cleared(&context)?;
 
     Ok(())
 }
@@ -327,7 +338,7 @@ async fn clean_force() -> Result<()> {
     ");
 
     assert_path_missing(cached);
-    assert!(context.cache_dir.child(".lock").is_file());
+    assert_cache_cleared(&context)?;
 
     Ok(())
 }
