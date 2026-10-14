@@ -338,6 +338,8 @@ fn list_outdated_freeze() {
 #[test]
 #[cfg(all(feature = "test-git", feature = "test-pypi"))]
 fn list_outdated_git() -> Result<()> {
+    use uv_test::packse::{PackseServer, scenario::Scenario};
+
     let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -360,7 +362,11 @@ fn list_outdated_git() -> Result<()> {
     "
     );
 
-    uv_snapshot!(context.pip_list().arg("--outdated"), @"
+    let without_git_package = PackseServer::new("simple/dependency-groups.toml");
+    uv_snapshot!(context.pip_list()
+        .arg("--outdated")
+        .arg("--default-index")
+        .arg(without_git_package.index_url()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Package   Version Latest Type
@@ -368,6 +374,27 @@ fn list_outdated_git() -> Result<()> {
     iniconfig 1.0.0   2.0.0  wheel
     "
     );
+
+    let scenario = toml::from_str::<Scenario>(indoc::indoc! {r#"
+        name = "git-package-on-index"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.iniconfig.versions."2.0.0"]
+        [packages.uv-public-pypackage.versions."0.2.0"]
+    "#})?;
+    let with_git_package = PackseServer::from_scenario(&scenario);
+    uv_snapshot!(context.pip_list()
+        .arg("--outdated")
+        .arg("--default-index")
+        .arg(with_git_package.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Package             Version Latest Type
+    ------------------- ------- ------ -----
+    iniconfig           1.0.0   2.0.0  wheel
+    uv-public-pypackage 0.1.0   0.2.0  wheel
+    ");
 
     Ok(())
 }
