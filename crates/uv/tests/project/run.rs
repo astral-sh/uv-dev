@@ -5386,6 +5386,7 @@ fn run_with_group_conflict() -> Result<()> {
     Ok(())
 }
 
+/// Group-specific dependencies make each selection and exclusion observable.
 #[test]
 fn run_default_groups() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -5402,7 +5403,7 @@ fn run_default_groups() -> Result<()> {
         [dependency-groups]
         foo = ["anyio"]
         bar = ["iniconfig"]
-        dev = ["sniffio"]
+        dev = ["certifi"]
         "#,
     )?;
 
@@ -5412,10 +5413,10 @@ fn run_default_groups() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("python").arg("-c").arg("import typing_extensions"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 7 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
-     + sniffio==1.3.1
+     + certifi==2024.2.2
      + typing-extensions==4.10.0
     ");
 
@@ -5431,7 +5432,7 @@ fn run_default_groups() -> Result<()> {
         [dependency-groups]
         foo = ["anyio"]
         bar = ["iniconfig"]
-        dev = ["sniffio"]
+        dev = ["certifi"]
 
         [tool.uv]
         default-groups = ["foo"]
@@ -5445,11 +5446,14 @@ fn run_default_groups() -> Result<()> {
         .arg("import typing_extensions"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
+    Resolved 7 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 3 packages in [TIME]
      + anyio==4.3.0
+     - certifi==2024.2.2
      + idna==3.6
+     + sniffio==1.3.1
     ");
 
     // `--no-group` should remove from the defaults.
@@ -5462,7 +5466,7 @@ fn run_default_groups() -> Result<()> {
         .arg("import typing_extensions"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 7 packages in [TIME]
     Uninstalled 3 packages in [TIME]
      - anyio==4.3.0
      - idna==3.6
@@ -5479,7 +5483,7 @@ fn run_default_groups() -> Result<()> {
         .arg("import iniconfig"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
+    Resolved 7 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 4 packages in [TIME]
      + anyio==4.3.0
@@ -5488,7 +5492,7 @@ fn run_default_groups() -> Result<()> {
      + sniffio==1.3.1
     ");
 
-    // Using `--all-groups` should include the defaults
+    // `--all-groups` includes the non-default `dev` group as well.
     uv_snapshot!(context.filters(), context.run()
         .arg("--exact")
         .arg("--all-groups")
@@ -5497,8 +5501,9 @@ fn run_default_groups() -> Result<()> {
         .arg("import iniconfig"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Checked 5 packages in [TIME]
+    Resolved 7 packages in [TIME]
+    Installed 1 package in [TIME]
+     + certifi==2024.2.2
     ");
 
     // Using `--only-group` should exclude the defaults
@@ -5511,9 +5516,10 @@ fn run_default_groups() -> Result<()> {
         .arg("import iniconfig"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Uninstalled 4 packages in [TIME]
+    Resolved 7 packages in [TIME]
+    Uninstalled 5 packages in [TIME]
      - anyio==4.3.0
+     - certifi==2024.2.2
      - idna==3.6
      - sniffio==1.3.1
      - typing-extensions==4.10.0
@@ -5527,9 +5533,10 @@ fn run_default_groups() -> Result<()> {
         .arg("import iniconfig"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Resolved 7 packages in [TIME]
+    Installed 5 packages in [TIME]
      + anyio==4.3.0
+     + certifi==2024.2.2
      + idna==3.6
      + sniffio==1.3.1
      + typing-extensions==4.10.0
@@ -5544,9 +5551,10 @@ fn run_default_groups() -> Result<()> {
         .arg("import typing_extensions"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Uninstalled 4 packages in [TIME]
+    Resolved 7 packages in [TIME]
+    Uninstalled 5 packages in [TIME]
      - anyio==4.3.0
+     - certifi==2024.2.2
      - idna==3.6
      - iniconfig==2.0.0
      - sniffio==1.3.1
@@ -5559,16 +5567,16 @@ fn run_default_groups() -> Result<()> {
         .arg("import iniconfig"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Resolved 7 packages in [TIME]
+    Installed 5 packages in [TIME]
      + anyio==4.3.0
+     + certifi==2024.2.2
      + idna==3.6
      + iniconfig==2.0.0
      + sniffio==1.3.1
     ");
 
-    // Using `--no-default-groups` with `--group foo` and `--group bar` should include those
-    // groups.
+    // Explicit groups exclude `dev` when defaults are disabled.
     uv_snapshot!(context.filters(), context.run()
         .arg("--exact")
         .arg("--no-default-groups")
@@ -5581,8 +5589,9 @@ fn run_default_groups() -> Result<()> {
         .arg("import typing_extensions"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Checked 5 packages in [TIME]
+    Resolved 7 packages in [TIME]
+    Uninstalled 1 package in [TIME]
+     - certifi==2024.2.2
     ");
 
     Ok(())
