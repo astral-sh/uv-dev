@@ -13339,7 +13339,13 @@ async fn add_stop_index_search_early_on_auth_failure() -> Result<()> {
 #[tokio::test]
 async fn add_ignore_error_codes() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let proxy = crate::pypi_proxy::start().await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/anyio/"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1..)
+        .mount(&server)
+        .await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc!(
@@ -13351,10 +13357,10 @@ async fn add_ignore_error_codes() -> Result<()> {
         dependencies = []
         [[tool.uv.index]]
         name = "my-index"
-        url = "{proxy_uri}/basic-auth/simple"
+        url = "{index_uri}/simple"
         ignore-error-codes = [401, 403]
         "#,
-        proxy_uri = proxy.uri()
+        index_uri = server.uri()
     ))?;
 
     uv_snapshot!(context.filters(), context.add().arg("anyio"), @"
