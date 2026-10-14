@@ -2088,7 +2088,7 @@ fn sync_dry_json() -> Result<()> {
 /// A member's stricter Python requirement constrains interpreter selection for the workspace.
 #[test]
 fn mixed_requires_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     // The first interpreter in search order satisfies the root but not the child.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -2097,7 +2097,7 @@ fn mixed_requires_python() -> Result<()> {
         [project]
         name = "albatross"
         version = "0.1.0"
-        requires-python = ">=3.9"
+        requires-python = ">=3.11"
         dependencies = ["bird-feeder", "anyio>3"]
 
         [tool.uv.sources]
@@ -2153,11 +2153,11 @@ fn mixed_requires_python() -> Result<()> {
     ");
 
     // Running `uv sync` again should fail.
-    uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.9"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.11"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
-    error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `bird-feeder`'s `project.requires-python`).
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
+    error: The requested interpreter resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `bird-feeder`'s `project.requires-python`).
     ");
 
     Ok(())
@@ -2166,7 +2166,7 @@ fn mixed_requires_python() -> Result<()> {
 /// Attribute an incompatible workspace interpreter to the root when it sets the stricter bound.
 #[test]
 fn mixed_requires_python_root_constraint() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9"]);
+    let context = uv_test::test_context_with_versions!(&["3.11"]);
     context
         .temp_dir
         .child("pyproject.toml")
@@ -2186,14 +2186,14 @@ fn mixed_requires_python_root_constraint() -> Result<()> {
         [project]
         name = "bird-feeder"
         version = "0.1.0"
-        requires-python = ">=3.9"
+        requires-python = ">=3.11"
     "#})?;
 
-    uv_snapshot!(context.filters(), context.sync().args(["--python", "3.9", "--offline"]), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--python", "3.11", "--offline"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
-    error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `albatross`'s `project.requires-python`).
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
+    error: The requested interpreter resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `albatross`'s `project.requires-python`).
     ");
 
     Ok(())
