@@ -589,20 +589,20 @@ fn login_missing_arguments() {
 async fn logout_native_auth() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_real_home();
     let proxy = crate::pypi_proxy::start().await;
-
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
+    let service = proxy.url("/basic-auth/simple");
+    let token_status = context
+        .auth_token()
+        .arg(&service)
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()?;
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
+    anyhow::ensure!(
+        token_status.code() == Some(2),
+        "refusing to remove an existing native token credential"
+    );
+    let credential =
+        NativeAuthFixture::guard_vacant_entry(service.clone(), Some("public"), "heron")?;
 
     // Without a service name
     uv_snapshot!(context.filters(), context.auth_logout(), @r"
@@ -673,8 +673,10 @@ async fn logout_native_auth() -> Result<()> {
     ----- stderr -----
     Removed credentials for public@http://[LOCALHOST]/basic-auth
     ");
+    credential.finish_after_logout()?;
 
     // Login again
+    let credential = NativeAuthFixture::guard_vacant_entry(service, Some("public"), "heron")?;
     context
         .auth_login()
         .arg(proxy.url("/basic-auth/simple"))
@@ -694,6 +696,7 @@ async fn logout_native_auth() -> Result<()> {
     ----- stderr -----
     Removed credentials for public@http://[LOCALHOST]/basic-auth
     ");
+    credential.finish_after_logout()?;
 
     // Conflict between --username and a URL username is rejected
     uv_snapshot!(context.filters(), context.auth_logout()
