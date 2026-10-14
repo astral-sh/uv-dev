@@ -1,13 +1,13 @@
 use std::fmt::Write;
 
 use anyhow::{Result, bail};
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use owo_colors::OwoColorize;
 use tracing::debug;
 
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
-use uv_tool::{InstalledTools, Tool, ToolEntrypoint};
+use uv_tool::{InstalledTools, Tool};
 
 use uv_command_support::ExitStatus;
 use uv_command_support::Printer;
@@ -47,69 +47,57 @@ async fn do_uninstall(
     names: Vec<PackageName>,
     printer: Printer,
 ) -> Result<()> {
-    let mut dangling = false;
-    let mut entrypoints = if names.is_empty() {
-        let mut entrypoints = vec![];
-        for (name, receipt) in installed_tools.tools()? {
-            let Ok(receipt) = receipt else {
-                // If the tool is not installed properly, attempt to remove the environment anyway.
-                match installed_tools.remove_environment(&name) {
-                    Ok(()) => {
-                        dangling = true;
-                        writeln!(
-                            printer.stderr(),
-                            "Removed dangling environment for `{name}`"
-                        )?;
-                        continue;
-                    }
-                    Err(err)
-                        if err
-                            .as_io_error()
-                            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
-                    {
-                        bail!("`{name}` is not installed");
-                    }
-                    Err(err) => {
-                        return Err(err.into());
-                    }
-                }
-            };
-
-            entrypoints.extend(uninstall_tool(&name, &receipt, installed_tools).await?);
-        }
-        entrypoints
+    // `--all` removes malformed environments; named tools only fall back for missing receipts.
+    let tools = if names.is_empty() {
+        Either::Left(
+            installed_tools
+                .tools()?
+                .into_iter()
+                .map(|(name, receipt)| Ok((name, receipt.ok()))),
+        )
     } else {
-        let mut entrypoints = vec![];
-        for name in names {
-            let Some(receipt) = installed_tools.get_tool_receipt(&name)? else {
-                // If the tool is not installed properly, attempt to remove the environment anyway.
-                match installed_tools.remove_environment(&name) {
-                    Ok(()) => {
-                        dangling = true;
-                        writeln!(
-                            printer.stderr(),
-                            "Removed dangling environment for `{name}`"
-                        )?;
-                        continue;
-                    }
-                    Err(uv_tool::Error::VirtualEnvError(uv_virtualenv::Error::Io(err)))
-                        if err.kind() == std::io::ErrorKind::NotFound =>
-                    {
-                        bail!("`{name}` is not installed");
-                    }
-                    Err(err) => {
-                        return Err(err.into());
-                    }
-                }
-            };
-
-            entrypoints.extend(uninstall_tool(&name, &receipt, installed_tools).await?);
-        }
-        entrypoints
+        Either::Right(names.into_iter().map(|name| {
+            installed_tools
+                .get_tool_receipt(&name)
+                .map(|receipt| (name, receipt))
+        }))
     };
-    entrypoints.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+    let mut dangling = false;
+    let mut executable_names = Vec::new();
+    for tool in tools {
+        let (name, receipt) = tool?;
+        let Some(receipt) = receipt else {
+            match installed_tools.remove_environment(&name) {
+                Ok(()) => {
+                    dangling = true;
+                    writeln!(
+                        printer.stderr(),
+                        "Removed dangling environment for `{name}`"
+                    )?;
+                    continue;
+                }
+                Err(err)
+                    if err
+                        .as_io_error()
+                        .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    bail!("`{name}` is not installed");
+                }
+                Err(err) => return Err(err.into()),
+            }
+        };
 
-    if entrypoints.is_empty() {
+        uninstall_tool(&name, &receipt, installed_tools).await?;
+        executable_names.extend(
+            receipt
+                .entrypoints()
+                .iter()
+                .map(|entrypoint| entrypoint.name.clone()),
+        );
+    }
+    executable_names.sort_unstable();
+
+    if executable_names.is_empty() {
         // If we removed at least one dangling environment, there's no need to summarize.
         if !dangling {
             writeln!(printer.stderr(), "Nothing to uninstall")?;
@@ -117,26 +105,19 @@ async fn do_uninstall(
         return Ok(());
     }
 
-    let s = if entrypoints.len() == 1 { "" } else { "s" };
+    let s = if executable_names.len() == 1 { "" } else { "s" };
     writeln!(
         printer.stderr(),
         "Uninstalled {} executable{s}: {}",
-        entrypoints.len(),
-        entrypoints
-            .iter()
-            .map(|entrypoint| entrypoint.name.bold())
-            .join(", ")
+        executable_names.len(),
+        executable_names.iter().map(|name| name.bold()).join(", ")
     )?;
 
     Ok(())
 }
 
 /// Uninstall a tool.
-async fn uninstall_tool(
-    name: &PackageName,
-    receipt: &Tool,
-    tools: &InstalledTools,
-) -> Result<Vec<ToolEntrypoint>> {
+async fn uninstall_tool(name: &PackageName, receipt: &Tool, tools: &InstalledTools) -> Result<()> {
     // Remove the tool itself.
     tools.remove_environment(name)?;
 
@@ -144,8 +125,7 @@ async fn uninstall_tool(
     let itself = std::env::current_exe().ok();
 
     // Remove the tool's entrypoints.
-    let entrypoints = receipt.entrypoints();
-    for entrypoint in entrypoints {
+    for entrypoint in receipt.entrypoints() {
         debug!(
             "Removing executable: {}",
             entrypoint.install_path.user_display()
@@ -173,5 +153,5 @@ async fn uninstall_tool(
         }
     }
 
-    Ok(entrypoints.to_vec())
+    Ok(())
 }

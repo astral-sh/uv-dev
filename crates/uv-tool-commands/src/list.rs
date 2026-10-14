@@ -14,6 +14,7 @@ use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{IndexCapabilities, RequiresPython};
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
+use uv_pep440::Version;
 use uv_python_types::LenientImplementationName;
 use uv_settings::{Combine, ResolverInstallerOptions};
 use uv_tool::InstalledTools;
@@ -55,8 +56,8 @@ pub async fn list(
         Err(err) => return Err(err.into()),
     };
 
-    let mut tools = installed_tools.tools()?.into_iter().collect::<Vec<_>>();
-    tools.sort_by_key(|(name, _)| name.clone());
+    let mut tools = installed_tools.tools()?;
+    tools.sort_by(|(left, _), (right, _)| left.cmp(right));
 
     if tools.is_empty() {
         writeln!(printer.stderr(), "No tools installed")?;
@@ -114,68 +115,63 @@ pub async fn list(
     }
 
     // Determine the latest version for each tool when `--outdated` is requested.
-    let latest: FxHashMap<PackageName, Option<DistFilename>> = if outdated
-        && !valid_tools.is_empty()
-    {
-        let download_concurrency = concurrency.downloads_semaphore.clone();
-
+    let latest: FxHashMap<PackageName, Version> = if outdated && !valid_tools.is_empty() {
         let reporter = LatestVersionReporter::from(printer).with_length(valid_tools.len() as u64);
 
         // Fetch the latest version for each tool.
         let mut fetches = futures::stream::iter(&valid_tools)
-            .map(|(name, tool, tool_env, _version)| {
-                let client_builder = client_builder.clone();
-                let download_concurrency = download_concurrency.clone();
-                let args = args.clone();
-                let filesystem = filesystem.clone();
-                async move {
-                    let capabilities = IndexCapabilities::default();
-                    let settings = ResolverInstallerSettings::from(args.combine(
-                        ResolverInstallerOptions::from(tool.options().clone()).combine(filesystem),
-                    ));
-                    let interpreter = tool_env.environment().interpreter();
+            .map(async |(name, tool, tool_env, _version)| {
+                let capabilities = IndexCapabilities::default();
+                let settings = ResolverInstallerSettings::from(
+                    args.clone().combine(
+                        ResolverInstallerOptions::from(tool.options().clone())
+                            .combine(filesystem.clone()),
+                    ),
+                );
+                let interpreter = tool_env.environment().interpreter();
 
-                    let client = RegistryClientBuilder::new(
-                        client_builder
-                            .clone()
-                            .keyring(settings.resolver.keyring_provider),
-                        cache.clone().with_refresh(Refresh::All(Timestamp::now())),
-                    )
-                    .index_locations(settings.resolver.index_locations.clone())
-                    .index_strategy(settings.resolver.index_strategy)
-                    .markers(interpreter.markers())
-                    .platform(interpreter.platform())
-                    .build()?;
+                let client = RegistryClientBuilder::new(
+                    client_builder
+                        .clone()
+                        .keyring(settings.resolver.keyring_provider),
+                    cache.clone().with_refresh(Refresh::All(Timestamp::now())),
+                )
+                .index_locations(settings.resolver.index_locations.clone())
+                .index_strategy(settings.resolver.index_strategy)
+                .markers(interpreter.markers())
+                .platform(interpreter.platform())
+                .build()?;
 
-                    let requires_python = RequiresPython::greater_than_equal_version(
-                        interpreter.python_full_version(),
-                    );
-                    let latest_client = LatestClient {
-                        client: &client,
-                        capabilities: &capabilities,
-                        prerelease: &settings.resolver.prerelease,
-                        exclude_newer: &settings.resolver.exclude_newer,
-                        index_locations: &settings.resolver.index_locations,
-                        tags: None,
-                        requires_python: Some(&requires_python),
-                    };
+                let requires_python =
+                    RequiresPython::greater_than_equal_version(interpreter.python_full_version());
+                let latest_client = LatestClient {
+                    client: &client,
+                    capabilities: &capabilities,
+                    prerelease: &settings.resolver.prerelease,
+                    exclude_newer: &settings.resolver.exclude_newer,
+                    index_locations: &settings.resolver.index_locations,
+                    tags: None,
+                    requires_python: Some(&requires_python),
+                };
 
-                    let latest = latest_client
-                        .find_latest(name, None, &download_concurrency)
-                        .await?;
-                    Ok::<(&PackageName, Option<DistFilename>), anyhow::Error>((name, latest))
-                }
+                let latest = latest_client
+                    .find_latest(name, None, &concurrency.downloads_semaphore)
+                    .await?;
+                Ok::<(&PackageName, Option<DistFilename>), anyhow::Error>((name, latest))
             })
             .buffer_unordered(concurrency.downloads);
 
         let mut map = FxHashMap::default();
-        while let Some((name, version)) = fetches.next().await.transpose()? {
-            if let Some(version) = version.as_ref() {
-                reporter.on_fetch_version(name, version.version());
+        while let Some((name, filename)) = fetches.next().await.transpose()? {
+            if let Some(filename) = filename {
+                let version = filename.into_version();
+                reporter.on_fetch_version(name, &version);
+                map.insert(name.clone(), version);
             } else {
                 reporter.on_fetch_progress();
+                // A later result supersedes an earlier one for the same normalized tool name.
+                map.remove(name);
             }
-            map.insert(name.clone(), version);
         }
         reporter.on_fetch_complete();
         map
@@ -185,104 +181,74 @@ pub async fn list(
 
     for (name, tool, tool_env, version) in valid_tools {
         // If `--outdated` is set, skip tools that are up-to-date.
-        if outdated {
-            let is_outdated = latest
-                .get(&name)
-                .and_then(Option::as_ref)
-                .is_some_and(|filename| filename.version() > &version);
-            if !is_outdated {
+        let latest_version = if outdated {
+            let Some(latest) = latest.get(&name).filter(|latest| *latest > &version) else {
                 continue;
-            }
-        }
+            };
+            Some(latest)
+        } else {
+            None
+        };
 
-        let version_specifier = show_version_specifiers
-            .then(|| {
+        let mut summary = format!("{name} v{version}");
+        if show_version_specifiers {
+            write_annotation(
+                &mut summary,
+                "required",
                 tool.requirements()
                     .iter()
                     .filter(|req| req.name == name)
                     .map(|req| req.source.to_string())
-                    .filter(|s| !s.is_empty())
-                    .peekable()
-            })
-            .take_if(|specifiers| specifiers.peek().is_some())
-            .map(|mut specifiers| {
-                let specifiers = specifiers.join(", ");
-                format!(" [required: {specifiers}]")
-            })
-            .unwrap_or_default();
+                    .filter(|source| !source.is_empty()),
+            )?;
+        }
 
-        let extra_requirements = show_extras
-            .then(|| {
+        if show_extras {
+            write_annotation(
+                &mut summary,
+                "extras",
                 tool.requirements()
                     .iter()
                     .filter(|req| req.name == name)
-                    .flat_map(|req| req.extras.iter()) // Flatten the extras from all matching requirements
-                    .peekable()
-            })
-            .take_if(|extras| extras.peek().is_some())
-            .map(|extras| {
-                let extras_str = extras.map(ToString::to_string).join(", ");
-                format!(" [extras: {extras_str}]")
-            })
-            .unwrap_or_default();
+                    .flat_map(|req| req.extras.iter()),
+            )?;
+        }
 
-        let python_version = if show_python {
-            let interpreter = tool_env.environment().interpreter();
-            let implementation = LenientImplementationName::from(interpreter.implementation_name());
-            format!(
-                " [{} {}]",
-                implementation.pretty(),
-                interpreter.python_full_version()
-            )
-        } else {
-            String::new()
-        };
-
-        let with_requirements = show_with
-            .then(|| {
+        if show_with {
+            write_annotation(
+                &mut summary,
+                "with",
                 tool.requirements()
                     .iter()
                     .filter(|req| req.name != name)
-                    .peekable()
-            })
-            .take_if(|requirements| requirements.peek().is_some())
-            .map(|requirements| {
-                let requirements = requirements
-                    .map(|req| format!("{}{}", req.name, req.source))
-                    .join(", ");
-                format!(" [with: {requirements}]")
-            })
-            .unwrap_or_default();
+                    .map(|req| format!("{}{}", req.name, req.source)),
+            )?;
+        }
 
-        let latest_version = if outdated {
-            latest
-                .get(&name)
-                .and_then(Option::as_ref)
-                .map(|filename| format!(" [latest: {}]", filename.version()))
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
+        if show_python {
+            let interpreter = tool_env.environment().interpreter();
+            let implementation = LenientImplementationName::from(interpreter.implementation_name());
+            write!(
+                summary,
+                " [{} {}]",
+                implementation.pretty(),
+                interpreter.python_full_version()
+            )?;
+        }
+
+        if let Some(latest) = latest_version {
+            write!(summary, " [latest: {latest}]")?;
+        }
 
         if show_paths {
             writeln!(
                 printer.stdout(),
                 "{} ({})",
-                format!(
-                    "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
-                )
-                .bold(),
+                summary.bold(),
                 installed_tools.tool_dir(&name).simplified_display().cyan(),
             )?;
         } else {
-            writeln!(
-                printer.stdout(),
-                "{}",
-                format!(
-                    "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
-                )
-                .bold()
-            )?;
+            writeln!(printer.stdout(), "{}", summary.bold())?;
         }
 
         // Output tool entrypoints
@@ -296,4 +262,17 @@ pub async fn list(
     }
 
     Ok(ExitStatus::Success)
+}
+
+/// Append a nonempty list of values as a tool annotation.
+fn write_annotation<T: std::fmt::Display>(
+    output: &mut String,
+    label: &str,
+    values: impl Iterator<Item = T>,
+) -> std::fmt::Result {
+    let mut values = values.peekable();
+    if values.peek().is_some() {
+        write!(output, " [{label}: {}]", values.format(", "))?;
+    }
+    Ok(())
 }

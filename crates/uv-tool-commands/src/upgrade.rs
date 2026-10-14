@@ -1,6 +1,5 @@
 use crate::common::finalize_tool_install;
 use anyhow::{Context, Result};
-use itertools::Itertools;
 use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -15,7 +14,7 @@ use uv_configuration::{
 };
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{ExtraBuildRequires, Index, Requirement, RequirementSource};
+use uv_distribution_types::{ExtraBuildRequires, Requirement, RequirementSource};
 use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
@@ -123,14 +122,11 @@ pub async fn upgrade(
         None
     };
 
-    // Determine whether we applied any upgrades.
-    let mut did_upgrade_tool = vec![];
-
-    // Determine whether we applied any upgrades.
-    let mut did_upgrade_environment = vec![];
+    let mut upgraded_tool_or_dependencies = false;
+    let mut upgraded_environments = Vec::new();
 
     // Constraints that caused upgrades to be skipped or altered.
-    let mut collected_constraints: Vec<(PackageName, UpgradeConstraint)> = Vec::new();
+    let mut collected_constraints = Vec::new();
 
     let mut errors = Vec::new();
     for (name, constraints) in &names {
@@ -157,18 +153,18 @@ pub async fn upgrade(
             Ok(report) => {
                 match report.outcome {
                     UpgradeOutcome::UpgradeEnvironment => {
-                        did_upgrade_environment.push(name);
+                        upgraded_environments.push(name);
                     }
                     UpgradeOutcome::UpgradeTool | UpgradeOutcome::UpgradeDependencies => {
-                        did_upgrade_tool.push(name);
+                        upgraded_tool_or_dependencies = true;
                     }
                     UpgradeOutcome::NoOp => {
                         debug!("Upgrading `{name}` was a no-op");
                     }
                 }
 
-                if let Some(constraint) = report.constraint.clone() {
-                    collected_constraints.push((name.clone(), constraint));
+                if let Some(constraint) = report.constraint {
+                    collected_constraints.push((name, constraint));
                 }
             }
             Err(err) => {
@@ -178,10 +174,7 @@ pub async fn upgrade(
     }
 
     if !errors.is_empty() {
-        for (name, err) in errors
-            .into_iter()
-            .sorted_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b))
-        {
+        for (name, err) in errors {
             trace!("Error trace: {err:?}");
             render_error(
                 &err.context(format!("Failed to upgrade {}", name.green())),
@@ -191,13 +184,13 @@ pub async fn upgrade(
         return Ok(ExitStatus::Failure);
     }
 
-    if did_upgrade_tool.is_empty() && did_upgrade_environment.is_empty() {
+    if !upgraded_tool_or_dependencies && upgraded_environments.is_empty() {
         writeln!(printer.stderr(), "Nothing to upgrade")?;
     }
 
     if let Some(python_request) = python_request {
-        if !did_upgrade_environment.is_empty() {
-            let tools = did_upgrade_environment
+        if !upgraded_environments.is_empty() {
+            let tools = upgraded_environments
                 .iter()
                 .map(|name| format!("`{}`", name.cyan()))
                 .collect::<Vec<_>>();
@@ -216,7 +209,7 @@ pub async fn upgrade(
     }
 
     for (name, constraint) in collected_constraints {
-        constraint.print(&name, printer)?;
+        constraint.print(name, printer)?;
     }
 
     Ok(ExitStatus::Success)
@@ -244,15 +237,12 @@ impl UpgradeConstraint {
     fn print(&self, name: &PackageName, printer: Printer) -> Result<()> {
         match self {
             Self::PinnedVersion { version } => {
-                let name = name.to_string();
-                let reinstall_command = format!("uv tool install {name}@latest");
-
                 writeln!(
                     printer.stderr(),
                     "hint: `{}` is pinned to `{}` (installed with an exact version pin); reinstall with `{}` to upgrade to a new version.",
                     name.cyan(),
-                    version.to_string().magenta(),
-                    reinstall_command.green(),
+                    version.magenta(),
+                    format_args!("uv tool install {name}@latest").green(),
                 )?;
             }
         }
@@ -286,45 +276,28 @@ async fn upgrade_tool(
 ) -> Result<UpgradeReport> {
     let tool_locks = preview.is_enabled(PreviewFeature::ToolInstallLocks);
     // Ensure the tool is installed.
-    let existing_tool_receipt = match installed_tools.get_tool_receipt(name) {
-        Ok(Some(receipt)) => receipt,
-        Ok(None) => {
-            let install_command = format!("uv tool install {name}");
-            return Err(anyhow::anyhow!(
-                "`{}` is not installed; run `{}` to install",
-                name.cyan(),
-                install_command.green()
-            ));
-        }
-        Err(_) => {
-            let install_command = format!("uv tool install --force {name}");
-            return Err(anyhow::anyhow!(
-                "`{}` is missing a valid receipt; run `{}` to reinstall",
-                name.cyan(),
-                install_command.green()
-            ));
-        }
+    let not_installed = || {
+        anyhow::anyhow!(
+            "`{}` is not installed; run `{}` to install",
+            name.cyan(),
+            format!("uv tool install {name}").green()
+        )
     };
-
-    let environment = match installed_tools.get_environment(name, cache) {
-        Ok(Some(environment)) => environment,
-        Ok(None) => {
-            let install_command = format!("uv tool install {name}");
-            return Err(anyhow::anyhow!(
-                "`{}` is not installed; run `{}` to install",
-                name.cyan(),
-                install_command.green()
-            ));
-        }
-        Err(_) => {
-            let install_command = format!("uv tool install --force {name}");
-            return Err(anyhow::anyhow!(
-                "`{}` is missing a valid environment; run `{}` to reinstall",
-                name.cyan(),
-                install_command.green()
-            ));
-        }
+    let invalid_component = |component: &str| {
+        anyhow::anyhow!(
+            "`{}` is missing a valid {component}; run `{}` to reinstall",
+            name.cyan(),
+            format!("uv tool install --force {name}").green()
+        )
     };
+    let existing_tool_receipt = installed_tools
+        .get_tool_receipt(name)
+        .map_err(|_| invalid_component("receipt"))?
+        .ok_or_else(not_installed)?;
+    let environment = installed_tools
+        .get_environment(name, cache)
+        .map_err(|_| invalid_component("environment"))?
+        .ok_or_else(not_installed)?;
 
     // Restore credentials from user configuration when the receipt refers to the same index.
     // Receipts intentionally omit credentials, including usernames needed for keyring lookups.
@@ -333,17 +306,15 @@ async fn upgrade_tool(
         receipt.indexes.index_url.as_ref(),
         filesystem.indexes.index_url.as_ref(),
     ) {
-        let stored = Index::from(stored.clone());
-        let configured = Index::from(configured.clone());
+        let stored_url = stored.as_ref().raw_url();
+        let configured_url = configured.as_ref().raw_url();
 
-        if stored.raw_url().username().is_empty()
-            && stored.raw_url().password().is_none()
-            && (!configured.raw_url().username().is_empty()
-                || configured.raw_url().password().is_some())
-            && CanonicalUrl::new(stored.raw_url().clone())
-                == CanonicalUrl::new(configured.raw_url().clone())
+        if stored_url.username().is_empty()
+            && stored_url.password().is_none()
+            && (!configured_url.username().is_empty() || configured_url.password().is_some())
+            && CanonicalUrl::new(stored_url.clone()) == CanonicalUrl::new(configured_url.clone())
         {
-            receipt.indexes.index_url = Some(configured.into());
+            receipt.indexes.index_url = Some(configured.clone());
         }
     }
 
@@ -360,14 +331,16 @@ async fn upgrade_tool(
         .collect::<Vec<_>>();
     let manifest_overrides = existing_tool_receipt.overrides().to_vec();
     let manifest_excludes = existing_tool_receipt.excludes().to_vec();
-    let lock_manifest = ToolLock::manifest(
-        existing_tool_receipt.requirements(),
-        &manifest_constraints,
-        &manifest_overrides,
-        &manifest_excludes,
-        &build_constraints,
-        &settings.resolver.dependency_metadata,
-    );
+    let lock_manifest = tool_locks.then(|| {
+        ToolLock::manifest(
+            existing_tool_receipt.requirements(),
+            &manifest_constraints,
+            &manifest_overrides,
+            &manifest_excludes,
+            &build_constraints,
+            &settings.resolver.dependency_metadata,
+        )
+    });
     let build_constraints = Constraints::from_specifications(build_constraints);
 
     // Resolve the requirements.
@@ -386,7 +359,7 @@ async fn upgrade_tool(
     let tool_dir = installed_tools.tool_dir(name);
     // TODO(zanieb): When updating an existing environment, build it in the cache directory then
     // copy it into the tool directory.
-    let (environment, outcome, tool_lock) = if tool_locks {
+    let (environment, outcome, tool_lock) = if let Some(lock_manifest) = lock_manifest {
         let target_interpreter =
             requested_interpreter.unwrap_or_else(|| environment.environment().interpreter());
         let site_packages = SitePackages::from_environment(environment.environment())?;
@@ -591,55 +564,49 @@ async fn upgrade_tool(
         (environment, outcome, None)
     };
 
-    if matches!(
-        outcome,
-        UpgradeOutcome::UpgradeEnvironment | UpgradeOutcome::UpgradeTool
-    ) {
-        // At this point, we updated the existing environment, so we should remove any of its
-        // existing executables.
-        remove_entrypoints(&existing_tool_receipt);
+    let constraint = match outcome {
+        UpgradeOutcome::UpgradeTool | UpgradeOutcome::UpgradeEnvironment => {
+            // At this point, we updated the existing environment, so we should remove any of its
+            // existing executables.
+            remove_entrypoints(&existing_tool_receipt);
 
-        let entrypoints: Vec<_> = existing_tool_receipt
-            .entrypoints()
-            .iter()
-            .filter_map(|entry| PackageName::from_str(entry.from.as_ref()?).ok())
-            .collect();
+            let entrypoints: Vec<_> = existing_tool_receipt
+                .entrypoints()
+                .iter()
+                .filter_map(|entry| PackageName::from_str(entry.from.as_ref()?).ok())
+                .collect();
 
-        // If we modified the target tool, reinstall the entrypoints.
-        finalize_tool_install(
-            &environment,
-            name,
-            &entrypoints,
-            installed_tools,
-            &ToolOptions::from(options),
-            true,
-            existing_tool_receipt.python().to_owned(),
-            existing_tool_receipt.requirements().to_vec(),
-            existing_tool_receipt.constraints().to_vec(),
-            existing_tool_receipt.overrides().to_vec(),
-            existing_tool_receipt.excludes().to_vec(),
-            existing_tool_receipt.build_constraints().to_vec(),
-            tool_lock.as_ref(),
-            printer,
-        )?;
-    } else {
-        if tool_locks {
-            ToolLock::write(&tool_dir, tool_lock.as_ref())?;
+            // If we modified the target tool, reinstall the entrypoints.
+            finalize_tool_install(
+                &environment,
+                name,
+                &entrypoints,
+                installed_tools,
+                &ToolOptions::from(options),
+                true,
+                existing_tool_receipt.python().to_owned(),
+                existing_tool_receipt.requirements().to_vec(),
+                existing_tool_receipt.constraints().to_vec(),
+                existing_tool_receipt.overrides().to_vec(),
+                existing_tool_receipt.excludes().to_vec(),
+                existing_tool_receipt.build_constraints().to_vec(),
+                tool_lock.as_ref(),
+                printer,
+            )?;
+            None
         }
-        installed_tools.add_tool_receipt(
-            name,
-            existing_tool_receipt
-                .clone()
-                .with_options(ToolOptions::from(options)),
-        )?;
-    }
-
-    let constraint = match &outcome {
         UpgradeOutcome::UpgradeDependencies | UpgradeOutcome::NoOp => {
-            pinned_requirement_version(&existing_tool_receipt, name)
-                .map(|version| UpgradeConstraint::PinnedVersion { version })
+            if tool_locks {
+                ToolLock::write(&tool_dir, tool_lock.as_ref())?;
+            }
+            let constraint = pinned_requirement_version(&existing_tool_receipt, name)
+                .map(|version| UpgradeConstraint::PinnedVersion { version });
+            installed_tools.add_tool_receipt(
+                name,
+                existing_tool_receipt.with_options(ToolOptions::from(options)),
+            )?;
+            constraint
         }
-        UpgradeOutcome::UpgradeTool | UpgradeOutcome::UpgradeEnvironment => None,
     };
 
     Ok(UpgradeReport {

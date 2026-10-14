@@ -56,7 +56,6 @@ uv-static = { workspace = true }
 uv-tool = { workspace = true }
 uv-torch = { workspace = true }
 uv-types = { workspace = true }
-uv-virtualenv = { workspace = true }
 uv-warnings = { workspace = true }
 uv-workspace = { workspace = true }
 
