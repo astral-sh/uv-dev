@@ -413,13 +413,12 @@ pub async fn upgrade(
     )?;
 
     let mut updated_requirements = BTreeMap::new();
-    for selected in &requirements {
+    for selected in requirements {
         let specifiers =
             match propose_specifiers(&selected.requirement, &selected.resolved_versions) {
                 Ok(Some(specifiers)) => specifiers,
                 Ok(None) => {
-                    declaration_outcomes
-                        .push(DeclarationOutcome::Unchanged(selected.package.clone()));
+                    declaration_outcomes.push(DeclarationOutcome::Unchanged(selected.package));
                     continue;
                 }
                 Err(err) => {
@@ -432,20 +431,20 @@ pub async fn upgrade(
             };
 
         let existing = into_verbatim_requirement(selected.requirement.clone(), &selected.package)?;
-        let mut proposed_requirement = selected.requirement.clone();
+        let mut proposed_requirement = selected.requirement;
         proposed_requirement.version_or_url = Some(VersionOrUrl::VersionSpecifier(specifiers));
         let replacement = into_verbatim_requirement(proposed_requirement, &selected.package)?;
         let update = RequirementUpdate {
-            package: selected.package.clone(),
-            dependency_type: selected.dependency_type.clone(),
-            original_text: selected.original_text.clone(),
+            package: selected.package,
+            dependency_type: selected.dependency_type,
+            original_text: selected.original_text,
             existing,
             replacement,
         };
         declaration_outcomes.push(DeclarationOutcome::Changed(update.package.clone()));
         updated_requirements
             .entry((
-                selected.dependency_type.toml_table_name().into_owned(),
+                update.dependency_type.toml_table_name().into_owned(),
                 update.existing.clone(),
                 update.replacement.clone(),
             ))
