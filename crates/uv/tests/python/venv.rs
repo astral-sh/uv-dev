@@ -862,7 +862,7 @@ fn create_venv_ignores_virtual_env_variable() -> Result<()> {
     active_venv.child("pyvenv.cfg").touch()?;
 
     uv_snapshot!(context.filters(), context.venv()
-        .env(EnvVars::VIRTUAL_ENV, &active_venv), @"
+        .env(EnvVars::VIRTUAL_ENV, active_venv.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
