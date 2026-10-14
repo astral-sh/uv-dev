@@ -112,7 +112,7 @@ impl CredentialsCache {
         Some(credentials)
     }
 
-    /// Return the cached credentials for a URL and username, if any.
+    /// Return credentials cached at the most specific URL prefix, if they match the username.
     ///
     /// Note we do not cache per username, but if a username is passed we will confirm that the
     /// cached credentials have a username equal to the provided one — otherwise `None` is returned.
@@ -207,18 +207,22 @@ impl<T> UrlTrie<T> {
 
     fn get(&self, url: &Url) -> Option<&T> {
         let segments = url.path_segments()?;
-        let mut state = 0;
+        let mut state = &self.states[0];
+        let mut matched = None;
         let realm = Realm::from(url).to_string();
         for component in [realm.as_str()]
             .into_iter()
             .chain(segments.filter(|item| !item.is_empty()))
         {
-            state = self.states[state].get(component)?;
-            if let Some(ref value) = self.states[state].value {
-                return Some(value);
+            let Some(next) = state.get(component) else {
+                break;
+            };
+            state = &self.states[next];
+            if let Some(value) = &state.value {
+                matched = Some(value);
             }
         }
-        self.states[state].value.as_ref()
+        matched
     }
 
     fn insert(&mut self, url: &Url, value: T) {
