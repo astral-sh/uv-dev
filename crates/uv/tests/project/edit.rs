@@ -15005,6 +15005,56 @@ fn add_path_within_workspace_defaults_to_workspace() -> Result<()> {
     Ok(())
 }
 
+/// Repeated directory requirements should add their workspace member only once.
+#[test]
+fn add_duplicate_path_as_workspace_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "parent"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+        "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("./child").arg("./child").arg("--frozen").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Added `child` to workspace members
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "parent"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "child",
+    ]
+
+    [tool.uv.workspace]
+    members = [
+        "child",
+    ]
+
+    [tool.uv.sources]
+    child = { workspace = true }
+    "#);
+
+    Ok(())
+}
+
 /// Add a path dependency within the workspace directory with --no-workspace flag.
 /// It should be added as a direct path dependency.
 #[test]

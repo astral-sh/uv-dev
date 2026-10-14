@@ -785,7 +785,7 @@ async fn add_workspace_members(
         DependencyTarget::PyProjectToml,
     )?;
     let mut modified = false;
-    for absolute_path in candidate_paths {
+    for absolute_path in candidate_paths.unique() {
         if project.workspace().includes(&absolute_path)? {
             continue;
         }
