@@ -555,30 +555,42 @@ fn requires_fallback_interpreter(
         return Ok(false);
     }
 
-    let is_explicit_selection = !packages.is_empty();
+    Ok(selected_dependencies(project, packages, exclude)
+        .next()
+        .transpose()?
+        .is_some())
+}
+
+/// Parse selected project dependencies in declaration order.
+fn selected_dependencies<'a>(
+    project: &'a ProjectWorkspace,
+    packages: &'a [PackageName],
+    exclude: &'a [PackageName],
+) -> impl Iterator<Item = Result<(&'a str, Requirement<VerbatimParsedUrl>)>> + 'a {
     let pyproject_path = project.project_root().join("pyproject.toml");
-    for dependency in project
+    project
         .current_project()
         .project()
         .dependencies
         .as_deref()
         .unwrap_or_default()
-    {
-        let requirement = parse_dependency(dependency, "`project.dependencies`", &pyproject_path)?;
-        if exclude.contains(&requirement.name)
-            || (is_explicit_selection && !packages.contains(&requirement.name))
-        {
-            continue;
-        }
-        return Ok(true);
-    }
-
-    Ok(false)
+        .iter()
+        .filter_map(move |dependency| {
+            let requirement = match parse_project_dependency(dependency, &pyproject_path) {
+                Ok(requirement) => requirement,
+                Err(error) => return Some(Err(error)),
+            };
+            if exclude.contains(&requirement.name)
+                || (!packages.is_empty() && !packages.contains(&requirement.name))
+            {
+                return None;
+            }
+            Some(Ok((dependency.as_str(), requirement)))
+        })
 }
 
-fn parse_dependency(
+fn parse_project_dependency(
     dependency: &str,
-    table_name: &str,
     pyproject_path: &Path,
 ) -> Result<Requirement<VerbatimParsedUrl>> {
     Requirement::<VerbatimParsedUrl>::from_str(dependency).map_err(|error| {
@@ -588,7 +600,7 @@ fn parse_dependency(
             Pep508ErrorSource::UrlError(_) => "Invalid URL requirement".to_string(),
         };
         anyhow!(
-            "Failed to parse dependency from {table_name} in `{}`: {message}",
+            "Failed to parse dependency from `project.dependencies` in `{}`: {message}",
             pyproject_path.display()
         )
     })
@@ -607,13 +619,6 @@ fn select_requirements(
 
     let is_explicit_selection = !packages.is_empty();
     let resolution_marker = project_resolution_marker(project, fallback_interpreter)?;
-    let dependencies = project
-        .current_project()
-        .project()
-        .dependencies
-        .as_deref()
-        .unwrap_or_default();
-    let pyproject_path = project.project_root().join("pyproject.toml");
     let optional_dependencies = project
         .current_project()
         .project()
@@ -621,14 +626,8 @@ fn select_requirements(
         .as_ref();
     let mut to_upgrade = Vec::new();
     let mut skipped = Vec::new();
-    for dependency in dependencies {
-        let requirement = parse_dependency(dependency, "`project.dependencies`", &pyproject_path)?;
-        if exclude.contains(&requirement.name)
-            || (is_explicit_selection && !packages.contains(&requirement.name))
-        {
-            continue;
-        }
-
+    for selected in selected_dependencies(project, packages, exclude) {
+        let (dependency, requirement) = selected?;
         let mut effective_marker = requirement.marker.and(resolution_marker);
         let skipped_reason = if effective_marker.is_false() {
             Some(SkippedReason::EnvironmentOrPythonRequirement)
@@ -645,7 +644,7 @@ fn select_requirements(
             skipped.push(SkippedRequirement {
                 package: requirement.name.clone(),
                 dependency_type: DependencyType::Production,
-                original_text: dependency.clone(),
+                original_text: dependency.to_owned(),
                 display_text: display_requirement(requirement),
                 reason,
             });
@@ -654,7 +653,7 @@ fn select_requirements(
         to_upgrade.push(UpgradableRequirement {
             package: requirement.name.clone(),
             dependency_type: DependencyType::Production,
-            original_text: dependency.clone(),
+            original_text: dependency.to_owned(),
             requirement,
             effective_marker,
             resolved_versions: BTreeSet::new(),
