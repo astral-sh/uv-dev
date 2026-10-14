@@ -2462,7 +2462,7 @@ fn init_requires_python_specifiers() -> Result<()> {
 /// Run `uv init`, inferring the `requires-python` from the `.python-version` file.
 #[test]
 fn init_requires_python_version_file() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.9"]);
 
     context.temp_dir.child(".python-version").write_str("3.9")?;
 
