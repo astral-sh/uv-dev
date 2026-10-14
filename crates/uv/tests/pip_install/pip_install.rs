@@ -4861,7 +4861,11 @@ fn no_deps() {
     "
     );
 
-    context.assert_command("import flask").failure();
+    context
+        .assert_command("import importlib.metadata; print(importlib.metadata.version('flask'))")
+        .success()
+        .stdout("3.0.2\n");
+    context.assert_not_installed("werkzeug");
 }
 
 /// Ignore unsatisfied dependencies when checking an installed package with `--no-deps`, while
