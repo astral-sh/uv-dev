@@ -7,6 +7,8 @@ use uv_test::pypi_proxy;
 mod artifact_hash_filtering;
 #[cfg(feature = "test-python")]
 mod editable;
+#[cfg(feature = "test-python")]
+mod find_links_inputs;
 #[cfg(all(feature = "test-python", feature = "test-git"))]
 mod git_checkout;
 #[cfg(feature = "test-python")]
