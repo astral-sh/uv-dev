@@ -1458,12 +1458,8 @@ impl ParsedRunCommand {
 
                 let (url, downloaded_script, args) =
                     remote_command.download(&client_builder).await?;
-                let script = match Pep723Metadata::read(&downloaded_script).await {
-                    Ok(Some(metadata)) => Some(Pep723Item::Remote(metadata, url)),
-                    Ok(None) => None,
-                    Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => None,
-                    Err(err) => return Err(err.into()),
-                };
+                let script = ignore_missing_script(Pep723Metadata::read(&downloaded_script).await)?
+                    .map(|metadata| Pep723Item::Remote(metadata, url));
 
                 Ok((script, RunCommand::PythonRemote(downloaded_script, args)))
             }
@@ -1604,20 +1600,23 @@ impl ParsedRunCommand {
     }
 }
 
+/// Treat a missing script as having no inline metadata.
+fn ignore_missing_script<T>(
+    result: Result<Option<T>, Pep723Error>,
+) -> Result<Option<T>, Pep723Error> {
+    match result {
+        Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        result => result,
+    }
+}
+
 impl RunCommand {
     /// Read any inline PEP 723 metadata associated with this command target.
     async fn read_pep723_item(&self) -> Result<Option<Pep723Item>, Pep723Error> {
         match self {
-            Self::PythonScript(script, _) | Self::PythonGuiScript(script, _) => {
-                match Pep723Script::read(script).await {
-                    Ok(Some(script)) => Ok(Some(Pep723Item::Script(script))),
-                    Ok(None) => Ok(None),
-                    Err(Pep723Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-                        Ok(None)
-                    }
-                    Err(err) => Err(err),
-                }
-            }
+            Self::PythonScript(script, _) | Self::PythonGuiScript(script, _) => Ok(
+                ignore_missing_script(Pep723Script::read(script).await)?.map(Pep723Item::Script),
+            ),
             Self::PythonStdin(contents, _) | Self::PythonGuiStdin(contents, _) => {
                 Pep723Metadata::parse(contents).map(|metadata| metadata.map(Pep723Item::Stdin))
             }
