@@ -7,8 +7,7 @@ use fs_err as fs;
 use indoc::indoc;
 use sha2::{Digest, Sha256};
 
-#[cfg(feature = "test-pypi")]
-use uv_test::download_to_disk;
+use uv_test::archive::generate_source_archive;
 use uv_test::uv_snapshot;
 
 const OK_WHEEL_FILENAME: &str = "ok-1.0.0-py3-none-any.whl";
@@ -721,17 +720,14 @@ fn pep_751_prefers_path_over_url() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "test-pypi")]
 #[test]
 fn pep_751_install_path_sdist() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    // Download the source.
-    let archive = context.temp_dir.child("iniconfig-2.0.0.tar.gz");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
-        &archive,
-    );
+    let archive = generate_source_archive(&"ok".parse()?, &"1.0.0".parse()?, "", None)?;
+    context
+        .temp_dir
+        .child("ok-1.0.0.tar.gz")
+        .write_binary(&archive)?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -740,34 +736,39 @@ fn pep_751_install_path_sdist() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["ok"]
 
         [tool.uv.sources]
-        iniconfig = { path = "iniconfig-2.0.0.tar.gz" }
+        ok = { path = "ok-1.0.0.tar.gz" }
         "#,
     )?;
 
     context
         .export()
+        .arg("--offline")
         .arg("-o")
         .arg("pylock.toml")
         .assert()
         .success();
 
+    // The lockfile reader must build the source without reusing artifacts from export.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
+        .arg("--offline")
+        .arg("--no-cache")
         .arg("-r")
         .arg("pylock.toml"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from file://[TEMP_DIR]/iniconfig-2.0.0.tar.gz)
+     + ok==1.0.0 (from file://[TEMP_DIR]/ok-1.0.0.tar.gz)
     "
     );
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
+        .arg("--offline")
         .arg("-r")
         .arg("pylock.toml"), @"
     exit_code: 0 (success)
