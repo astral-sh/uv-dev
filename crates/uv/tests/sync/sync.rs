@@ -5,7 +5,7 @@ use assert_cmd::prelude::*;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
-use predicates::prelude::predicate;
+use predicates::prelude::{PredicateStrExt, predicate};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 #[cfg(feature = "test-git")]
@@ -10683,7 +10683,7 @@ fn sync_scripts_project_not_packaged() -> Result<()> {
     std::process::Command::new(entry.path())
         .assert()
         .success()
-        .stdout("Hello\n");
+        .stdout(predicate::eq("Hello").trim());
 
     Ok(())
 }
