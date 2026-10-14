@@ -363,16 +363,20 @@ impl Credentials {
         Ok(header)
     }
 
-    /// Apply the credentials to the given URL.
+    /// Apply HTTP Basic credentials to the given URL.
     ///
-    /// Any existing credentials will be overridden.
+    /// Each present component replaces its counterpart if the URL supports user information.
+    /// Bearer credentials do not modify the URL.
     #[must_use]
     pub fn apply(&self, mut url: DisplaySafeUrl) -> DisplaySafeUrl {
-        if let Some(username) = self.username() {
+        let Self::Basic { username, password } = self else {
+            return url;
+        };
+        if let Some(username) = username.as_deref() {
             let _ = url.set_username(username);
         }
-        if let Some(password) = self.password() {
-            let _ = url.set_password(Some(password));
+        if let Some(password) = password {
+            let _ = url.set_password(Some(password.as_str()));
         }
         url
     }
