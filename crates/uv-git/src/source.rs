@@ -54,9 +54,16 @@ impl GitSource {
     pub(crate) fn fetch(self) -> Result<Fetch> {
         let lfs_requested = self.git.lfs().enabled();
 
+        // Older cache readers require complete repositories, including historical trees.
+        let cache = if self.settings.partial_fetches {
+            self.cache.join("partial")
+        } else {
+            self.cache
+        };
+
         // The path to the repo, within the Git database.
         let ident = cache_digest(self.git.repository());
-        let db_path = self.cache.join("db").join(&ident);
+        let db_path = cache.join("db").join(&ident);
 
         // Authenticate the URL, if necessary.
         let remote = if let Some(credentials) = GIT_STORE.get(self.git.repository()) {
@@ -73,7 +80,7 @@ impl GitSource {
 
             // If we have a locked revision, and we have a pre-existing database which has that
             // revision, then no update needs to happen.
-            // Git LFS objects also live in the shared database so older uv versions can reuse it.
+            // Git LFS objects also live in the database so deleted checkouts can be rebuilt.
             if let (Some(rev), Some(db)) = (self.git.precise(), &maybe_db) {
                 if db.contains(rev) && (!lfs_requested || db.contains_lfs_artifacts(rev)) {
                     debug!("Using existing Git source `{}`", self.git.url());
@@ -125,11 +132,7 @@ impl GitSource {
         } else {
             ident
         };
-        let checkout_path = self
-            .cache
-            .join("checkouts")
-            .join(&ident)
-            .join(short_id.as_str());
+        let checkout_path = cache.join("checkouts").join(&ident).join(short_id.as_str());
 
         // Check out `actual_rev` from the database to a scoped location on the
         // filesystem. This will use hard links and such to ideally make the
