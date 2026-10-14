@@ -122,28 +122,27 @@ pub async fn read_pylock_toml_requirements(
     let mut preferences = Vec::new();
     let mut git = Vec::new();
 
-    for package in &lock.packages {
-        // Skip the distribution if it's not included in the upgrade strategy.
+    for package in lock.packages {
+        // Skip the distribution if it's included in the upgrade strategy.
         if upgrade_packages.contains(&package.name) {
             continue;
-        }
-
-        // Map each entry in the lockfile to a preference.
-        if let Some(version) = package.version.as_ref() {
-            preferences.push(Preference::from_locked(
-                package.name.clone(),
-                version.clone(),
-                package
-                    .index
-                    .as_ref()
-                    .map(|index| IndexUrl::from(VerbatimUrl::from(index.clone()))),
-                vec![],
-            ));
         }
 
         // Map each entry in the lockfile to a Git SHA.
         if let Some(git_ref) = package.as_git_ref()? {
             git.push(git_ref);
+        }
+
+        // Map each entry in the lockfile to a preference.
+        if let Some(version) = package.version {
+            preferences.push(Preference::from_locked(
+                package.name,
+                version,
+                package
+                    .index
+                    .map(|index| IndexUrl::from(VerbatimUrl::from(index))),
+                vec![],
+            ));
         }
     }
 
