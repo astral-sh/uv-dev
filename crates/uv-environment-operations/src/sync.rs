@@ -9,7 +9,7 @@ use uv_configuration::{
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{Dist, Resolution, ResolvedDist, SourceDist};
+use uv_distribution_types::{Dist, Resolution, ResolvedDist};
 use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::InstallLogger;
 use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
@@ -356,20 +356,11 @@ pub async fn sync_from_lock(
 
 /// Filter out any virtual workspace members.
 fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
-    resolution.filter(|dist| {
-        let ResolvedDist::Installable { dist, .. } = dist else {
-            return true;
-        };
-
-        let Dist::Source(dist) = dist.as_ref() else {
-            return true;
-        };
-
-        let SourceDist::Directory(dist) = dist else {
-            return true;
-        };
-
-        !dist.r#virtual.unwrap_or(false)
+    resolution.filter(|resolved| match resolved {
+        ResolvedDist::Installed { .. } => true,
+        ResolvedDist::Installable { dist, .. } => {
+            !matches!(dist.as_ref(), Dist::Source(source) if source.is_virtual())
+        }
     })
 }
 
