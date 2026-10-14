@@ -35522,8 +35522,7 @@ fn lock_dynamic_to_static() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let dynamic_pyproject = indoc! {r#"
         [project]
         name = "project"
         requires-python = ">=3.12"
@@ -35533,27 +35532,12 @@ fn lock_dynamic_to_static() -> Result<()> {
         [build-system]
         requires = ["setuptools"]
         build-backend = "setuptools.build_meta"
-
-        [tool.uv]
-        cache-keys = [{ file = "pyproject.toml" }, { file = "src/project/__init__.py" }]
-
-        [tool.setuptools.dynamic]
-        version = { attr = "project.__version__" }
-
-        [tool.setuptools]
-        package-dir = { "" = "src" }
-
-        [tool.setuptools.packages.find]
-        where = ["src"]
-        "#,
-    )?;
-
+    "#};
+    pyproject_toml.write_str(dynamic_pyproject)?;
     context
         .temp_dir
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .write_str("__version__ = '0.1.0'")?;
+        .child("setup.py")
+        .write_str("from setuptools import setup\nsetup(version='0.1.0')\n")?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -35583,19 +35567,8 @@ fn lock_dynamic_to_static() -> Result<()> {
     });
 
     // Remove the dynamic version (but leave the version unchanged).
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        requires-python = ">=3.12"
-        version = "0.1.0"
-        dependencies = []
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-        "#,
-    )?;
+    pyproject_toml
+        .write_str(&dynamic_pyproject.replace("dynamic = [\"version\"]", "version = \"0.1.0\""))?;
 
     // Rerunning with `--locked` should fail, since the project is no longer dynamic.
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
@@ -35646,8 +35619,7 @@ fn lock_static_to_dynamic() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let static_pyproject = indoc! {r#"
         [project]
         name = "project"
         requires-python = ">=3.12"
@@ -35657,8 +35629,12 @@ fn lock_static_to_dynamic() -> Result<()> {
         [build-system]
         requires = ["setuptools"]
         build-backend = "setuptools.build_meta"
-        "#,
-    )?;
+    "#};
+    pyproject_toml.write_str(static_pyproject)?;
+    context
+        .temp_dir
+        .child("setup.py")
+        .write_str("from setuptools import setup\nsetup(version='0.1.0')\n")?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -35689,38 +35665,8 @@ fn lock_static_to_dynamic() -> Result<()> {
     });
 
     // Make the version dynamic (but leave the value unchanged).
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        requires-python = ">=3.12"
-        dynamic = ["version"]
-        dependencies = []
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-
-        [tool.uv]
-        cache-keys = [{ file = "pyproject.toml" }, { file = "src/project/__init__.py" }]
-
-        [tool.setuptools.dynamic]
-        version = { attr = "project.__version__" }
-
-        [tool.setuptools]
-        package-dir = { "" = "src" }
-
-        [tool.setuptools.packages.find]
-        where = ["src"]
-        "#,
-    )?;
-
-    context
-        .temp_dir
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .write_str("__version__ = '0.1.0'")?;
+    pyproject_toml
+        .write_str(&static_pyproject.replace("version = \"0.1.0\"", "dynamic = [\"version\"]"))?;
 
     // Rerunning with `--locked` should fail, since the project is no longer static.
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
