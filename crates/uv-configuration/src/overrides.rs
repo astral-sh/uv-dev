@@ -314,15 +314,17 @@ impl Overrides {
     {
         let scoped = package.and_then(|(package, version)| self.scoped_for(package, version));
         if let Some(scoped) = scoped {
-            let requirements = requirements.into_iter().collect::<Vec<_>>();
-            let names = requirements
-                .iter()
-                .map(|&requirement| &requirement.name)
-                .collect::<FxHashSet<_>>();
+            let mut missing_overrides = scoped.overrides.keys().collect::<FxHashSet<_>>();
+            let requirements = requirements
+                .into_iter()
+                .inspect(|requirement| {
+                    missing_overrides.remove(&requirement.name);
+                })
+                .collect::<Vec<_>>();
             let mut additions = scoped
                 .overrides
                 .iter()
-                .filter(|(name, _)| !names.contains(*name))
+                .filter(|(name, _)| missing_overrides.contains(*name))
                 .flat_map(|(_, requirements)| requirements)
                 .collect::<Vec<_>>();
             additions.sort_unstable();
