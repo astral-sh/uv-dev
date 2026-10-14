@@ -634,7 +634,6 @@ fn select_requirements(
         .as_ref();
     let mut to_upgrade = Vec::new();
     let mut skipped = Vec::new();
-    let mut found_packages = BTreeSet::new();
     for dependency in dependencies {
         let requirement = parse_dependency(dependency, "`project.dependencies`", &pyproject_path)?;
         if exclude.contains(&requirement.name)
@@ -643,7 +642,6 @@ fn select_requirements(
             continue;
         }
 
-        found_packages.insert(requirement.name.clone());
         let mut effective_marker = requirement.marker.and(resolution_marker);
         let skipped_reason = if effective_marker.is_false() {
             Some(SkippedReason::EnvironmentOrPythonRequirement)
@@ -676,17 +674,19 @@ fn select_requirements(
         });
     }
 
-    for package in packages
-        .iter()
-        .filter(|package| !exclude.contains(*package))
-    {
-        if !found_packages.contains(package) {
-            bail!("Dependency `{package}` was not found in `project.dependencies`");
-        }
-    }
     let active_packages = to_upgrade.iter().map(|selected| &selected.package);
     let selected_packages: Vec<_> = if is_explicit_selection {
         let mut active_packages: BTreeSet<_> = active_packages.collect();
+        let skipped_packages: BTreeSet<_> =
+            skipped.iter().map(|selected| &selected.package).collect();
+        for package in packages
+            .iter()
+            .filter(|package| !exclude.contains(*package))
+        {
+            if !active_packages.contains(package) && !skipped_packages.contains(package) {
+                bail!("Dependency `{package}` was not found in `project.dependencies`");
+            }
+        }
         packages
             .iter()
             .filter(|package| active_packages.remove(*package))
