@@ -53,21 +53,19 @@ pub fn uninstall_wheel(
 
         // On Windows, deleting the current executable is a special case.
         #[cfg(windows)]
-        if let Some(itself) = itself.as_ref() {
-            if itself
+        if let Some(itself) = itself.as_ref()
+            && itself
                 .file_name()
-                .is_some_and(|itself| path.file_name().is_some_and(|path| itself == path))
-            {
-                if same_file::is_same_file(itself, &path).unwrap_or(false) {
-                    tracing::debug!("Detected self-delete of executable: {}", path.display());
-                    match self_replace::self_delete_outside_path(site_packages) {
-                        Ok(()) => uninstall.record_removed_wheel_file(&path, &mut visited),
-                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(err) => return Err(err.into()),
-                    }
-                    continue;
-                }
+                .is_some_and(|name| path.file_name() == Some(name))
+            && same_file::is_same_file(itself, &path).unwrap_or(false)
+        {
+            tracing::debug!("Detected self-delete of executable: {}", path.display());
+            match self_replace::self_delete_outside_path(site_packages) {
+                Ok(()) => uninstall.record_removed_wheel_file(&path, &mut visited),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.into()),
             }
+            continue;
         }
 
         match fs_err::remove_file(&path) {
