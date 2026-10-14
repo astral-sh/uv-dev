@@ -16,7 +16,7 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot};
+use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot, venv_bin_path};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -668,10 +668,17 @@ fn run_pep723_script_requires_python_incompatible_range() -> Result<()> {
     Ok(())
 }
 
-/// Run a `.pyw` script. The script should be executed with `pythonw.exe`.
+/// A `.pyw` script uses the GUI interpreter when the project environment provides one.
 #[test]
 fn run_pythonw_script() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let executable_name = if cfg!(windows) {
+        "pythonw.exe"
+    } else {
+        "python"
+    };
+    let executable = venv_bin_path(context.venv.path()).join(executable_name);
+    assert!(executable.is_file(), "missing {}", executable.display());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
@@ -694,9 +701,13 @@ fn run_pythonw_script() -> Result<()> {
         .touch()?;
 
     let test_script = context.temp_dir.child("main.pyw");
-    test_script.write_str(indoc! { r"
+    test_script.write_str(indoc! { r#"
         import anyio
-       "
+        import sys
+        from pathlib import Path
+
+        Path(__file__).with_name("interpreter.txt").write_text(Path(sys.executable).name)
+       "#
     })?;
 
     uv_snapshot!(context.filters(), context.run().arg("main.pyw"), @"
@@ -710,6 +721,10 @@ fn run_pythonw_script() -> Result<()> {
      + idna==3.6
      + sniffio==1.3.1
     ");
+    context
+        .temp_dir
+        .child("interpreter.txt")
+        .assert(executable_name);
 
     Ok(())
 }
