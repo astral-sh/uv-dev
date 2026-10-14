@@ -631,9 +631,7 @@ pub async fn install(
                 let resolution = resolve_environment(
                     tool_environment_spec(
                         spec.clone(),
-                        existing_tool_lock
-                            .as_ref()
-                            .and_then(|lock| lock.preference()),
+                        existing_tool_lock.as_ref(),
                         Some(&site_packages),
                     ),
                     resolution_scope,
@@ -802,13 +800,7 @@ pub async fn install(
             (resolution, interpreter, Some(tool_lock))
         } else {
             let spec = if tool_locks {
-                tool_environment_spec(
-                    spec,
-                    existing_tool_lock
-                        .as_ref()
-                        .and_then(|lock| lock.preference()),
-                    None,
-                )
+                tool_environment_spec(spec, existing_tool_lock.as_ref(), None)
             } else {
                 EnvironmentSpecification::from(spec)
             };
