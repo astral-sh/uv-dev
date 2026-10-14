@@ -703,7 +703,7 @@ pub async fn install(
                 let tool_lock = ToolLock::from_resolution(
                     &tool_dir,
                     &resolution,
-                    &lock_manifest,
+                    lock_manifest,
                     &settings.resolver.index_locations,
                 )?;
                 let resolution = tool_lock.to_resolution(
@@ -958,7 +958,7 @@ pub async fn install(
                 let tool_lock = ToolLock::from_resolution(
                     &tool_dir,
                     &resolution,
-                    &lock_manifest,
+                    lock_manifest,
                     &settings.resolver.index_locations,
                 )?;
                 let resolution = tool_lock.to_resolution(
