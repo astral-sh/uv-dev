@@ -232,8 +232,8 @@ pub async fn resolve(
                 }
             }
             // Apply dependency-groups
-            for (group_name, group) in &metadata.dependency_groups {
-                if groups.contains(group_name) {
+            for (group_name, group) in metadata.dependency_groups {
+                if groups.contains(&group_name) {
                     let scope =
                         metadata
                             .name
@@ -244,14 +244,14 @@ pub async fn resolve(
                                     group: group_name.clone(),
                                 }
                             });
-                    requirements.extend(group.iter().cloned().map(|group| Requirement {
+                    requirements.extend(group.into_iter().map(|requirement| Requirement {
                         scope: scope.clone(),
                         origin: Some(RequirementOrigin::Group(
                             pyproject_path.clone(),
                             metadata.name.clone(),
                             group_name.clone(),
                         )),
-                        ..group
+                        ..requirement
                     }));
                 }
             }
