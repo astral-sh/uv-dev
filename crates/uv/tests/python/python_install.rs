@@ -318,7 +318,7 @@ fn python_reinstall() {
 }
 
 #[test]
-fn python_reinstall_patch() {
+fn python_reinstall_patch() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -334,6 +334,18 @@ fn python_reinstall_patch() {
      + cpython-3.12.7-[PLATFORM] (python3.12)
     ");
 
+    let platform = platform_key_from_env()?;
+    let installations = ["3.12.6", "3.12.7"].map(|version| {
+        context
+            .temp_dir
+            .join("managed")
+            .join(format!("cpython-{version}-{platform}"))
+    });
+    let marker = "original-installation.txt";
+    for installation in &installations {
+        fs_err::write(installation.join(marker), "original installation\n")?;
+    }
+
     // Reinstall all "3.12" versions.
     uv_snapshot!(context.filters(), context.python_install().arg("3.12").arg("--reinstall"), @"
     exit_code: 0 (success)
@@ -342,6 +354,15 @@ fn python_reinstall_patch() {
      ~ cpython-3.12.6-[PLATFORM]
      ~ cpython-3.12.7-[PLATFORM] (python3.12)
     ");
+    for installation in installations {
+        assert!(
+            installation.is_dir(),
+            "installation missing after reinstall: {}",
+            installation.display()
+        );
+        assert_path_missing(installation.join(marker));
+    }
+    Ok(())
 }
 
 #[test]
