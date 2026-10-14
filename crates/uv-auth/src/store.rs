@@ -396,15 +396,25 @@ impl TextCredentialStore {
     }
 
     /// Store credentials for a given service.
-    pub fn insert(&mut self, service: Service, credentials: Credentials) -> Option<Credentials> {
+    pub fn insert(
+        &mut self,
+        mut service: Service,
+        credentials: Credentials,
+    ) -> Option<Credentials> {
+        service.remove_credentials();
         let username = credentials.to_username();
         self.credentials.insert((service, username), credentials)
     }
 
     /// Remove credentials for a given service.
     pub fn remove(&mut self, service: Service, username: Username) -> Option<Credentials> {
-        // Remove the specific credential for this service and username
-        self.credentials.remove(&(service, username))
+        let mut key = (service, username);
+        // Older stores can contain credentials in the service URL.
+        if let Some(credentials) = self.credentials.remove(&key) {
+            return Some(credentials);
+        }
+        key.0.remove_credentials();
+        self.credentials.remove(&key)
     }
 }
 
@@ -517,6 +527,27 @@ mod tests {
         );
         let url = DisplaySafeUrl::parse("https://example.com/").unwrap();
         assert!(store.get_credentials(&url, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn credential_store_keys_exclude_url_credentials() {
+        let mut store = TextCredentialStore::default();
+        let service = Service::from_str("https://user:password@example.com/repository").unwrap();
+        let clean_service = Service::from_str("https://example.com/repository").unwrap();
+        let credentials = Credentials::basic(Some("user".to_owned()), Some("password".to_owned()));
+        let username = credentials.to_username();
+
+        store.insert(service.clone(), credentials.clone());
+        assert_eq!(store.credentials.keys().next().unwrap().0, clean_service);
+        assert!(store.remove(clean_service, username.clone()).is_some());
+
+        store.insert(service.clone(), credentials.clone());
+        assert!(store.remove(service.clone(), username.clone()).is_some());
+
+        store
+            .credentials
+            .insert((service.clone(), username.clone()), credentials);
+        assert!(store.remove(service, username).is_some());
     }
 
     #[tokio::test]

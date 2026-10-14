@@ -34,6 +34,11 @@ impl Service {
         &self.0
     }
 
+    /// Remove URL credentials before using the service as a storage key.
+    pub(crate) fn remove_credentials(&mut self) {
+        self.0.remove_credentials();
+    }
+
     /// Validate that the URL scheme is supported.
     fn check_scheme(url: &Url) -> Result<(), ServiceParseError> {
         match url.scheme() {
