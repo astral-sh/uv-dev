@@ -477,7 +477,7 @@ mod tests {
     fn read_from_directory_skips_relative_symlinks_to_directories() {
         let directory = tempdir().unwrap();
         let target = tempfile::tempdir_in(directory.path()).unwrap();
-        std::os::unix::fs::symlink(
+        fs_err::os::unix::fs::symlink(
             target.path().file_name().unwrap(),
             directory.path().join("example-1.0-py3-none-any.whl"),
         )
