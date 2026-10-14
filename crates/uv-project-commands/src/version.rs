@@ -25,7 +25,7 @@ use uv_fs::Simplified;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, PackageName};
-use uv_pep440::{BumpCommand, PrereleaseKind, Version};
+use uv_pep440::Version;
 use uv_preview::Preview;
 use uv_project_edit::{DependencyTarget, Error, PyProjectTomlMut};
 use uv_python_discovery::ConfigDiscovery;
@@ -164,36 +164,8 @@ pub async fn project_version(
         // Apply all the bumps
         let mut new_version = old_version.clone();
 
-        for spec in &bump {
-            match spec.bump {
-                VersionBump::Major => new_version.bump(BumpCommand::BumpRelease {
-                    index: 0,
-                    value: spec.value,
-                }),
-                VersionBump::Minor => new_version.bump(BumpCommand::BumpRelease {
-                    index: 1,
-                    value: spec.value,
-                }),
-                VersionBump::Patch => new_version.bump(BumpCommand::BumpRelease {
-                    index: 2,
-                    value: spec.value,
-                }),
-                VersionBump::Stable => new_version.bump(BumpCommand::MakeStable),
-                VersionBump::Alpha => new_version.bump(BumpCommand::BumpPrerelease {
-                    kind: PrereleaseKind::Alpha,
-                    value: spec.value,
-                }),
-                VersionBump::Beta => new_version.bump(BumpCommand::BumpPrerelease {
-                    kind: PrereleaseKind::Beta,
-                    value: spec.value,
-                }),
-                VersionBump::Rc => new_version.bump(BumpCommand::BumpPrerelease {
-                    kind: PrereleaseKind::Rc,
-                    value: spec.value,
-                }),
-                VersionBump::Post => new_version.bump(BumpCommand::BumpPost { value: spec.value }),
-                VersionBump::Dev => new_version.bump(BumpCommand::BumpDev { value: spec.value }),
-            }
+        for spec in bump {
+            new_version.bump(spec.into());
         }
 
         if new_version <= old_version {
