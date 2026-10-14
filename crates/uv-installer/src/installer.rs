@@ -190,6 +190,9 @@ impl InstallContext {
 
             Ok::<(), InstallError>(())
         })?;
+        if let Some(reporter) = &self.reporter {
+            reporter.on_install_complete();
+        }
         if let Err(err) = state.warn_package_conflicts() {
             warn!("Checking for conflicts between packages failed: {err}");
         }
@@ -202,19 +205,23 @@ pub trait Reporter: Send + Sync {
     /// Callback to invoke when a dependency is installed.
     fn on_install_progress(&self, wheel: &CachedDist);
 
-    /// Callback to invoke when the resolution is complete.
+    /// Callback to invoke when all wheels have been installed.
     fn on_install_complete(&self);
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use uv_cache::Cache;
+    use uv_distribution_types::CachedDist;
     use uv_preview::Preview;
     use uv_python_discovery::find_environment;
     use uv_python_interpreter::PythonEnvironment;
     use uv_python_types::{EnvironmentPreference, PythonPreference, PythonRequest};
 
-    use super::Installer;
+    use super::{Installer, Reporter};
 
     fn environment() -> PythonEnvironment {
         let _preview = uv_preview::test::with_features(&[]);
@@ -255,5 +262,28 @@ mod tests {
         let installer = Installer::new(&environment, Preview::default()).with_installer_name(None);
 
         assert_eq!(installer.name, None);
+    }
+
+    #[test]
+    fn reports_installation_complete() {
+        struct CompletionReporter(AtomicUsize);
+
+        impl Reporter for CompletionReporter {
+            fn on_install_progress(&self, _wheel: &CachedDist) {
+                panic!("an empty installation cannot report progress");
+            }
+
+            fn on_install_complete(&self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let environment = environment();
+        let reporter = Arc::new(CompletionReporter(AtomicUsize::new(0)));
+        Installer::new(&environment, Preview::default())
+            .with_reporter(reporter.clone())
+            .install_blocking(Vec::new())
+            .expect("empty installation should succeed");
+        assert_eq!(reporter.0.load(Ordering::Relaxed), 1);
     }
 }
