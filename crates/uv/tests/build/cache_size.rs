@@ -1,18 +1,21 @@
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteBin, PathChild};
 
-use uv_test::uv_snapshot;
+use uv_test::{assert_path_missing, uv_snapshot};
 
-/// Test that `cache size` returns 0 when the cache directory does not exist.
+/// Reporting the size of a missing cache should not create it.
 #[test]
-fn cache_size_missing_raw() {
+fn cache_size_missing_cache_remains_missing() {
     let context = uv_test::test_context_with_versions!(&[]).with_cache_dir("missing-cache");
+    assert_path_missing(&context.cache_dir);
 
     uv_snapshot!(context.cache_size().arg("--preview"), @"
     exit_code: 0 (success)
     ----- stdout -----
     0
     ");
+
+    assert_path_missing(&context.cache_dir);
 }
 
 /// Files added to the cache contribute to its reported disk usage.
