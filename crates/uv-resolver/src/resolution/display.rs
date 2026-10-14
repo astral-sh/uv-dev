@@ -357,38 +357,40 @@ fn reduce_graph<'graph, 'dist, K: Eq + Hash>(
     merge: impl Fn(&mut RequirementsTxtDist<'dist>, &'graph RequirementsTxtDist<'dist>),
 ) -> RequirementsTxtGraph<'dist> {
     let mut next = RequirementsTxtGraph::with_capacity(graph.node_count(), graph.edge_count());
-    let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
 
-    // Re-add the nodes to the reduced graph.
-    for index in graph.node_indices() {
-        let DisplayResolutionGraphNode::Dist(dist) = &graph[index] else {
-            continue;
-        };
+    // Node weights are yielded in index order, so each entry maps its original node index to its
+    // reduced node index.
+    let remap = {
+        let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
+        graph
+            .node_weights()
+            .map(|node| {
+                let DisplayResolutionGraphNode::Dist(dist) = node else {
+                    return None;
+                };
 
-        // In the `requirements.txt` output, we want a flat installation list, so we need to use
-        // the reachability markers instead of the edge markers.
-        match inverse.entry(key(dist)) {
-            std::collections::hash_map::Entry::Occupied(entry) => {
-                merge(&mut next[*entry.get()], dist);
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let index = next.add_node(dist.clone());
-                entry.insert(index);
-            }
-        }
-    }
+                // In the `requirements.txt` output, we want a flat installation list, so we need
+                // to use the reachability markers instead of the edge markers.
+                Some(match inverse.entry(key(dist)) {
+                    std::collections::hash_map::Entry::Occupied(entry) => {
+                        let index = *entry.get();
+                        merge(&mut next[index], dist);
+                        index
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        *entry.insert(next.add_node(dist.clone()))
+                    }
+                })
+            })
+            .collect::<Vec<_>>()
+    };
 
     // Re-add the edges to the reduced graph.
     for edge in graph.edge_indices() {
         let (source, target) = graph.edge_endpoints(edge).unwrap();
-        let DisplayResolutionGraphNode::Dist(source_node) = &graph[source] else {
+        let (Some(source), Some(target)) = (remap[source.index()], remap[target.index()]) else {
             continue;
         };
-        let DisplayResolutionGraphNode::Dist(target_node) = &graph[target] else {
-            continue;
-        };
-        let source = inverse[&key(source_node)];
-        let target = inverse[&key(target_node)];
 
         next.update_edge(source, target, ());
     }
