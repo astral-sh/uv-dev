@@ -1336,6 +1336,21 @@ fn create_venv_explicit_request_takes_priority_over_python_version_file() {
     context.venv.assert(predicates::path::is_dir());
 }
 
+#[cfg(feature = "test-pypi")]
+fn assert_seed_packages(context: &uv_test::TestContext, expected: &[&str]) {
+    context
+        .external_command(context.interpreter())
+        .args([
+            "-I",
+            "-B",
+            "-c",
+            "from importlib.metadata import distributions; print(','.join(sorted(dist.name.lower() for dist in distributions())), end='')",
+        ])
+        .assert()
+        .success()
+        .stdout(expected.join(","));
+}
+
 #[test]
 #[cfg(feature = "test-pypi")]
 fn seed() {
@@ -1354,7 +1369,7 @@ fn seed() {
     "
     );
 
-    context.venv.assert(predicates::path::is_dir());
+    assert_seed_packages(&context, &["pip"]);
     let site_packages = site_packages_path(context.venv.path(), "python3.12");
     assert_path_missing(site_packages.join("_virtualenv.py"));
     assert_path_missing(site_packages.join("_virtualenv.pth"));
@@ -1380,7 +1395,7 @@ fn seed_older_python_version() {
     "
     );
 
-    context.venv.assert(predicates::path::is_dir());
+    assert_seed_packages(&context, &["pip", "setuptools", "wheel"]);
 }
 
 #[test]
