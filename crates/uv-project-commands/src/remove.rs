@@ -97,7 +97,7 @@ pub async fn remove(
                 &DiscoveryOptions::default(),
                 cache,
                 &WorkspaceCache::default(),
-                package.clone(),
+                package,
             )
             .await?
         } else {
