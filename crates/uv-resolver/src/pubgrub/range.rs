@@ -138,13 +138,7 @@ impl Range<Version> {
             let (Bound::Included(lower), Bound::Excluded(upper)) = (lower, upper) else {
                 return false;
             };
-            if !lower.local().is_empty() {
-                return false;
-            }
-            if upper.local() != LocalVersionSlice::Max {
-                return false;
-            }
-            *lower == upper.clone().without_local()
+            Self::matches_local_version_sentinel(lower, upper)
         })
     }
 
@@ -154,10 +148,15 @@ impl Range<Version> {
             let (Bound::Excluded(lower), Bound::Excluded(upper)) = (lower, upper) else {
                 return false;
             };
-            lower.local().is_empty()
-                && upper.local() == LocalVersionSlice::Max
-                && *lower == upper.clone().without_local()
+            Self::matches_local_version_sentinel(lower, upper)
         })
+    }
+
+    /// Check whether the upper version is the local sentinel for the lower public version.
+    fn matches_local_version_sentinel(lower: &Version, upper: &Version) -> bool {
+        lower.local().is_empty()
+            && upper.local() == LocalVersionSlice::Max
+            && *lower == upper.clone().without_local()
     }
 
     /// Rewrite internal local-version sentinels into bounds suitable for diagnostics.

@@ -4,52 +4,21 @@ use uv_pypi_types::{ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl, Verbatim
 use uv_redacted::DisplaySafeUrl;
 
 /// Map a URL to a precise URL, if possible.
-pub(crate) fn url_to_precise(url: VerbatimParsedUrl, git: &GitResolver) -> VerbatimParsedUrl {
-    match &url.parsed_url {
-        ParsedUrl::GitDirectory(ParsedGitDirectoryUrl {
-            url: git_url,
-            subdirectory,
-        }) => {
-            let Some(new_git_url) = git.precise(git_url.clone()) else {
-                debug_assert!(false, "Unresolved Git URL: {}, {git_url:?}", url.verbatim);
-                return url;
-            };
+pub(crate) fn url_to_precise(mut url: VerbatimParsedUrl, git: &GitResolver) -> VerbatimParsedUrl {
+    let (ParsedUrl::GitDirectory(ParsedGitDirectoryUrl { url: git_url, .. })
+    | ParsedUrl::GitPath(ParsedGitPathUrl { url: git_url, .. })) = &mut url.parsed_url
+    else {
+        return url;
+    };
+    let Some(precise) = git.precise(git_url.clone()) else {
+        debug_assert!(false, "Unresolved Git URL: {}, {git_url:?}", url.verbatim);
+        return url;
+    };
+    *git_url = precise;
 
-            let new_parsed_url = ParsedGitDirectoryUrl {
-                url: new_git_url,
-                subdirectory: subdirectory.clone(),
-            };
-            let new_url = DisplaySafeUrl::from(new_parsed_url.clone());
-            let new_verbatim_url = apply_redirect(&url.verbatim, new_url);
-            VerbatimParsedUrl {
-                parsed_url: ParsedUrl::GitDirectory(new_parsed_url),
-                verbatim: new_verbatim_url,
-            }
-        }
-        ParsedUrl::GitPath(ParsedGitPathUrl {
-            url: git_url,
-            install_path,
-            ext,
-        }) => {
-            let Some(new_git_url) = git.precise(git_url.clone()) else {
-                debug_assert!(false, "Unresolved Git URL: {}, {git_url:?}", url.verbatim);
-                return url;
-            };
-
-            let new_parsed_url = ParsedGitPathUrl {
-                url: new_git_url,
-                install_path: install_path.clone(),
-                ext: *ext,
-            };
-            let new_url = DisplaySafeUrl::from(new_parsed_url.clone());
-            let new_verbatim_url = apply_redirect(&url.verbatim, new_url);
-            VerbatimParsedUrl {
-                parsed_url: ParsedUrl::GitPath(new_parsed_url),
-                verbatim: new_verbatim_url,
-            }
-        }
-        _ => url,
-    }
+    let redirect = DisplaySafeUrl::from(url.parsed_url.clone());
+    url.verbatim = apply_redirect(&url.verbatim, redirect);
+    url
 }
 
 /// Given a [`VerbatimUrl`] and a redirect, apply the redirect to the URL while preserving as much
@@ -59,46 +28,29 @@ fn apply_redirect(url: &VerbatimUrl, redirect: DisplaySafeUrl) -> VerbatimUrl {
 
     // The redirect should be the "same" URL, but with a specific commit hash added after the `@`.
     // We take advantage of this to preserve as much of the verbatim representation as possible.
-    if let Some(given) = url.given() {
-        let (given, fragment) = given
-            .split_once('#')
-            .map_or((given, None), |(prefix, suffix)| (prefix, Some(suffix)));
-        if let Some(precise_suffix) = redirect
-            .raw()
-            .path()
-            .rsplit_once('@')
-            .map(|(_, suffix)| suffix.to_owned())
-        {
-            // If there was an `@` in the original representation...
-            if let Some((.., parsed_suffix)) = url.raw().path().rsplit_once('@') {
-                if let Some((given_prefix, given_suffix)) = given.rsplit_once('@') {
-                    // And the portion after the `@` is stable between the parsed and given representations...
-                    if given_suffix == parsed_suffix {
-                        // Preserve everything that precedes the `@` in the precise representation.
-                        let given = format!("{given_prefix}@{precise_suffix}");
-                        let given = if let Some(fragment) = fragment {
-                            format!("{given}#{fragment}")
-                        } else {
-                            given
-                        };
-                        return redirect.with_given(given);
-                    }
-                }
-            } else {
-                // If there was no `@` in the original representation, we can just append the
-                // precise suffix to the given representation.
-                let given = format!("{given}@{precise_suffix}");
-                let given = if let Some(fragment) = fragment {
-                    format!("{given}#{fragment}")
-                } else {
-                    given
-                };
-                return redirect.with_given(given);
-            }
-        }
-    }
+    let Some(given) = url.given() else {
+        return redirect;
+    };
+    let (given, fragment) = given
+        .split_once('#')
+        .map_or((given, None), |(prefix, suffix)| (prefix, Some(suffix)));
+    let Some((_, precise_suffix)) = redirect.raw().path().rsplit_once('@') else {
+        return redirect;
+    };
 
-    redirect
+    let prefix = match url.raw().path().rsplit_once('@') {
+        None => given,
+        Some((_, parsed_suffix)) => match given.rsplit_once('@') {
+            Some((prefix, given_suffix)) if given_suffix == parsed_suffix => prefix,
+            _ => return redirect,
+        },
+    };
+    let mut given = format!("{prefix}@{precise_suffix}");
+    if let Some(fragment) = fragment {
+        given.push('#');
+        given.push_str(fragment);
+    }
+    redirect.with_given(given)
 }
 
 #[cfg(test)]
@@ -107,6 +59,12 @@ mod tests {
     use uv_redacted::DisplaySafeUrl;
 
     use crate::redirect::apply_redirect;
+
+    fn assert_redirect(url: &VerbatimUrl, redirect: DisplaySafeUrl, expected: &VerbatimUrl) {
+        let actual = apply_redirect(url, redirect);
+        assert_eq!(actual.given(), expected.given());
+        assert_eq!(&actual, expected);
+    }
 
     #[test]
     fn test_apply_redirect() -> Result<(), VerbatimUrlError> {
@@ -121,8 +79,8 @@ mod tests {
         let expected = VerbatimUrl::parse_url(
             "https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe",
         )?
-        .with_given("https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe");
-        assert_eq!(apply_redirect(&verbatim, redirect), expected);
+        .with_given("git+https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe");
+        assert_redirect(&verbatim, redirect, &expected);
 
         // If there's an `@` in the original representation, and it's stable between the parsed and
         // given representations, we preserve everything that precedes the `@` in the precise
@@ -136,8 +94,8 @@ mod tests {
         let expected = VerbatimUrl::parse_url(
             "https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe",
         )?
-        .with_given("https://${DOMAIN}.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe");
-        assert_eq!(apply_redirect(&verbatim, redirect), expected);
+        .with_given("git+https://${DOMAIN}.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe");
+        assert_redirect(&verbatim, redirect, &expected);
 
         // If there's a conflict after the `@`, discard the original representation.
         let verbatim = VerbatimUrl::parse_url("https://github.com/flask.git@main")?
@@ -149,7 +107,7 @@ mod tests {
         let expected = VerbatimUrl::parse_url(
             "https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe",
         )?;
-        assert_eq!(apply_redirect(&verbatim, redirect), expected);
+        assert_redirect(&verbatim, redirect, &expected);
 
         // We should preserve subdirectory fragments.
         let verbatim = VerbatimUrl::parse_url("https://github.com/flask.git#subdirectory=src")?
@@ -162,7 +120,7 @@ mod tests {
             "https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe#subdirectory=src",
         )?.with_given("git+https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe#subdirectory=src");
 
-        assert_eq!(apply_redirect(&verbatim, redirect), expected);
+        assert_redirect(&verbatim, redirect, &expected);
 
         Ok(())
     }

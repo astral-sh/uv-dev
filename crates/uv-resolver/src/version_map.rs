@@ -3,6 +3,7 @@ use std::collections::Bound;
 use std::ops::RangeBounds;
 use std::sync::OnceLock;
 
+use itertools::{EitherOrBoth, merge_join_by};
 use jiff::Timestamp;
 use pubgrub::Ranges;
 use tracing::{instrument, trace};
@@ -194,57 +195,38 @@ impl VersionMap {
         &self,
         range: &Ranges<Version>,
     ) -> impl DoubleEndedIterator<Item = (&Version, VersionMapDistHandle<'_>)> {
-        // Performance optimization: If we only have a single version, return that version directly.
-        if let Some(version) = range.as_singleton() {
-            either::Either::Left(match self.inner {
-                VersionMapInner::Eager(ref eager) => {
-                    either::Either::Left(eager.map.get_key_value(version).into_iter().map(
-                        move |(version, dist)| {
-                            let version_map_dist = VersionMapDistHandle {
-                                inner: VersionMapDistHandleInner::Eager(dist),
-                            };
-                            (version, version_map_dist)
+        // Use a direct lookup when the range contains exactly one version.
+        let singleton = range.as_singleton();
+        match &self.inner {
+            VersionMapInner::Eager(eager) => {
+                let entries = if let Some(version) = singleton {
+                    either::Either::Left(eager.map.get_key_value(version).into_iter())
+                } else {
+                    either::Either::Right(eager.map.range(BoundingRange::from(range)))
+                };
+                either::Either::Left(entries.map(|(version, dist)| {
+                    let handle = VersionMapDistHandle {
+                        inner: VersionMapDistHandleInner::Eager(dist),
+                    };
+                    (version, handle)
+                }))
+            }
+            VersionMapInner::Lazy(lazy) => {
+                let entries = if let Some(version) = singleton {
+                    either::Either::Left(lazy.map.get(version).into_iter())
+                } else {
+                    either::Either::Right(lazy.map.range(BoundingRange::from(range)).iter())
+                };
+                either::Either::Right(entries.map(move |entry| {
+                    let handle = VersionMapDistHandle {
+                        inner: VersionMapDistHandleInner::Lazy {
+                            lazy,
+                            dist: &entry.dist,
                         },
-                    ))
-                }
-                VersionMapInner::Lazy(ref lazy) => {
-                    either::Either::Right(lazy.map.get(version).into_iter().map(move |entry| {
-                        let version_map_dist = VersionMapDistHandle {
-                            inner: VersionMapDistHandleInner::Lazy {
-                                lazy,
-                                dist: &entry.dist,
-                            },
-                        };
-                        (&entry.version, version_map_dist)
-                    }))
-                }
-            })
-        } else {
-            either::Either::Right(match self.inner {
-                VersionMapInner::Eager(ref eager) => {
-                    either::Either::Left(eager.map.range(BoundingRange::from(range)).map(
-                        |(version, dist)| {
-                            let version_map_dist = VersionMapDistHandle {
-                                inner: VersionMapDistHandleInner::Eager(dist),
-                            };
-                            (version, version_map_dist)
-                        },
-                    ))
-                }
-                VersionMapInner::Lazy(ref lazy) => {
-                    either::Either::Right(lazy.map.range(BoundingRange::from(range)).iter().map(
-                        |entry| {
-                            let version_map_dist = VersionMapDistHandle {
-                                inner: VersionMapDistHandleInner::Lazy {
-                                    lazy,
-                                    dist: &entry.dist,
-                                },
-                            };
-                            (&entry.version, version_map_dist)
-                        },
-                    ))
-                }
-            })
+                    };
+                    (&entry.version, handle)
+                }))
+            }
         }
     }
 
@@ -329,11 +311,9 @@ impl<'a> VersionMapDistHandle<'a> {
     fn is_included(&self) -> bool {
         match self.inner {
             VersionMapDistHandleInner::Eager(_) => true,
-            VersionMapDistHandleInner::Lazy { lazy, dist } => match (&dist.flat, &dist.simple) {
-                (Some(_), _) => true,
-                (None, Some(simple)) => lazy.any_file_materializable(simple),
-                (None, None) => false,
-            },
+            VersionMapDistHandleInner::Lazy { lazy, dist } => {
+                lazy.passes_cutoff(dist, FileCutoffCheck::Materializable)
+            }
         }
     }
 
@@ -388,41 +368,28 @@ struct VersionMapLazyIndex {
 impl VersionMapLazyIndex {
     /// Merge the sorted flat index into the sorted simple entries in one pass.
     fn merge_flat(self, flat_index: FlatDistributions) -> Self {
-        let flat_count = flat_index.iter().size_hint().0;
-        let mut merged = Vec::with_capacity(self.entries.len() + flat_count);
-        let mut simple = self.entries.into_iter().peekable();
-        let mut flat = flat_index.into_iter().peekable();
-        let flat_entry = |(version, dist)| VersionMapLazyEntry {
-            version,
-            dist: LazyPrioritizedDist {
-                flat: Some(dist),
-                simple: None,
-            },
-        };
-        while let (Some(simple_entry), Some((flat_version, _))) = (simple.peek(), flat.peek()) {
-            match simple_entry.version.cmp(flat_version) {
-                std::cmp::Ordering::Less => {
-                    if let Some(entry) = simple.next() {
-                        merged.push(entry);
-                    }
+        let flat = flat_index.into_iter();
+        let mut entries = Vec::with_capacity(self.entries.len() + flat.len());
+        merge_join_by(self.entries, flat, |simple, (version, _)| {
+            simple.version.cmp(version)
+        })
+        .for_each(|entry| {
+            entries.push(match entry {
+                EitherOrBoth::Left(simple) => simple,
+                EitherOrBoth::Right((version, flat)) => VersionMapLazyEntry {
+                    version,
+                    dist: LazyPrioritizedDist {
+                        flat: Some(flat),
+                        simple: None,
+                    },
+                },
+                EitherOrBoth::Both(mut simple, (_, flat)) => {
+                    simple.dist.flat = Some(flat);
+                    simple
                 }
-                std::cmp::Ordering::Greater => {
-                    if let Some(entry) = flat.next() {
-                        merged.push(flat_entry(entry));
-                    }
-                }
-                std::cmp::Ordering::Equal => {
-                    if let (Some(mut entry), Some((_, dist))) = (simple.next(), flat.next()) {
-                        entry.dist.flat = Some(dist);
-                        merged.push(entry);
-                    }
-                }
-            }
-        }
-        merged.extend(simple);
-        merged.extend(flat.map(flat_entry));
-
-        Self { entries: merged }
+            });
+        });
+        Self { entries }
     }
 
     fn get(&self, version: &Version) -> Option<&VersionMapLazyEntry> {
@@ -507,6 +474,24 @@ struct VersionMapLazy {
     minimum_libc_version: Option<MinimumLibcVersion>,
 }
 
+/// How to apply upload-time cutoffs to a distribution.
+#[derive(Clone, Copy)]
+enum FileCutoffCheck {
+    /// Whether the version belongs to the candidate universe.
+    Included,
+    /// Whether the version should be materialized for candidate selection. Files without upload
+    /// times must be materialized to emit the corresponding `exclude-newer` warnings.
+    Materializable,
+}
+
+/// Whether a file is included by upload-time cutoffs.
+#[derive(Clone, Copy)]
+enum FileCutoffStatus {
+    Included,
+    /// The file is excluded, with its upload time if available.
+    Excluded(Option<i64>),
+}
+
 impl VersionMapLazy {
     /// Returns the registry-provided metadata for the given version, if it exists.
     fn get_metadata(&self, version: &Version) -> Option<ResolutionMetadata> {
@@ -531,60 +516,32 @@ impl VersionMapLazy {
     /// cutoffs, without materializing the distributions.
     fn included_versions(&self) -> impl DoubleEndedIterator<Item = &Version> {
         self.map.entries.iter().filter_map(move |entry| {
-            let included = match (&entry.dist.flat, &entry.dist.simple) {
-                // Flat index files have no upload times and bypass the cutoffs.
-                (Some(_), _) => true,
-                (None, Some(simple)) => self.any_file_included(simple),
-                (None, None) => false,
-            };
-            included.then_some(&entry.version)
+            self.passes_cutoff(&entry.dist, FileCutoffCheck::Included)
+                .then_some(&entry.version)
         })
     }
 
-    /// Returns whether at least one file keeps this version inside the candidate universe.
-    ///
-    /// This mirrors the per-file cutoff handling in [`Self::get_simple`] without materializing the
-    /// distribution, including the two cutoff modes' distinct handling of missing upload times.
-    fn any_file_included(&self, simple: &SimplePrioritizedDist) -> bool {
-        if self.included_version_cutoff.is_none() && self.available_version_cutoff.is_none() {
+    /// Check a distribution against upload-time cutoffs without materializing it.
+    fn passes_cutoff(&self, dist: &LazyPrioritizedDist, check: FileCutoffCheck) -> bool {
+        // Flat index files have no upload times and bypass the cutoffs.
+        if dist.flat.is_some() {
             return true;
         }
-        let Some(datum) = self.simple_metadata.datum(simple.datum_index) else {
+        let Some(simple) = &dist.simple else {
             return false;
         };
-        let files = &datum.files;
-        files
-            .wheels
-            .iter()
-            .chain(files.source_dists.iter())
-            .any(|file| {
-                let upload_time = file.upload_time_utc_ms();
-                let excluded = if let Some(cutoff) = &self.included_version_cutoff {
-                    upload_time.is_none_or(|t| t >= cutoff.as_millisecond())
-                } else if let Some(cutoff) = &self.available_version_cutoff {
-                    upload_time.is_some_and(|t| t >= cutoff.as_millisecond())
-                } else {
-                    false
-                };
-                !excluded
-            })
-    }
-
-    /// Returns whether a version should be materialized during candidate selection.
-    ///
-    /// Missing upload times are retained here, even for `included_version_cutoff`, since
-    /// materializing them is what emits the corresponding `exclude-newer` warning.
-    fn any_file_materializable(&self, simple: &SimplePrioritizedDist) -> bool {
-        let Some(cutoff) = self
-            .included_version_cutoff
-            .as_ref()
-            .or(self.available_version_cutoff.as_ref())
-        else {
-            return true;
+        let (cutoff, include_missing) = match (
+            &self.included_version_cutoff,
+            &self.available_version_cutoff,
+        ) {
+            (Some(cutoff), _) => (cutoff, matches!(check, FileCutoffCheck::Materializable)),
+            (None, Some(cutoff)) => (cutoff, true),
+            (None, None) => return true,
         };
         let Some(datum) = self.simple_metadata.datum(simple.datum_index) else {
             return false;
         };
+        let cutoff = cutoff.as_millisecond();
         datum
             .files
             .wheels
@@ -592,7 +549,7 @@ impl VersionMapLazy {
             .chain(datum.files.source_dists.iter())
             .any(|file| {
                 file.upload_time_utc_ms()
-                    .is_none_or(|upload_time| upload_time < cutoff.as_millisecond())
+                    .map_or(include_missing, |upload_time| upload_time < cutoff)
             })
     }
 
@@ -632,7 +589,7 @@ impl VersionMapLazy {
             for (filename, file) in files.all(&self.package_name) {
                 // Support resolving as if it were an earlier timestamp, at least as long files have
                 // upload time information.
-                let (excluded, upload_time) = if let Some(included_version_cutoff) =
+                let cutoff_status = if let Some(included_version_cutoff) =
                     &self.included_version_cutoff
                 {
                     match file.upload_time_utc_ms.as_ref() {
@@ -643,16 +600,16 @@ impl VersionMapLazy {
                                 "Excluding `{}` (uploaded {upload_time}) due to exclude-newer ({included_version_cutoff})",
                                 file.filename
                             );
-                            (true, Some(upload_time))
+                            FileCutoffStatus::Excluded(Some(upload_time))
                         }
                         None => {
                             warn_user_once!(
                                 "`{}` is missing an upload date, but user provided: {included_version_cutoff}",
                                 file.filename,
                             );
-                            (true, None)
+                            FileCutoffStatus::Excluded(None)
                         }
-                        _ => (false, None),
+                        _ => FileCutoffStatus::Included,
                     }
                 } else if let Some(available_version_cutoff) = &self.available_version_cutoff {
                     match file.upload_time_utc_ms.as_ref() {
@@ -663,12 +620,12 @@ impl VersionMapLazy {
                                 "Excluding `{}` (uploaded {upload_time}) due to available version cutoff ({available_version_cutoff})",
                                 file.filename
                             );
-                            (true, Some(upload_time))
+                            FileCutoffStatus::Excluded(Some(upload_time))
                         }
-                        _ => (false, None),
+                        _ => FileCutoffStatus::Included,
                     }
                 } else {
-                    (false, None)
+                    FileCutoffStatus::Included
                 };
 
                 // Prioritize amongst all available files.
@@ -678,12 +635,9 @@ impl VersionMapLazy {
                     DistFilename::WheelFilename(filename) => {
                         let compatibility = self.wheel_compatibility(
                             &filename,
-                            &filename.name,
-                            &filename.version,
                             hashes.as_slice(),
                             yanked,
-                            excluded,
-                            upload_time,
+                            cutoff_status,
                         );
                         let dist = RegistryBuiltWheel {
                             filename,
@@ -703,12 +657,11 @@ impl VersionMapLazy {
                             &filename,
                             hashes.as_slice(),
                             yanked,
-                            excluded,
-                            upload_time,
+                            cutoff_status,
                         );
                         let dist = RegistrySourceDist {
-                            name: filename.name.clone(),
-                            version: filename.version.clone(),
+                            name: filename.name,
+                            version: filename.version,
                             ext: filename.extension,
                             file: Box::new(file),
                             index: self.index.clone(),
@@ -733,11 +686,10 @@ impl VersionMapLazy {
         filename: &SourceDistFilename,
         hashes: &[HashDigest],
         yanked: Option<&Yanked>,
-        excluded: bool,
-        upload_time: Option<i64>,
+        cutoff_status: FileCutoffStatus,
     ) -> SourceDistCompatibility {
         // Check if after upload time cutoff
-        if excluded {
+        if let FileCutoffStatus::Excluded(upload_time) = cutoff_status {
             return SourceDistCompatibility::Incompatible(IncompatibleSource::ExcludeNewer(
                 upload_time,
             ));
@@ -748,17 +700,8 @@ impl VersionMapLazy {
             return SourceDistCompatibility::Incompatible(IncompatibleSource::NoBuild);
         }
 
-        // Check if yanked
-        if let Some(yanked) = yanked {
-            if yanked.is_yanked()
-                && !self
-                    .allowed_yanks
-                    .contains(&filename.name, &filename.version)
-            {
-                return SourceDistCompatibility::Incompatible(IncompatibleSource::Yanked(
-                    yanked.clone(),
-                ));
-            }
+        if let Some(yanked) = self.disallowed_yank(&filename.name, &filename.version, yanked) {
+            return SourceDistCompatibility::Incompatible(IncompatibleSource::Yanked(yanked));
         }
 
         // Check if the filename is PEP 625-compliant.
@@ -769,38 +712,22 @@ impl VersionMapLazy {
             return SourceDistCompatibility::Incompatible(IncompatibleSource::NotPep625Filename);
         }
 
-        // Check if hashes line up. If hashes aren't required, they're considered matching.
-        let hash_policy = self
-            .hasher
-            .archive_policy_for_package(&filename.name, &filename.version);
-        let required_hashes = hash_policy.digests();
-        let hash = if required_hashes.is_empty() {
-            HashComparison::Matched
-        } else {
-            if hashes.is_empty() {
-                HashComparison::Missing
-            } else if hash_policy.matches(hashes) {
-                HashComparison::Matched
-            } else {
-                HashComparison::Mismatched
-            }
-        };
-
-        SourceDistCompatibility::Compatible(hash)
+        SourceDistCompatibility::Compatible(self.compare_hashes(
+            &filename.name,
+            &filename.version,
+            hashes,
+        ))
     }
 
     fn wheel_compatibility(
         &self,
         filename: &WheelFilename,
-        name: &PackageName,
-        version: &Version,
         hashes: &[HashDigest],
         yanked: Option<&Yanked>,
-        excluded: bool,
-        upload_time: Option<i64>,
+        cutoff_status: FileCutoffStatus,
     ) -> WheelCompatibility {
         // Check if after upload time cutoff
-        if excluded {
+        if let FileCutoffStatus::Excluded(upload_time) = cutoff_status {
             return WheelCompatibility::Incompatible(IncompatibleWheel::ExcludeNewer(upload_time));
         }
 
@@ -809,11 +736,8 @@ impl VersionMapLazy {
             return WheelCompatibility::Incompatible(IncompatibleWheel::NoBinary);
         }
 
-        // Check if yanked
-        if let Some(yanked) = yanked {
-            if yanked.is_yanked() && !self.allowed_yanks.contains(name, version) {
-                return WheelCompatibility::Incompatible(IncompatibleWheel::Yanked(yanked.clone()));
-            }
+        if let Some(yanked) = self.disallowed_yank(&filename.name, &filename.version, yanked) {
+            return WheelCompatibility::Incompatible(IncompatibleWheel::Yanked(yanked));
         }
 
         // Variant wheels cannot be selected, including during universal resolution.
@@ -843,25 +767,39 @@ impl VersionMapLazy {
             None
         };
 
-        // Check if hashes line up. If hashes aren't required, they're considered matching.
-        let hash_policy = self.hasher.archive_policy_for_package(name, version);
-        let required_hashes = hash_policy.digests();
-        let hash = if required_hashes.is_empty() {
-            HashComparison::Matched
-        } else {
-            if hashes.is_empty() {
-                HashComparison::Missing
-            } else if hash_policy.matches(hashes) {
-                HashComparison::Matched
-            } else {
-                HashComparison::Mismatched
-            }
-        };
+        let hash = self.compare_hashes(&filename.name, &filename.version, hashes);
 
         // Break ties with the build tag.
         let build_tag = filename.build_tag().cloned();
 
         WheelCompatibility::Compatible(hash, priority, build_tag)
+    }
+
+    /// Return a file's yank metadata if its version is not explicitly allowed.
+    fn disallowed_yank(
+        &self,
+        name: &PackageName,
+        version: &Version,
+        yanked: Option<&Yanked>,
+    ) -> Option<Yanked> {
+        yanked
+            .filter(|yanked| yanked.is_yanked() && !self.allowed_yanks.contains(name, version))
+            .cloned()
+    }
+
+    /// Compare registry archive hashes against the expected digests, if any.
+    fn compare_hashes(
+        &self,
+        name: &PackageName,
+        version: &Version,
+        hashes: &[HashDigest],
+    ) -> HashComparison {
+        let hash_policy = self.hasher.archive_policy_for_package(name, version);
+        if hash_policy.digests().is_empty() {
+            HashComparison::Matched
+        } else {
+            HashComparison::compare(hash_policy, hashes)
+        }
     }
 }
 

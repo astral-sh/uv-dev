@@ -6,8 +6,8 @@ use tracing::debug;
 
 use uv_distribution_filename::{BuildTag, WheelFilename};
 use uv_distribution_types::{
-    File, InstalledDist, MinimumLibcVersion, Name, RegistryBuiltDist, RegistryBuiltWheel,
-    RegistrySourceDist, RequiresPython,
+    ArchiveHashPolicy, File, InstalledDist, MinimumLibcVersion, Name, RegistryBuiltDist,
+    RegistryBuiltWheel, RegistrySourceDist, RequiresPython,
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
@@ -167,60 +167,38 @@ pub enum IncompatibleDist {
 
 impl IncompatibleDist {
     pub(crate) fn singular_message(&self) -> String {
-        match self {
-            Self::Wheel(incompatibility) => match incompatibility {
-                IncompatibleWheel::NoBinary => format!("has {self}"),
-                IncompatibleWheel::Tag(_) => format!("has {self}"),
-                IncompatibleWheel::Yanked(_) => format!("was {self}"),
-                IncompatibleWheel::ExcludeNewer(ts) => match ts {
-                    Some(_) => format!("was {self}"),
-                    None => format!("has {self}"),
-                },
-                IncompatibleWheel::RequiresPython(..) => format!("requires {self}"),
-                IncompatibleWheel::MissingPlatform(_) => format!("has {self}"),
-            },
-            Self::Source(incompatibility) => match incompatibility {
-                IncompatibleSource::NoBuild => format!("has {self}"),
-                IncompatibleSource::Yanked(_) => format!("was {self}"),
-                IncompatibleSource::ExcludeNewer(ts) => match ts {
-                    Some(_) => format!("was {self}"),
-                    None => format!("has {self}"),
-                },
-                IncompatibleSource::RequiresPython(..) => {
-                    format!("requires {self}")
-                }
-                IncompatibleSource::NotPep625Filename => format!("has {self}"),
-            },
-            Self::Unavailable => format!("has {self}"),
-        }
+        let (verb, _) = self.message_verbs();
+        format!("{verb} {self}")
     }
 
     pub(crate) fn plural_message(&self) -> String {
+        let (_, verb) = self.message_verbs();
+        format!("{verb} {self}")
+    }
+
+    /// The singular and plural verbs introducing this incompatibility.
+    fn message_verbs(&self) -> (&'static str, &'static str) {
         match self {
-            Self::Wheel(incompatibility) => match incompatibility {
-                IncompatibleWheel::NoBinary => format!("have {self}"),
-                IncompatibleWheel::Tag(_) => format!("have {self}"),
-                IncompatibleWheel::Yanked(_) => format!("were {self}"),
-                IncompatibleWheel::ExcludeNewer(ts) => match ts {
-                    Some(_) => format!("were {self}"),
-                    None => format!("have {self}"),
-                },
-                IncompatibleWheel::RequiresPython(..) => format!("require {self}"),
-                IncompatibleWheel::MissingPlatform(_) => format!("have {self}"),
-            },
-            Self::Source(incompatibility) => match incompatibility {
-                IncompatibleSource::NoBuild => format!("have {self}"),
-                IncompatibleSource::Yanked(_) => format!("were {self}"),
-                IncompatibleSource::ExcludeNewer(ts) => match ts {
-                    Some(_) => format!("were {self}"),
-                    None => format!("have {self}"),
-                },
-                IncompatibleSource::RequiresPython(..) => {
-                    format!("require {self}")
-                }
-                IncompatibleSource::NotPep625Filename => format!("have {self}"),
-            },
-            Self::Unavailable => format!("have {self}"),
+            Self::Wheel(
+                IncompatibleWheel::NoBinary
+                | IncompatibleWheel::Tag(_)
+                | IncompatibleWheel::ExcludeNewer(None)
+                | IncompatibleWheel::MissingPlatform(_),
+            )
+            | Self::Source(
+                IncompatibleSource::NoBuild
+                | IncompatibleSource::ExcludeNewer(None)
+                | IncompatibleSource::NotPep625Filename,
+            )
+            | Self::Unavailable => ("has", "have"),
+            Self::Wheel(
+                IncompatibleWheel::Yanked(_) | IncompatibleWheel::ExcludeNewer(Some(_)),
+            )
+            | Self::Source(
+                IncompatibleSource::Yanked(_) | IncompatibleSource::ExcludeNewer(Some(_)),
+            ) => ("was", "were"),
+            Self::Wheel(IncompatibleWheel::RequiresPython(..))
+            | Self::Source(IncompatibleSource::RequiresPython(..)) => ("requires", "require"),
         }
     }
 
@@ -229,35 +207,29 @@ impl IncompatibleDist {
         tags: Option<&Tags>,
         requires_python: Option<AbiTag>,
     ) -> Option<String> {
+        fn example(tag: impl Display) -> String {
+            format!("(e.g., `{}`)", tag.cyan())
+        }
+
         match self {
-            Self::Wheel(incompatibility) => match incompatibility {
-                IncompatibleWheel::Tag(IncompatibleTag::Python) => {
-                    let tag = tags?.python_tag().as_ref().map(ToString::to_string)?;
-                    Some(format!("(e.g., `{tag}`)", tag = tag.cyan()))
-                }
-                IncompatibleWheel::Tag(IncompatibleTag::Abi) => {
-                    let tag = tags?.abi_tag().as_ref().map(ToString::to_string)?;
-                    Some(format!("(e.g., `{tag}`)", tag = tag.cyan()))
-                }
-                IncompatibleWheel::Tag(IncompatibleTag::FreethreadedAbi) => None,
-                IncompatibleWheel::Tag(IncompatibleTag::AbiPythonVersion) => {
-                    let tag = requires_python?;
-                    Some(format!("(e.g., `{tag}`)", tag = tag.cyan()))
-                }
-                IncompatibleWheel::Tag(IncompatibleTag::Platform) => {
-                    let tag = tags?.platform_tag().map(ToString::to_string)?;
-                    Some(format!("(e.g., `{tag}`)", tag = tag.cyan()))
-                }
-                IncompatibleWheel::Tag(IncompatibleTag::Invalid) => None,
-                IncompatibleWheel::Tag(IncompatibleTag::Variant) => None,
-                IncompatibleWheel::NoBinary => None,
-                IncompatibleWheel::Yanked(..) => None,
-                IncompatibleWheel::ExcludeNewer(..) => None,
-                IncompatibleWheel::RequiresPython(..) => None,
-                IncompatibleWheel::MissingPlatform(..) => None,
+            Self::Wheel(IncompatibleWheel::Tag(tag)) => match tag {
+                IncompatibleTag::Python => tags?.python_tag().map(example),
+                IncompatibleTag::Abi => tags?.abi_tag().map(example),
+                IncompatibleTag::AbiPythonVersion => requires_python.map(example),
+                IncompatibleTag::Platform => tags?.platform_tag().map(example),
+                IncompatibleTag::FreethreadedAbi
+                | IncompatibleTag::Invalid
+                | IncompatibleTag::Variant => None,
             },
-            Self::Source(..) => None,
-            Self::Unavailable => None,
+            Self::Wheel(
+                IncompatibleWheel::NoBinary
+                | IncompatibleWheel::Yanked(..)
+                | IncompatibleWheel::ExcludeNewer(..)
+                | IncompatibleWheel::RequiresPython(..)
+                | IncompatibleWheel::MissingPlatform(..),
+            )
+            | Self::Source(..)
+            | Self::Unavailable => None,
         }
     }
 }
@@ -265,71 +237,53 @@ impl IncompatibleDist {
 impl Display for IncompatibleDist {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Wheel(incompatibility) => match incompatibility {
-                IncompatibleWheel::NoBinary => f.write_str("no source distribution"),
-                IncompatibleWheel::Tag(tag) => match tag {
-                    IncompatibleTag::Variant => f.write_str("only unsupported wheel variants"),
-                    IncompatibleTag::Invalid => f.write_str("no wheels with valid tags"),
-                    IncompatibleTag::Python => {
-                        f.write_str("no wheels with a matching Python implementation tag")
-                    }
-                    IncompatibleTag::Abi => f.write_str("no wheels with a matching Python ABI tag"),
-                    IncompatibleTag::FreethreadedAbi => {
-                        f.write_str("no wheels with a free-threading compatible ABI tag")
-                    }
-                    IncompatibleTag::AbiPythonVersion => {
-                        f.write_str("no wheels with a matching Python version tag")
-                    }
-                    IncompatibleTag::Platform => {
-                        f.write_str("no wheels with a matching platform tag")
-                    }
-                },
-                IncompatibleWheel::Yanked(yanked) => match yanked {
-                    Yanked::Bool(_) => f.write_str("yanked"),
-                    Yanked::Reason(reason) => write!(
-                        f,
-                        "yanked (reason: {})",
-                        reason.trim().trim_end_matches('.')
-                    ),
-                },
-                IncompatibleWheel::ExcludeNewer(ts) => match ts {
-                    Some(_) => f.write_str("published after the exclude newer time"),
-                    None => f.write_str("no publish time"),
-                },
-                IncompatibleWheel::RequiresPython(python, _) => {
-                    write!(f, "Python {python}")
-                }
-                IncompatibleWheel::MissingPlatform(marker) => {
-                    if let Some(platform) = KnownPlatform::from_marker(*marker) {
-                        write!(f, "no {platform}-compatible wheels")
-                    } else if let Some(marker) = marker.try_to_string() {
-                        write!(f, "no `{marker}`-compatible wheels")
-                    } else {
-                        write!(f, "no compatible wheels")
-                    }
-                }
+            Self::Wheel(IncompatibleWheel::Yanked(yanked))
+            | Self::Source(IncompatibleSource::Yanked(yanked)) => match yanked {
+                Yanked::Bool(_) => f.write_str("yanked"),
+                Yanked::Reason(reason) => write!(
+                    f,
+                    "yanked (reason: {})",
+                    reason.trim().trim_end_matches('.')
+                ),
             },
-            Self::Source(incompatibility) => match incompatibility {
-                IncompatibleSource::NoBuild => f.write_str("no usable wheels"),
-                IncompatibleSource::Yanked(yanked) => match yanked {
-                    Yanked::Bool(_) => f.write_str("yanked"),
-                    Yanked::Reason(reason) => write!(
-                        f,
-                        "yanked (reason: {})",
-                        reason.trim().trim_end_matches('.')
-                    ),
-                },
-                IncompatibleSource::ExcludeNewer(ts) => match ts {
-                    Some(_) => f.write_str("published after the exclude newer time"),
-                    None => f.write_str("no publish time"),
-                },
-                IncompatibleSource::RequiresPython(python, _) => {
-                    write!(f, "Python {python}")
-                }
-                IncompatibleSource::NotPep625Filename => {
-                    f.write_str("a non-PEP 625-compliant source distribution filename")
-                }
+            Self::Wheel(IncompatibleWheel::ExcludeNewer(ts))
+            | Self::Source(IncompatibleSource::ExcludeNewer(ts)) => match ts {
+                Some(_) => f.write_str("published after the exclude newer time"),
+                None => f.write_str("no publish time"),
             },
+            Self::Wheel(IncompatibleWheel::RequiresPython(python, _))
+            | Self::Source(IncompatibleSource::RequiresPython(python, _)) => {
+                write!(f, "Python {python}")
+            }
+            Self::Wheel(IncompatibleWheel::NoBinary) => f.write_str("no source distribution"),
+            Self::Wheel(IncompatibleWheel::Tag(tag)) => match tag {
+                IncompatibleTag::Variant => f.write_str("only unsupported wheel variants"),
+                IncompatibleTag::Invalid => f.write_str("no wheels with valid tags"),
+                IncompatibleTag::Python => {
+                    f.write_str("no wheels with a matching Python implementation tag")
+                }
+                IncompatibleTag::Abi => f.write_str("no wheels with a matching Python ABI tag"),
+                IncompatibleTag::FreethreadedAbi => {
+                    f.write_str("no wheels with a free-threading compatible ABI tag")
+                }
+                IncompatibleTag::AbiPythonVersion => {
+                    f.write_str("no wheels with a matching Python version tag")
+                }
+                IncompatibleTag::Platform => f.write_str("no wheels with a matching platform tag"),
+            },
+            Self::Wheel(IncompatibleWheel::MissingPlatform(marker)) => {
+                if let Some(platform) = KnownPlatform::from_marker(*marker) {
+                    write!(f, "no {platform}-compatible wheels")
+                } else if let Some(marker) = marker.try_to_string() {
+                    write!(f, "no `{marker}`-compatible wheels")
+                } else {
+                    write!(f, "no compatible wheels")
+                }
+            }
+            Self::Source(IncompatibleSource::NoBuild) => f.write_str("no usable wheels"),
+            Self::Source(IncompatibleSource::NotPep625Filename) => {
+                f.write_str("a non-PEP 625-compliant source distribution filename")
+            }
             Self::Unavailable => f.write_str("no available distributions"),
         }
     }
@@ -391,6 +345,19 @@ pub enum HashComparison {
     Missing,
     /// The hash matches the expected value.
     Matched,
+}
+
+impl HashComparison {
+    /// Compare available hashes against a policy when the caller requires validation.
+    pub(crate) fn compare(policy: ArchiveHashPolicy<'_>, hashes: &[HashDigest]) -> Self {
+        if hashes.is_empty() {
+            Self::Missing
+        } else if policy.matches(hashes) {
+            Self::Matched
+        } else {
+            Self::Mismatched
+        }
+    }
 }
 
 impl PrioritizedDist {
@@ -468,8 +435,7 @@ impl PrioritizedDist {
 
     /// Return the highest-priority distribution for the package version, if any.
     pub(crate) fn get(&self) -> Option<CompatibleDist<'_>> {
-        let best_wheel = self.0.best_wheel_index.map(|i| &self.0.wheels[i]);
-        match (&best_wheel, &self.0.source) {
+        match (self.best_wheel(), &self.0.source) {
             // If both are compatible, break ties based on the hash outcome. For example, prefer a
             // source distribution with a matching hash over a wheel with a mismatched hash. When
             // the outcomes are equivalent (e.g., both have a matching hash), prefer the wheel.
@@ -537,9 +503,7 @@ impl PrioritizedDist {
 
     /// Return the incompatibility for the best wheel, if any.
     pub(crate) fn incompatible_wheel(&self) -> Option<&IncompatibleWheel> {
-        self.0
-            .best_wheel_index
-            .map(|i| &self.0.wheels[i])
+        self.best_wheel()
             .and_then(|(_, compatibility)| match compatibility {
                 WheelCompatibility::Compatible(_, _, _) => None,
                 WheelCompatibility::Incompatible(incompatibility) => Some(incompatibility),
@@ -566,50 +530,52 @@ impl PrioritizedDist {
         // relative to the filtered list.
         let mut adjusted_wheels = Vec::with_capacity(self.0.wheels.len());
         let mut adjusted_best_index = 0;
-        for (i, (wheel, compatibility)) in self.0.wheels.iter().enumerate() {
-            if compatibility.is_excluded() {
-                continue;
-            }
+        for (i, wheel) in self.included_wheels() {
             if i == best_wheel_index {
                 adjusted_best_index = adjusted_wheels.len();
             }
             adjusted_wheels.push(wheel.clone());
         }
 
-        let sdist = self
-            .0
-            .source
-            .as_ref()
-            .filter(|(_, compatibility)| !compatibility.is_excluded())
-            .map(|(sdist, _)| sdist.clone());
         Some(RegistryBuiltDist {
             wheels: adjusted_wheels,
             best_wheel_index: adjusted_best_index,
-            sdist,
+            sdist: self.included_source().cloned(),
         })
     }
 
     /// If this prioritized dist has an sdist, then this creates a source
     /// distribution.
     pub(crate) fn source_dist(&self) -> Option<RegistrySourceDist> {
-        let mut sdist = self
-            .0
-            .source
-            .as_ref()
-            .filter(|(_, compatibility)| !compatibility.is_excluded())
-            .map(|(sdist, _)| sdist.clone())?;
+        let mut sdist = self.included_source().cloned()?;
         assert!(
             sdist.wheels.is_empty(),
             "source distribution should not have any wheels yet"
         );
         sdist.wheels = self
-            .0
-            .wheels
-            .iter()
-            .filter(|(_, compatibility)| !compatibility.is_excluded())
-            .map(|(wheel, _)| wheel.clone())
+            .included_wheels()
+            .map(|(_, wheel)| wheel.clone())
             .collect();
         Some(sdist)
+    }
+
+    /// Return the non-excluded source distribution, if any.
+    fn included_source(&self) -> Option<&RegistrySourceDist> {
+        self.0
+            .source
+            .as_ref()
+            .filter(|(_, compatibility)| !compatibility.is_excluded())
+            .map(|(sdist, _)| sdist)
+    }
+
+    /// Return non-excluded wheels with their original indices.
+    fn included_wheels(&self) -> impl Iterator<Item = (usize, &RegistryBuiltWheel)> {
+        self.0
+            .wheels
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, compatibility))| !compatibility.is_excluded())
+            .map(|(index, (wheel, _))| (index, wheel))
     }
 
     /// Returns the "best" wheel in this prioritized distribution, if one

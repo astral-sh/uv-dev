@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use uv_cache::Cache;
@@ -19,6 +18,7 @@ use uv_platform_tags::{IncompatibleTag, TagCompatibility, Tags};
 use uv_pypi_types::HashDigest;
 use uv_types::HashStrategy;
 
+use crate::FxHashbrownMap;
 use crate::prioritized_distribution::{
     HashComparison, IncompatibleSource, IncompatibleWheel, PrioritizedDist,
     SourceDistCompatibility, WheelCompatibility,
@@ -28,7 +28,7 @@ use crate::prioritized_distribution::{
 #[derive(Debug, Clone, Default)]
 pub struct FlatIndex {
     /// Entries are ranked using each resolver's platform and hash policies when requested.
-    index: FxHashMap<PackageName, Vec<FlatIndexEntry>>,
+    index: FxHashbrownMap<PackageName, Vec<FlatIndexEntry>>,
     /// Whether any `--find-links` entries could not be resolved due to a lack of network
     /// connectivity.
     offline: bool,
@@ -51,12 +51,12 @@ impl FlatIndex {
     /// Collect all files from a `--find-links` target into a [`FlatIndex`].
     #[instrument(skip_all)]
     fn from_entries(entries: FlatIndexEntries) -> Self {
-        let mut index = FxHashMap::<PackageName, Vec<FlatIndexEntry>>::default();
+        let mut index = FxHashbrownMap::<PackageName, Vec<FlatIndexEntry>>::default();
         let (entries, offline) = entries.into_parts();
 
         for entry in entries {
             index
-                .entry(entry.filename().name().clone())
+                .entry_ref(entry.filename().name())
                 .or_default()
                 .push(entry);
         }
@@ -157,7 +157,7 @@ impl FlatDistributions {
                     build_options,
                 );
                 let dist = RegistrySourceDist {
-                    name: filename.name.clone(),
+                    name: filename.name,
                     version: filename.version.clone(),
                     ext: filename.extension,
                     file: Box::new(file),
@@ -193,21 +193,12 @@ impl FlatDistributions {
             return SourceDistCompatibility::Incompatible(IncompatibleSource::NotPep625Filename);
         }
 
-        // Check if hashes line up
-        let hash_policy = hasher.archive_policy_for_package(&filename.name, &filename.version);
-        let hash = if hash_policy.requires_validation() {
-            if hashes.is_empty() {
-                HashComparison::Missing
-            } else if hash_policy.matches(hashes) {
-                HashComparison::Matched
-            } else {
-                HashComparison::Mismatched
-            }
-        } else {
-            HashComparison::Matched
-        };
-
-        SourceDistCompatibility::Compatible(hash)
+        SourceDistCompatibility::Compatible(Self::compare_hashes(
+            hasher,
+            &filename.name,
+            &filename.version,
+            hashes,
+        ))
     }
 
     fn wheel_compatibility(
@@ -239,24 +230,27 @@ impl FlatDistributions {
             None => None,
         };
 
-        // Check if hashes line up.
-        let hash_policy = hasher.archive_policy_for_package(&filename.name, &filename.version);
-        let hash = if hash_policy.requires_validation() {
-            if hashes.is_empty() {
-                HashComparison::Missing
-            } else if hash_policy.matches(hashes) {
-                HashComparison::Matched
-            } else {
-                HashComparison::Mismatched
-            }
-        } else {
-            HashComparison::Matched
-        };
+        let hash = Self::compare_hashes(hasher, &filename.name, &filename.version, hashes);
 
         // Break ties with the build tag.
         let build_tag = filename.build_tag().cloned();
 
         WheelCompatibility::Compatible(hash, priority, build_tag)
+    }
+
+    /// Compare flat-index archive hashes when validation is required.
+    fn compare_hashes(
+        hasher: &HashStrategy,
+        name: &PackageName,
+        version: &Version,
+        hashes: &[HashDigest],
+    ) -> HashComparison {
+        let hash_policy = hasher.archive_policy_for_package(name, version);
+        if hash_policy.requires_validation() {
+            HashComparison::compare(hash_policy, hashes)
+        } else {
+            HashComparison::Matched
+        }
     }
 }
 
