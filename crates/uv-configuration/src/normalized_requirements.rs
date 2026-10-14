@@ -259,16 +259,18 @@ impl RequirementsKey {
 /// Intersect ranges in a balanced tree, avoiding repeated scans of a growing range.
 fn intersect_ranges(ranges: impl IntoIterator<Item = Ranges<Version>>) -> Ranges<Version> {
     let mut ranges: Vec<_> = ranges.into_iter().collect();
+    let mut merged = Vec::new();
     while ranges.len() > 1 {
-        let mut pairs = ranges.into_iter();
-        ranges = iter::from_fn(|| {
+        let mut pairs = ranges.drain(..);
+        merged.extend(iter::from_fn(move || {
             let left = pairs.next()?;
             Some(match pairs.next() {
                 Some(right) => left.intersection(&right),
                 None => left,
             })
-        })
-        .collect();
+        }));
+        // The drained input becomes the output buffer for the next level.
+        mem::swap(&mut ranges, &mut merged);
     }
     ranges.pop().unwrap_or_else(Ranges::full)
 }
