@@ -453,7 +453,7 @@ fn regression_cpython() {
 }
 
 #[test]
-fn python_install_force() {
+fn python_install_force() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -484,8 +484,8 @@ fn python_install_force() {
     bin_python.assert(predicate::path::exists());
 
     // If an unmanaged executable is present, `--force` is required
-    fs_err::remove_file(bin_python.path()).unwrap();
-    bin_python.touch().unwrap();
+    fs_err::remove_file(bin_python.path())?;
+    bin_python.write_str("unmanaged executable\n")?;
 
     uv_snapshot!(context.filters(), context.python_install().arg("3.15"), @"
     exit_code: 0 (success)
@@ -493,6 +493,7 @@ fn python_install_force() {
     warning: Failed to install executable for cpython-3.15.[LATEST]-[PLATFORM]
       cause: Executable already exists at `[BIN]/python3.15` but is not managed by uv; use `--force` to replace it
     ");
+    assert_eq!(context.read(&bin_python), "unmanaged executable\n");
 
     uv_snapshot!(context.filters(), context.python_install().arg("--force").arg("3.15"), @"
     exit_code: 0 (success)
@@ -501,7 +502,13 @@ fn python_install_force() {
      + cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
     ");
 
-    bin_python.assert(predicate::path::exists());
+    context
+        .external_command(&bin_python)
+        .args(["-c", "import sys; print(sys.version_info[:2], end='')"])
+        .assert()
+        .success()
+        .stdout("(3, 15)");
+    Ok(())
 }
 
 #[test]
