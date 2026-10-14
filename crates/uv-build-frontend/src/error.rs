@@ -140,7 +140,7 @@ impl MissingLibrary {
         );
         // e.g. `/usr/bin/ld: cannot find -lncurses: No such file or directory`
         let ld_not_found_re =
-            regex!(r"/usr/bin/ld: cannot find -l([a-zA-Z10-9]+): No such file or directory");
+            regex!(r"/usr/bin/ld: cannot find -l([a-zA-Z0-9]+): No such file or directory");
         // e.g. `ModuleNotFoundError`
         let module_not_found = regex!(r#"ModuleNotFoundError: No module named ['"]([^'"]+)['"]"#);
 
