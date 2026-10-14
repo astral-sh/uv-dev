@@ -4,6 +4,46 @@ use std::process::Command;
 use assert_cmd::prelude::*;
 use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 
+use super::wheel_fixture::write_crlf_script_wheel;
+
+/// Rewriting a CRLF shebang must leave the following encoding cookie usable.
+#[test]
+fn install_crlf_wheel_script_preserves_encoding_cookie() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context
+        .temp_dir
+        .join("encoded_script-1.0.0-py3-none-any.whl");
+    write_crlf_script_wheel(&wheel)?;
+    context
+        .pip_install()
+        .arg(wheel)
+        .arg("--no-index")
+        .assert()
+        .success();
+
+    let script = venv_bin_path(&context.venv).join("encoded-script");
+    let contents = fs_err::read(&script)?;
+    assert!(
+        contents.starts_with(b"#!") && !contents.starts_with(b"#!python"),
+        "wheel script does not have a rewritten shebang: {}",
+        script.display()
+    );
+    let mut command = if cfg!(unix) {
+        Command::new(&script)
+    } else {
+        let mut command = context.python_command();
+        command.arg(&script);
+        command
+    };
+    command.env(uv_static::EnvVars::PYTHONUTF8, "1");
+    uv_snapshot!(command, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    café
+    ");
+    Ok(())
+}
+
 fn launcher_wheel(context: &TestContext) -> PathBuf {
     context
         .workspace_root
