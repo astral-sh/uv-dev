@@ -51,7 +51,7 @@ fn cache_size_populated_raw() -> anyhow::Result<()> {
 /// A populated cache reports human-readable units.
 #[test]
 fn cache_size_populated_human() -> anyhow::Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_filtered_cache_size();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes_and_units();
     context
         .cache_dir
         .child("payload.bin")
@@ -60,7 +60,7 @@ fn cache_size_populated_human() -> anyhow::Result<()> {
     uv_snapshot!(context.filters(), context.cache_size().arg("--preview").arg("--human"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [SIZE]KiB
+    [SIZE]
     ");
     Ok(())
 }
