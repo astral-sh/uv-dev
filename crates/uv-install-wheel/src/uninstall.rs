@@ -333,7 +333,7 @@ pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
     let content = fs_err::read_to_string(&easy_install)?;
     // https://github.com/pypa/pip/blob/41587f5e0017bcd849f42b314dc8a34a7db75621/src/pip/_internal/req/req_uninstall.py#L634
     let mut lines = content.lines();
-    let Some(target_index) = lines.position(|line| line.trim() == target_line) else {
+    let Some(target_index) = lines.position(|line| normcase(line.trim()) == target_line) else {
         return Ok(uninstall);
     };
 
@@ -404,6 +404,29 @@ mod tests {
 
     use crate::Layout;
     use crate::uninstall::{is_valid_top_level_entry, uninstall_egg, uninstall_wheel};
+
+    #[cfg(windows)]
+    #[test]
+    fn test_uninstall_legacy_editable_with_mixed_case_path() -> anyhow::Result<()> {
+        let temp = assert_fs::TempDir::new()?;
+        let site_packages = temp.child("site-packages");
+        let project = temp.child("MixedCaseProject");
+        project.create_dir_all()?;
+        let target = project.path().to_str().expect("valid temporary path");
+        let egg_link = site_packages.child("example.egg-link");
+        egg_link.write_str(target)?;
+        let easy_install = site_packages.child("easy-install.pth");
+        easy_install.write_str(&format!("other\n{target}\nretained\n"))?;
+
+        super::uninstall_legacy_editable(egg_link.path())?;
+
+        assert_eq!(
+            fs_err::read_to_string(easy_install.path())?,
+            "other\nretained\n"
+        );
+        assert!(!egg_link.exists());
+        Ok(())
+    }
 
     #[test]
     fn test_top_level_entry_safe_name() {
