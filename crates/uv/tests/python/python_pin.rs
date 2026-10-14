@@ -820,8 +820,13 @@ fn python_pin_install() {
 }
 
 #[test]
-fn python_pin_rm() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+fn python_pin_rm() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let local_version = context.temp_dir.child(PYTHON_VERSION_FILENAME);
+    let global_version = context
+        .user_config_dir
+        .child("uv")
+        .child(PYTHON_VERSION_FILENAME);
 
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
     exit_code: 2 (failure)
@@ -829,13 +834,13 @@ fn python_pin_rm() {
     error: No Python version file found
     ");
 
-    // Create and remove a local pin
-    context.python_pin().arg("3.12").assert().success();
+    local_version.write_str("3.11\n")?;
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Removed Python version file at `.python-version`
     ");
+    assert_path_missing(&local_version);
 
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm").arg("--global"), @"
     exit_code: 2 (failure)
@@ -843,34 +848,25 @@ fn python_pin_rm() {
     error: No global Python pin found
     ");
 
-    // Global does not detect the local pin
-    context.python_pin().arg("3.12").assert().success();
+    // Global removal does not detect a local pin.
+    local_version.write_str("3.11\n")?;
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm").arg("--global"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No global Python pin found
     ");
 
-    context
-        .python_pin()
-        .arg("3.12")
-        .arg("--global")
-        .assert()
-        .success();
+    global_version.write_str("3.12\n")?;
 
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm").arg("--global"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Removed global Python pin at `[UV_USER_CONFIG_DIR]/.python-version`
     ");
+    assert_path_missing(&global_version);
+    assert_eq!(context.read(&local_version), "3.11\n");
 
-    // Add the global pin again
-    context
-        .python_pin()
-        .arg("3.12")
-        .arg("--global")
-        .assert()
-        .success();
+    global_version.write_str("3.12\n")?;
 
     // Remove the local pin
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
@@ -878,6 +874,8 @@ fn python_pin_rm() {
     ----- stdout -----
     Removed Python version file at `.python-version`
     ");
+    assert_path_missing(&local_version);
+    assert_eq!(context.read(&global_version), "3.12\n");
 
     // The global pin should not be removed without `--global`
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
@@ -885,6 +883,7 @@ fn python_pin_rm() {
     ----- stderr -----
     error: No Python version file found; use `--rm --global` to remove the global pin
     ");
+    Ok(())
 }
 
 #[test]
