@@ -18,7 +18,8 @@ use tracing::warn;
 use uv_threads::initialize_rayon_once;
 
 use super::{
-    DirhashTree, HashedFile, UnhashedFile, UnzipOutput, blake3_copy, directory_tree_from_extracted,
+    DirhashTree, HashedFile, UnhashedFile, UnzipOutput, blake3_copy_with_buffer,
+    directory_tree_from_extracted,
 };
 use crate::archive_path::SanitizedArchivePath;
 
@@ -31,6 +32,12 @@ enum ExtractedEntry {
         executable: bool,
     },
     Directory(SanitizedArchivePath),
+}
+
+/// State reused while processing a batch of archive entries.
+struct ExtractionJob<R> {
+    archive: ZipFileReader<AllowStdIo<R>>,
+    copy_buffer: Vec<u8>,
 }
 
 /// Unzip a `.zip` archive into the target directory.
@@ -79,14 +86,17 @@ fn unzip_inner(
     let skip_validation = insecure_no_validate();
     // Initialize the threadpool with the user settings.
     initialize_rayon_once();
-    // Reuse each reader's buffer across entries instead of allocating it for every file.
+    // Reuse each extraction job's reader and copy buffer across entries.
     let extracted = (0..archive.file().entries().len())
         .into_par_iter()
         .map_init(
-            || archive.clone(),
-            |archive, file_number| {
+            || ExtractionJob {
+                archive: archive.clone(),
+                copy_buffer: Vec::new(),
+            },
+            |job, file_number| {
                 extract_entry(
-                    archive,
+                    job,
                     file_number,
                     target,
                     &directories,
@@ -161,7 +171,7 @@ fn validate_unique_output_paths(entries: &[StoredZipEntry]) -> Result<(), Error>
 
 /// Extract a single central-directory entry from a seekable ZIP archive.
 fn extract_entry<R>(
-    archive: &mut ZipFileReader<AllowStdIo<R>>,
+    job: &mut ExtractionJob<R>,
     file_number: usize,
     target: &Path,
     directories: &Mutex<FxHashSet<PathBuf>>,
@@ -171,8 +181,8 @@ fn extract_entry<R>(
 where
     R: std::io::BufRead + std::io::Seek + Unpin,
 {
-    let entry = archive.file().entries()[file_number].clone();
-    let file_name = entry_file_name(&entry, file_number)?;
+    let entry = &job.archive.file().entries()[file_number];
+    let file_name = entry_file_name(entry, file_number)?;
     let enclosed_name = match SanitizedArchivePath::from_archive_member(file_name) {
         Ok(path) => path,
         Err(_) if skip_validation => None,
@@ -187,7 +197,7 @@ where
     if entry.dir()? {
         create_directory_once(directories, &path)?;
         if hash_contents {
-            validate_directory_entry(&entry, enclosed_name.as_path(), skip_validation)?;
+            validate_directory_entry(entry, enclosed_name.as_path(), skip_validation)?;
         }
         return Ok(Some(ExtractedEntry::Directory(enclosed_name)));
     }
@@ -197,8 +207,7 @@ where
     }
 
     extract_file_entry(
-        archive,
-        &entry,
+        job,
         file_number,
         enclosed_name,
         &path,
@@ -225,7 +234,8 @@ fn create_directory_once(
     path: &Path,
 ) -> Result<(), Error> {
     let mut directories = directories.lock().map_err(|_| directory_lock_error())?;
-    if directories.insert(path.to_path_buf()) {
+    if !directories.contains(path) {
+        directories.insert(path.to_path_buf());
         fs_err::create_dir_all(path).map_err(Error::Io)?;
     }
 
@@ -263,8 +273,7 @@ fn validate_directory_entry(
 
 /// Extract a regular file entry and return its digest metadata.
 fn extract_file_entry<R>(
-    archive: &mut ZipFileReader<AllowStdIo<R>>,
-    entry: &StoredZipEntry,
+    job: &mut ExtractionJob<R>,
     file_number: usize,
     enclosed_name: SanitizedArchivePath,
     path: &Path,
@@ -283,17 +292,20 @@ where
         fs_err::File::create(path)
     }
     .map_err(Error::Io)?;
+    let entry = &job.archive.file().entries()[file_number];
     let size = entry.uncompressed_size();
+    let expected_crc32 = entry.crc32();
+    let unix_permissions = entry.unix_permissions();
     let writer = buffered_file_writer(outfile, size);
 
     // Keep the hashing state out of ordinary extraction, and pin both futures here to avoid
     // moving their large state into `block_on`.
     let (copied, computed_crc32, digest) = if hash_contents {
         let (copied, computed_crc32, digest) =
-            block_on(pin!(copy_and_hash_entry(archive, file_number, writer)))?;
+            block_on(pin!(copy_and_hash_entry(job, file_number, writer)))?;
         (copied, computed_crc32, Some(digest))
     } else {
-        let (copied, computed_crc32) = block_on(pin!(copy_entry(archive, file_number, writer)))?;
+        let (copied, computed_crc32) = block_on(pin!(copy_entry(job, file_number, writer)))?;
         (copied, computed_crc32, None)
     };
     validate_file_entry(
@@ -301,19 +313,17 @@ where
         copied,
         size,
         computed_crc32,
-        entry.crc32(),
+        expected_crc32,
         skip_validation,
     )?;
     #[cfg(unix)]
-    preserve_executable_bit(path, entry.unix_permissions())?;
+    preserve_executable_bit(path, unix_permissions)?;
 
     Ok(ExtractedEntry::File {
         path: enclosed_name,
         size,
         digest,
-        executable: entry
-            .unix_permissions()
-            .is_some_and(|mode| mode & 0o111 != 0),
+        executable: unix_permissions.is_some_and(|mode| mode & 0o111 != 0),
     })
 }
 
@@ -389,24 +399,31 @@ fn directory_lock_error() -> Error {
 
 /// Copy an entry without computing a content digest.
 async fn copy_entry<R>(
-    archive: &mut ZipFileReader<AllowStdIo<R>>,
+    job: &mut ExtractionJob<R>,
     file_number: usize,
     writer: std::io::BufWriter<fs_err::File>,
 ) -> Result<(u64, u32), Error>
 where
     R: std::io::BufRead + std::io::Seek + Unpin,
 {
+    let ExtractionJob {
+        archive,
+        copy_buffer,
+    } = job;
     let mut file = archive.reader_with_entry(file_number).await?;
     let mut writer = AllowStdIo::new(writer);
 
     let mut copied = 0;
-    let mut buffer = vec![0; 128 * 1024];
+    copy_buffer.resize(128 * 1024, 0);
     loop {
-        let read = file.read(&mut buffer).await.map_err(Error::io_or_zip)?;
+        let read = file.read(copy_buffer).await.map_err(Error::io_or_zip)?;
         if read == 0 {
             break;
         }
-        writer.write_all(&buffer[..read]).await.map_err(Error::Io)?;
+        writer
+            .write_all(&copy_buffer[..read])
+            .await
+            .map_err(Error::Io)?;
         copied += read as u64;
     }
     writer.flush().await.map_err(Error::Io)?;
@@ -415,17 +432,21 @@ where
 
 /// Copy an entry while hashing the same uncompressed bytes written to disk.
 async fn copy_and_hash_entry<R>(
-    archive: &mut ZipFileReader<AllowStdIo<R>>,
+    job: &mut ExtractionJob<R>,
     file_number: usize,
     writer: std::io::BufWriter<fs_err::File>,
 ) -> Result<(u64, u32, blake3::Hash), Error>
 where
     R: std::io::BufRead + std::io::Seek + Unpin,
 {
-    let mut file = archive.reader_with_entry(file_number).await?;
+    let mut file = job.archive.reader_with_entry(file_number).await?;
     let mut writer = AllowStdIo::new(writer);
-    let (copied, digest) = blake3_copy((&mut file).compat(), (&mut writer).compat_write())
-        .await
-        .map_err(Error::io_or_zip)?;
+    let (copied, digest) = blake3_copy_with_buffer(
+        (&mut file).compat(),
+        (&mut writer).compat_write(),
+        &mut job.copy_buffer,
+    )
+    .await
+    .map_err(Error::io_or_zip)?;
     Ok((copied, file.compute_hash(), digest))
 }
