@@ -16,7 +16,8 @@ use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
 use uv_test::packse::WheelBuilder;
 use uv_test::{
-    DEFAULT_PYTHON_VERSION, TestContext, apply_filters, capture_uv_snapshot, get_bin, uv_snapshot,
+    DEFAULT_PYTHON_VERSION, TestContext, apply_filters, assert_path_missing, capture_uv_snapshot,
+    get_bin, uv_snapshot,
 };
 
 fn zip_file_names(path: &Path) -> Result<Vec<String>> {
@@ -1119,24 +1120,17 @@ fn build_all_with_failure() -> Result<()> {
     Successfully built dist/project-0.1.0-py3-none-any.whl
     ");
 
-    // project and member_a should be built, regardless of member_b build failure
-    project
-        .child("dist")
-        .child("project-0.1.0.tar.gz")
+    let dist = project.child("dist");
+    dist.child("project-0.1.0.tar.gz")
         .assert(predicate::path::is_file());
-    project
-        .child("dist")
-        .child("project-0.1.0-py3-none-any.whl")
+    dist.child("project-0.1.0-py3-none-any.whl")
         .assert(predicate::path::is_file());
-
-    project
-        .child("dist")
-        .child("member_a-0.1.0.tar.gz")
+    dist.child("member_a-0.1.0.tar.gz")
         .assert(predicate::path::is_file());
-    project
-        .child("dist")
-        .child("member_a-0.1.0-py3-none-any.whl")
+    dist.child("member_a-0.1.0-py3-none-any.whl")
         .assert(predicate::path::is_file());
+    assert_path_missing(dist.child("member_b-0.1.0.tar.gz"));
+    assert_path_missing(dist.child("member_b-0.1.0-py3-none-any.whl"));
 
     Ok(())
 }
