@@ -4969,34 +4969,23 @@ fn system_certs_cli_aliases_override_env() {
     windows,
     ignore = "Configuration tests are not yet supported on Windows"
 )]
-fn system_certs_env_overrides_native_tls() -> anyhow::Result<()> {
+fn system_certs_env_overrides_native_tls() {
     let context = uv_test::test_context_with_versions!(&[]);
     let mut command = add_shared_args(context.version());
     command
         .arg("--show-settings")
         .env(EnvVars::UV_SYSTEM_CERTS, "0")
         .env_remove(EnvVars::UV_NATIVE_TLS);
-    let baseline = command
-        .assert()
-        .success()
-        .stdout(predicates::str::contains("system_certs: false"))
-        .stderr("");
-    let expected_settings = String::from_utf8(baseline.get_output().stdout.clone())?;
+    let baseline = capture_uv_snapshot!(context.filters(), &mut command);
+    assert!(
+        baseline.starts_with("exit_code: 0 (success)\n"),
+        "{baseline}"
+    );
+    assert!(baseline.contains("system_certs: false,"), "{baseline}");
+    assert!(!baseline.contains("----- stderr -----"), "{baseline}");
 
-    command
-        .env(EnvVars::UV_NATIVE_TLS, "1")
-        .assert()
-        .success()
-        .stdout(expected_settings.clone())
-        .stderr("");
-
-    command
-        .env(EnvVars::UV_NATIVE_TLS, "invalid")
-        .assert()
-        .success()
-        .stdout(expected_settings)
-        .stderr("");
-    Ok(())
+    diff_uv_snapshot!(context.filters(), &baseline, command.env(EnvVars::UV_NATIVE_TLS, "1"), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, command.env(EnvVars::UV_NATIVE_TLS, "invalid"), @"");
 }
 
 #[test]
