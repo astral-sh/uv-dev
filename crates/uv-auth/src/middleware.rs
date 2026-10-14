@@ -892,6 +892,29 @@ mod tests {
         Ok(())
     }
 
+    #[test(tokio::test)]
+    async fn test_cached_credentials_prefer_specific_url() -> Result<(), Error> {
+        let server = start_test_server("user", "specific").await;
+        let root = Url::parse(&server.uri())?;
+        let specific = root.join("private/")?;
+        let cache = CredentialsCache::new();
+        for (url, password) in [(&root, "general"), (&specific, "specific")] {
+            cache.store_credentials(
+                DisplaySafeUrl::ref_cast(url),
+                Credentials::basic(Some("user".into()), Some(password.into())),
+            );
+        }
+        let client = test_client_builder()
+            .with(AuthMiddleware::new().with_cache(cache))
+            .build();
+
+        assert_eq!(
+            client.get(specific.join("package")?).send().await?.status(),
+            200
+        );
+        Ok(())
+    }
+
     /// Without seeding the cache, authenticated requests are not cached
     #[test(tokio::test)]
     async fn test_credentials_in_url_no_seed() -> Result<(), Error> {
