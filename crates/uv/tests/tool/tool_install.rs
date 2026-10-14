@@ -6286,6 +6286,58 @@ fn tool_install_lock_reuses_equivalent_requirements() {
     });
 }
 
+#[cfg(windows)]
+#[test]
+fn tool_install_reports_normalized_executable_names() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let (filename, wheel) = generate_wheel_with_files(
+        &"report-tool".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("report_tool-1.0.0.data/scripts/foo", "script\n"),
+            ("report_tool-1.0.0.data/scripts/foo.cmd", "script\n"),
+            ("report_tool-1.0.0.data/scripts/foo.exe", "script\n"),
+            ("report_tool-1.0.0.data/scripts/jupyter.exe", "script\n"),
+            (
+                "report_tool-1.0.0.data/scripts/jupyter-console.exe",
+                "script\n",
+            ),
+        ],
+    );
+    context.temp_dir.child(filename).write_binary(&wheel)?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["--offline", "--no-index", "--find-links"])
+        .arg(context.temp_dir.path())
+        .arg("report-tool"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + report-tool==1.0.0
+    Installed 4 executables: foo, foo.cmd, jupyter, jupyter-console
+    ");
+
+    context
+        .temp_dir
+        .child("bin/foo")
+        .assert(predicate::path::is_file());
+    context
+        .temp_dir
+        .child("bin/foo.cmd")
+        .assert(predicate::path::is_file());
+    context
+        .temp_dir
+        .child("bin/foo.exe")
+        .assert(predicate::path::is_file());
+    Ok(())
+}
+
 #[test]
 fn tool_install_with_build_hashes() -> Result<()> {
     for preview in ["--no-preview", "--preview-features=tool-install-locks"] {
