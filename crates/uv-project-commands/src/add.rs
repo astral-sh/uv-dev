@@ -603,15 +603,7 @@ pub async fn add(
         (EditTarget::Project(_), Some(false)) | (EditTarget::Script(_), None | Some(false)) => {}
     }
 
-    let mut toml = match &target {
-        EditTarget::Script(script) => {
-            PyProjectTomlMut::from_toml(&script.metadata.raw, DependencyTarget::Script)
-        }
-        EditTarget::Project(project) => PyProjectTomlMut::from_toml(
-            &project.pyproject_toml().raw,
-            DependencyTarget::PyProjectToml,
-        ),
-    }?;
+    let mut toml = target.editable_toml()?;
 
     let edits = edits(
         requirements,
