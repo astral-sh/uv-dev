@@ -431,26 +431,6 @@ fn run_pep723_script() -> Result<()> {
        "#
     })?;
 
-    // Running a script with `--group` should warn.
-    uv_snapshot!(context.filters(), context.run().arg("--group").arg("foo").arg("main.py"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving script dependencies
-      cause: Because there are no versions of add and you require add, we can conclude that your requirements are unsatisfiable.
-    ");
-
-    // If the script can't be resolved, we should reference the script.
-    let test_script = context.temp_dir.child("main.py");
-    test_script.write_str(indoc! { r#"
-        # /// script
-        # requires-python = ">=3.11"
-        # dependencies = [
-        #   "add",
-        # ]
-        # ///
-       "#
-    })?;
-
     uv_snapshot!(context.filters(), context.run().arg("--no-project").arg("main.py"), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -499,6 +479,43 @@ fn run_pep723_script() -> Result<()> {
     ----- stderr -----
     error: The script contains multiple PEP 723 metadata blocks
     ");
+
+    Ok(())
+}
+
+/// An unlocked inline script does not resolve dependency groups from its surrounding project.
+#[test]
+fn run_pep723_script_ignores_project_group() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [dependency-groups]
+        foo = ["uv-test-unavailable-group-package"]
+    "#})?;
+    context.temp_dir.child("main.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+        print("script ran")
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run().args(["--offline", "--group", "foo", "main.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    script ran
+    ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
 
     Ok(())
 }
