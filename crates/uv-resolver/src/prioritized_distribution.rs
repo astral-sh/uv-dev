@@ -6,8 +6,8 @@ use tracing::debug;
 
 use uv_distribution_filename::{BuildTag, WheelFilename};
 use uv_distribution_types::{
-    File, InstalledDist, MinimumLibcVersion, Name, RegistryBuiltDist, RegistryBuiltWheel,
-    RegistrySourceDist, RequiresPython,
+    ArchiveHashPolicy, File, InstalledDist, MinimumLibcVersion, Name, RegistryBuiltDist,
+    RegistryBuiltWheel, RegistrySourceDist, RequiresPython,
 };
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
@@ -391,6 +391,19 @@ pub enum HashComparison {
     Missing,
     /// The hash matches the expected value.
     Matched,
+}
+
+impl HashComparison {
+    /// Compare available hashes against a policy when the caller requires validation.
+    pub(crate) fn compare(policy: ArchiveHashPolicy<'_>, hashes: &[HashDigest]) -> Self {
+        if hashes.is_empty() {
+            Self::Missing
+        } else if policy.matches(hashes) {
+            Self::Matched
+        } else {
+            Self::Mismatched
+        }
+    }
 }
 
 impl PrioritizedDist {
