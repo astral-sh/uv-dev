@@ -28540,13 +28540,21 @@ fn lock_repeat_named_index_member() -> Result<()> {
 }
 
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_unique_named_index() -> Result<()> {
+#[tokio::test]
+async fn lock_unique_named_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    for index in ["first", "second"] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{index}/simple/iniconfig/")))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1..)
+            .mount(&server)
+            .await;
+    }
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -28554,16 +28562,17 @@ fn lock_unique_named_index() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [[tool.uv.index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121"
+        name = "first"
+        url = "{index_uri}/first/simple"
 
         [[tool.uv.index]]
-        name = "example"
-        url = "https://astral.sh"
+        name = "second"
+        url = "{index_uri}/second/simple"
         "#,
-    )?;
+        index_uri = server.uri(),
+    })?;
 
-    // Fall back to PyPI, since `iniconfig` doesn't exist on the PyTorch index.
+    // Both named indexes lack the package, so resolution falls back to PyPI.
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
