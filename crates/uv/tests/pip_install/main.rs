@@ -8,6 +8,8 @@ mod binary_policy;
 #[cfg(feature = "test-python")]
 mod direct_url_hashes;
 #[cfg(feature = "test-python")]
+mod exact;
+#[cfg(feature = "test-python")]
 mod index;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod json;
