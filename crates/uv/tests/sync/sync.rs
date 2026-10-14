@@ -16273,7 +16273,7 @@ fn sync_config_settings_package() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn sync_does_not_remove_empty_virtual_environment_directory() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::MetadataExt;
 
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
@@ -16287,26 +16287,29 @@ fn sync_does_not_remove_empty_virtual_environment_directory() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = []
         "#,
     )?;
 
     let venv_dir = project_dir.child(".venv");
     fs_err::create_dir(&venv_dir)?;
+    // Keep the original inode allocated so replacing the directory cannot reuse it.
+    let original = fs_err::File::open(&venv_dir)?;
 
-    // Ensure the parent is read-only, to prevent deletion of the virtual environment
-    fs_err::set_permissions(&project_dir, std::fs::Permissions::from_mode(0o555))?;
+    context
+        .sync()
+        .current_dir(&project_dir)
+        .arg("--offline")
+        .assert()
+        .success();
 
-    // Note we do _not_ fail to create the virtual environment — we fail later when writing to the
-    // project directory
-    uv_snapshot!(context.filters(), context.sync().current_dir(&project_dir), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Resolved 2 packages in [TIME]
-    error: Permission denied (os error 13) at path "[TEMP_DIR]/project/[TMP]"
-    "#);
+    let original = original.metadata()?;
+    let current = fs_err::metadata(&venv_dir)?;
+    assert_eq!(
+        (current.dev(), current.ino()),
+        (original.dev(), original.ino()),
+        "sync replaced the virtual environment directory"
+    );
 
     Ok(())
 }
