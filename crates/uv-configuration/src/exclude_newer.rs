@@ -5,7 +5,6 @@ use std::{
 };
 
 use jiff::Timestamp;
-use rustc_hash::FxHashSet;
 use serde::ser::SerializeMap;
 use uv_distribution_types::{ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue};
 use uv_normalize::PackageName;
@@ -212,13 +211,8 @@ impl FromStr for ExcludeNewerPackageEntry {
             format!("Invalid `exclude-newer-package` package name `{package}`: {err}")
         })?;
 
-        let setting = if value == "false" {
-            ExcludeNewerOverride::Disabled
-        } else {
-            ExcludeNewerOverride::Enabled(Box::new(ExcludeNewerValue::from_str(value).map_err(
-                |err| format!("Invalid `exclude-newer-package` value `{value}`: {err}"),
-            )?))
-        };
+        let setting = ExcludeNewerOverride::from_str(value)
+            .map_err(|err| format!("Invalid `exclude-newer-package` value `{value}`: {err}"))?;
 
         Ok(Self { package, setting })
     }
@@ -437,11 +431,7 @@ impl ExcludeNewer {
     /// Returns the effective exclude-newer timestamp for a specific package, falling back to the
     /// global value if no package-specific setting exists.
     pub fn exclude_newer_package(&self, package_name: &PackageName) -> Option<Timestamp> {
-        match self.package.get(package_name) {
-            Some(ExcludeNewerOverride::Enabled(value)) => Some(value.timestamp()),
-            Some(ExcludeNewerOverride::Disabled) => None,
-            None => self.global.as_ref().map(ExcludeNewerValue::timestamp),
-        }
+        self.exclude_newer_package_for_index(package_name, None)
     }
 
     /// Returns the effective exclude-newer timestamp for a package resolved from a specific index.
@@ -461,28 +451,21 @@ impl ExcludeNewer {
         package_name: &PackageName,
         index: Option<&ExcludeNewerOverride>,
     ) -> Option<(Timestamp, EffectiveExcludeNewerSource)> {
-        match self.package.get(package_name) {
-            Some(ExcludeNewerOverride::Enabled(value)) => {
-                Some((value.timestamp(), EffectiveExcludeNewerSource::Package))
-            }
-            Some(ExcludeNewerOverride::Disabled) => None,
-            None => match index {
-                Some(ExcludeNewerOverride::Disabled) => {
-                    Self::warn_index_exclude_newer_preview();
-                    None
-                }
-                Some(ExcludeNewerOverride::Enabled(value)) => Some((
-                    {
-                        Self::warn_index_exclude_newer_preview();
-                        value.timestamp()
-                    },
-                    EffectiveExcludeNewerSource::Index,
-                )),
-                None => self
-                    .global
-                    .as_ref()
-                    .map(|value| (value.timestamp(), EffectiveExcludeNewerSource::Global)),
-            },
+        let (setting, source) = if let Some(setting) = self.package.get(package_name) {
+            (setting, EffectiveExcludeNewerSource::Package)
+        } else if let Some(setting) = index {
+            Self::warn_index_exclude_newer_preview();
+            (setting, EffectiveExcludeNewerSource::Index)
+        } else {
+            return self
+                .global
+                .as_ref()
+                .map(|value| (value.timestamp(), EffectiveExcludeNewerSource::Global));
+        };
+
+        match setting {
+            ExcludeNewerOverride::Enabled(value) => Some((value.timestamp(), source)),
+            ExcludeNewerOverride::Disabled => None,
         }
     }
 
@@ -493,17 +476,17 @@ impl ExcludeNewer {
 
     /// Filter package-specific settings to packages in the resolution.
     #[must_use]
-    pub fn filter_packages<'a>(self, packages: impl IntoIterator<Item = &'a PackageName>) -> Self {
-        let packages = packages.into_iter().collect::<FxHashSet<_>>();
-        Self {
-            global: self.global,
-            package: ExcludeNewerPackage(
-                self.package
-                    .into_iter()
-                    .filter(|(package, _)| packages.contains(package))
-                    .collect(),
-            ),
-        }
+    pub fn filter_packages<'a>(
+        mut self,
+        packages: impl IntoIterator<Item = &'a PackageName>,
+    ) -> Self {
+        self.package = ExcludeNewerPackage(
+            packages
+                .into_iter()
+                .filter_map(|package| self.package.remove_entry(package))
+                .collect(),
+        );
+        self
     }
 
     /// Compare against current configuration when deciding whether a lockfile may be reused.
@@ -533,26 +516,18 @@ impl ExcludeNewer {
 
 impl std::fmt::Display for ExcludeNewer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut separator = "";
         if let Some(global) = &self.global {
             write!(f, "global: {global}")?;
-            if !self.package.is_empty() {
-                write!(f, ", ")?;
-            }
+            separator = ", ";
         }
-        let mut first = true;
         for (name, setting) in &self.package {
-            if !first {
-                write!(f, ", ")?;
-            }
+            write!(f, "{separator}{name}: ")?;
             match setting {
-                ExcludeNewerOverride::Enabled(timestamp) => {
-                    write!(f, "{name}: {}", timestamp.as_ref())?;
-                }
-                ExcludeNewerOverride::Disabled => {
-                    write!(f, "{name}: disabled")?;
-                }
+                ExcludeNewerOverride::Enabled(timestamp) => write!(f, "{}", timestamp.as_ref())?,
+                ExcludeNewerOverride::Disabled => f.write_str("disabled")?,
             }
-            first = false;
+            separator = ", ";
         }
         Ok(())
     }

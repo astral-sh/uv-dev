@@ -42,7 +42,7 @@ impl BuildOptions {
             NoBinary::All => match &self.no_build {
                 // Allow `all` to be overridden by specific build exclusions
                 NoBuild::Packages(packages) => !packages.contains(package_name),
-                _ => true,
+                NoBuild::None | NoBuild::All => true,
             },
             NoBinary::Packages(packages) => packages.contains(package_name),
         }
@@ -53,7 +53,7 @@ impl BuildOptions {
             NoBuild::All => match &self.no_binary {
                 // Allow `all` to be overridden by specific binary exclusions
                 NoBinary::Packages(packages) => !packages.contains(package_name),
-                _ => true,
+                NoBinary::None | NoBinary::All => true,
             },
             NoBuild::None => false,
             NoBuild::Packages(packages) => packages.contains(package_name),
@@ -113,7 +113,7 @@ impl NoBinary {
     }
 
     /// Determine the binary installation strategy to use for the given arguments from the pip CLI.
-    pub fn from_pip_args(no_binary: Vec<PackageNameSpecifier>) -> Self {
+    pub fn from_pip_args(no_binary: impl IntoIterator<Item = PackageNameSpecifier>) -> Self {
         let combined = PackageNameSpecifiers::from_iter(no_binary.into_iter());
         match combined {
             PackageNameSpecifiers::All => Self::All,
@@ -124,26 +124,14 @@ impl NoBinary {
 
     /// Determine the binary installation strategy to use for the given argument from the pip CLI.
     pub fn from_pip_arg(no_binary: PackageNameSpecifier) -> Self {
-        Self::from_pip_args(vec![no_binary])
+        Self::from_pip_args([no_binary])
     }
 
     /// Combine a set of [`NoBinary`] values.
     #[must_use]
-    pub fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            // If both are `None`, the result is `None`.
-            (Self::None, Self::None) => Self::None,
-            // If either is `All`, the result is `All`.
-            (Self::All, _) | (_, Self::All) => Self::All,
-            // If one is `None`, the result is the other.
-            (Self::Packages(a), Self::None) => Self::Packages(a),
-            (Self::None, Self::Packages(b)) => Self::Packages(b),
-            // If both are `Packages`, the result is the union of the two.
-            (Self::Packages(mut a), Self::Packages(b)) => {
-                a.extend(b);
-                Self::Packages(a)
-            }
-        }
+    pub fn combine(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
     }
 
     /// Extend a [`NoBinary`] value with another.
@@ -209,7 +197,10 @@ impl NoBuild {
     }
 
     /// Determine the build strategy to use for the given arguments from the pip CLI.
-    pub fn from_pip_args(only_binary: Vec<PackageNameSpecifier>, no_build: bool) -> Self {
+    pub fn from_pip_args(
+        only_binary: impl IntoIterator<Item = PackageNameSpecifier>,
+        no_build: bool,
+    ) -> Self {
         if no_build {
             Self::All
         } else {
@@ -224,26 +215,14 @@ impl NoBuild {
 
     /// Determine the build strategy to use for the given argument from the pip CLI.
     pub fn from_pip_arg(no_build: PackageNameSpecifier) -> Self {
-        Self::from_pip_args(vec![no_build], false)
+        Self::from_pip_args([no_build], false)
     }
 
     /// Combine a set of [`NoBuild`] values.
     #[must_use]
-    pub fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            // If both are `None`, the result is `None`.
-            (Self::None, Self::None) => Self::None,
-            // If either is `All`, the result is `All`.
-            (Self::All, _) | (_, Self::All) => Self::All,
-            // If one is `None`, the result is the other.
-            (Self::Packages(a), Self::None) => Self::Packages(a),
-            (Self::None, Self::Packages(b)) => Self::Packages(b),
-            // If both are `Packages`, the result is the union of the two.
-            (Self::Packages(mut a), Self::Packages(b)) => {
-                a.extend(b);
-                Self::Packages(a)
-            }
-        }
+    pub fn combine(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
     }
 
     /// Extend a [`NoBuild`] value with another.

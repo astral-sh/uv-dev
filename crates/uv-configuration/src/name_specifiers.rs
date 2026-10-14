@@ -44,18 +44,7 @@ impl<'de> serde::Deserialize<'de> for PackageNameSpecifier {
             where
                 E: serde::de::Error,
             {
-                // Accept the special values `:all:` and `:none:`.
-                match value {
-                    ":all:" => Ok(PackageNameSpecifier::All),
-                    ":none:" => Ok(PackageNameSpecifier::None),
-                    _ => {
-                        // Otherwise, parse the value as a package name.
-                        match PackageName::from_str(value) {
-                            Ok(name) => Ok(PackageNameSpecifier::Package(name)),
-                            Err(err) => Err(E::custom(err)),
-                        }
-                    }
-                }
+                PackageNameSpecifier::from_str(value).map_err(E::custom)
             }
         }
 
@@ -90,30 +79,18 @@ pub enum PackageNameSpecifiers {
 
 impl PackageNameSpecifiers {
     pub(crate) fn from_iter(specifiers: impl Iterator<Item = PackageNameSpecifier>) -> Self {
-        let mut packages = Vec::new();
-        let mut all: bool = false;
-
+        let mut selection = Self::None;
         for specifier in specifiers {
             match specifier {
-                PackageNameSpecifier::None => {
-                    packages.clear();
-                    all = false;
-                }
-                PackageNameSpecifier::All => {
-                    all = true;
-                }
-                PackageNameSpecifier::Package(name) => {
-                    packages.push(name);
-                }
+                PackageNameSpecifier::None => selection = Self::None,
+                PackageNameSpecifier::All => selection = Self::All,
+                PackageNameSpecifier::Package(name) => match &mut selection {
+                    Self::All => {}
+                    Self::None => selection = Self::Packages(vec![name]),
+                    Self::Packages(packages) => packages.push(name),
+                },
             }
         }
-
-        if all {
-            Self::All
-        } else if packages.is_empty() {
-            Self::None
-        } else {
-            Self::Packages(packages)
-        }
+        selection
     }
 }
