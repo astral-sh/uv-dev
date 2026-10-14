@@ -587,36 +587,19 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                     }
                 }
 
+                // The central-directory reader validates and consumes the archive suffix before
+                // returning the end record.
                 break;
             }
         }
     }
 
-    if !skip_validation {
-        // Every local file header must have a corresponding central-directory entry.
-        if let Some((key, value)) = local_headers.iter().next() {
-            return Err(Error::MissingCentralDirectoryEntry {
-                offset: *key,
-                path: value.relpath.to_path_buf(),
-            });
-        }
-
-        // Allow trailing null bytes, which some ZIP implementations incorrectly include.
-        let mut has_trailing_bytes = false;
-        let mut buf = [0u8; 256];
-        loop {
-            let n = reader.read(&mut buf).await.map_err(Error::Io)?;
-            if n == 0 {
-                if has_trailing_bytes {
-                    warn!("Ignoring trailing null bytes in ZIP archive");
-                }
-                break;
-            }
-            if buf[..n].iter().any(|&byte| byte != 0) {
-                return Err(Error::TrailingContents);
-            }
-            has_trailing_bytes = true;
-        }
+    // Every local file header must have a corresponding central-directory entry.
+    if !skip_validation && let Some((key, value)) = local_headers.iter().next() {
+        return Err(Error::MissingCentralDirectoryEntry {
+            offset: *key,
+            path: value.relpath.to_path_buf(),
+        });
     }
 
     if hash_contents {
@@ -818,4 +801,35 @@ pub async fn archive(
         SourceDistExtension::Legacy(_) => Err(Error::UnsupportedCompression),
     }?;
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use async_zip::base::write::ZipFileWriter;
+    use async_zip::{Compression, ZipEntryBuilder};
+
+    use super::{Error, unzip_inner};
+
+    #[tokio::test]
+    async fn zip_trailing_bytes_follow_central_directory_validation() -> anyhow::Result<()> {
+        let mut writer = ZipFileWriter::new(Vec::new());
+        writer
+            .write_entry_whole(
+                ZipEntryBuilder::new("file".into(), Compression::Stored),
+                b"content",
+            )
+            .await?;
+        let mut archive = writer.close().await?;
+        archive.extend_from_slice(&[0; 32]);
+        let target = tempfile::tempdir()?;
+
+        unzip_inner(archive.as_slice(), target.path(), false).await?;
+        archive.push(1);
+        let invalid_target = tempfile::tempdir()?;
+        assert!(matches!(
+            unzip_inner(archive.as_slice(), invalid_target.path(), false).await,
+            Err(Error::TrailingContents)
+        ));
+        Ok(())
+    }
 }
