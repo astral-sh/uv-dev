@@ -1603,12 +1603,12 @@ impl ProjectWorkspace {
         // It must have a `[project]` table.
         let project = pyproject_toml
             .project
-            .clone()
+            .as_ref()
             .ok_or_else(|| WorkspaceErrorKind::MissingProject(pyproject_path))?;
 
         Self::from_project(
             project_root,
-            &project,
+            project,
             &pyproject_toml,
             options,
             cache,
@@ -1639,14 +1639,14 @@ impl ProjectWorkspace {
             .map_err(|err| WorkspaceErrorKind::Toml(pyproject_path.clone(), Box::new(err)))?;
 
         // Extract the `[project]` metadata.
-        let Some(project) = pyproject_toml.project.clone() else {
+        let Some(project) = pyproject_toml.project.as_ref() else {
             // We have to build to get the metadata.
             return Ok(None);
         };
 
         match Self::from_project(
             project_root,
-            &project,
+            project,
             &pyproject_toml,
             options,
             cache,
