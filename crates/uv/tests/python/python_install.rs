@@ -3660,11 +3660,17 @@ fn assert_cpython_bytecode_compiled(context: &TestContext, version: &str) {
                 def raise_walk_error(error):
                     raise error
 
+                def source_for_cache(cache):
+                    try:
+                        return Path(importlib.util.source_from_cache(str(cache)))
+                    except ValueError:
+                        return None
+
                 stdlib = Path(sysconfig.get_path("stdlib")).resolve()
                 managed = Path(sys.argv[1]).resolve()
                 if not stdlib.is_relative_to(managed):
                     raise AssertionError(f"stdlib {stdlib} is outside managed installation {managed}")
-                expected = set()
+                sources = set()
                 actual = set()
                 for directory, _, filenames in os.walk(stdlib, onerror=raise_walk_error):
                     for filename in filenames:
@@ -3672,13 +3678,17 @@ fn assert_cpython_bytecode_compiled(context: &TestContext, version: &str) {
                         if path.is_symlink() or not path.is_file():
                             continue
                         if path.suffix == ".py":
-                            expected.add(Path(importlib.util.cache_from_source(str(path))))
+                            sources.add(path)
                         elif path.suffix == ".pyc":
                             actual.add(path)
-                if not expected:
+                if not sources:
                     raise AssertionError(f"no Python sources in {stdlib}")
+                expected = {Path(importlib.util.cache_from_source(str(source))) for source in sources}
                 missing = sorted(expected - actual)
-                unexpected = sorted(actual - expected)
+                # Interpreter startup can create caches with a different optimization level.
+                unexpected = sorted(
+                    cache for cache in actual - expected if source_for_cache(cache) not in sources
+                )
                 if missing or unexpected:
                     raise AssertionError(
                         f"missing {len(missing)} bytecode files: {missing[:5]}; "
