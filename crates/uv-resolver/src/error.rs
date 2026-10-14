@@ -56,11 +56,7 @@ pub enum ResolveError {
 
     #[error(
         "Requirements contain conflicting URLs for package `{package_name}`{}:\n- {}",
-        if env.marker_environment().is_some() {
-            String::new()
-        } else {
-            format!(" in {env}")
-        },
+        ConflictEnvironment(env),
         urls.iter()
             .map(|url| format!("{}{}", DisplaySafeUrl::from(url.clone()), if url.is_editable() { " (editable)" } else { "" }))
             .collect::<Vec<_>>()
@@ -74,11 +70,7 @@ pub enum ResolveError {
 
     #[error(
         "Requirements contain conflicting indexes for package `{package_name}`{}:\n- {}",
-        if env.marker_environment().is_some() {
-            String::new()
-        } else {
-            format!(" in {env}")
-        },
+        ConflictEnvironment(env),
         indexes.iter()
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
@@ -181,6 +173,18 @@ impl<T> From<tokio::sync::mpsc::error::SendError<T>> for ResolveError {
     /// The tokio error only says "channel closed", so we don't lose information.
     fn from(_value: tokio::sync::mpsc::error::SendError<T>) -> Self {
         Self::ChannelClosed
+    }
+}
+
+/// Format the universal resolver environment suffix for source conflicts.
+struct ConflictEnvironment<'a>(&'a ResolverEnvironment);
+
+impl std::fmt::Display for ConflictEnvironment<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.0.marker_environment().is_some() {
+            return Ok(());
+        }
+        write!(f, " in {}", self.0)
     }
 }
 
