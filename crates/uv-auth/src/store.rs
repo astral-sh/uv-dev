@@ -268,8 +268,13 @@ impl TextCredentialStore {
     /// Read credentials from a file.
     fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, TomlCredentialError> {
         let content = fs::read_to_string(path)?;
-        let credentials: TomlCredentials<TomlCredential> = toml::from_str(&content)?;
+        let mut credentials: TomlCredentials<TomlCredential> = toml::from_str(&content)?;
 
+        // A canonical entry takes precedence over a legacy key left in the same store after login.
+        credentials.credentials.sort_by_key(|credential| {
+            credential.service.url().username().is_empty()
+                && credential.service.url().password().is_none()
+        });
         let credentials: FxHashMap<(Service, Username), Credentials> = credentials
             .credentials
             .into_iter()
@@ -605,12 +610,58 @@ mod tests {
     }
 
     #[test]
-    fn credential_store_uses_the_last_equivalent_service_entry() {
+    fn credential_store_prefers_a_clean_entry_over_a_later_legacy_entry() {
         let file = NamedTempFile::new().unwrap();
         fs::write(
             file.path(),
             "[[credential]]\nservice = 'https://user:first@example.com/repository'\nusername = 'user'\npassword = 'first'\n\n\
              [[credential]]\nservice = 'https://example.com/repository'\nusername = 'user'\npassword = 'second'\n\n\
+             [[credential]]\nservice = 'https://user:last@example.com/repository'\nusername = 'user'\npassword = 'last'\n",
+        )
+        .unwrap();
+        let store = TextCredentialStore::from_file(file.path()).unwrap();
+        let url = DisplaySafeUrl::parse("https://example.com/repository").unwrap();
+
+        assert_eq!(store.credentials.len(), 1);
+        assert_eq!(
+            store
+                .get_credentials(&url, Some("user"))
+                .unwrap()
+                .unwrap()
+                .password(),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn credential_store_prefers_a_clean_entry_over_an_earlier_legacy_entry() {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(
+            file.path(),
+            "[[credential]]\nservice = 'https://user:old@example.com/repository'\nusername = 'user'\npassword = 'old'\n\n\
+             [[credential]]\nservice = 'https://example.com/repository'\nusername = 'user'\npassword = 'new'\n",
+        )
+        .unwrap();
+        let store = TextCredentialStore::from_file(file.path()).unwrap();
+        let url = DisplaySafeUrl::parse("https://example.com/repository").unwrap();
+
+        assert_eq!(store.credentials.len(), 1);
+        assert_eq!(
+            store
+                .get_credentials(&url, Some("user"))
+                .unwrap()
+                .unwrap()
+                .password(),
+            Some("new")
+        );
+    }
+
+    #[test]
+    fn credential_store_uses_file_order_for_equivalent_legacy_entries() {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(
+            file.path(),
+            "[[credential]]\nservice = 'https://user:first@example.com/repository'\nusername = 'user'\npassword = 'first'\n\n\
              [[credential]]\nservice = 'https://user:last@example.com/repository'\nusername = 'user'\npassword = 'last'\n",
         )
         .unwrap();
