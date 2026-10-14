@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir};
 use fs_err as fs;
 use indoc::{formatdoc, indoc};
