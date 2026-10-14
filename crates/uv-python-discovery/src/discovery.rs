@@ -708,14 +708,13 @@ fn python_installations_from_executables<'a>(
         })),
         QueryStrategy::Parallel => {
             let items: Vec<Result<PythonExecutableGroup, Error>> = executables.collect();
-            let results: Vec<Vec<Result<PythonInstallation, Error>>> = items
+            let results: Vec<_> = items
                 .into_par_iter()
-                .map(|group| {
+                .flat_map_iter(|group| {
                     python_installations_from_executable_group(group, cache, strategy)
-                        .collect::<Vec<_>>()
                 })
                 .collect();
-            Box::new(results.into_iter().flatten())
+            Box::new(results.into_iter())
         }
     }
 }
