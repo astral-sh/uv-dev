@@ -60,6 +60,19 @@ impl GitSource {
         }
     }
 
+    /// Find a cached locked revision or exact commit reference, including any requested LFS objects.
+    fn cached_revision(&self, db: &GitDatabase, lfs_requested: bool) -> Option<GitOid> {
+        let is_cached = |revision: &GitOid| {
+            db.contains(*revision) && (!lfs_requested || db.contains_lfs_artifacts(*revision))
+        };
+        self.git.precise().filter(is_cached).or_else(|| {
+            let GitReference::BranchOrTagOrCommit(revision) = self.git.reference() else {
+                return None;
+            };
+            revision.parse::<GitOid>().ok().filter(is_cached)
+        })
+    }
+
     /// Fetch the underlying Git repository at the given revision.
     #[instrument(skip(self), fields(repository = %self.git.url(), rev = ?self.git.precise()))]
     pub(crate) fn fetch(self) -> Result<Fetch> {
@@ -79,50 +92,24 @@ impl GitSource {
         // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes
         // it easier to short-circuit this in the cases where we do have the commit.
         let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {
-            let git_remote = GitRemote::new(remote.clone().into_owned());
-            let maybe_db = git_remote.db_at(&db_path).ok();
-
-            // If we have a locked revision, and we have a pre-existing database which has that
-            // revision, then no update needs to happen.
-            // When requested, we also check if LFS artifacts have been fetched and validated.
-            if let (Some(rev), Some(db)) = (self.git.precise(), &maybe_db) {
-                if db.contains(rev) && (!lfs_requested || db.contains_lfs_artifacts(rev)) {
-                    debug!("Using existing Git source `{}`", self.git.url());
-                    return Ok((
-                        maybe_db
-                            .unwrap()
-                            .with_lfs_ready(lfs_requested.then_some(true)),
-                        rev,
-                        None,
-                    ));
-                }
-            }
-
-            // If the revision isn't locked, but it looks like it might be an exact commit hash,
-            // and we do have a pre-existing database, then check whether it is, in fact, a commit
-            // hash. If so, treat it like it's locked.
-            // When requested, we also check if LFS artifacts have been fetched and validated.
-            if let Some(db) = &maybe_db {
-                if let GitReference::BranchOrTagOrCommit(maybe_commit) = self.git.reference() {
-                    if let Ok(oid) = maybe_commit.parse::<GitOid>() {
-                        if db.contains(oid) && (!lfs_requested || db.contains_lfs_artifacts(oid)) {
-                            // This reference is an exact commit. Treat it like it's locked.
-                            debug!("Using existing Git source `{}`", self.git.url());
-                            return Ok((
-                                maybe_db
-                                    .unwrap()
-                                    .with_lfs_ready(lfs_requested.then_some(true)),
-                                oid,
-                                None,
-                            ));
-                        }
+            let git_remote = GitRemote::new(remote.as_ref().clone());
+            let maybe_db = match git_remote.db_at(&db_path) {
+                Ok(db) => {
+                    if let Some(revision) = self.cached_revision(&db, lfs_requested) {
+                        debug!("Using existing Git source `{}`", self.git.url());
+                        return Ok((
+                            db.with_lfs_ready(lfs_requested.then_some(true)),
+                            revision,
+                            None,
+                        ));
                     }
+                    Some(db)
                 }
-            }
+                Err(_) => None,
+            };
 
-            // ... otherwise, we use this state to update the Git database. Note that we still check
-            // for being offline here, for example in the situation that we have a locked revision
-            // but the database doesn't have it.
+            // Updating the database checks offline mode, including when a locked revision is
+            // missing from the local database.
             debug!("Updating Git source `{}`", self.git.url());
 
             // Report the checkout operation to the reporter.
@@ -150,11 +137,10 @@ impl GitSource {
         // path length limit on Windows.
         let short_id = db.to_short_id(actual_rev)?;
 
-        // Compute the canonical URL for the repository checkout.
-        let canonical = git.repository().clone().with_lfs(Some(lfs_requested));
         // Recompute the checkout hash when Git LFS is enabled as we want
         // to distinctly differentiate between LFS vs non-LFS source trees.
         let ident = if lfs_requested {
+            let canonical = git.repository().clone().with_lfs(Some(true));
             cache_digest(&canonical)
         } else {
             ident
@@ -171,10 +157,10 @@ impl GitSource {
         let checkout = db.copy_to(actual_rev, &checkout_path)?;
 
         // Report the checkout operation to the reporter.
-        if let Some(task) = maybe_task {
-            if let Some(reporter) = self.reporter.as_ref() {
-                reporter.on_checkout_complete(remote.as_ref(), actual_rev.as_str(), task);
-            }
+        if let Some(task) = maybe_task
+            && let Some(reporter) = self.reporter.as_ref()
+        {
+            reporter.on_checkout_complete(remote.as_ref(), actual_rev.as_str(), task);
         }
 
         Ok(Fetch {

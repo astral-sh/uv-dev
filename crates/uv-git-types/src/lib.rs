@@ -169,7 +169,7 @@ impl GitUrl {
             return Err(GitUrlParseError::MismatchedRevision {
                 revision: revision.clone(),
                 precise,
-                url: Box::new(self.url.clone()),
+                url: Box::new(self.url),
             });
         }
 
@@ -265,22 +265,20 @@ impl TryFrom<DisplaySafeUrl> for GitUrl {
         url.set_fragment(None);
         url.set_query(None);
 
-        if url.path().matches('@').nth(1).is_some() {
-            return Err(GitUrlParseError::AmbiguousRevision(url));
-        }
-
         // If the URL ends with a reference, like `https://git.example.com/MyProject.git@v1.0`,
         // extract it.
-        let mut reference = GitReference::DefaultBranch;
-        if let Some((prefix, suffix)) = url
-            .path()
-            .rsplit_once('@')
-            .map(|(prefix, suffix)| (prefix.to_string(), suffix.to_string()))
-        {
-            let suffix = percent_decode_str(&suffix).decode_utf8_lossy().into_owned();
-            reference = GitReference::from_rev(suffix);
+        let reference = if let Some((prefix, suffix)) = url.path().rsplit_once('@') {
+            if prefix.contains('@') {
+                return Err(GitUrlParseError::AmbiguousRevision(url));
+            }
+            let reference =
+                GitReference::from_rev(percent_decode_str(suffix).decode_utf8_lossy().into_owned());
+            let prefix = prefix.to_owned();
             url.set_path(&prefix);
-        }
+            reference
+        } else {
+            GitReference::DefaultBranch
+        };
 
         // TODO(samypr100): GitLfs::from_env() for now unless we want to support parsing lfs=true
         Self::from_reference(url, reference, GitLfs::from_env())
