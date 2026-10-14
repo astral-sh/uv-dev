@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use owo_colors::OwoColorize;
 use tracing::debug;
 use uv_python_managed::downloads::ManagedPythonDownloadList;
@@ -218,41 +218,38 @@ pub async fn pin(
         request
     };
 
-    let existing = version_file.ok().flatten();
     // TODO(zanieb): Allow updating the discovered version file with an `--update` flag.
-    let new = if global {
-        let Some(new) = PythonVersionFile::global() else {
-            // TODO(zanieb): We should find a nice way to surface that as an error
-            bail!("Failed to determine directory for global Python pin");
-        };
-        new.with_versions(vec![request])
+    let target = if global {
+        PythonVersionFile::global()
+            .context("Failed to determine directory for global Python pin")?
     } else {
         PythonVersionFile::new(project_dir.join(PYTHON_VERSION_FILENAME))
-            .with_versions(vec![request])
     };
 
-    new.write().await?;
+    let previous_pin = version_file
+        .ok()
+        .flatten()
+        .filter(|existing| existing.path() == target.path())
+        .and_then(PythonVersionFile::into_version)
+        .filter(|version| version != &request);
+    let pinned_version = request.to_canonical_string().into_owned();
+    let target = target.with_versions(vec![request]);
+    target.write().await?;
 
-    // If we updated an existing version file to a new version
-    if let Some(existing) = existing
-        .as_ref()
-        .filter(|existing| existing.path() == new.path())
-        .and_then(PythonVersionFile::version)
-        .filter(|version| *version != new.version().unwrap())
-    {
+    if let Some(previous_pin) = previous_pin {
         writeln!(
             printer.stdout(),
             "Updated `{}` from `{}` -> `{}`",
-            new.path().user_display().cyan(),
-            existing.to_canonical_string().green(),
-            new.version().unwrap().to_canonical_string().green()
+            target.path().user_display().cyan(),
+            previous_pin.to_canonical_string().green(),
+            pinned_version.green()
         )?;
     } else {
         writeln!(
             printer.stdout(),
             "Pinned `{}` to `{}`",
-            new.path().user_display().cyan(),
-            new.version().unwrap().to_canonical_string().green()
+            target.path().user_display().cyan(),
+            pinned_version.green()
         )?;
     }
 
