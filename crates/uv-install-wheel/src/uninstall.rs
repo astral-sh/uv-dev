@@ -181,6 +181,14 @@ fn record_path_in_scheme(
     }
 }
 
+/// Iterate over trimmed, nonempty lines in legacy installation metadata.
+fn trimmed_nonempty_lines(contents: &str) -> impl Iterator<Item = &str> {
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+}
+
 /// Check that a `top_level.txt` entry names a single top-level module or package.
 ///
 /// Unlike wheel `RECORD` entries, egg `top_level.txt` entries refer to direct children of the
@@ -217,11 +225,7 @@ pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Unin
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(err) => return Err(err.into()),
     };
-    let namespace_packages = namespace_packages
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<HashSet<_>>();
+    let namespace_packages = trimmed_nonempty_lines(&namespace_packages).collect::<HashSet<_>>();
 
     // Read the `top_level.txt` file.
     let top_level_path = egg_info.join("top_level.txt");
@@ -233,14 +237,10 @@ pub fn uninstall_egg(egg_info: &Path, distribution: impl Display) -> Result<Unin
         Err(err) => return Err(err.into()),
     };
 
-    // Remove everything in `top_level.txt` except namespace packages.
-    for entry in top_level.lines().map(str::trim) {
-        // Empty or whitespace-only entries are skipped: legacy setuptools writes `top_level.txt`
-        // with a trailing newline even when the package has no top-level modules, which
-        // `str::lines` yields as an empty string. Joining that onto `dist_location` would
-        // resolve back to `dist_location` itself (site-packages), and a subsequent
-        // `remove_dir_all` would wipe out every installed package.
-        if entry.is_empty() || namespace_packages.contains(entry) {
+    // Remove everything in `top_level.txt` except namespace packages. Legacy setuptools can write
+    // a blank file; joining an empty entry to `dist_location` would target site-packages itself.
+    for entry in trimmed_nonempty_lines(&top_level) {
+        if namespace_packages.contains(entry) {
             continue;
         }
         if !is_valid_top_level_entry(entry, &distribution) {
@@ -303,10 +303,8 @@ pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
 
     // Find the target line in the `.egg-link` file.
     let contents = fs_err::read_to_string(egg_link)?;
-    let target_line = contents
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
+    let target_line = trimmed_nonempty_lines(&contents)
+        .next()
         .ok_or_else(|| Error::InvalidEggLink(egg_link.to_path_buf()))?;
 
     // This comes from `pkg_resources.normalize_path`
