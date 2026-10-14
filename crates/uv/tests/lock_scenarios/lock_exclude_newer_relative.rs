@@ -325,7 +325,7 @@ fn lock_exclude_newer_package_relative() -> Result<()> {
     requires-dist = [{ name = "idna" }]
     "#);
 
-    // Changing the current time should not result in a new lockfile
+    // Moving the clock makes 3.7 eligible without invalidating the existing lock.
     let later_timestamp = "2024-06-01T00:00:00Z";
     uv_snapshot!(context.filters(), context
         .lock()
@@ -339,23 +339,22 @@ fn lock_exclude_newer_package_relative() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // Changing the span to 2 weeks should cause a new resolution.
-    // 2 weeks before 2024-05-01 is 2024-04-17, which is after idna 3.7 (released 2024-04-11).
+    assert_eq!(context.read("uv.lock"), lock);
+
+    // Upgrading reevaluates the package's relative cutoff against the later clock.
     uv_snapshot!(context.filters(), context
         .lock()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, current_timestamp)
+        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, later_timestamp)
         .arg("--exclude-newer-package")
-        .arg("idna=2 weeks")
+        .arg("idna=3 weeks")
         .arg("--upgrade"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P3W` to `P2W` for package `idna`
     Resolved 2 packages in [TIME]
     Updated idna v3.6 -> v3.7
     ");
 
-    // Both `exclude-newer-package` values in the lockfile should be changed, and we should now have idna 3.7
     let lock = context.read("uv.lock");
     assert_snapshot!(lock, @r#"
     version = 1
@@ -365,7 +364,7 @@ fn lock_exclude_newer_package_relative() -> Result<()> {
     [options]
 
     [options.exclude-newer-package]
-    idna = { timestamp = "0001-01-01T00:00:00Z", span = "P2W" }
+    idna = { timestamp = "0001-01-01T00:00:00Z", span = "P3W" }
 
     [[package]]
     name = "idna"
@@ -388,52 +387,23 @@ fn lock_exclude_newer_package_relative() -> Result<()> {
     requires-dist = [{ name = "idna" }]
     "#);
 
-    // Similarly, using something like `--upgrade` should cause a new resolution
-    let current_timestamp = "2024-06-01T00:00:00Z";
+    // Changing only the span updates the stored option without changing the resolved package.
     uv_snapshot!(context.filters(), context
         .lock()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, current_timestamp)
+        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, later_timestamp)
         .arg("--exclude-newer-package")
-        .arg("idna=2 weeks")
-        .arg("--upgrade"), @"
+        .arg("idna=2 weeks"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Resolving despite existing lockfile due to change of exclude newer span from `P3W` to `P2W` for package `idna`
     Resolved 2 packages in [TIME]
     ");
 
-    // The `exclude-newer-package` span is unchanged; the timestamp is a placeholder
-    let lock = context.read("uv.lock");
-    assert_snapshot!(lock, @r#"
-    version = 1
-    revision = 5
-    requires-python = ">=3.12"
-
-    [options]
-
-    [options.exclude-newer-package]
-    idna = { timestamp = "0001-01-01T00:00:00Z", span = "P2W" }
-
-    [[package]]
-    name = "idna"
-    version = "3.7"
-    source = { registry = "https://pypi.org/simple" }
-    sdist = { url = "https://files.pythonhosted.org/packages/21/ed/f86a79a07470cb07819390452f178b3bef1d375f2ec021ecfc709fc7cf07/idna-3.7.tar.gz", hash = "sha256:028ff3aadf0609c1fd278d8ea3089299412a7a8b9bd005dd08b9f8285bcb5cfc", size = 189575, upload-time = "2024-04-11T03:34:43.276Z" }
-    wheels = [
-        { url = "https://files.pythonhosted.org/packages/e5/3e/741d8c82801c347547f8a2a06aa57dbb1992be9e948df2ea0eda2c8b79e8/idna-3.7-py3-none-any.whl", hash = "sha256:82fee1fc78add43492d3a1898bfa6d8a904cc97d8427f683ed8e798d07761aa0", size = 66836, upload-time = "2024-04-11T03:34:41.447Z" },
-    ]
-
-    [[package]]
-    name = "project"
-    version = "0.1.0"
-    source = { virtual = "." }
-    dependencies = [
-        { name = "idna" },
-    ]
-
-    [package.metadata]
-    requires-dist = [{ name = "idna" }]
-    "#);
+    assert_eq!(
+        context.read("uv.lock"),
+        lock.replacen("span = \"P3W\"", "span = \"P2W\"", 1)
+    );
 
     Ok(())
 }
