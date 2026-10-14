@@ -7,7 +7,7 @@ use std::fmt::{Debug, Formatter};
 use std::hash::{BuildHasher, Hash, RandomState};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use papaya::{HashMap, ResizeMode};
+use papaya::{Compute, HashMap, Operation, ResizeMode};
 use tokio::sync::Notify;
 
 /// Run tasks only once and store the results in a parallel hash map.
@@ -61,18 +61,52 @@ impl<K: Eq + Hash + Clone, V: Clone, H: BuildHasher + Clone> OnceMap<K, V, H> {
     /// }
     /// ```
     pub async fn register_or_wait(&self, key: &K) -> Option<V> {
-        let notify = {
-            let items = self.items.pin();
-            match items.try_insert_with(key.clone(), || Value::Waiting(Arc::new(Notify::new()))) {
-                Ok(_) => return None,
-                Err(value) => match value {
-                    Value::Filled(_) => return value.get(),
-                    Value::Waiting(notify) => notify.clone(),
-                },
-            }
-        };
+        match self.claim_or_wait(key).await {
+            Claim::Ready(value) => Some(value),
+            Claim::New(_) => None,
+        }
+    }
 
-        self.wait_pending(key, notify).await
+    /// Return a cached result or initialize it once. If initialization is cancelled, another
+    /// caller can take over the job. If another caller publishes a result while initialization is
+    /// in progress, that result takes precedence.
+    pub async fn get_or_init(&self, key: K, init: impl Future<Output = V>) -> V {
+        match self.claim_or_wait(&key).await {
+            Claim::Ready(value) => value,
+            Claim::New(notify) => {
+                let claim = PendingClaim {
+                    map: self,
+                    key,
+                    notify,
+                    completed: false,
+                };
+                claim.complete(init.await)
+            }
+        }
+    }
+
+    async fn claim_or_wait(&self, key: &K) -> Claim<V> {
+        loop {
+            let notify = {
+                let items = self.items.pin();
+                match items.try_insert_with(key.clone(), || Value::Waiting(Arc::new(Notify::new())))
+                {
+                    Ok(Value::Waiting(notify)) => return Claim::New(Arc::clone(notify)),
+                    Ok(Value::Filled(_)) => unreachable!("inserted a pending job"),
+                    Err(Value::Waiting(notify)) => Arc::clone(notify),
+                    Err(value) => {
+                        if let Some(value) = value.get() {
+                            return Claim::Ready(value);
+                        }
+                        continue;
+                    }
+                }
+            };
+
+            if let Some(value) = self.wait_pending(key, notify).await {
+                return Claim::Ready(value);
+            }
+        }
     }
 
     /// Wait for an existing entry without registering a missing key.
@@ -91,20 +125,15 @@ impl<K: Eq + Hash + Clone, V: Clone, H: BuildHasher + Clone> OnceMap<K, V, H> {
         // Register the waiter for calls to `notify_waiters`.
         let notification = notify.notified();
 
-        // Make sure the value wasn't inserted in-between us checking the map and registering the waiter.
-        if let Some(value) = self.items.pin().get(key).expect("map is append-only").get() {
-            return Some(value);
+        // Check that this is still the same pending job after registering the waiter.
+        match self.items.pin().get(key) {
+            Some(Value::Waiting(current)) if Arc::ptr_eq(current, &notify) => {}
+            Some(value) => return value.get(),
+            None => return None,
         }
 
-        // Wait until the value is inserted.
         notification.await;
-
-        let items = self.items.pin();
-        let value = items.get(key).expect("map is append-only");
-        match value {
-            Value::Filled(_) => value.get(),
-            Value::Waiting(_) => unreachable!("notify was called"),
-        }
+        self.get(key)
     }
 
     /// Submit the result of a job you registered.
@@ -129,7 +158,65 @@ impl<K: Eq + Hash + Clone, V: Clone, H: BuildHasher + Clone> OnceMap<K, V, H> {
         K: Borrow<Q>,
     {
         let items = self.items.pin();
-        items.remove(key)?.take()
+        match items.remove(key)? {
+            Value::Waiting(notify) => {
+                notify.notify_waiters();
+                None
+            }
+            value @ Value::Filled(_) => value.take(),
+        }
+    }
+}
+
+enum Claim<V> {
+    Ready(V),
+    New(Arc<Notify>),
+}
+
+struct PendingClaim<'a, K: Eq + Hash, V, H: BuildHasher> {
+    map: &'a OnceMap<K, V, H>,
+    key: K,
+    notify: Arc<Notify>,
+    completed: bool,
+}
+
+impl<K: Eq + Hash + Clone, V: Clone, H: BuildHasher + Clone> PendingClaim<'_, K, V, H> {
+    fn complete(mut self, value: V) -> V {
+        let items = self.map.items.pin();
+        let result = items.compute(self.key.clone(), |entry| match entry {
+            Some((_, Value::Waiting(notify))) if Arc::ptr_eq(notify, &self.notify) => {
+                Operation::Insert(Value::filled(value.clone()))
+            }
+            entry => Operation::Abort(entry.and_then(|(_, current)| current.get())),
+        });
+        self.completed = true;
+        match result {
+            Compute::Updated { .. } => {
+                self.notify.notify_waiters();
+                value
+            }
+            Compute::Aborted(published) => published.unwrap_or(value),
+            Compute::Inserted(..) | Compute::Removed(..) => {
+                unreachable!("claim completion can only update or abort")
+            }
+        }
+    }
+}
+
+impl<K: Eq + Hash, V, H: BuildHasher> Drop for PendingClaim<'_, K, V, H> {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        let removed = matches!(
+            self.map.items.pin().remove_if(&self.key, |_, value| {
+                matches!(value, Value::Waiting(notify) if Arc::ptr_eq(notify, &self.notify))
+            }),
+            Ok(Some(_))
+        );
+        if removed {
+            self.notify.notify_waiters();
+        }
     }
 }
 
