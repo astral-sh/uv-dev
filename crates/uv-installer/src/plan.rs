@@ -855,9 +855,9 @@ impl Plan {
     /// Returns a tuple of plans, where the first plan contains the remote distributions that match
     /// the predicate, and the second plan contains those that do not.
     ///
-    /// Any extraneous and cached distributions will be returned in the first plan, while the second
-    /// plan will contain any `false` matches from the remote distributions, along with any
-    /// reinstalls for those distributions.
+    /// Cached distributions are included in the first plan. Extraneous distributions are included
+    /// in the second plan if it has any remote distributions, so they remain installed until the
+    /// last phase; otherwise, they are included in the first plan.
     pub fn partition<F>(self, mut f: F) -> (Self, Self)
     where
         F: FnMut(&PackageName) -> bool,
@@ -899,27 +899,20 @@ impl Plan {
             (vec![], extraneous)
         };
 
-        // Always include the cached distributions in the left plan.
-        let (left_cached, right_cached) = (cached, vec![]);
-
-        // Include all cached and extraneous distributions in the left plan.
-        let left_plan = Self {
-            cached: left_cached,
-            remote: left_remote,
-            reinstalls: left_reinstalls,
-            extraneous: left_extraneous,
-        };
-
-        // The right plan will only contain the remote distributions that did not match the predicate,
-        // along with any reinstalls for those distributions.
-        let right_plan = Self {
-            cached: right_cached,
-            remote: right_remote,
-            reinstalls: right_reinstalls,
-            extraneous: right_extraneous,
-        };
-
-        (left_plan, right_plan)
+        (
+            Self {
+                cached,
+                remote: left_remote,
+                reinstalls: left_reinstalls,
+                extraneous: left_extraneous,
+            },
+            Self {
+                cached: Vec::new(),
+                remote: right_remote,
+                reinstalls: right_reinstalls,
+                extraneous: right_extraneous,
+            },
+        )
     }
 }
 
