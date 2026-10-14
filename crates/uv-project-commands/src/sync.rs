@@ -21,9 +21,8 @@ use uv_distribution_types::NameRequirementSpecification;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
-    EnvironmentError, EnvironmentUpdate, LinkErrorReporting, ProjectEnvironment,
-    ProjectEnvironmentTarget, ScriptEnvironment, detect_conflicts, sync_from_lock,
-    update_environment,
+    EnvironmentError, LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentTarget,
+    ScriptEnvironment, detect_conflicts, sync_from_lock, update_environment,
 };
 use uv_fs::{PortablePathBuf, Simplified};
 use uv_install_operations::Changelog;
@@ -356,7 +355,7 @@ pub async fn sync(
                     )
                 });
 
-            match update_environment(
+            let result = update_environment(
                 environment.clone(),
                 spec,
                 modifications,
@@ -378,36 +377,17 @@ pub async fn sync(
                 preview,
             )
             .await
-            {
-                Ok(EnvironmentUpdate { changelog, .. }) => {
-                    write_sync_report(
-                        &target,
-                        &environment,
-                        &changelog,
-                        None,
-                        dry_run,
-                        output_format,
-                        printer,
-                    )?;
-                    return Ok(ExitStatus::Success);
-                }
-                Err(EnvironmentError::Install(error)) => {
-                    let error = *error;
-                    if let Some(changelog) = error.outdated_environment() {
-                        write_sync_report(
-                            &target,
-                            &environment,
-                            changelog,
-                            None,
-                            dry_run,
-                            output_format,
-                            printer,
-                        )?;
-                    }
-                    return Err(UvError::from(error).into());
-                }
-                Err(err) => return Err(UvError::from(err).into()),
-            }
+            .map(|update| update.changelog);
+            report_sync_result(
+                &target,
+                &environment,
+                result,
+                None,
+                dry_run,
+                output_format,
+                printer,
+            )?;
+            return Ok(ExitStatus::Success);
         }
     }
 
@@ -513,7 +493,7 @@ pub async fn sync(
     let state = state.fork();
 
     // Perform the sync operation.
-    let changelog = match sync_from_lock(
+    let result = sync_from_lock(
         sync_target,
         &environment,
         &extras,
@@ -535,31 +515,12 @@ pub async fn sync(
         preview,
         MalwareCheckContext::from(&malware_settings),
     )
-    .await
-    {
-        Ok(changelog) => changelog,
-        Err(EnvironmentError::Install(error)) => {
-            let error = *error;
-            if let Some(changelog) = error.outdated_environment() {
-                write_sync_report(
-                    &target,
-                    &environment,
-                    changelog,
-                    Some(lock_report),
-                    dry_run,
-                    output_format,
-                    printer,
-                )?;
-            }
-            return Err(UvError::from(error).into());
-        }
-        Err(err) => return Err(UvError::from(err).into()),
-    };
+    .await;
 
-    write_sync_report(
+    report_sync_result(
         &target,
         &environment,
-        &changelog,
+        result,
         Some(lock_report),
         dry_run,
         output_format,
@@ -1077,34 +1038,48 @@ impl Report {
     }
 }
 
-fn write_sync_report(
+/// Report package changes even when an outdated environment fails a sync check.
+fn report_sync_result(
     target: &SyncTarget<'_>,
     environment: &SyncEnvironment,
-    changelog: &Changelog,
+    result: Result<Changelog, EnvironmentError>,
     lock: Option<LockReport>,
     dry_run: DryRun,
     output_format: SyncFormat,
     printer: Printer,
 ) -> Result<()> {
-    let report = Report {
-        schema: SchemaReport::default(),
-        target: TargetName::from(target),
-        project: target.project_report(),
-        script: target.script().map(ScriptReport::from),
-        sync: SyncReport {
-            environment: EnvironmentReport::from(environment),
-            action: SyncAction::from(environment),
-            changes: PackageChangesReport::from_changelog(changelog),
-            dry_run: dry_run.enabled(),
-            target: TargetName::from(target),
-        },
-        lock,
-        dry_run: dry_run.enabled(),
+    let installation = match result {
+        Ok(changelog) => Ok(changelog),
+        Err(EnvironmentError::Install(error)) => Err(*error),
+        Err(error) => return Err(UvError::from(error).into()),
     };
+    let changelog = match &installation {
+        Ok(changelog) => Some(changelog),
+        Err(error) => error.outdated_environment(),
+    };
+    if let Some(changelog) = changelog {
+        let report = Report {
+            schema: SchemaReport::default(),
+            target: TargetName::from(target),
+            project: target.project_report(),
+            script: target.script().map(ScriptReport::from),
+            sync: SyncReport {
+                environment: EnvironmentReport::from(environment),
+                action: SyncAction::from(environment),
+                changes: PackageChangesReport::from_changelog(changelog),
+                dry_run: dry_run.enabled(),
+                target: TargetName::from(target),
+            },
+            lock,
+            dry_run: dry_run.enabled(),
+        };
 
-    if let Some(output) = report.format(output_format) {
-        writeln!(printer.stdout_important(), "{output}")?;
+        if let Some(output) = report.format(output_format) {
+            writeln!(printer.stdout_important(), "{output}")?;
+        }
     }
 
-    Ok(())
+    installation
+        .map(|_| ())
+        .map_err(|error| UvError::from(error).into())
 }
