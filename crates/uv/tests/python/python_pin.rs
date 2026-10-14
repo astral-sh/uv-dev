@@ -118,10 +118,6 @@ fn python_pin() {
     any
     ");
 
-    // We should not mutate the file
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    assert_snapshot!(python_version, @"any");
-
     // Request Python 3.12
     uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
     exit_code: 0 (success)
@@ -781,6 +777,7 @@ fn python_pin_with_comments_and_whitespace() -> Result<()> {
     3.12
     3.10
     ");
+    assert_eq!(context.read(&version_file), content);
     fs_err::remove_file(version_file)?;
 
     let versions_file = context.temp_dir.child(PYTHON_VERSIONS_FILENAME);
@@ -791,6 +788,7 @@ fn python_pin_with_comments_and_whitespace() -> Result<()> {
     3.12
     3.10
     ");
+    assert_eq!(context.read(&versions_file), content);
 
     Ok(())
 }
