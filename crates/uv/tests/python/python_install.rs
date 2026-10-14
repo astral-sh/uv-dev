@@ -27,6 +27,7 @@ use uv_static::EnvVars;
 use walkdir::WalkDir;
 
 use crate::build_upgrade::OutdatedPythonBuild;
+use crate::managed_venv::{create_stdlib_venv, venv_version};
 #[cfg(all(windows, feature = "test-windows-registry"))]
 use crate::windows_registry::RegistryFixture;
 
@@ -2878,15 +2879,11 @@ fn install_transparent_patch_upgrade_venv_module() {
     "
     );
 
-    let managed_python = context
-        .bin_dir
-        .join(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
-    uv_snapshot!(context.filters(), context.external_command(managed_python)
-        .arg("-m").arg("venv").arg(context.venv.as_os_str()).arg("--without-pip"), @"
+    uv_snapshot!(context.filters(), create_stdlib_venv(&context, "3.12"), @"
     exit_code: 0 (success)
     ");
 
-    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, context.interpreter()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.9
@@ -2903,7 +2900,7 @@ fn install_transparent_patch_upgrade_venv_module() {
     );
 
     // Virtual environment should reflect highest patch version.
-    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, context.interpreter()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.11
