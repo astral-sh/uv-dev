@@ -596,6 +596,14 @@ jobs:
                 bundled_lld_dir="$(rustc --print sysroot)/lib/rustlib/${{ matrix.target }}/bin/gcc-ld"
                 test -x "${bundled_lld_dir}/ld.lld"
                 export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C link-arg=-B${bundled_lld_dir} -C link-arg=-fuse-ld=lld -C link-arg=-Wl,--icf=all"
+
+                # Keep crate and source filenames without build-machine directory prefixes.
+                for registry_directory in "${CARGO_HOME:-${HOME}/.cargo}/registry/src/"*; do
+                    if [[ -d "${registry_directory}" ]]; then
+                        export RUSTFLAGS="${RUSTFLAGS} --remap-path-prefix=${registry_directory}=registry"
+                    fi
+                done
+                export RUSTFLAGS="${RUSTFLAGS} --remap-path-prefix=${PWD}=."
             fi
         env:
           CARGO: ${{ github.workspace }}/scripts/cargo.sh
