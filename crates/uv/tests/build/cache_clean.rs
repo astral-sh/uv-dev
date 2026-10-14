@@ -11,7 +11,6 @@ use anyhow::Result;
     all(feature = "test-python", feature = "test-pypi")
 ))]
 use assert_cmd::prelude::*;
-#[cfg(unix)]
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use indoc::indoc;
@@ -20,9 +19,7 @@ use predicates::prelude::predicate;
 #[cfg(target_os = "linux")]
 use std::process::Command;
 
-use uv_cache::Cache;
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
-use uv_cache::CacheBucket;
+use uv_cache::{Cache, CacheBucket};
 #[cfg(unix)]
 use uv_fs::link::{LinkMode, LinkOptions, link_dir};
 use uv_static::EnvVars;
@@ -480,12 +477,9 @@ fn clean_package_index() -> Result<()> {
 fn clean_does_not_follow_symlinks() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes_and_units();
     let victim_dir = context.temp_dir.child("victim");
-    let archive_entry = context.cache_dir.child("archive-v0").child("archive");
-    let package_entry = context
-        .cache_dir
-        .child("wheels-v7")
-        .child("pypi")
-        .child("demo");
+    let cache = Cache::from_path(context.cache_dir.path());
+    let archive_entry = ChildPath::new(cache.bucket(CacheBucket::Archive)).child("archive");
+    let package_entry = ChildPath::new(cache.bucket(CacheBucket::Wheels)).child("pypi/demo");
 
     victim_dir.create_dir_all()?;
     victim_dir.child("payload.txt").write_str("payload")?;
@@ -497,7 +491,7 @@ fn clean_does_not_follow_symlinks() -> Result<()> {
     fs_err::os::unix::fs::symlink(&victim_dir, package_entry.join("escape"))?;
     fs_err::os::unix::fs::symlink(&archive_entry, package_entry.join("archive"))?;
 
-    let files = context.cache_dir.child("files-v0");
+    let files = ChildPath::new(cache.bucket(CacheBucket::Files));
     let shard = files.child("shard");
     shard.child("orphan").write_str("orphan")?;
     shard
@@ -560,7 +554,8 @@ fn clean_does_not_follow_symlinks() -> Result<()> {
 #[test]
 fn clean_package_empty_shard_without_search_permission() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
-    let shard = context.cache_dir.child("files-v0").child("shard");
+    let cache = Cache::from_path(context.cache_dir.path());
+    let shard = ChildPath::new(cache.bucket(CacheBucket::Files)).child("shard");
     shard.create_dir_all()?;
     fs_err::set_permissions(&shard, Permissions::from_mode(0o600))?;
 
@@ -600,9 +595,8 @@ fn clean_handles_verbatim_paths() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
 
     // Cached sdist path resembling the uwsgi==2.0.31 build failure.
-    let uwsgi_shard = context
-        .cache_dir
-        .child("sdists-v10")
+    let cache = Cache::from_path(context.cache_dir.path());
+    let uwsgi_shard = ChildPath::new(cache.bucket(CacheBucket::SourceDistributions))
         .child("pypi")
         .child("uwsgi")
         .child("2.0.31")
