@@ -3814,7 +3814,7 @@ fn python_install_build_version_pypy() {
 }
 
 #[test]
-fn python_install_upgrade() {
+fn python_install_upgrade() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -3843,6 +3843,12 @@ fn python_install_upgrade() {
     Installed Python 3.10.17 in [TIME]
      + cpython-3.10.17-[PLATFORM] (python3.10)
     ");
+    let older_patch_marker = context
+        .temp_dir
+        .child("managed")
+        .child(format!("cpython-3.10.17-{}", platform_key_from_env()?))
+        .child("reinstall-marker");
+    older_patch_marker.write_str("original installation\n")?;
 
     // Upgrade an outdated patch even when a reinstall is requested.
     uv_snapshot!(context.filters(), context.python_install().arg("--upgrade").arg("--reinstall").arg("3.10"), @"
@@ -3851,6 +3857,7 @@ fn python_install_upgrade() {
     Installed Python 3.10.[LATEST] in [TIME]
      + cpython-3.10.[LATEST]-[PLATFORM] (python3.10)
     ");
+    assert_eq!(context.read(&older_patch_marker), "original installation\n");
 
     // Reinstall only the latest patch, leaving older installed patches untouched.
     uv_snapshot!(context.filters(), context.python_install().arg("--upgrade").arg("--reinstall").arg("3.10"), @"
@@ -3859,6 +3866,7 @@ fn python_install_upgrade() {
     Installed Python 3.10.[LATEST] in [TIME]
      ~ cpython-3.10.[LATEST]-[PLATFORM] (python3.10)
     ");
+    assert_eq!(context.read(&older_patch_marker), "original installation\n");
 
     // Request a patch version with `--upgrade`
     uv_snapshot!(context.filters(), context.python_install().arg("--upgrade").arg("3.11.4"), @"
@@ -3912,6 +3920,8 @@ fn python_install_upgrade() {
      + cpython-3.9.25-[PLATFORM] (python3.9)
      + cpython-3.12.[LATEST]-[PLATFORM] (python3.12)
     ");
+
+    Ok(())
 }
 
 #[test]
