@@ -153,3 +153,31 @@ fn no_binary_comma_separated() -> Result<()> {
     beta.assert_source_selected();
     Ok(())
 }
+
+/// Each comma-separated package name overrides the global source-only policy.
+#[test]
+fn only_binary_comma_separated() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    write_wheel(&context, "parent", &["alpha".parse()?, "beta".parse()?])?;
+    let alpha = wheel_and_sdist(&context, "alpha")?;
+    let beta = wheel_and_sdist(&context, "beta")?;
+
+    uv_snapshot!(context.filters(), install(&context)
+        .arg("parent")
+        .arg("--no-binary=:all:")
+        .arg("--only-binary=alpha,beta,parent")
+        .arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + alpha==1.0.0
+     + beta==1.0.0
+     + parent==1.0.0
+    ");
+
+    alpha.assert_wheel_selected();
+    beta.assert_wheel_selected();
+    Ok(())
+}
