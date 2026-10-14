@@ -290,7 +290,7 @@ pub async fn remove(
     let state = UniversalState::default();
 
     // Lock and sync the environment, if necessary.
-    let lock = match Box::pin(
+    let lock = Box::pin(
         LockOperation::new(
             mode,
             &settings.resolver,
@@ -306,10 +306,8 @@ pub async fn remove(
         .execute((&target).into()),
     )
     .await
-    {
-        Ok(result) => result.into_lock(),
-        Err(err) => return Err(UvError::from(err).into()),
-    };
+    .map_err(UvError::from)?
+    .into_lock();
 
     // Sync only project removals that have an environment.
     let (EditTarget::Project(project), PythonTarget::Environment(venv)) = (&target, &python_target)
