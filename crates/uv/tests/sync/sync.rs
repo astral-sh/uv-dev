@@ -2085,19 +2085,19 @@ fn sync_dry_json() -> Result<()> {
     Ok(())
 }
 
-/// Ensure that we use the maximum Python version when a workspace contains mixed requirements.
+/// A member's stricter Python requirement constrains interpreter selection for the workspace.
 #[test]
 fn mixed_requires_python() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
 
-    // Create a workspace root with a minimum Python requirement of Python 3.12.
+    // The first interpreter in search order satisfies the root but not the child.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
         [project]
         name = "albatross"
         version = "0.1.0"
-        requires-python = ">=3.12"
+        requires-python = ">=3.9"
         dependencies = ["bird-feeder", "anyio>3"]
 
         [tool.uv.sources]
@@ -2114,7 +2114,7 @@ fn mixed_requires_python() -> Result<()> {
     let init = src.child("__init__.py");
     init.touch()?;
 
-    // Create a child with a minimum Python requirement of Python 3.9.
+    // The child's requirement raises the minimum for the entire workspace.
     let child = context.temp_dir.child("packages").child("bird-feeder");
     child.create_dir_all()?;
 
@@ -2130,7 +2130,7 @@ fn mixed_requires_python() -> Result<()> {
         [project]
         name = "bird-feeder"
         version = "0.1.0"
-        requires-python = ">=3.9"
+        requires-python = ">=3.12"
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -2138,8 +2138,7 @@ fn mixed_requires_python() -> Result<()> {
         "#,
     )?;
 
-    // Running `uv sync` should succeed, locking for Python 3.12.
-    uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.12"), @"
+    uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -2158,7 +2157,7 @@ fn mixed_requires_python() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
-    error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `albatross`'s `project.requires-python`).
+    error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `bird-feeder`'s `project.requires-python`).
     ");
 
     Ok(())
