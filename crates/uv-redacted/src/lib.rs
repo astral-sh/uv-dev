@@ -12,7 +12,6 @@ const SENSITIVE_QUERY_PARAMETERS: &[&str] = &[
     "X-Amz-Credential",
     "X-Amz-Security-Token",
     "X-Amz-Signature",
-    "sig",
 ];
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -273,11 +272,7 @@ impl Debug for DisplaySafeUrl {
             .field("host", &url.host())
             .field("port", &url.port())
             .field("path", &url.path())
-            .field(
-                "query",
-                &url.query()
-                    .map(|query| redacted_query(query, url.query_pairs())),
-            )
+            .field("query", &redacted_query(url))
             .field("fragment", &url.fragment())
             .finish()
     }
@@ -327,26 +322,26 @@ fn is_sensitive_query_parameter(key: &str) -> bool {
         .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
 }
 
-fn redacted_query<'a>(
-    query: &'a str,
-    query_pairs: impl Iterator<Item = (Cow<'a, str>, Cow<'a, str>)>,
-) -> Cow<'a, str> {
-    let mut redacted = false;
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    for (key, value) in query_pairs {
-        if is_sensitive_query_parameter(&key) {
-            serializer.append_pair(&key, "****");
-            redacted = true;
-        } else {
-            serializer.append_pair(&key, &value);
-        }
+fn redacted_query(url: &Url) -> Option<Cow<'_, str>> {
+    let query = url.query()?;
+    // Re-serializing a query can change its spelling, so only do so when redaction is needed.
+    if !url
+        .query_pairs()
+        .any(|(key, _)| is_sensitive_query_parameter(&key))
+    {
+        return Some(Cow::Borrowed(query));
     }
 
-    if redacted {
-        Cow::Owned(serializer.finish())
-    } else {
-        Cow::Borrowed(query)
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    for (key, value) in url.query_pairs() {
+        let value = if is_sensitive_query_parameter(&key) {
+            "****"
+        } else {
+            &value
+        };
+        serializer.append_pair(&key, value);
     }
+    Some(Cow::Owned(serializer.finish()))
 }
 
 fn display_with_redacted_credentials(
@@ -372,8 +367,8 @@ fn display_with_redacted_credentials(
     }
 
     write!(f, "{}", url.path())?;
-    if let Some(query) = url.query() {
-        write!(f, "?{}", redacted_query(query, url.query_pairs()))?;
+    if let Some(query) = redacted_query(url) {
+        write!(f, "?{query}")?;
     }
     if let Some(fragment) = url.fragment() {
         write!(f, "#{fragment}")?;
