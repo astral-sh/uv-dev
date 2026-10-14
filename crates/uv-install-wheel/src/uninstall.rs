@@ -71,11 +71,30 @@ pub fn uninstall_wheel(
         match fs_err::remove_file(&path) {
             Ok(()) => uninstall.record_removed_wheel_file(&path, &mut visited),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => match fs_err::remove_dir_all(&path) {
-                Ok(()) => uninstall.record_removed_directory(&path),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(_) => return Err(err.into()),
-            },
+            Err(err) => {
+                match contains_installation_scheme(&path, layout) {
+                    Ok(true) => {
+                        if should_warn_for_distribution(
+                            &WARNED_FOR_RECORD_ENTRY_PACKAGE,
+                            &distribution,
+                        ) {
+                            warn_user!(
+                                "Invalid `RECORD` entry in `{distribution}` that would remove an installation directory, skipping: {}",
+                                entry.path
+                            );
+                        }
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(check_err) if check_err.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(_) => return Err(err.into()),
+                }
+                match fs_err::remove_dir_all(&path) {
+                    Ok(()) => uninstall.record_removed_directory(&path),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return Err(err.into()),
+                }
+            }
         }
     }
 
@@ -158,11 +177,9 @@ fn record_path_in_scheme(
     // `.data/data`. For a system environment, wheels are allowed to write to
     // whole system directories, for example `data` is `/usr/local` for system Python on
     // Ubuntu 24.04.
-    if normalized.starts_with(&layout.scheme.data)
-        || normalized.starts_with(&layout.scheme.purelib)
-        || normalized.starts_with(&layout.scheme.platlib)
-        || normalized.starts_with(&layout.scheme.scripts)
-        || normalized.starts_with(&layout.scheme.include)
+    if installation_scheme_paths(layout)
+        .into_iter()
+        .any(|root| normalized.starts_with(root))
     {
         Some(target)
     } else {
@@ -177,6 +194,33 @@ fn record_path_in_scheme(
         }
         None
     }
+}
+
+/// Return whether deleting a directory would remove an installation-scheme root or its contents.
+fn contains_installation_scheme(path: &Path, layout: &Layout) -> std::io::Result<bool> {
+    let target = fs_err::canonicalize(path)?;
+    for root in installation_scheme_paths(layout) {
+        // An ancestor can contain a symlink to a scheme root even when the root resolves elsewhere.
+        for ancestor in root.ancestors() {
+            match fs_err::canonicalize(ancestor) {
+                Ok(ancestor) if ancestor.starts_with(&target) => return Ok(true),
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn installation_scheme_paths(layout: &Layout) -> [&Path; 5] {
+    [
+        &layout.scheme.data,
+        &layout.scheme.purelib,
+        &layout.scheme.platlib,
+        &layout.scheme.scripts,
+        &layout.scheme.include,
+    ]
 }
 
 /// Iterate over trimmed, nonempty lines in legacy installation metadata.
@@ -500,6 +544,42 @@ mod tests {
         assert!(target_file.exists());
         assert!(!metadata.exists());
         assert!(!init_py.exists());
+    }
+
+    /// A directory can lie within the data scheme while containing another scheme's root.
+    #[test]
+    fn test_uninstall_record_preserves_installation_scheme() {
+        let venv = assert_fs::TempDir::new().unwrap();
+        let site_packages = venv.child("lib/python3.12/site-packages");
+        let dist_info = site_packages.child("evilpkg-0.1.0.dist-info");
+        dist_info.create_dir_all().unwrap();
+        dist_info
+            .child("RECORD")
+            .write_str("../../../lib,,\nevilpkg,,\nevilpkg-0.1.0.dist-info/RECORD,,\n")
+            .unwrap();
+        let sibling = site_packages.child("sibling/__init__.py");
+        sibling.touch().unwrap();
+        let package = site_packages.child("evilpkg");
+        package.child("__init__.py").touch().unwrap();
+
+        let layout = Layout {
+            sys_executable: venv.path().join("bin/python"),
+            python_version: (3, 12),
+            os_name: "posix".to_string(),
+            scheme: Scheme {
+                purelib: site_packages.to_path_buf(),
+                platlib: site_packages.to_path_buf(),
+                scripts: venv.path().join("bin"),
+                data: venv.path().to_path_buf(),
+                include: venv.path().join("include/python3.12"),
+            },
+        };
+
+        uninstall_wheel(dist_info.path(), "evilpkg 0.1.0", &layout).unwrap();
+
+        assert!(sibling.exists());
+        assert!(!package.exists());
+        assert!(!dist_info.exists());
     }
 
     #[test]
