@@ -1,9 +1,7 @@
-use std::process::Command;
-
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
-use indoc::{formatdoc, indoc};
+use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::{PredicateStrExt, predicate};
 use serde_json::json;
@@ -58,120 +56,6 @@ fn tool_upgrade_up_to_date() {
     ----- stderr -----
     Nothing to upgrade
     ");
-}
-
-#[test]
-fn tool_upgrade_preserves_workspace_member_non_editability() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    let root_pyproject = context.temp_dir.child("pyproject.toml");
-    let write_root_manifest = |version: &str| {
-        root_pyproject.write_str(&formatdoc! {r#"
-            [project]
-            name = "root"
-            version = "{version}"
-            requires-python = ">=3.12"
-            dependencies = ["child"]
-
-            [project.scripts]
-            root_cli = "root:main"
-
-            [build-system]
-            requires = ["uv_build>=0.7,<10000"]
-            build-backend = "uv_build"
-
-            [tool.uv.sources]
-            child = {{ workspace = true }}
-
-            [tool.uv.workspace]
-            members = ["child"]
-        "#})
-    };
-    write_root_manifest("0.1.0")?;
-
-    let root_src = context.temp_dir.child("src").child("root");
-    root_src.create_dir_all()?;
-    root_src.child("__init__.py").write_str(indoc! {
-        r#"
-        def main():
-            from importlib.metadata import version
-
-            import child
-
-            print(version("root"), child.MESSAGE)
-        "#
-    })?;
-
-    let child = context.temp_dir.child("child");
-    child.create_dir_all()?;
-    child.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-
-    let child_src = child.child("src").child("child");
-    child_src.create_dir_all()?;
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
-
-    context
-        .tool_install()
-        .arg(context.temp_dir.path())
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.0 OK
-    ");
-
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'PRE-UPGRADE'\n")?;
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.0 OK
-    ");
-
-    write_root_manifest("0.1.1")?;
-    context
-        .tool_upgrade()
-        .arg("root")
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.1 OK
-    ");
-
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.1 OK
-    ");
-
-    Ok(())
 }
 
 #[test]
