@@ -346,8 +346,7 @@ pub async fn check(
     };
 
     // Select an environment and, if we found a project, sync it before running checks.
-    let mut locked_ty_path = None;
-    let venv = if let Some(script) = &script {
+    let (venv, locked_ty_path) = if let Some(script) = &script {
         let extras = extras.with_defaults(DefaultExtras::default());
         let venv = if let Some(venv) = isolated_venv {
             venv
@@ -410,7 +409,7 @@ pub async fn check(
         .map_err(UvError::from)?;
 
         let marker_environment = venv.interpreter().to_resolver_marker_environment();
-        if ty_path.is_none()
+        let locked_ty_path = (ty_path.is_none()
             && ty_version.is_none()
             && result
                 .lock()
@@ -421,13 +420,11 @@ pub async fn check(
                 )
                 .map_err(anyhow::Error::msg)?
                 .root()
-                .is_some()
-        {
-            locked_ty_path = Some(
-                venv.scripts()
-                    .join(format!("ty{}", std::env::consts::EXE_SUFFIX)),
-            );
-        }
+                .is_some())
+        .then(|| {
+            venv.scripts()
+                .join(format!("ty{}", std::env::consts::EXE_SUFFIX))
+        });
 
         let target = InstallTarget::Script {
             script,
@@ -467,7 +464,7 @@ pub async fn check(
             );
         }
 
-        Some(venv)
+        (Some(venv), locked_ty_path)
     } else if let Some(project) = &project {
         let extras = extras.with_defaults(DefaultExtras::default());
         let mut malware_context = MalwareCheckContext::from(&malware_settings);
@@ -590,7 +587,7 @@ pub async fn check(
         target.validate_extras(&extras)?;
         target.validate_groups(&groups)?;
 
-        if ty_path.is_none()
+        let locked_ty_path = if ty_path.is_none()
             && ty_version.is_none()
             && let Some(tool) = toolchain::find_locked_tool(
                 project,
@@ -599,9 +596,8 @@ pub async fn check(
                 &PackageName::from_str("ty")?,
                 &DEV_DEPENDENCIES,
                 &groups,
-            )?
-        {
-            locked_ty_path = Some(if !tool.requires_separate_environment() && !no_sync {
+            )? {
+            Some(if !tool.requires_separate_environment() && !no_sync {
                 // Synchronization will install the locked tool into the selected project or
                 // isolated environment.
                 venv.scripts()
@@ -646,8 +642,10 @@ pub async fn check(
                 PythonEnvironment::from(environment)
                     .scripts()
                     .join(format!("ty{}", std::env::consts::EXE_SUFFIX))
-            });
-        }
+            })
+        } else {
+            None
+        };
 
         if no_sync {
             debug!("Skipping environment synchronization due to `--no-sync`");
@@ -682,9 +680,9 @@ pub async fn check(
             }
         }
 
-        Some(venv)
+        (Some(venv), locked_ty_path)
     } else {
-        isolated_venv
+        (isolated_venv, None)
     };
 
     // Forward the user's explicit Python request so ty can apply its own version selection rules.
