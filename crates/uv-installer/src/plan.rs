@@ -174,13 +174,12 @@ impl<'a> Planner<'a> {
         Self { resolution }
     }
 
-    /// Partition a set of requirements into those that should be linked from the cache, those that
-    /// need to be downloaded, and those that should be removed.
+    /// Partition a set of requirements into distributions to install from the cache, prepare
+    /// before installation, or remove.
     ///
-    /// The install plan will respect cache [`Freshness`]. Specifically, if refresh is enabled, the
-    /// plan will respect cache entries created after the current time (as per the [`Refresh`]
-    /// policy). Otherwise, entries will be ignored. The downstream distribution database may still
-    /// read those entries from the cache after revalidating them.
+    /// Distributions selected for cache refresh are sent for preparation instead of being linked
+    /// directly from the cache. The distribution database may still reuse cached entries after
+    /// revalidating them.
     ///
     /// The install plan will also respect the required hashes, such that it will never return a
     /// cached distribution that does not match the required hash. Like pip, though, it _will_
@@ -717,8 +716,8 @@ pub struct Plan {
     /// available in the local cache.
     pub cached: Vec<CachedDist>,
 
-    /// The distributions that are not already installed in the current environment, and are
-    /// not available in the local cache.
+    /// The distributions that require preparation before installation. Cache entries may still
+    /// exist but require revalidation.
     pub remote: Vec<Arc<Dist>>,
 
     /// Any distributions that are already installed in the current environment, but will be
