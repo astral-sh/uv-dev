@@ -9463,13 +9463,13 @@ fn prefer_editable() -> Result<()> {
         context
             .python_command()
             .args(["-I", "-c"])
-            .arg(indoc! {r#"
+            .arg(indoc! {r"
                 import black
                 from pathlib import Path
                 import sys
 
                 assert Path(black.__file__).samefile(sys.argv[1]), black.__file__
-            "#})
+            "})
             .arg(source.join("black/__init__.py"))
             .assert()
             .success();

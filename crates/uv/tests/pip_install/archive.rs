@@ -14,6 +14,7 @@ use uv_test::{TestContext, assert_link_target, assert_path_missing, uv_snapshot}
 
 const WHEEL_FILENAME: &str = "ok-1.0.0-py3-none-any.whl";
 
+#[derive(Clone, Copy)]
 enum Corruption {
     UncompressedSize,
     Crc32,
