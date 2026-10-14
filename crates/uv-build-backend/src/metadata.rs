@@ -1533,9 +1533,9 @@ mod tests {
 
     #[test]
     fn contact_out_of_range_integer() {
-        let contents = extend_project(indoc! {r#"
+        let contents = extend_project(indoc! {r"
             authors = [{ name = 18446744073709551616 }]
-        "#});
+        "});
         let error = toml::from_str::<PyProjectToml>(&contents).unwrap_err();
         assert_snapshot!(format_err(error), @r#"
         TOML parse error at line 4, column 21
