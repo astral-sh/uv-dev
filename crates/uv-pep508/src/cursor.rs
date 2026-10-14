@@ -63,13 +63,7 @@ impl<'a> Cursor<'a> {
 
     /// Consumes whitespace from the cursor.
     pub(crate) fn eat_whitespace(&mut self) {
-        while let Some(char) = self.peek_char() {
-            if char.is_whitespace() {
-                self.next();
-            } else {
-                return;
-            }
-        }
+        self.take_while(char::is_whitespace);
     }
 
     /// Returns the next character and position from the input stream and consumes it.
@@ -98,19 +92,18 @@ impl<'a> Cursor<'a> {
         true
     }
 
-    /// Consumes characters from the cursor as long as the condition is met.
+    /// Consumes characters from the cursor as long as the condition is met, returning the start
+    /// position and length in bytes.
     pub(crate) fn take_while(&mut self, condition: impl Fn(char) -> bool) -> (usize, usize) {
         let start = self.pos();
-        let mut len = 0;
         while let Some(char) = self.peek_char() {
             if !condition(char) {
                 break;
             }
 
             self.next();
-            len += char.len_utf8();
         }
-        (start, len)
+        (start, self.pos() - start)
     }
 
     /// Consumes characters from the cursor, raising an error if it doesn't match the given token.
