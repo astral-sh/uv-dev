@@ -18,7 +18,10 @@ use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace, warn};
 use walkdir::WalkDir;
 
-use uv_fs::{PortablePath, Simplified, normalize_path_under, persist_with_retry_sync, relative_to};
+use uv_fs::{
+    PortablePath, Simplified, normalize_path, normalize_path_under, persist_with_retry_sync,
+    relative_to,
+};
 use uv_normalize::PackageName;
 use uv_pypi_types::DirectUrl;
 use uv_shell::escape_posix_for_single_quotes;
@@ -530,18 +533,25 @@ fn move_folder_recorded(
     Ok(())
 }
 
+/// Find the recorded file, accepting the same normalized paths as wheel validation.
 fn find_record_entry<'record>(
     record: &'record mut [RecordEntry],
     relative: &Path,
     absolute: &Path,
 ) -> Result<&'record mut RecordEntry, Error> {
-    record
-        .iter_mut()
-        .find(|entry| Path::new(&entry.path) == relative)
+    let index = record
+        .iter()
+        .position(|entry| Path::new(&entry.path) == relative)
+        .or_else(|| {
+            record
+                .iter()
+                .position(|entry| normalize_path(Path::new(&entry.path)).as_ref() == relative)
+        })
         .ok_or_else(|| Error::RecordFile {
             relative: relative.to_path_buf(),
             absolute: absolute.to_path_buf(),
-        })
+        })?;
+    Ok(&mut record[index])
 }
 
 /// Installs a single script (not an entrypoint).
@@ -1015,7 +1025,7 @@ pub fn validate_and_heal_record<'a>(
                 return false;
             }
             // Allow non-canonical spellings such as `./foo`.
-            files.remove(uv_fs::normalize_path(path).as_ref()).is_none()
+            files.remove(normalize_path(path).as_ref()).is_none()
         })
         .map(|entry| PathBuf::from(entry.path))
         .collect::<Vec<_>>();
