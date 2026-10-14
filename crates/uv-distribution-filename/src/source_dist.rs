@@ -90,7 +90,13 @@ impl SourceDistFilename {
                 kind: SourceDistFilenameErrorKind::Extension,
             });
         };
+        Self::parse_normalized(filename, extension)
+    }
 
+    pub(super) fn parse_normalized(
+        filename: &str,
+        extension: SourceDistExtension,
+    ) -> Result<Self, SourceDistFilenameError> {
         let stem = source_dist_stem(filename, extension)?;
 
         let Some((package_name, version)) = stem.rsplit_once('-') else {

@@ -75,13 +75,12 @@ impl DistFilename {
     /// Source dist filenames can be ambiguous, e.g. `a-1-1.tar.gz`. Without knowing the package name, we assume that
     /// source dist filename version doesn't contain minus (the version is normalized).
     pub fn try_from_normalized_filename(filename: &str) -> Option<Self> {
-        if let Ok(filename) = WheelFilename::from_str(filename) {
-            Some(Self::WheelFilename(filename))
-        } else if let Ok(filename) = SourceDistFilename::parsed_normalized_filename(filename) {
-            Some(Self::SourceDistFilename(filename))
-        } else {
-            None
-        }
+        Some(match DistExtension::from_path(filename).ok()? {
+            DistExtension::Wheel => Self::WheelFilename(WheelFilename::from_str(filename).ok()?),
+            DistExtension::Source(extension) => Self::SourceDistFilename(
+                SourceDistFilename::parse_normalized(filename, extension).ok()?,
+            ),
+        })
     }
 
     pub fn name(&self) -> &PackageName {
