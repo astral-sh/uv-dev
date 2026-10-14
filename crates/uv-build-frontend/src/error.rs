@@ -194,17 +194,13 @@ fn extract_package_name(version_id: &str) -> &str {
     // https://peps.python.org/pep-0508/#names
     // ^([A-Z0-9]|[A-Z0-9][A-Z0-9._-]*[A-Z0-9])$ with re.IGNORECASE
     // Since we're only using this for a hint, we're more lenient than what we would be doing if this was used for parsing
-    let end = version_id
-        .char_indices()
-        .take_while(|(_, char)| matches!(char, 'A'..='Z' | 'a'..='z' | '0'..='9' | '.' | '-' | '_'))
-        .last()
-        .map_or(0, |(i, c)| i + c.len_utf8());
-
-    if end == 0 {
-        version_id
-    } else {
-        &version_id[..end]
-    }
+    version_id
+        .split(|character: char| {
+            !(character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_'))
+        })
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(version_id)
 }
 
 /// Write a hint about missing build dependencies.
