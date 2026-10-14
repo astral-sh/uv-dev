@@ -75,10 +75,6 @@ pub async fn audit(
             if let Some(name) = names.first() {
                 bail!("`{name}` is not installed; run `uv tool install {name}` to install");
             }
-            if matches!(output_format, AuditOutputFormat::Text) {
-                writeln!(printer.stderr(), "No tools installed")?;
-                return Ok(ExitStatus::Success);
-            }
             return render_audits(&[], output_format, printer);
         }
         Err(error) => return Err(error.into()),
@@ -106,10 +102,6 @@ pub async fn audit(
     tools.dedup_by(|(left, _), (right, _)| left == right);
 
     if tools.is_empty() {
-        if matches!(output_format, AuditOutputFormat::Text) {
-            writeln!(printer.stderr(), "No tools installed")?;
-            return Ok(ExitStatus::Success);
-        }
         return render_audits(&[], output_format, printer);
     }
 
@@ -249,6 +241,9 @@ fn render_audits(
     printer: Printer,
 ) -> Result<ExitStatus> {
     match output_format {
+        AuditOutputFormat::Text if audits.is_empty() => {
+            writeln!(printer.stderr(), "No tools installed")?;
+        }
         AuditOutputFormat::Text => {
             for (name, results) in audits {
                 writeln!(printer.stderr(), "Auditing `{name}`")?;
