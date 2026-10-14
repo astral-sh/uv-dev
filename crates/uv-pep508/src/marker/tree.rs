@@ -1176,39 +1176,6 @@ impl MarkerTree {
         }
     }
 
-    /// Find a top level `extra == "..."` expression.
-    ///
-    /// ASSUMPTION: There is one `extra = "..."`, and it's either the only marker or part of the
-    /// main conjunction.
-    fn top_level_extra(self) -> Option<MarkerExpression> {
-        let mut extra_expression = None;
-        for conjunction in self.to_dnf() {
-            let found = conjunction.iter().find(|expression| {
-                matches!(
-                    expression,
-                    MarkerExpression::Extra {
-                        operator: ExtraOperator::Equal,
-                        ..
-                    }
-                )
-            })?;
-
-            // Because the marker tree is in DNF form, we must verify that the extra expression is part
-            // of all solutions to this marker.
-            if let Some(ref extra_expression) = extra_expression {
-                if *extra_expression != *found {
-                    return None;
-                }
-
-                continue;
-            }
-
-            extra_expression = Some(found.clone());
-        }
-
-        extra_expression
-    }
-
     /// Find a top level `extra == "..."` name.
     ///
     /// ASSUMPTION: There is one `extra = "..."`, and it's either the only marker or part of the
@@ -1222,12 +1189,23 @@ impl MarkerTree {
             return Some(Cow::Borrowed(extra));
         }
 
-        let extra_expression = self.top_level_extra()?;
-
-        match extra_expression {
-            MarkerExpression::Extra { name, .. } => name.into_extra().map(Cow::Owned),
-            _ => unreachable!(),
+        let mut extras = self.to_dnf().into_iter().map(|conjunction| {
+            conjunction
+                .into_iter()
+                .find_map(|expression| match expression {
+                    MarkerExpression::Extra {
+                        name,
+                        operator: ExtraOperator::Equal,
+                    } => Some(name),
+                    _ => None,
+                })
+        });
+        let extra = extras.next()??;
+        // In DNF, the extra expression must be part of every solution to the marker.
+        if extras.any(|candidate| candidate.as_ref() != Some(&extra)) {
+            return None;
         }
+        extra.into_extra().map(Cow::Owned)
     }
 
     /// Simplify this marker by *assuming* that the Python version range
