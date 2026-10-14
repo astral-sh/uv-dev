@@ -526,35 +526,24 @@ fn parse_marker_op<T: Pep508Url, R: Reporter>(
     parse_inner: fn(&mut Cursor, &mut R) -> Result<Option<MarkerTree>, Pep508Error<T>>,
     reporter: &mut R,
 ) -> Result<Option<MarkerTree>, Pep508Error<T>> {
-    let mut tree = None;
-
     // marker_and or marker_expr
-    let first_element = parse_inner(cursor, reporter)?;
-
-    if let Some(expression) = first_element {
-        tree = Some(match tree {
-            Some(tree) => apply(tree, expression),
-            None => expression,
-        });
-    }
+    let mut tree = parse_inner(cursor, reporter)?;
 
     loop {
         // wsp*
         cursor.eat_whitespace();
         // ('or' marker_and) or ('and' marker_or)
         let (start, len) = cursor.peek_while(|c| !c.is_whitespace() && c != '(');
-        match cursor.slice(start, len) {
-            value if value == op => {
-                cursor.take_while(|c| !c.is_whitespace() && c != '(');
+        if cursor.slice(start, len) != op {
+            return Ok(tree);
+        }
+        cursor.take_while(|c| !c.is_whitespace() && c != '(');
 
-                if let Some(expression) = parse_inner(cursor, reporter)? {
-                    tree = Some(match tree {
-                        Some(tree) => apply(tree, expression),
-                        None => expression,
-                    });
-                }
-            }
-            _ => return Ok(tree),
+        if let Some(expression) = parse_inner(cursor, reporter)? {
+            tree = Some(match tree {
+                Some(tree) => apply(tree, expression),
+                None => expression,
+            });
         }
     }
 }
