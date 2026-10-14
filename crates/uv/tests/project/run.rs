@@ -5,10 +5,9 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
-use predicates::{
-    prelude::{PredicateStrExt, predicate},
-    str::contains,
-};
+#[cfg(feature = "test-python-eol")]
+use predicates::prelude::PredicateStrExt;
+use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
