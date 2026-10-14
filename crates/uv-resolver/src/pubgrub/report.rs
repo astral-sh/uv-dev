@@ -1844,6 +1844,15 @@ impl PartialEq for PubGrubHint {
 
 impl Eq for PubGrubHint {}
 
+/// Return the command-line argument that enables prereleases for this package.
+fn prerelease_allow_argument(package: &PackageName, package_override: bool) -> Cow<'static, str> {
+    if package_override {
+        Cow::Owned(format!("--prerelease-package {package}=allow"))
+    } else {
+        Cow::Borrowed("--prerelease=allow")
+    }
+}
+
 impl std::fmt::Display for PubGrubHint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1852,11 +1861,7 @@ impl std::fmt::Display for PubGrubHint {
                 version,
                 package_override,
             } => {
-                let argument = if *package_override {
-                    format!("--prerelease-package {package}=allow")
-                } else {
-                    "--prerelease=allow".to_string()
-                };
+                let argument = prerelease_allow_argument(package, *package_override);
                 write!(
                     f,
                     "Pre-releases are available for `{}` in the requested range (e.g., {}), but pre-releases weren't enabled (try: `{}`)",
@@ -1880,11 +1885,7 @@ impl std::fmt::Display for PubGrubHint {
                 range,
                 package_override,
             } => {
-                let argument = if *package_override {
-                    format!("--prerelease-package {name}=allow")
-                } else {
-                    "--prerelease=allow".to_string()
-                };
+                let argument = prerelease_allow_argument(name, *package_override);
                 write!(
                     f,
                     "`{}` was requested with a pre-release marker (e.g., {}), but pre-releases weren't enabled (try: `{}`)",
