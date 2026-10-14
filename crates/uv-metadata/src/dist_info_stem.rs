@@ -21,7 +21,7 @@ impl<'a> DistInfoStem<'a> {
         package_name: &PackageName,
     ) -> Result<Self, Error> {
         let stem = stem.into();
-        if !normalize(&stem).starts_with(package_name.as_str()) {
+        if !has_normalized_package_prefix(&stem, package_name) {
             return Err(Error::MissingDistInfoPackageName(
                 stem.into_owned(),
                 package_name.to_string(),
@@ -43,11 +43,11 @@ impl Display for DistInfoStem<'_> {
     }
 }
 
-/// Normalize a `.dist-info` stem, converting it to lowercase and collapsing runs of `-`, `_`,
-/// and `.` down to a single `-`.
+/// Check whether a normalized `.dist-info` stem starts with the package name.
 ///
-/// Unlike [`PackageName`], this does not restrict the allowed characters.
-fn normalize(stem: &str) -> Cow<'_, str> {
+/// Normalization lowercases ASCII letters and collapses runs of `-`, `_`, and `.` into `-`.
+/// Unlike [`PackageName`], the stem can contain other characters after the prefix.
+fn has_normalized_package_prefix(stem: &str, package_name: &PackageName) -> bool {
     let mut last_was_separator = false;
     let normalized = stem.bytes().filter_map(move |byte| {
         let byte = match byte {
@@ -59,22 +59,16 @@ fn normalize(stem: &str) -> Cow<'_, str> {
         last_was_separator = is_separator;
         (!repeated_separator).then_some(byte)
     });
-
-    if normalized.clone().eq(stem.bytes()) {
-        return Cow::Borrowed(stem);
-    }
-
-    let mut output = String::with_capacity(stem.len());
-    output.extend(normalized.map(char::from));
-    Cow::Owned(output)
+    let package_name = package_name.as_str();
+    normalized.take(package_name.len()).eq(package_name.bytes())
 }
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
+    use uv_normalize::PackageName;
 
     #[test]
-    fn normalize() {
+    fn normalized_prefix() {
         let inputs = [
             "friendly-bard",
             "Friendly-Bard",
@@ -85,21 +79,9 @@ mod tests {
             "friendly-.bard",
             "FrIeNdLy-._.-bArD",
         ];
+        let package_name: PackageName = "friendly-bard".parse().unwrap();
         for input in inputs {
-            assert_eq!(super::normalize(input), "friendly-bard");
-        }
-    }
-
-    #[test]
-    fn normalize_borrowed() {
-        for input in ["", "-", "friendly-bard", "friendly+local!", "café"] {
-            assert_eq!(
-                match super::normalize(input) {
-                    Cow::Borrowed(normalized) => Some(normalized),
-                    Cow::Owned(_) => None,
-                },
-                Some(input)
-            );
+            assert!(super::has_normalized_package_prefix(input, &package_name));
         }
     }
 }
