@@ -125,67 +125,30 @@ pub async fn remove(
     }?;
 
     for package in packages {
-        match dependency_type {
-            DependencyType::Production => {
-                let deps = toml.remove_dependency(&package)?;
-                if deps.is_empty() {
-                    return Err(DependencyNotFoundError {
-                        package: package.clone(),
-                        dependency_type: dependency_type.clone(),
-                        found_in: toml.find_dependency(&package, None),
-                    }
-                    .into());
-                }
+        let missing = match &dependency_type {
+            DependencyType::Production => toml.remove_dependency(&package)?.is_empty(),
+            DependencyType::Optional(extra) => {
+                toml.remove_optional_dependency(&package, extra)?.is_empty()
             }
-            DependencyType::Dev => {
+            DependencyType::Group(group) if group != &*DEV_DEPENDENCIES => toml
+                .remove_dependency_group_requirement(&package, group)?
+                .is_empty(),
+            DependencyType::Dev | DependencyType::Group(_) => {
+                // Both development dependency formats may contain the package.
                 let dev_deps = toml.remove_dev_dependency(&package)?;
                 let group_deps =
                     toml.remove_dependency_group_requirement(&package, &DEV_DEPENDENCIES)?;
-                if dev_deps.is_empty() && group_deps.is_empty() {
-                    return Err(DependencyNotFoundError {
-                        package: package.clone(),
-                        dependency_type: dependency_type.clone(),
-                        found_in: toml.find_dependency(&package, None),
-                    }
-                    .into());
-                }
+                dev_deps.is_empty() && group_deps.is_empty()
             }
-            DependencyType::Optional(ref extra) => {
-                let deps = toml.remove_optional_dependency(&package, extra)?;
-                if deps.is_empty() {
-                    return Err(DependencyNotFoundError {
-                        package: package.clone(),
-                        dependency_type: dependency_type.clone(),
-                        found_in: toml.find_dependency(&package, None),
-                    }
-                    .into());
-                }
+        };
+        if missing {
+            let found_in = toml.find_dependency(&package, None);
+            return Err(DependencyNotFoundError {
+                package,
+                dependency_type,
+                found_in,
             }
-            DependencyType::Group(ref group) => {
-                if group == &*DEV_DEPENDENCIES {
-                    let dev_deps = toml.remove_dev_dependency(&package)?;
-                    let group_deps =
-                        toml.remove_dependency_group_requirement(&package, &DEV_DEPENDENCIES)?;
-                    if dev_deps.is_empty() && group_deps.is_empty() {
-                        return Err(DependencyNotFoundError {
-                            package: package.clone(),
-                            dependency_type: dependency_type.clone(),
-                            found_in: toml.find_dependency(&package, None),
-                        }
-                        .into());
-                    }
-                } else {
-                    let deps = toml.remove_dependency_group_requirement(&package, group)?;
-                    if deps.is_empty() {
-                        return Err(DependencyNotFoundError {
-                            package: package.clone(),
-                            dependency_type: dependency_type.clone(),
-                            found_in: toml.find_dependency(&package, None),
-                        }
-                        .into());
-                    }
-                }
-            }
+            .into());
         }
     }
 
