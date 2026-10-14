@@ -505,10 +505,10 @@ impl Version {
     /// last number in the release component.
     #[inline]
     fn push_release(&mut self, n: u64) {
-        if let VersionInner::Small { small } = &mut self.inner {
-            if small.push_release(n) {
-                return;
-            }
+        if let VersionInner::Small { small } = &mut self.inner
+            && small.push_release(n)
+        {
+            return;
         }
         self.make_full().release.push(n);
     }
@@ -531,10 +531,10 @@ impl Version {
     #[inline]
     #[must_use]
     pub(crate) fn with_epoch(mut self, value: u64) -> Self {
-        if let VersionInner::Small { small } = &mut self.inner {
-            if small.set_epoch(value) {
-                return self;
-            }
+        if let VersionInner::Small { small } = &mut self.inner
+            && small.set_epoch(value)
+        {
+            return self;
         }
         self.make_full().epoch = value;
         self
@@ -544,10 +544,10 @@ impl Version {
     #[inline]
     #[must_use]
     pub fn with_pre(mut self, value: Option<Prerelease>) -> Self {
-        if let VersionInner::Small { small } = &mut self.inner {
-            if small.set_pre(value) {
-                return self;
-            }
+        if let VersionInner::Small { small } = &mut self.inner
+            && small.set_pre(value)
+        {
+            return self;
         }
         self.make_full().pre = value;
         self
@@ -557,10 +557,10 @@ impl Version {
     #[inline]
     #[must_use]
     pub fn with_post(mut self, value: Option<u64>) -> Self {
-        if let VersionInner::Small { small } = &mut self.inner {
-            if small.set_post(value) {
-                return self;
-            }
+        if let VersionInner::Small { small } = &mut self.inner
+            && small.set_post(value)
+        {
+            return self;
         }
         self.make_full().post = value;
         self
@@ -570,10 +570,10 @@ impl Version {
     #[inline]
     #[must_use]
     pub(crate) fn with_dev(mut self, value: Option<u64>) -> Self {
-        if let VersionInner::Small { small } = &mut self.inner {
-            if small.set_dev(value) {
-                return self;
-            }
+        if let VersionInner::Small { small } = &mut self.inner
+            && small.set_dev(value)
+        {
+            return self;
         }
         self.make_full().dev = value;
         self
@@ -598,10 +598,10 @@ impl Version {
         match value {
             LocalVersion::Segments(segments) => self.with_local_segments(segments),
             LocalVersion::Max => {
-                if let VersionInner::Small { small } = &mut self.inner {
-                    if small.set_local(LocalVersion::Max) {
-                        return self;
-                    }
+                if let VersionInner::Small { small } = &mut self.inner
+                    && small.set_local(LocalVersion::Max)
+                {
+                    return self;
                 }
                 self.make_full().local = value;
                 self
@@ -616,10 +616,10 @@ impl Version {
     #[inline]
     #[must_use]
     pub fn without_local(mut self) -> Self {
-        if let VersionInner::Small { small } = &mut self.inner {
-            if small.set_local(LocalVersion::empty()) {
-                return self;
-            }
+        if let VersionInner::Small { small } = &mut self.inner
+            && small.set_local(LocalVersion::empty())
+        {
+            return self;
         }
         self.make_full().local = LocalVersion::empty();
         self
@@ -789,10 +789,10 @@ impl Version {
     pub fn with_min(mut self, value: Option<u64>) -> Self {
         debug_assert!(!self.is_pre(), "min is not allowed on pre-release versions");
         debug_assert!(!self.is_dev(), "min is not allowed on dev versions");
-        if let VersionInner::Small { small } = &mut self.inner {
-            if small.set_min(value) {
-                return self;
-            }
+        if let VersionInner::Small { small } = &mut self.inner
+            && small.set_min(value)
+        {
+            return self;
         }
         self.make_full().min = value;
         self
@@ -811,10 +811,10 @@ impl Version {
             "max is not allowed on post-release versions"
         );
         debug_assert!(!self.is_dev(), "max is not allowed on dev versions");
-        if let VersionInner::Small { small } = &mut self.inner {
-            if small.set_max(value) {
-                return self;
-            }
+        if let VersionInner::Small { small } = &mut self.inner
+            && small.set_max(value)
+        {
+            return self;
         }
         self.make_full().max = value;
         self
