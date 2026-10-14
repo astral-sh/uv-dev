@@ -6,11 +6,9 @@ use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-#[cfg(feature = "test-git")]
-use assert_fs::fixture::ChildPath;
 use assert_fs::{
     assert::PathAssert,
-    fixture::{FileTouch, FileWriteStr, PathChild, PathCreateDir},
+    fixture::{ChildPath, FileTouch, FileWriteStr, PathChild, PathCreateDir},
 };
 use indoc::indoc;
 use insta::assert_snapshot;
@@ -21,6 +19,11 @@ use uv_static::EnvVars;
 
 use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{assert_path_missing, copy_dir_ignore, uv_snapshot};
+
+fn assert_tool_launcher(path: &ChildPath) {
+    // On Unix, tool launchers can be symlinks to scripts in the tool environment.
+    path.assert(predicate::path::is_file().follow_links(true));
+}
 
 #[cfg(feature = "test-git")]
 fn tool_install_git_path(bin_dir: &ChildPath) -> OsString {
@@ -82,7 +85,7 @@ fn tool_install() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -149,9 +152,7 @@ fn tool_install() {
     ");
 
     tool_dir.child("flask").assert(predicate::path::is_dir());
-    bin_dir
-        .child(format!("flask{}", std::env::consts::EXE_SUFFIX))
-        .assert(predicate::path::is_file());
+    assert_tool_launcher(&bin_dir.child(format!("flask{}", std::env::consts::EXE_SUFFIX)));
 
     #[cfg(not(windows))]
     insta::with_settings!({
@@ -1661,7 +1662,7 @@ fn tool_install_version() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -1739,7 +1740,7 @@ fn tool_install_editable() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -2342,7 +2343,7 @@ fn tool_install_editable_from() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -2474,7 +2475,7 @@ fn tool_install_already_installed() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -3185,7 +3186,7 @@ fn tool_install_unnamed_package() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -3269,7 +3270,7 @@ fn tool_install_git() {
         "static-requires-python-tool{}",
         std::env::consts::EXE_SUFFIX
     ));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     fs_err::remove_dir_all(&bin_dir).expect("Failed to remove bin dir.");
     fs_err::remove_dir_all(&tool_dir).expect("Failed to remove tool dir.");
@@ -3298,7 +3299,7 @@ fn tool_install_git() {
         "static-requires-python-tool{}",
         std::env::consts::EXE_SUFFIX
     ));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 }
 
 /// Test that installing a tool from Git uses statically available `requires-python` metadata
@@ -3433,7 +3434,7 @@ fn tool_install_git_lfs() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("test-lfs-repo{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     insta::with_settings!({
         filters => context.filters(),
@@ -3599,7 +3600,7 @@ fn tool_install_unnamed_from() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -3684,7 +3685,7 @@ fn tool_install_unnamed_with() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -4551,7 +4552,7 @@ fn tool_install_malformed_dist_info() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("app{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -4628,7 +4629,7 @@ fn tool_install_settings() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("flask{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -5271,7 +5272,7 @@ async fn tool_install_credentials() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("app{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -5361,7 +5362,7 @@ async fn tool_install_default_credentials() -> Result<()> {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("app{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -5709,7 +5710,7 @@ fn tool_install_find_links() {
         .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
-    executable.assert(predicate::path::is_file());
+    assert_tool_launcher(&executable);
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
