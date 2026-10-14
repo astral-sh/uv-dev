@@ -150,7 +150,7 @@ impl Credentials {
 
     /// Create a set of Bearer Authentication credentials.
     #[allow(dead_code)]
-    pub fn bearer(token: Vec<u8>) -> Self {
+    pub(crate) fn bearer(token: Vec<u8>) -> Self {
         Self::Bearer {
             token: Token::new(token),
         }
