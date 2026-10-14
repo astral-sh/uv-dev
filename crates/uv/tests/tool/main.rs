@@ -44,5 +44,8 @@ mod tool_upgrade;
 
 mod tool_upgrade_local;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
+mod tool_workspace;
+
+#[cfg(feature = "test-python")]
 mod workspace_fixture;
