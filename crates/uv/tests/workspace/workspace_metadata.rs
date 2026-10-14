@@ -93,6 +93,9 @@ fn workspace_metadata_simple() {
 
     let workspace = context.temp_dir.child("foo");
     let lockfile = workspace.child("uv.lock");
+    // Neither query should reuse metadata cached by the other.
+    let original_cache = context.cache_dir.path().to_path_buf();
+    let context = context.with_cache_dir("quiet-cache");
     let quiet = context
         .workspace_metadata()
         .current_dir(&workspace)
@@ -102,6 +105,7 @@ fn workspace_metadata_simple() {
         .stderr("");
     assert!(!lockfile.exists(), "quiet metadata persisted a lockfile");
 
+    let context = context.with_cache_dir(original_cache);
     let metadata = uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)
     ----- stdout -----
