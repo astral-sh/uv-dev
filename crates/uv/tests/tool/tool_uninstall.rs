@@ -1,16 +1,15 @@
 use std::collections::BTreeMap;
-use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{FileWriteBin, FileWriteStr, PathChild};
+use assert_fs::fixture::{ChildPath, FileWriteBin, FileWriteStr, PathChild};
 
 use uv_static::EnvVars;
 use uv_test::packse::generate_wheel;
 use uv_test::{TestContext, assert_path_missing, uv_snapshot};
 
-/// Create an offline installation command for a tool with known entry points.
-fn local_tool_install(context: &TestContext, name: &str, entry_points: &[&str]) -> Result<Command> {
+/// Create a local wheel for a tool with known entry points.
+fn local_tool_wheel(context: &TestContext, name: &str, entry_points: &[&str]) -> Result<ChildPath> {
     let entry_points = entry_points
         .iter()
         .map(ToString::to_string)
@@ -26,10 +25,7 @@ fn local_tool_install(context: &TestContext, name: &str, entry_points: &[&str]) 
     );
     let wheel = context.temp_dir.child(filename);
     wheel.write_binary(&contents)?;
-
-    let mut command = context.tool_install();
-    command.arg(wheel.path()).arg("--offline");
-    Ok(command)
+    Ok(wheel)
 }
 
 #[test]
@@ -39,8 +35,13 @@ fn tool_uninstall() -> Result<()> {
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
-    let mut install = local_tool_install(&context, "formatter", &["formatter", "formatterd"])?;
-    install.assert().success();
+    let wheel = local_tool_wheel(&context, "formatter", &["formatter", "formatterd"])?;
+    context
+        .tool_install()
+        .arg(wheel.path())
+        .arg("--offline")
+        .assert()
+        .success();
 
     uv_snapshot!(context.filters(), context.tool_uninstall().arg("formatter"), @"
     exit_code: 0 (success)
@@ -61,7 +62,10 @@ fn tool_uninstall() -> Result<()> {
     ");
 
     // After uninstalling the tool, we should be able to reinstall it.
-    uv_snapshot!(context.filters(), install.env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg(wheel.path())
+        .arg("--offline")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -89,7 +93,11 @@ fn tool_uninstall_preserves_parent_files() -> Result<()> {
         .child("data/keep.txt")
         .write_str("Unrelated file\n")?;
 
-    local_tool_install(&context, "linter", &["linter"])?
+    let wheel = local_tool_wheel(&context, "linter", &["linter"])?;
+    context
+        .tool_install()
+        .arg(wheel.path())
+        .arg("--offline")
         .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str())
         .assert()
         .success();
@@ -115,10 +123,18 @@ fn tool_uninstall_multiple_names() -> Result<()> {
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
-    local_tool_install(&context, "formatter", &["formatter", "formatterd"])?
+    let formatter = local_tool_wheel(&context, "formatter", &["formatter", "formatterd"])?;
+    context
+        .tool_install()
+        .arg(formatter.path())
+        .arg("--offline")
         .assert()
         .success();
-    local_tool_install(&context, "linter", &["linter"])?
+    let linter = local_tool_wheel(&context, "linter", &["linter"])?;
+    context
+        .tool_install()
+        .arg(linter.path())
+        .arg("--offline")
         .assert()
         .success();
 
@@ -144,7 +160,11 @@ fn tool_uninstall_missing_receipt() -> Result<()> {
         .with_tool_dirs();
     let environment = context.temp_dir.child("tools/formatter");
 
-    local_tool_install(&context, "formatter", &["formatter", "formatterd"])?
+    let wheel = local_tool_wheel(&context, "formatter", &["formatter", "formatterd"])?;
+    context
+        .tool_install()
+        .arg(wheel.path())
+        .arg("--offline")
         .assert()
         .success();
 
@@ -166,10 +186,18 @@ fn tool_uninstall_multiple_names_with_missing_receipt() -> Result<()> {
         .with_tool_dirs();
     let environment = context.temp_dir.child("tools/formatter");
 
-    local_tool_install(&context, "formatter", &["formatter", "formatterd"])?
+    let formatter = local_tool_wheel(&context, "formatter", &["formatter", "formatterd"])?;
+    context
+        .tool_install()
+        .arg(formatter.path())
+        .arg("--offline")
         .assert()
         .success();
-    local_tool_install(&context, "linter", &["linter"])?
+    let linter = local_tool_wheel(&context, "linter", &["linter"])?;
+    context
+        .tool_install()
+        .arg(linter.path())
+        .arg("--offline")
         .assert()
         .success();
 
@@ -199,7 +227,11 @@ fn tool_uninstall_all_missing_receipt() -> Result<()> {
         .with_tool_dirs();
     let environment = context.temp_dir.child("tools/formatter");
 
-    local_tool_install(&context, "formatter", &["formatter", "formatterd"])?
+    let wheel = local_tool_wheel(&context, "formatter", &["formatter", "formatterd"])?;
+    context
+        .tool_install()
+        .arg(wheel.path())
+        .arg("--offline")
         .assert()
         .success();
 
