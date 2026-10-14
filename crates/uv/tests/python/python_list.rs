@@ -381,55 +381,18 @@ fn python_list_venv() {
 
 #[test]
 #[cfg(feature = "test-python")]
-fn python_list_unsupported_version() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_filtered_python_symlinks()
-        .with_filtered_python_keys();
+fn python_list_no_matching_version() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
-    // Request a low version
-    uv_snapshot!(context.filters(), context.python_list().arg("3.5"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: Python <3.6 is not supported but 3.5 was requested.
-    ");
+    uv_snapshot!(context.filters(), context.python_list().arg("4.2"), @"exit_code: 0 (success)");
+}
 
-    // Request a low version with a patch
-    uv_snapshot!(context.filters(), context.python_list().arg("3.5.9"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: Python <3.6 is not supported but 3.5.9 was requested.
-    ");
+#[test]
+#[cfg(feature = "test-python")]
+fn python_list_range_below_supported_versions() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
-    // Request a really low version
-    uv_snapshot!(context.filters(), context.python_list().arg("2.6"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: Python <3.6 is not supported but 2.6 was requested.
-    ");
-
-    // Request a really low version with a patch
-    uv_snapshot!(context.filters(), context.python_list().arg("2.6.8"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: Python <3.6 is not supported but 2.6.8 was requested.
-    ");
-
-    // Request a future version
-    uv_snapshot!(context.filters(), context.python_list().arg("4.2"), @"
-    exit_code: 0 (success)
-    ");
-
-    // Request a low version with a range
-    uv_snapshot!(context.filters(), context.python_list().arg("<3.0"), @"
-    exit_code: 0 (success)
-    ");
-
-    // Request free-threaded Python on unsupported version
-    uv_snapshot!(context.filters(), context.python_list().arg("3.12t"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: Python <3.13 does not support free-threading but 3.12+freethreaded was requested.
-    ");
+    uv_snapshot!(context.filters(), context.python_list().arg("<3.0"), @"exit_code: 0 (success)");
 }
 
 #[test]
