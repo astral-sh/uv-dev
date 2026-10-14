@@ -456,6 +456,19 @@ mod tests {
     }
 
     #[test]
+    fn credential_store_rejects_insecure_service() {
+        let error = toml::from_str::<TomlCredentials<TomlCredential>>(
+            "[[credential]]\nservice = 'http://example.com'\nusername = 'user'\n",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("HTTPS is required for non-local hosts")
+        );
+    }
+
+    #[test]
     fn test_credential_store_operations() {
         let mut store = TextCredentialStore::default();
         let credentials = Credentials::basic(Some("user".to_string()), Some("pass".to_string()));
