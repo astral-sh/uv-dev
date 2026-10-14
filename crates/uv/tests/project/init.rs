@@ -864,37 +864,22 @@ fn init_script_create_directory() -> Result<()> {
     Ok(())
 }
 
-// Init script should fail if file is already a PEP 723 script
+/// Initializing a plain script adds metadata; initializing it again leaves the script untouched.
 #[test]
 fn init_script_file_conflicts() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("existing_script.py")
+        .write_str("print(\"Hello, world!\")")?;
 
-    let child = context.temp_dir.child("foo");
-    child.create_dir_all()?;
-
-    uv_snapshot!(context.filters(), context.init().current_dir(&child).arg("--script").arg("name_conflict.py"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Initialized script at `name_conflict.py`
-    ");
-
-    uv_snapshot!(context.filters(), context.init().current_dir(&child).arg("--script").arg("name_conflict.py"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `name_conflict.py` is already a PEP 723 script; use `uv run` to execute it
-    ");
-
-    let contents = "print(\"Hello, world!\")";
-    fs_err::write(child.join("existing_script.py"), contents)?;
-
-    uv_snapshot!(context.filters(), context.init().current_dir(&child).arg("--script").arg("existing_script.py"), @"
+    uv_snapshot!(context.filters(), context.init().arg("--script").arg("existing_script.py"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Initialized script at `existing_script.py`
     ");
 
-    let existing_script = context.read("foo/existing_script.py");
-
+    let existing_script = context.read("existing_script.py");
     assert_snapshot!(
         existing_script, @r#"
     # /// script
@@ -905,6 +890,13 @@ fn init_script_file_conflicts() -> Result<()> {
     print("Hello, world!")
     "#
     );
+
+    uv_snapshot!(context.filters(), context.init().arg("--script").arg("existing_script.py"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `existing_script.py` is already a PEP 723 script; use `uv run` to execute it
+    ");
+    assert_eq!(context.read("existing_script.py"), existing_script);
 
     Ok(())
 }
