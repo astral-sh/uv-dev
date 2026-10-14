@@ -12,8 +12,8 @@ use uv_pypi_types::{DirectUrl, Metadata10};
 
 use crate::linker::{InstallState, LinkMode, link_wheel_files};
 use crate::wheel::{
-    LibKind, ValidatedWheel, WheelFile, dist_info_file, find_dist_info, install_data,
-    parse_scripts, read_record, write_installer_metadata, write_record, write_script_entrypoints,
+    LibKind, ValidatedEntryPoints, ValidatedWheel, WheelFile, dist_info_file, find_dist_info,
+    install_data, parse_scripts, read_record, write_installer_metadata, write_record,
 };
 use crate::{Error, Layout};
 
@@ -83,15 +83,14 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
 
     // Parse `RECORD` and entry points and validate script destinations before linking wheel files.
     let validated_wheel = ValidatedWheel::new(layout, wheel, &dist_info_prefix)?;
+    let record_file = File::open(dist_info_file(wheel, &dist_info_prefix, "RECORD"))?;
+    let mut record = read_record(record_file)?;
+    let entrypoints = parse_scripts(wheel, &dist_info_prefix, layout.python_version.1)?;
+    let validated_entrypoints = ValidatedEntryPoints::new(&entrypoints, layout)?;
+
     trace!(?name, "Extracting wheel files");
     link_wheel_files(link_mode, site_packages, &validated_wheel, state, filename)?;
     trace!(?name, "Extracted wheel files");
-
-    // Read the RECORD file.
-    let record_file = File::open(dist_info_file(wheel, &dist_info_prefix, "RECORD"))?;
-    let mut record = read_record(record_file)?;
-
-    let entrypoints = parse_scripts(wheel, &dist_info_prefix, layout.python_version.1)?;
 
     if entrypoints.is_empty() {
         trace!(?name, "No entrypoints");
@@ -99,19 +98,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         trace!(?name, "Writing entrypoints");
 
         fs_err::create_dir_all(&layout.scheme.scripts)?;
-        for (scripts, is_gui) in [
-            (&entrypoints.console_scripts, false),
-            (&entrypoints.gui_scripts, true),
-        ] {
-            write_script_entrypoints(
-                layout,
-                relocatable,
-                site_packages,
-                scripts,
-                &mut record,
-                is_gui,
-            )?;
-        }
+        validated_entrypoints.write(layout, relocatable, site_packages, &mut record)?;
     }
 
     // Move wheel data into the interpreter's installation scheme.
@@ -149,4 +136,76 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     write_record(&record_path, record)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use assert_fs::prelude::*;
+    use uv_distribution_filename::WheelFilename;
+    use uv_pypi_types::Scheme;
+
+    use super::install_wheel;
+    use crate::{Error, InstallState, Layout, LinkMode};
+
+    #[test]
+    fn invalid_entry_points_leave_environment_untouched() -> anyhow::Result<()> {
+        let temp = assert_fs::TempDir::new()?;
+        let wheel = temp.child("wheel");
+        wheel.child("example/__init__.py").touch()?;
+        let dist_info = wheel.child("example-1.0.0.dist-info");
+        dist_info
+            .child("METADATA")
+            .write_str("Metadata-Version: 2.1\nName: example\nVersion: 1.0.0\n")?;
+        dist_info
+            .child("WHEEL")
+            .write_str("Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")?;
+        dist_info
+            .child("entry_points.txt")
+            .write_str("[console_scripts]\nbroken = missing_colon\n")?;
+        dist_info.child("RECORD").write_str(concat!(
+            "example/__init__.py,,\n",
+            "example-1.0.0.dist-info/METADATA,,\n",
+            "example-1.0.0.dist-info/WHEEL,,\n",
+            "example-1.0.0.dist-info/entry_points.txt,,\n",
+            "example-1.0.0.dist-info/RECORD,,\n",
+        ))?;
+
+        let venv = temp.child("venv");
+        let site_packages = venv.child("site-packages");
+        site_packages.create_dir_all()?;
+        let layout = Layout {
+            sys_executable: venv.path().join("bin/python"),
+            python_version: (3, 12),
+            os_name: "posix".to_owned(),
+            scheme: Scheme {
+                purelib: site_packages.to_path_buf(),
+                platlib: site_packages.to_path_buf(),
+                scripts: venv.path().join("bin"),
+                data: venv.to_path_buf(),
+                include: venv.path().join("include"),
+            },
+        };
+        let filename: WheelFilename = "example-1.0.0-py3-none-any.whl".parse()?;
+        let error = install_wheel::<(), ()>(
+            &layout,
+            false,
+            wheel.path(),
+            &filename,
+            None,
+            None,
+            None,
+            None,
+            true,
+            LinkMode::Copy,
+            &InstallState::default(),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(error, Error::InvalidWheel(message) if message.contains("invalid console script"))
+        );
+        assert!(!site_packages.child("example").exists());
+        assert!(!site_packages.child("example-1.0.0.dist-info").exists());
+        Ok(())
+    }
 }
