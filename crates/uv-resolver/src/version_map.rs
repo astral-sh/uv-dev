@@ -310,11 +310,9 @@ impl<'a> VersionMapDistHandle<'a> {
     fn is_included(&self) -> bool {
         match self.inner {
             VersionMapDistHandleInner::Eager(_) => true,
-            VersionMapDistHandleInner::Lazy { lazy, dist } => match (&dist.flat, &dist.simple) {
-                (Some(_), _) => true,
-                (None, Some(simple)) => lazy.any_file_materializable(simple),
-                (None, None) => false,
-            },
+            VersionMapDistHandleInner::Lazy { lazy, dist } => {
+                lazy.passes_cutoff(dist, FileCutoffCheck::Materializable)
+            }
         }
     }
 
@@ -488,6 +486,16 @@ struct VersionMapLazy {
     minimum_libc_version: Option<MinimumLibcVersion>,
 }
 
+/// How to apply upload-time cutoffs to a distribution.
+#[derive(Clone, Copy)]
+enum FileCutoffCheck {
+    /// Whether the version belongs to the candidate universe.
+    Included,
+    /// Whether the version should be materialized for candidate selection. Files without upload
+    /// times must be materialized to emit the corresponding `exclude-newer` warnings.
+    Materializable,
+}
+
 impl VersionMapLazy {
     /// Returns the registry-provided metadata for the given version, if it exists.
     fn get_metadata(&self, version: &Version) -> Option<ResolutionMetadata> {
@@ -512,60 +520,32 @@ impl VersionMapLazy {
     /// cutoffs, without materializing the distributions.
     fn included_versions(&self) -> impl DoubleEndedIterator<Item = &Version> {
         self.map.entries.iter().filter_map(move |entry| {
-            let included = match (&entry.dist.flat, &entry.dist.simple) {
-                // Flat index files have no upload times and bypass the cutoffs.
-                (Some(_), _) => true,
-                (None, Some(simple)) => self.any_file_included(simple),
-                (None, None) => false,
-            };
-            included.then_some(&entry.version)
+            self.passes_cutoff(&entry.dist, FileCutoffCheck::Included)
+                .then_some(&entry.version)
         })
     }
 
-    /// Returns whether at least one file keeps this version inside the candidate universe.
-    ///
-    /// This mirrors the per-file cutoff handling in [`Self::get_simple`] without materializing the
-    /// distribution, including the two cutoff modes' distinct handling of missing upload times.
-    fn any_file_included(&self, simple: &SimplePrioritizedDist) -> bool {
-        if self.included_version_cutoff.is_none() && self.available_version_cutoff.is_none() {
+    /// Check a distribution against upload-time cutoffs without materializing it.
+    fn passes_cutoff(&self, dist: &LazyPrioritizedDist, check: FileCutoffCheck) -> bool {
+        // Flat index files have no upload times and bypass the cutoffs.
+        if dist.flat.is_some() {
             return true;
         }
-        let Some(datum) = self.simple_metadata.datum(simple.datum_index) else {
+        let Some(simple) = &dist.simple else {
             return false;
         };
-        let files = &datum.files;
-        files
-            .wheels
-            .iter()
-            .chain(files.source_dists.iter())
-            .any(|file| {
-                let upload_time = file.upload_time_utc_ms();
-                let excluded = if let Some(cutoff) = &self.included_version_cutoff {
-                    upload_time.is_none_or(|t| t >= cutoff.as_millisecond())
-                } else if let Some(cutoff) = &self.available_version_cutoff {
-                    upload_time.is_some_and(|t| t >= cutoff.as_millisecond())
-                } else {
-                    false
-                };
-                !excluded
-            })
-    }
-
-    /// Returns whether a version should be materialized during candidate selection.
-    ///
-    /// Missing upload times are retained here, even for `included_version_cutoff`, since
-    /// materializing them is what emits the corresponding `exclude-newer` warning.
-    fn any_file_materializable(&self, simple: &SimplePrioritizedDist) -> bool {
-        let Some(cutoff) = self
-            .included_version_cutoff
-            .as_ref()
-            .or(self.available_version_cutoff.as_ref())
-        else {
-            return true;
+        let (cutoff, include_missing) = match (
+            &self.included_version_cutoff,
+            &self.available_version_cutoff,
+        ) {
+            (Some(cutoff), _) => (cutoff, matches!(check, FileCutoffCheck::Materializable)),
+            (None, Some(cutoff)) => (cutoff, true),
+            (None, None) => return true,
         };
         let Some(datum) = self.simple_metadata.datum(simple.datum_index) else {
             return false;
         };
+        let cutoff = cutoff.as_millisecond();
         datum
             .files
             .wheels
@@ -573,7 +553,7 @@ impl VersionMapLazy {
             .chain(datum.files.source_dists.iter())
             .any(|file| {
                 file.upload_time_utc_ms()
-                    .is_none_or(|upload_time| upload_time < cutoff.as_millisecond())
+                    .map_or(include_missing, |upload_time| upload_time < cutoff)
             })
     }
 
