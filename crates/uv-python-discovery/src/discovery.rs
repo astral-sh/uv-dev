@@ -470,15 +470,11 @@ fn python_executables_from_search_path<'a>(
         .or_else(|| env::var_os(EnvVars::PATH))
         .unwrap_or_default();
 
-    let possible_names: Vec<_> = version
-        .executable_names(implementation)
-        .into_iter()
-        .map(|name| name.to_string())
-        .collect();
+    let possible_names = version.executable_names(implementation);
 
     trace!(
         "Searching PATH for executables: {}",
-        possible_names.join(", ")
+        possible_names.iter().join(", ")
     );
 
     // Split and iterate over the paths instead of using `which_all` so we can
@@ -524,7 +520,7 @@ fn python_executables_from_search_path<'a>(
                 .clone()
                 .into_iter()
                 .flat_map(move |name| {
-                    which::which_in_global(&*name, Some(&dir))
+                    which::which_in_global(name.to_string(), Some(&dir))
                         .into_iter()
                         .flatten()
                         .filter(|path| !is_windows_store_shim(path))
