@@ -73,6 +73,71 @@ impl WorkspaceWithChild {
     }
 }
 
+/// A tool whose workspace member is not a declared dependency.
+pub(super) struct WorkspaceWithUnrequiredMember {
+    pub(super) member: ChildPath,
+    pub(super) member_module: ChildPath,
+    pub(super) bin_dir: ChildPath,
+}
+
+impl WorkspaceWithUnrequiredMember {
+    pub(super) fn new(context: &TestContext) -> Result<Self> {
+        context
+            .temp_dir
+            .child("pyproject.toml")
+            .write_str(indoc! {r#"
+                [project]
+                name = "root"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+
+                [project.scripts]
+                root_cli = "root:main"
+
+                [build-system]
+                requires = ["uv_build>=0.7,<10000"]
+                build-backend = "uv_build"
+
+                [tool.uv.workspace]
+                members = ["child"]
+            "#})?;
+        let root_src = context.temp_dir.child("src").child("root");
+        root_src.create_dir_all()?;
+        root_src.child("__init__.py").write_str(indoc! {r"
+            def main():
+                import child
+                print(child.MESSAGE)
+        "})?;
+
+        let member = context.temp_dir.child("child");
+        member.create_dir_all()?;
+        member.child("pyproject.toml").write_str(indoc! {r#"
+            [project]
+            name = "child"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
+        "#})?;
+        let member_src = member.child("src").child("child");
+        member_src.create_dir_all()?;
+        let member_module = member_src.child("__init__.py");
+        member_module.write_str("MESSAGE = 'OK'\n")?;
+
+        Ok(Self {
+            member,
+            member_module,
+            bin_dir: context.temp_dir.child("bin"),
+        })
+    }
+
+    pub(super) fn assert_tool_output(&self, context: &TestContext, expected: &str) {
+        assert_tool_output(context, &self.bin_dir, expected);
+    }
+}
+
 /// A tool with an additional requirement that belongs to a separate workspace.
 pub(super) struct MixedWorkspace {
     pub(super) tool_root: ChildPath,

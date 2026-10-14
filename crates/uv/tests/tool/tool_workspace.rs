@@ -5,7 +5,7 @@ use indoc::{formatdoc, indoc};
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 
-use crate::workspace_fixture::{MixedWorkspace, WorkspaceWithChild};
+use crate::workspace_fixture::{MixedWorkspace, WorkspaceWithChild, WorkspaceWithUnrequiredMember};
 
 #[test]
 fn tool_install_preserves_mixed_workspace_member_editability() -> Result<()> {
@@ -216,124 +216,43 @@ fn tool_upgrade_preserves_mixed_workspace_member_non_editability() -> Result<()>
 }
 
 #[test]
-fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_exe_suffix();
-    let with_editable_tool_dir = context.temp_dir.child("tools-with-editable");
-    let with_editable_bin_dir = context.temp_dir.child("bin-with-editable");
-    let with_tool_dir = context.temp_dir.child("tools-with");
-    let with_bin_dir = context.temp_dir.child("bin-with");
-    let with_editable_executable =
-        with_editable_bin_dir.child(format!("root_cli{}", std::env::consts::EXE_SUFFIX));
-    let with_executable = with_bin_dir.child(format!("root_cli{}", std::env::consts::EXE_SUFFIX));
-
-    let root_pyproject = context.temp_dir.child("pyproject.toml");
-    root_pyproject.write_str(indoc! {
-        r#"
-        [project]
-        name = "root"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [project.scripts]
-        root_cli = "root:main"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.workspace]
-        members = ["child"]
-        "#
-    })?;
-
-    let root_src = context.temp_dir.child("src").child("root");
-    root_src.create_dir_all()?;
-    root_src.child("__init__.py").write_str(indoc! {
-        r"
-        def main():
-            import child
-            print(child.MESSAGE)
-        "
-    })?;
-
-    let child = context.temp_dir.child("child");
-    child.create_dir_all()?;
-    child.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-
-    let child_src = child.child("src").child("child");
-    child_src.create_dir_all()?;
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
+fn tool_install_workspace_member_honors_with_editable() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let fixture = WorkspaceWithUnrequiredMember::new(&context)?;
 
     context
         .tool_install()
         .arg("--with-editable")
-        .arg(child.path())
+        .arg(fixture.member.path())
         .arg(context.temp_dir.path())
-        .env(EnvVars::UV_TOOL_DIR, with_editable_tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, with_editable_bin_dir.as_os_str())
-        .env(EnvVars::PATH, with_editable_bin_dir.as_os_str())
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
         .assert()
         .success();
+    fixture.assert_tool_output(&context, "OK");
 
-    uv_snapshot!(context.filters(), context.external_command(with_editable_executable.path()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    OK
-    ");
+    fixture.member_module.write_str("MESSAGE = 'CHANGED'\n")?;
+    fixture.assert_tool_output(&context, "CHANGED");
+    Ok(())
+}
 
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'CHANGED'\n")?;
-
-    uv_snapshot!(context.filters(), context.external_command(with_editable_executable.path()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    CHANGED
-    ");
-
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
+#[test]
+fn tool_install_workspace_member_honors_non_editable_with() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let fixture = WorkspaceWithUnrequiredMember::new(&context)?;
 
     context
         .tool_install()
         .arg("--editable")
         .arg("--with")
-        .arg(child.path())
+        .arg(fixture.member.path())
         .arg(context.temp_dir.path())
-        .env(EnvVars::UV_TOOL_DIR, with_tool_dir.as_os_str())
-        .env(EnvVars::XDG_BIN_HOME, with_bin_dir.as_os_str())
-        .env(EnvVars::PATH, with_bin_dir.as_os_str())
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
         .assert()
         .success();
+    fixture.assert_tool_output(&context, "OK");
 
-    uv_snapshot!(context.filters(), context.external_command(with_executable.path()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    OK
-    ");
-
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'CHANGED'\n")?;
-
-    uv_snapshot!(context.filters(), context.external_command(with_executable.path()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    OK
-    ");
-
+    fixture.member_module.write_str("MESSAGE = 'CHANGED'\n")?;
+    fixture.assert_tool_output(&context, "OK");
     Ok(())
 }
 
