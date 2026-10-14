@@ -25,6 +25,8 @@ mod tool_run;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tool_uninstall;
 
+mod tool_uninstall_empty;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tool_upgrade;
 

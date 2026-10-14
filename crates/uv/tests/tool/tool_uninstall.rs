@@ -8,7 +8,7 @@ use uv_test::{assert_path_missing, uv_snapshot};
 
 #[test]
 fn tool_uninstall() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
@@ -60,7 +60,7 @@ fn tool_uninstall() {
 /// directories remain in the parent.
 #[test]
 fn tool_uninstall_preserves_parent_files() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let tool_dir = context.temp_dir.child("data/tools");
@@ -95,33 +95,9 @@ fn tool_uninstall_preserves_parent_files() -> Result<()> {
     Ok(())
 }
 
-/// Uninstalling all tools must preserve parent files when no tools are installed.
-#[test]
-fn tool_uninstall_all_empty_preserves_parent_files() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_tool_dirs();
-    let tool_dir = context.temp_dir.child("data/tools");
-    context
-        .temp_dir
-        .child("data/uv.toml")
-        .write_str("# User configuration\n")?;
-
-    uv_snapshot!(context.filters(), context.tool_uninstall()
-        .arg("--all")
-        .env(EnvVars::UV_TOOL_DIR, tool_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Nothing to uninstall
-    ");
-
-    assert_eq!(context.read("data/uv.toml"), "# User configuration\n");
-    assert!(tool_dir.child(".lock").is_file());
-
-    Ok(())
-}
-
 #[test]
 fn tool_uninstall_multiple_names() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
 
@@ -149,21 +125,8 @@ fn tool_uninstall_multiple_names() {
 }
 
 #[test]
-fn tool_uninstall_not_installed() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_uninstall().arg("black"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `black` is not installed
-    ");
-}
-
-#[test]
 fn tool_uninstall_missing_receipt() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let environment = context.temp_dir.child("tools/black");
@@ -187,7 +150,7 @@ fn tool_uninstall_missing_receipt() {
 
 #[test]
 fn tool_uninstall_multiple_names_with_missing_receipt() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let environment = context.temp_dir.child("tools/black");
@@ -221,7 +184,7 @@ fn tool_uninstall_multiple_names_with_missing_receipt() {
 
 #[test]
 fn tool_uninstall_all_missing_receipt() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
+    let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let environment = context.temp_dir.child("tools/black");
