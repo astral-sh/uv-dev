@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use uv_cache::{ARCHIVE_VERSION, ArchiveId, Cache};
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::Hashed;
@@ -37,7 +39,16 @@ impl Archive {
 
     /// Returns `true` if the archive exists in the cache.
     pub(crate) fn exists(&self, cache: &Cache) -> bool {
-        self.version == ARCHIVE_VERSION && cache.archive(&self.id).exists()
+        self.existing_path(cache).is_some()
+    }
+
+    /// Return the archive's path if it exists in the current cache format.
+    pub fn existing_path(&self, cache: &Cache) -> Option<PathBuf> {
+        if self.version != ARCHIVE_VERSION {
+            return None;
+        }
+        let path = cache.archive(&self.id);
+        path.exists().then_some(path)
     }
 }
 
