@@ -7088,10 +7088,8 @@ fn sync_non_existent_extra_non_project_workspace() -> Result<()> {
 
 /// Regression test for <https://github.com/astral-sh/uv/issues/6316>.
 ///
-/// Previously, we would read metadata statically from pyproject.toml and write that to `uv.lock`. In
-/// this sync pass, we had also built the project with setuptools, which sorts specifiers by python
-/// string sort through packaging. On the second run, we read the cache that now has the setuptools
-/// sorting, changing the lockfile.
+/// Setuptools writes cached metadata with a different specifier order than the project's static
+/// metadata. A subsequent sync must retain the static metadata in the lockfile.
 #[test]
 fn read_metadata_statically_over_the_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -7107,8 +7105,8 @@ fn read_metadata_statically_over_the_cache() -> Result<()> {
         dependencies = ["anyio>=4,<5"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["setuptools"]
+        build-backend = "setuptools.build_meta"
         "#,
     )?;
     context
@@ -7132,6 +7130,10 @@ fn read_metadata_statically_over_the_cache() -> Result<()> {
     let requirement = &project["metadata"]["requires-dist"][0];
     assert_eq!(requirement["name"].as_str(), Some("anyio"));
     assert_eq!(requirement["specifier"].as_str(), Some(">=4,<5"));
+    context
+        .assert_command("from importlib.metadata import requires; print(requires('project'))")
+        .success()
+        .stdout(predicate::str::contains("<5,>=4"));
 
     context.sync().assert().success();
     assert_eq!(lock, context.read("uv.lock"));
