@@ -15,7 +15,6 @@ use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
 use uv_pypi_types::ConflictItem;
 
-use uv_resolver_types::graph_ops::Reachable;
 use uv_resolver_types::universal_marker::resolve_activated_extras;
 
 pub use crate::lock::export::metadata::{Metadata, PythonReport};
@@ -400,20 +399,6 @@ impl Edge<'_> {
             Self::Optional { dep_extras, .. } => dep_extras,
             Self::Dev { dep_extras, .. } => dep_extras,
         }
-    }
-}
-
-impl Reachable<MarkerTree> for Edge<'_> {
-    fn true_marker() -> MarkerTree {
-        MarkerTree::TRUE
-    }
-
-    fn false_marker() -> MarkerTree {
-        MarkerTree::FALSE
-    }
-
-    fn marker(&self) -> MarkerTree {
-        *self.marker()
     }
 }
 

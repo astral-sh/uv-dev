@@ -37,16 +37,14 @@ pub fn marker_reachability<Marker: Boolean + Copy + PartialEq, Node, Edge: Reach
 
     // The root nodes are always applicable, unless the user has restricted resolver
     // environments with `tool.uv.environments`.
-    let root_markers = if fork_markers.is_empty() {
-        Edge::true_marker()
-    } else {
-        fork_markers
-            .iter()
-            .fold(Edge::false_marker(), |mut acc, edge| {
-                acc.or(edge.marker());
-                acc
-            })
-    };
+    let root_markers = fork_markers
+        .iter()
+        .map(Reachable::marker)
+        .reduce(|mut combined, marker| {
+            combined.or(marker);
+            combined
+        })
+        .unwrap_or_else(Edge::true_marker);
     for root_index in &queue {
         reachability.insert(*root_index, root_markers);
     }
@@ -257,9 +255,6 @@ pub trait Reachable<T> {
     /// The marker representing the "true" value.
     fn true_marker() -> T;
 
-    /// The marker representing the "false" value.
-    fn false_marker() -> T;
-
     /// The marker attached to the edge.
     fn marker(&self) -> T;
 }
@@ -267,10 +262,6 @@ pub trait Reachable<T> {
 impl Reachable<Self> for MarkerTree {
     fn true_marker() -> Self {
         Self::TRUE
-    }
-
-    fn false_marker() -> Self {
-        Self::FALSE
     }
 
     fn marker(&self) -> Self {
@@ -281,10 +272,6 @@ impl Reachable<Self> for MarkerTree {
 impl Reachable<Self> for UniversalMarker {
     fn true_marker() -> Self {
         Self::TRUE
-    }
-
-    fn false_marker() -> Self {
-        Self::FALSE
     }
 
     fn marker(&self) -> Self {
