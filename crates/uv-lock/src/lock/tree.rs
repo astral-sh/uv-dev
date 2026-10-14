@@ -45,6 +45,21 @@ impl<'a> TreeJsonTarget<'a> {
     }
 }
 
+/// Return every locked package for workspace members in lockfile order.
+///
+/// A single-project lockfile can omit its root from the member list.
+fn workspace_member_packages(lock: &Lock) -> impl Iterator<Item = &Package> {
+    if lock.members().is_empty() {
+        Either::Left(lock.root().into_iter())
+    } else {
+        Either::Right(
+            lock.members()
+                .iter()
+                .flat_map(|name| lock.packages_for_name(name)),
+        )
+    }
+}
+
 #[derive(Debug)]
 pub struct TreeDisplay<'env> {
     /// The constructed dependency graph.
@@ -85,27 +100,9 @@ impl<'env> TreeDisplay<'env> {
         invert: bool,
         show_sizes: bool,
     ) -> Self {
-        // Identify any workspace members.
-        //
-        // These include:
-        // - The members listed in the lockfile.
-        // - The root package, if it's not in the list of members. (The root package is omitted from
-        //   the list of workspace members for single-member workspaces with a `[project]` section,
-        //   to avoid cluttering the lockfile.
-        let members: BTreeSet<&PackageId> = if lock.members().is_empty() {
-            lock.root().into_iter().map(|package| &package.id).collect()
-        } else {
-            lock.packages
-                .iter()
-                .filter_map(|package| {
-                    if lock.members().contains(&package.id.name) {
-                        Some(&package.id)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
+        let members: BTreeSet<&PackageId> = workspace_member_packages(lock)
+            .map(|package| &package.id)
+            .collect();
 
         // Conflict extras and groups are encoded as marker expressions. Include the declared
         // mutual-exclusion constraints when checking whether a universal path is satisfiable.
@@ -1409,19 +1406,7 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
             return Vec::new();
         }
 
-        let packages = if self.tree.lock.members().is_empty() {
-            self.tree.lock.root().into_iter().collect::<Vec<_>>()
-        } else {
-            self.tree
-                .lock
-                .packages()
-                .iter()
-                .filter(|package| self.tree.lock.members().contains(&package.id.name))
-                .collect::<Vec<_>>()
-        };
-
-        packages
-            .into_iter()
+        workspace_member_packages(self.tree.lock)
             .filter(|package| {
                 let id = MetadataNodeId::from_package_id(
                     &self.workspace_root,
