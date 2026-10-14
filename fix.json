@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Use the POSIX dot command in ksh virtual-environment activation hints, retaining shell path quoting and other shells’ behavior. Update the existing regression test to require the corrected hint.",
+  "validation": [
+    "Confirmed the parent regression passed before updating its expectation, then failed on the incorrect hint before the production fix.",
+    "Focused debug-profile tests passed: create_venv_ksh, create_venv, and create_venv_apostrophe.",
+    "RUSTUP_TOOLCHAIN=stable cargo fmt --all",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2623"
+}
