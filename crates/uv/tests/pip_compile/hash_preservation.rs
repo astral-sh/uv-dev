@@ -24,10 +24,10 @@ impl HashFixture {
             satisfiable = true
 
             [packages.a.versions."1.0.0"]
-            wheel_tags = ["py2.py3-none-any", "py3-none-any"]
+            wheel_tags = ["py2-none-any", "py3-none-any"]
 
             [packages.a.versions."2.0.0"]
-            wheel_tags = ["py2.py3-none-any", "py3-none-any"]
+            wheel_tags = ["py2-none-any", "py3-none-any"]
         "#})
         .expect("valid hash fixture scenario");
         Self {
@@ -36,10 +36,10 @@ impl HashFixture {
         }
     }
 
-    /// The fixture publishes two wheels and one source distribution for each version of `a`.
+    /// The fixture publishes a compatible wheel, an incompatible wheel, and one source archive.
     fn hashes(&self, version: &str) -> [String; 3] {
         let filenames = [
-            format!("a-{version}-py2.py3-none-any.whl"),
+            format!("a-{version}-py2-none-any.whl"),
             format!("a-{version}-py3-none-any.whl"),
             format!("a-{version}.tar.gz"),
         ];
