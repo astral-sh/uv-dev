@@ -15,7 +15,7 @@ fn prune_ci_empty_cache() -> Result<()> {
     uv_snapshot!(context.filters(), context.prune().arg("--ci"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Pruning cache at: [CACHE_DIR]/
+    Pruning cache at: empty-cache
     No unused entries found
     ");
 
