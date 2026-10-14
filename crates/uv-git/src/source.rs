@@ -2,7 +2,6 @@
 //! Cargo is dual-licensed under either Apache 2.0 or MIT, at the user's choice.
 //! Source: <https://github.com/rust-lang/cargo/blob/23eb492cf920ce051abfc56bbaf838514dc8365c/src/cargo/sources/git/source.rs>
 
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -83,17 +82,16 @@ impl GitSource {
         let db_path = self.cache.join("db").join(&ident);
 
         // Authenticate the URL, if necessary.
-        let remote = if let Some(credentials) = GIT_STORE.get(self.git.repository()) {
-            Cow::Owned(credentials.apply(self.git.url().clone()))
-        } else {
-            Cow::Borrowed(self.git.url())
-        };
+        let url = self.git.url().clone();
+        let remote = GitRemote::new(match GIT_STORE.get(self.git.repository()) {
+            Some(credentials) => credentials.apply(url),
+            None => url,
+        });
 
         // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes
         // it easier to short-circuit this in the cases where we do have the commit.
         let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {
-            let git_remote = GitRemote::new(remote.as_ref().clone());
-            let maybe_db = match git_remote.db_at(&db_path) {
+            let maybe_db = match remote.db_at(&db_path) {
                 Ok(db) => {
                     if let Some(revision) = self.cached_revision(&db, lfs_requested) {
                         debug!("Using existing Git source `{}`", self.git.url());
@@ -114,10 +112,10 @@ impl GitSource {
 
             // Report the checkout operation to the reporter.
             let task = self.reporter.as_ref().map(|reporter| {
-                reporter.on_checkout_start(git_remote.url(), self.git.reference().as_rev())
+                reporter.on_checkout_start(remote.url(), self.git.reference().as_rev())
             });
 
-            let (db, actual_rev) = git_remote.checkout(
+            let (db, actual_rev) = remote.checkout(
                 &db_path,
                 maybe_db,
                 self.git.reference(),
@@ -131,7 +129,7 @@ impl GitSource {
         }()?;
 
         // Validate the resolved commit before checking out its contents.
-        let git = self.git.clone().with_precise(actual_rev)?;
+        let git = self.git.with_precise(actual_rev)?;
 
         // Don’t use the full hash, in order to contribute less to reaching the
         // path length limit on Windows.
@@ -160,7 +158,7 @@ impl GitSource {
         if let Some(task) = maybe_task
             && let Some(reporter) = self.reporter.as_ref()
         {
-            reporter.on_checkout_complete(remote.as_ref(), actual_rev.as_str(), task);
+            reporter.on_checkout_complete(db.remote_url(), actual_rev.as_str(), task);
         }
 
         Ok(Fetch {
