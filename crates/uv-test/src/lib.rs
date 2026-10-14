@@ -2213,21 +2213,52 @@ fn create_venv_from_executable<P: AsRef<Path>>(
 
 /// Create a `PATH` with the requested Python versions available in order.
 ///
-/// Generally this should be used with `UV_PYTHON_SEARCH_PATH`.
+/// On Unix, each interpreter is isolated so other executables in its original directory cannot
+/// affect discovery. The returned paths remain valid until `temp_dir` is removed. Generally this
+/// should be used with `UV_PYTHON_SEARCH_PATH`.
 pub fn python_path_with_versions(
     temp_dir: &ChildPath,
     python_versions: &[&str],
 ) -> anyhow::Result<OsString> {
-    let download_list = if python_versions.is_empty() {
-        None
-    } else {
-        Some(ManagedPythonDownloadList::new_only_embedded()?)
-    };
-    Ok(env::join_paths(
-        python_installations_for_versions(temp_dir, python_versions, download_list.as_ref())?
-            .into_iter()
-            .map(|path| path.parent().unwrap().to_path_buf()),
-    )?)
+    if python_versions.is_empty() {
+        return Ok(OsString::new());
+    }
+
+    let download_list = ManagedPythonDownloadList::new_only_embedded()?;
+    let installations =
+        python_installations_for_versions(temp_dir, python_versions, Some(&download_list))?;
+    #[cfg(unix)]
+    {
+        isolated_python_search_path(temp_dir, &installations)
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(env::join_paths(
+            installations
+                .into_iter()
+                .map(|path| path.parent().unwrap().to_path_buf()),
+        )?)
+    }
+}
+
+#[cfg(unix)]
+fn isolated_python_search_path(
+    temp_dir: &ChildPath,
+    installations: &[PathBuf],
+) -> anyhow::Result<OsString> {
+    let mut root = tempfile::Builder::new()
+        .prefix("python-search-")
+        .tempdir_in(temp_dir)?;
+    let mut directories = Vec::with_capacity(installations.len());
+    for (index, installation) in installations.iter().enumerate() {
+        let directory = root.path().join(index.to_string());
+        fs_err::create_dir(&directory)?;
+        fs_err::os::unix::fs::symlink(installation, directory.join("python3"))?;
+        directories.push(directory);
+    }
+    let path = env::join_paths(directories)?;
+    root.disable_cleanup(true);
+    Ok(path)
 }
 
 /// Returns a list of Python executables for the given versions.
@@ -2542,10 +2573,14 @@ mod file_read_tests {
 
 #[cfg(test)]
 mod python_discovery_tests {
+    #[cfg(unix)]
+    use std::env;
     use std::path::PathBuf;
 
     use assert_fs::fixture::PathCreateDir;
 
+    #[cfg(unix)]
+    use super::isolated_python_search_path;
     use super::{TestContext, assert_path_missing};
 
     #[test]
@@ -2553,6 +2588,28 @@ mod python_discovery_tests {
         let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
 
         assert_path_missing(context.temp_dir.join("cache"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn additional_python_search_path_excludes_sibling_executables() -> anyhow::Result<()> {
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
+        let host_bin = context.temp_dir.join("host-bin");
+        fs_err::create_dir(&host_bin)?;
+        let requested = host_bin.join("python3.11");
+        fs_err::write(&requested, b"")?;
+        fs_err::write(host_bin.join("python3.12"), b"")?;
+
+        let search_path =
+            isolated_python_search_path(&context.temp_dir, std::slice::from_ref(&requested))?;
+        let directories = env::split_paths(&search_path).collect::<Vec<_>>();
+        assert_eq!(directories.len(), 1);
+        assert_eq!(
+            fs_err::read_link(directories[0].join("python3"))?,
+            requested
+        );
+        assert_path_missing(directories[0].join("python3.12"));
+        Ok(())
     }
 
     #[test]
