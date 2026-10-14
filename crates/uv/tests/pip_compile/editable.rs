@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
@@ -38,15 +38,25 @@ fn deduplicate_editable_metadata() -> Result<()> {
         .child("requirements.in")
         .write_str("-e ./project\n-e ./project/.\n")?;
 
-    context
+    let result = context
         .pip_compile()
         .arg("requirements.in")
         .arg("--offline")
         .arg("--no-header")
         .arg("--no-annotate")
         .assert()
-        .success()
-        .stdout("-e ./project\n");
+        .success();
+    let output = std::str::from_utf8(&result.get_output().stdout)?;
+    let mut lines = output.lines();
+    let path = lines
+        .next()
+        .and_then(|line| line.strip_prefix("-e "))
+        .context("missing editable requirement")?;
+    assert_eq!(lines.next(), None, "expected one editable requirement");
+    assert_eq!(
+        fs_err::canonicalize(context.temp_dir.join(path))?,
+        fs_err::canonicalize(project.path())?
+    );
     context
         .temp_dir
         .child("metadata-invocations.txt")
