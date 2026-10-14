@@ -141,9 +141,8 @@ impl PythonInstallation {
         mirrors: PythonDownloadMirrors<'_>,
         python_downloads_json_url: Option<&str>,
     ) -> Result<Self, Error> {
-        let downloads_enabled = preference.allows_managed()
-            && python_downloads.is_automatic()
-            && !client_builder.is_offline();
+        let downloads_enabled =
+            automatic_downloads_enabled(preference, python_downloads, client_builder.is_offline());
         let installation = find_best_python_installation(
             request,
             environments,
@@ -218,9 +217,8 @@ impl PythonInstallation {
             ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
                 .await?;
 
-        let downloads_enabled = preference.allows_managed()
-            && python_downloads.is_automatic()
-            && !client_builder.is_offline();
+        let downloads_enabled =
+            automatic_downloads_enabled(preference, python_downloads, client_builder.is_offline());
 
         // Regardless of whether downloads are enabled, we want to determine if the download is
         // available to power error messages. However, if downloads aren't enabled, we don't want to
@@ -650,6 +648,15 @@ impl PythonInstallation {
         let request = request.clone().into_request_for_source(self.source);
         self.interpreter.matches_version_request(&request)
     }
+}
+
+/// Whether discovery can automatically download a managed Python installation.
+fn automatic_downloads_enabled(
+    preference: PythonPreference,
+    downloads: PythonDownloads,
+    offline: bool,
+) -> bool {
+    preference.allows_managed() && downloads.is_automatic() && !offline
 }
 
 /// Find a [`PythonEnvironment`] matching the given request and preference.
