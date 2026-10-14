@@ -14032,7 +14032,8 @@ fn install_git_submodule_relative_url() -> Result<()> {
     Command::new("git")
         .args(["init"])
         .current_dir(helpers_dir.path())
-        .output()?;
+        .assert()
+        .success();
 
     // Create a simple file in helpers
     helpers_dir.child("helper.py").write_str(indoc! {"
@@ -14048,7 +14049,8 @@ fn install_git_submodule_relative_url() -> Result<()> {
     Command::new("git")
         .args(["init"])
         .current_dir(grandchild_dir.path())
-        .output()?;
+        .assert()
+        .success();
 
     grandchild_dir.child("grandchild.py").write_str(indoc! {"
         def help():
@@ -14058,7 +14060,8 @@ fn install_git_submodule_relative_url() -> Result<()> {
     Command::new("git")
         .args(["add", "."])
         .current_dir(grandchild_dir.path())
-        .output()?;
+        .assert()
+        .success();
 
     Command::new("git")
         .args(["commit", "-m", "Initial nested helpers commit"])
@@ -14067,7 +14070,8 @@ fn install_git_submodule_relative_url() -> Result<()> {
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
         .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .output()?;
+        .assert()
+        .success();
 
     Command::new("git")
         .args(["submodule", "add", "../../grandchild", "nested/grandchild"])
@@ -14088,7 +14092,8 @@ fn install_git_submodule_relative_url() -> Result<()> {
     Command::new("git")
         .args(["add", "."])
         .current_dir(helpers_dir.path())
-        .output()?;
+        .assert()
+        .success();
 
     Command::new("git")
         .args(["commit", "-m", "Initial helpers commit"])
@@ -14097,7 +14102,8 @@ fn install_git_submodule_relative_url() -> Result<()> {
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
         .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .output()?;
+        .assert()
+        .success();
 
     // Create and initialize the main repository
     let mylib_dir = temp_dir.child("mylib");
@@ -14107,12 +14113,18 @@ fn install_git_submodule_relative_url() -> Result<()> {
     Command::new("git")
         .args(["init"])
         .current_dir(mylib_dir.path())
-        .output()?;
+        .assert()
+        .success();
 
     // Create a simple setup.py
     mylib_dir.child("setup.py").write_str(
         r#"
+from pathlib import Path
+
 from setuptools import setup, find_packages
+
+assert Path("mylib/helpers/helper.py").is_file()
+assert Path("mylib/helpers/nested/grandchild/grandchild.py").is_file()
 
 setup(
     name="mylib",
@@ -14153,7 +14165,8 @@ def main():
     Command::new("git")
         .args(["add", "."])
         .current_dir(mylib_dir.path())
-        .output()?;
+        .assert()
+        .success();
 
     Command::new("git")
         .args(["commit", "-m", "Initial mylib commit with submodule"])
@@ -14162,7 +14175,8 @@ def main():
         .env("GIT_AUTHOR_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_NAME", "Test")
         .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .output()?;
+        .assert()
+        .success();
 
     let mut filters = context.filters();
     filters.push((r"@[0-9a-f]{40}", "@COMMIT_HASH"));
