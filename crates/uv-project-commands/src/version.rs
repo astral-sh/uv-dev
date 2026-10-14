@@ -575,7 +575,7 @@ async fn lock_and_sync(
 
     let state = state.fork();
 
-    match sync_from_lock(
+    sync_from_lock(
         target,
         venv,
         &extras,
@@ -598,10 +598,7 @@ async fn lock_and_sync(
         MalwareCheckContext::from(malware_settings),
     )
     .await
-    {
-        Ok(_) => {}
-        Err(err) => return Err(UvError::from(err).into()),
-    }
+    .map_err(UvError::from)?;
 
     Ok(ExitStatus::Success)
 }
