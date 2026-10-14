@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use assert_fs::prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir};
+use assert_cmd::assert::OutputAssertExt;
+use assert_fs::prelude::{FileWriteStr, PathChild};
 use fs_err as fs;
 use indoc::{formatdoc, indoc};
 
@@ -9,16 +10,30 @@ use uv_static::EnvVars;
 
 use uv_test::{TestContext, copy_dir_ignore, site_packages_path, uv_snapshot, venv_bin_path};
 
-/// Filter the user scheme, which differs between Windows and Unix.
-fn user_scheme_bin_filter() -> (String, String) {
-    if cfg!(windows) {
-        (
-            r"\[USER_CONFIG_DIR\][\\/]Python[\\/]Python\d+".to_string(),
-            "[USER_SCHEME]".to_string(),
-        )
-    } else {
-        (r"\[HOME\]/\.local".to_string(), "[USER_SCHEME]".to_string())
-    }
+/// Isolate the user installation and ask the fixture interpreter for its scripts directory.
+fn with_user_scheme(context: TestContext) -> anyhow::Result<(TestContext, PathBuf)> {
+    let user_base = context.home_dir.join("user-base");
+    let context = context.with_env("PYTHONUSERBASE", user_base.as_os_str());
+    let output = context
+        .python_command()
+        .args([
+            "-c",
+            "import sysconfig; print(sysconfig.get_path('scripts', scheme=sysconfig.get_preferred_scheme('user')))",
+        ])
+        .assert()
+        .success()
+        .stderr("");
+    let scripts = PathBuf::from(
+        std::str::from_utf8(&output.get_output().stdout)?.trim_end_matches(['\r', '\n']),
+    );
+    anyhow::ensure!(
+        scripts.starts_with(&user_base),
+        "user scripts directory {} is outside {}",
+        scripts.display(),
+        user_base.display()
+    );
+    let context = context.with_filtered_path(&scripts, "USER_SCRIPTS");
+    Ok((context, scripts))
 }
 
 // Keep base-prefix discovery within the test environment instead of picking up a system uv.
@@ -56,7 +71,6 @@ fn find_uv_bin_target() -> anyhow::Result<()> {
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
         // Target installs always use "bin" on all platforms. On Windows,
         // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
         .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
@@ -96,7 +110,6 @@ fn find_uv_bin_prefix() -> anyhow::Result<()> {
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
         // Target installs always use "bin" on all platforms. On Windows,
         // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
         .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
@@ -168,7 +181,6 @@ fn find_uv_bin_in_ephemeral_environment() -> anyhow::Result<()> {
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
         // Target installs always use "bin" on all platforms. On Windows,
         // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
         .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
@@ -214,7 +226,6 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
         // Target installs always use "bin" on all platforms. On Windows,
         // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
         .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
@@ -266,29 +277,16 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
 
 #[test]
 fn find_uv_bin_user_bin() -> anyhow::Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let (context, scripts) = with_user_scheme(
+        uv_test::test_context!("3.12")
+            .with_filtered_python_names()
+            .with_filtered_virtualenv_bin()
+            .with_filtered_exe_suffix(),
+    )?;
 
-    // Add uv to `~/.local/bin`
-    let bin = if cfg!(unix) {
-        context.home_dir.child(".local").child("bin")
-    } else {
-        context
-            .user_config_dir
-            .child("Python")
-            .child("Python312")
-            .child("Scripts")
-    };
-    bin.create_dir_all().unwrap();
-    bin.child(format!("uv{}", std::env::consts::EXE_SUFFIX))
-        .touch()
-        .unwrap();
+    let executable = format!("uv{}", std::env::consts::EXE_SUFFIX);
+    fs::create_dir_all(&scripts)?;
+    fs::write(scripts.join(&executable), "")?;
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
@@ -312,21 +310,16 @@ fn find_uv_bin_user_bin() -> anyhow::Result<()> {
     "
     );
 
-    // Remove the virtual environment one for some reason
-    fs::remove_file(if cfg!(unix) {
-        context.venv.child("bin").child("uv")
-    } else {
-        context.venv.child("Scripts").child("uv.exe")
-    })
-    .unwrap();
+    // Remove the virtual environment executable to exercise the user-scheme fallback.
+    fs::remove_file(venv_bin_path(&context.venv).join(&executable))?;
 
-    // We should find the binary in the bin now
+    // We should find the binary in the user scripts directory now.
     uv_snapshot!(context.filters(), context.python_command()
         .arg("-c")
         .arg(TEST_SCRIPT), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [USER_SCHEME]/[BIN]/uv
+    [USER_SCRIPTS]/uv
     "
     );
 
@@ -335,14 +328,15 @@ fn find_uv_bin_user_bin() -> anyhow::Result<()> {
 
 #[test]
 fn find_uv_bin_error_message() -> anyhow::Result<()> {
-    let mut context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
-        // Target installs always use "bin" on all platforms. On Windows,
-        // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
-        .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
+    let (mut context, _) = with_user_scheme(
+        uv_test::test_context!("3.12")
+            .with_filtered_python_names()
+            .with_filtered_virtualenv_bin()
+            .with_filtered_exe_suffix()
+            // Target installs always use "bin" on all platforms. On Windows,
+            // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin".
+            .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string())),
+    )?;
 
     // Add filters for Python bin directories using with_filtered_path
     // This inserts at the beginning, so these filters are applied first
@@ -400,7 +394,7 @@ fn find_uv_bin_error_message() -> anyhow::Result<()> {
      - [VENV]/[BIN]
      - [VENV]/missing-base-prefix/[BIN]
      - [SITE_PACKAGES]/[BIN]
-     - [USER_SCHEME]/[BIN]
+     - [USER_SCRIPTS]/
     "#
     );
 
@@ -413,7 +407,6 @@ fn find_uv_bin_in_venv(python_version: &str) -> anyhow::Result<()> {
         .with_filtered_python_names()
         .with_filtered_virtualenv_bin()
         .with_filtered_exe_suffix()
-        .with_filter(user_scheme_bin_filter())
         // Target installs always use "bin" on all platforms. On Windows,
         // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin"
         .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string()));
