@@ -13,7 +13,6 @@ use sha2::{Sha256, digest::Output};
 pub struct RecordEntry {
     pub path: String,
     pub hash: Option<String>,
-    #[allow(dead_code)]
     pub size: Option<u64>,
 }
 
