@@ -2937,7 +2937,7 @@ async fn find_links_wheel_cache() -> Result<()> {
     Ok(())
 }
 
-/// Reuse a wheel built from a local `--find-links` source distribution when builds are disabled.
+/// Reuse a wheel built from a local `--find-links` source distribution.
 #[test]
 fn find_links_source_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -2970,11 +2970,13 @@ fn find_links_source_cache() -> Result<()> {
     );
 
     context.pip_uninstall().arg("tqdm").assert().success();
+    context.assert_not_installed("hatchling");
 
-    // Only the source archive is available in `links`, so installation requires the cached wheel.
+    // Building without isolation would require `hatchling` in the target environment. With only
+    // the source archive available in `links`, installation therefore requires the cached wheel.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
-        .arg("--no-build")
+        .arg("--no-build-isolation")
         .arg("--no-index")
         .arg("--find-links")
         .arg(links.path()), @"
