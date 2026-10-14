@@ -568,6 +568,8 @@ fn install_script(
     file: &DirEntry,
     #[allow(unused)] rename_or_copy: &mut RenameOrCopy,
 ) -> Result<(), Error> {
+    const PLACEHOLDER_PYTHON: &[u8; 8] = b"#!python";
+
     let file_type = file.file_type()?;
 
     if file_type.is_dir() {
@@ -608,16 +610,15 @@ fn install_script(
     //
     // > The b'#!pythonw' convention is allowed. b'#!pythonw' indicates a GUI script
     // > instead of a console script.
-    let placeholder_python = b"#!python";
     // scripts might be binaries, so we read an exact number of bytes instead of the first line as string
-    let mut start = vec![0; placeholder_python.len()];
+    let mut start = [0; PLACEHOLDER_PYTHON.len()];
     match script.read_exact(&mut start) {
         Ok(()) => {}
         // Ignore scripts shorter than the buffer.
         Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {}
         Err(err) => return Err(Error::Io(err)),
     }
-    let size_and_encoded_hash = if start == placeholder_python {
+    let size_and_encoded_hash = if &start == PLACEHOLDER_PYTHON {
         // `#!pythonw` denotes a GUI script.
         let is_gui = script.fill_buf()?.first() == Some(&b'w');
 
