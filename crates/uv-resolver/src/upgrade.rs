@@ -32,7 +32,7 @@ impl UpgradePackages {
     }
 
     /// Returns `true` if the given package should be upgraded.
-    pub fn contains(&self, package_name: &PackageName) -> bool {
+    pub(crate) fn contains(&self, package_name: &PackageName) -> bool {
         self.all || self.packages.contains(package_name)
     }
 }
