@@ -155,7 +155,6 @@ impl fmt::Debug for Token {
 }
 impl Credentials {
     /// Create a set of HTTP Basic Authentication credentials.
-    #[allow(dead_code)]
     pub fn basic(username: Option<String>, password: Option<String>) -> Self {
         Self::Basic {
             username: Username::new(username),
@@ -164,7 +163,6 @@ impl Credentials {
     }
 
     /// Create a set of Bearer Authentication credentials.
-    #[allow(dead_code)]
     pub(crate) fn bearer(token: Vec<u8>) -> Self {
         Self::Bearer {
             token: Token::new(token),
