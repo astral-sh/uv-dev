@@ -170,9 +170,8 @@ impl MissingLibrary {
                 ))
             } else {
                 let module = module_not_found.captures(line)?.get(1)?.as_str();
-                let package = crate::pipreqs::MODULE_MAPPING
-                    .lookup(module)
-                    .map_or(module, PackageName::as_str);
+                let package =
+                    crate::pipreqs::lookup_package(module).map_or(module, PackageName::as_str);
                 Some(Self::BuildDependency(package.to_owned()))
             }
         })
