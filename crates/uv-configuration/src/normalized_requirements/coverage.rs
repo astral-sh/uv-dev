@@ -1,6 +1,6 @@
 //! Track overlapping version exclusions while removing redundant specifiers.
 
-use std::ops::Bound;
+use std::ops::{Bound, Range};
 
 use uv_pep440::Version;
 use version_ranges::Ranges;
@@ -37,8 +37,8 @@ impl<'a> VersionRangeCoverage<'a> {
     /// Whether every excluded version is also excluded by another specifier.
     pub(super) fn is_redundant(&self, exclusion: &Ranges<Version>) -> bool {
         exclusion.iter().all(|bounds| {
-            let (start, end) = self.coordinates(bounds);
-            start >= end || self.counts.minimum(start, end) >= 2
+            let coordinates = self.coordinates(bounds);
+            coordinates.is_empty() || self.counts.minimum(&coordinates) >= 2
         })
     }
 
@@ -48,15 +48,15 @@ impl<'a> VersionRangeCoverage<'a> {
 
     fn update(&mut self, exclusion: &Ranges<Version>, delta: isize) {
         for bounds in exclusion.iter() {
-            let (start, end) = self.coordinates(bounds);
-            if start < end {
-                self.counts.add(start, end, delta);
+            let coordinates = self.coordinates(bounds);
+            if !coordinates.is_empty() {
+                self.counts.add(&coordinates, delta);
             }
         }
     }
 
     /// Map inclusive and exclusive bounds to a half-open interval of coordinates.
-    fn coordinates(&self, (lower, upper): (Bound<&Version>, Bound<&Version>)) -> (usize, usize) {
+    fn coordinates(&self, (lower, upper): (Bound<&Version>, Bound<&Version>)) -> Range<usize> {
         let endpoint = |version| {
             self.endpoints
                 .partition_point(|candidate| *candidate < version)
@@ -71,7 +71,7 @@ impl<'a> VersionRangeCoverage<'a> {
             Bound::Excluded(version) => 2 * endpoint(version) + 1,
             Bound::Unbounded => 2 * self.endpoints.len() + 1,
         };
-        (start, end)
+        start..end
     }
 }
 
@@ -97,8 +97,8 @@ impl RangeCounts {
         }
     }
 
-    fn add(&mut self, start: usize, end: usize, delta: isize) {
-        self.add_node(1, 0, self.len, start, end, delta);
+    fn add(&mut self, target: &Range<usize>, delta: isize) {
+        self.add_node(1, 0, self.len, target, delta);
     }
 
     fn add_node(
@@ -106,22 +106,21 @@ impl RangeCounts {
         node: usize,
         left: usize,
         right: usize,
-        start: usize,
-        end: usize,
+        target: &Range<usize>,
         delta: isize,
     ) {
-        if end <= left || right <= start {
+        if target.end <= left || right <= target.start {
             return;
         }
-        if start <= left && right <= end {
+        if target.start <= left && right <= target.end {
             let node = &mut self.nodes[node];
             node.minimum += delta;
             node.lazy += delta;
             return;
         }
         let middle = left + (right - left) / 2;
-        self.add_node(node * 2, left, middle, start, end, delta);
-        self.add_node(node * 2 + 1, middle, right, start, end, delta);
+        self.add_node(node * 2, left, middle, target, delta);
+        self.add_node(node * 2 + 1, middle, right, target, delta);
         let child_minimum = self.nodes[node * 2]
             .minimum
             .min(self.nodes[node * 2 + 1].minimum);
@@ -129,8 +128,8 @@ impl RangeCounts {
         node.minimum = node.lazy + child_minimum;
     }
 
-    fn minimum(&self, start: usize, end: usize) -> isize {
-        self.minimum_node(1, 0, self.len, start, end, 0)
+    fn minimum(&self, target: &Range<usize>) -> isize {
+        self.minimum_node(1, 0, self.len, target, 0)
     }
 
     fn minimum_node(
@@ -138,19 +137,18 @@ impl RangeCounts {
         node: usize,
         left: usize,
         right: usize,
-        start: usize,
-        end: usize,
+        target: &Range<usize>,
         parent: isize,
     ) -> isize {
-        if end <= left || right <= start {
+        if target.end <= left || right <= target.start {
             return isize::MAX;
         }
-        if start <= left && right <= end {
+        if target.start <= left && right <= target.end {
             return parent + self.nodes[node].minimum;
         }
         let middle = left + (right - left) / 2;
         let parent = parent + self.nodes[node].lazy;
-        self.minimum_node(node * 2, left, middle, start, end, parent)
-            .min(self.minimum_node(node * 2 + 1, middle, right, start, end, parent))
+        self.minimum_node(node * 2, left, middle, target, parent)
+            .min(self.minimum_node(node * 2 + 1, middle, right, target, parent))
     }
 }
