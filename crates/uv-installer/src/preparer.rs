@@ -72,7 +72,7 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             .into_iter()
             .map(async |dist| {
                 let wheel = self
-                    .get_wheel((*dist).clone(), in_flight, resolution)
+                    .get_wheel(Arc::unwrap_or_clone(dist), in_flight, resolution)
                     .boxed_local()
                     .await?;
                 if let Some(reporter) = self.reporter.as_ref() {
