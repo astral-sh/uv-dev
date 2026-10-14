@@ -21,7 +21,6 @@ mod cache_clean;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod cache_prune;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod cache_size;
 
 mod extract;
