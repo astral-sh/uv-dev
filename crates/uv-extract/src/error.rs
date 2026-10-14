@@ -56,7 +56,7 @@ pub enum Error {
     DuplicateOutputPath { path: PathBuf },
     #[error("ZIP file contains a local file header without a corresponding central-directory record entry for: {} ({offset})", path.display())]
     MissingCentralDirectoryEntry { path: PathBuf, offset: u64 },
-    #[error("ZIP file contains an end-of-central-directory record entry, but no local file header for: {} ({offset}", path.display())]
+    #[error("ZIP file contains a central-directory record entry without a corresponding local file header for: {} ({offset})", path.display())]
     MissingLocalFileHeader { path: PathBuf, offset: u64 },
     #[error("ZIP file uses conflicting paths for the local file header at {} (got `{}`, expected `{}`)", offset, local_path.display(), central_directory_path.display())]
     ConflictingPaths {
@@ -101,7 +101,7 @@ pub enum Error {
     ZipInZip,
     #[error("ZIP64 end-of-central-directory record contains unsupported extensible data")]
     ExtensibleData,
-    #[error("ZIP file end-of-central-directory record contains multiple entries with the same path, but conflicting modes: {}", path.display())]
+    #[error("ZIP file central directory contains multiple entries with the same path, but conflicting modes: {}", path.display())]
     DuplicateExecutableFileHeader { path: PathBuf },
     #[error("Archive contains a file with an empty filename")]
     EmptyFilename,
