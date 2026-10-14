@@ -499,6 +499,7 @@ impl SourceBuild {
                 .any(|req| !build.pep517_backend.requirements.contains(req))
             {
                 debug!("Installing extra requirements for build backend");
+                let dependency_sources = Self::dependency_sources(&build.extra_build_dependencies);
                 let requirements: Vec<_> = build
                     .build_requirements()
                     .cloned()
@@ -513,7 +514,7 @@ impl SourceBuild {
                     .await
                     .map_err(|err| {
                         Error::RequirementsResolve(
-                            "`build-system.requires`",
+                            dependency_sources,
                             AnyErrorBuild::from(err),
                         )
                     })?;
@@ -523,7 +524,7 @@ impl SourceBuild {
                     .await
                     .map_err(|err| {
                         Error::RequirementsInstall(
-                            "`build-system.requires`",
+                            dependency_sources,
                             AnyErrorBuild::from(err),
                         )
                     })?;
