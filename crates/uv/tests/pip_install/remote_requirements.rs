@@ -1,10 +1,81 @@
-//! Remote requirements files.
+//! Remote requirements and constraints files.
 
 use anyhow::Result;
+use indoc::indoc;
 use wiremock::matchers::{basic_auth, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use uv_test::packse::PackseServer;
+use uv_test::packse::scenario::Scenario;
 use uv_test::uv_snapshot;
+
+async fn remote_constraints_fixture() -> Result<(MockServer, PackseServer)> {
+    let scenario: Scenario = toml::from_str(indoc! {r#"
+        name = "remote-constraints"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.typing-extensions.versions."4.7.1"]
+        [packages.typing-extensions.versions."4.8.2"]
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    let constraints = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/constraints.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("typing-extensions==4.7.1\n"))
+        .expect(1)
+        .mount(&constraints)
+        .await;
+    Ok((constraints, index))
+}
+
+/// A remote constraint selects the older available version.
+#[tokio::test]
+async fn constraint_url_on_command_line() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (constraints, index) = remote_constraints_fixture().await?;
+    uv_snapshot!(context.pip_install()
+        .arg("-c")
+        .arg(format!("{}/constraints.txt", constraints.uri()))
+        .arg("typing_extensions>=4.0")
+        .arg("--index-url")
+        .arg(index.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + typing-extensions==4.7.1
+    ");
+    context.assert_installed("typing_extensions", "4.7.1");
+    Ok(())
+}
+
+/// A local requirements file can include a remote constraint.
+#[tokio::test]
+async fn constraint_url_in_requirements_file() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (constraints, index) = remote_constraints_fixture().await?;
+    fs_err::write(
+        context.temp_dir.join("requirements.txt"),
+        format!(
+            "typing-extensions>=4.0\n-c {}/constraints.txt\n",
+            constraints.uri()
+        ),
+    )?;
+    uv_snapshot!(context.pip_install()
+        .args(["-r", "requirements.txt", "--index-url"])
+        .arg(index.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + typing-extensions==4.7.1
+    ");
+    context.assert_installed("typing_extensions", "4.7.1");
+    Ok(())
+}
 
 /// Re-read an authenticated remote requirements file when its contents change.
 #[tokio::test]
