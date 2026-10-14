@@ -22915,7 +22915,8 @@ fn lock_metadata_free_frozen_filtered_dependency_selections() -> Result<()> {
 fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    let original_pyproject = indoc! {r#"
+    let project = |selection| {
+        formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -22923,15 +22924,16 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
         dependencies = ["dependency"]
 
         [project.optional-dependencies]
-        original = []
+        {selection} = []
 
         [dependency-groups]
-        original = []
+        {selection} = []
 
         [tool.uv.sources]
-        dependency = { path = "dependency" }
-        "#};
-    pyproject_toml.write_str(original_pyproject)?;
+        dependency = {{ path = "dependency" }}
+        "#}
+    };
+    pyproject_toml.write_str(&project("original"))?;
     context
         .temp_dir
         .child("dependency/pyproject.toml")
@@ -22950,10 +22952,17 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
 
     let mut lock = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
     lock["revision"] = toml_edit::value(4);
+    let revision_4_lock = lock.to_string();
+    assert!(
+        locked_package(&revision_4_lock, "project")?
+            .get("metadata")
+            .is_some(),
+        "expected a revision-4 lock with package metadata"
+    );
     context
         .temp_dir
         .child("uv.lock")
-        .write_str(&lock.to_string())?;
+        .write_str(&revision_4_lock)?;
 
     // Revision-4 lockfiles that retain metadata do not require the preview feature.
     uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
@@ -22962,7 +22971,7 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    pyproject_toml.write_str(&original_pyproject.replace("original =", "added ="))?;
+    pyproject_toml.write_str(&project("added"))?;
 
     uv_snapshot!(context.filters(), context.sync()
         .arg("--frozen")
@@ -22993,9 +23002,10 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
     ----- stderr -----
     error: Group `added` is not defined in the project's `dependency-groups` table
     ");
+    assert_eq!(context.read("uv.lock"), revision_4_lock);
 
     // Locks without package metadata must likewise preserve the recorded empty selections.
-    pyproject_toml.write_str(original_pyproject)?;
+    pyproject_toml.write_str(&project("original"))?;
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features")
         .arg("lock-without-metadata")
@@ -23005,7 +23015,14 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
-    pyproject_toml.write_str(&original_pyproject.replace("original =", "added ="))?;
+    let metadata_free_lock = context.read("uv.lock");
+    assert!(
+        locked_package(&metadata_free_lock, "project")?
+            .get("metadata")
+            .is_none(),
+        "expected the preview lock to omit package metadata"
+    );
+    pyproject_toml.write_str(&project("added"))?;
 
     uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("original"), @"
     exit_code: 0 (success)
@@ -23028,6 +23045,7 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
     ----- stderr -----
     error: Group `added` is not defined in the project's `dependency-groups` table
     ");
+    assert_eq!(context.read("uv.lock"), metadata_free_lock);
 
     Ok(())
 }
