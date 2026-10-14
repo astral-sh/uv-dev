@@ -415,14 +415,6 @@ pub async fn install(
 
     // Convert to tool options.
     let options = ToolOptions::from(options);
-    let lock_manifest = ToolLock::manifest(
-        &requirements,
-        &receipt_constraints,
-        &receipt_overrides,
-        &receipt_excludes,
-        &receipt_build_constraints,
-        &settings.resolver.dependency_metadata,
-    );
 
     let installed_tools = InstalledTools::from_settings()?.init()?;
     let _lock = installed_tools.lock().await?;
@@ -647,6 +639,16 @@ pub async fn install(
     } else {
         EnvironmentResolution::Specific
     };
+    let build_lock_manifest = || {
+        ToolLock::manifest(
+            &requirements,
+            &receipt_constraints,
+            &receipt_overrides,
+            &receipt_excludes,
+            &receipt_build_constraints,
+            &settings.resolver.dependency_metadata,
+        )
+    };
 
     // TODO(zanieb): Build the environment in the cache directory then copy into the tool directory.
     // This lets us confirm the environment is valid before removing an existing install. However,
@@ -703,7 +705,7 @@ pub async fn install(
                 let tool_lock = ToolLock::from_resolution(
                     &tool_dir,
                     &resolution,
-                    lock_manifest,
+                    build_lock_manifest(),
                     &settings.resolver.index_locations,
                 )?;
                 let resolution = tool_lock.to_resolution(
@@ -958,7 +960,7 @@ pub async fn install(
                 let tool_lock = ToolLock::from_resolution(
                     &tool_dir,
                     &resolution,
-                    lock_manifest,
+                    build_lock_manifest(),
                     &settings.resolver.index_locations,
                 )?;
                 let resolution = tool_lock.to_resolution(
