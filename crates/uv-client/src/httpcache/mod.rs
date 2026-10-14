@@ -438,18 +438,19 @@ impl ArchivedCachePolicy {
         // we check `ETag`.
         //
         // [RFC 9111 S4.3.4]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.4
-        if let Some(old_etag) = self.response.headers.etag.as_ref() {
-            if let Some(new_etag) = new_policy.response.headers.etag.as_ref() {
-                // We don't support weak validators, so only match if they're
-                // both strong.
-                if !old_etag.weak && !new_etag.weak && old_etag.value == new_etag.value {
-                    tracing::trace!(
-                        "Resource is not modified because old and new etag values ({:?}) match",
-                        new_etag.value,
-                    );
-                    return false;
-                }
-            }
+        //
+        // We don't support weak validators, so only match if they're both strong.
+        if let Some(old_etag) = self.response.headers.etag.as_ref()
+            && let Some(new_etag) = new_policy.response.headers.etag.as_ref()
+            && !old_etag.weak
+            && !new_etag.weak
+            && old_etag.value == new_etag.value
+        {
+            tracing::trace!(
+                "Resource is not modified because old and new etag values ({:?}) match",
+                new_etag.value,
+            );
+            return false;
         }
         // As per [RFC 9111 S4.3.4], we need to confirm that our validators match. Here,
         // we check `Last-Modified`.
@@ -514,17 +515,17 @@ impl ArchivedCachePolicy {
         //
         // [RFC 9110 S13.1.2]: https://www.rfc-editor.org/rfc/rfc9110#section-13.1.2
         // [RFC 9111 S4.3.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.1
-        if let Some(etag) = self.response.headers.etag.as_ref() {
-            // We don't support weak validation principally because we want to
-            // be notified if there was a change in the content. Namely, from
-            // RFC 9110 S13.1.2: "... weak entity tags can be used for cache
-            // validation even if there have been changes to the representation
-            // data."
-            if !etag.weak {
-                if let Ok(header) = HeaderValue::from_bytes(&etag.value) {
-                    request.headers_mut().append("if-none-match", header);
-                }
-            }
+        //
+        // We don't support weak validation principally because we want to
+        // be notified if there was a change in the content. Namely, from
+        // RFC 9110 S13.1.2: "... weak entity tags can be used for cache
+        // validation even if there have been changes to the representation
+        // data."
+        if let Some(etag) = self.response.headers.etag.as_ref()
+            && !etag.weak
+            && let Ok(header) = HeaderValue::from_bytes(&etag.value)
+        {
+            request.headers_mut().append("if-none-match", header);
         }
         // We also set `If-Modified-Since` as per [RFC 9110 S13.1.3] and [RFC
         // 9111 S4.3.1]. Generally, `If-None-Match` will override this, but we
@@ -787,18 +788,18 @@ impl ArchivedCachePolicy {
             // as per [RFC 9111 S5.2.1.1].
             //
             // [RFC 9111 S5.2.1.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.1.1
-            if let Some(max_age) = reqcc.max_age_seconds() {
-                if age > max_age {
-                    tracing::trace!(
-                        "Request to `{}` does not have a fresh cache entry because \
+            if let Some(max_age) = reqcc.max_age_seconds()
+                && age > max_age
+            {
+                tracing::trace!(
+                    "Request to `{}` does not have a fresh cache entry because \
                      the cached response's age is {} seconds and the max age \
                      allowed by the request is {} seconds",
-                        request.url(),
-                        age,
-                        max_age,
-                    );
-                    return false;
-                }
+                    request.url(),
+                    age,
+                    max_age,
+                );
+                return false;
             }
 
             // If the request has a min-fresh directive, then we only consider a
@@ -927,8 +928,8 @@ impl ArchivedCachePolicy {
     }
 
     /// Returns how long a response should be considered "fresh" as per
-    /// [RFC 9111 S4.2.1]. When this returns false, the response should be
-    /// considered stale and the client should revalidate with the server.
+    /// [RFC 9111 S4.2.1]. A response becomes stale when its age reaches this duration and can be
+    /// reused without revalidation only if stale responses are allowed.
     ///
     /// If there are no indicators of a response's freshness lifetime, then
     /// this returns `0`. That is, the response will be considered stale in all
@@ -936,15 +937,15 @@ impl ArchivedCachePolicy {
     ///
     /// [RFC 9111 S4.2.1]: https://www.rfc-editor.org/rfc/rfc9111.html#section-4.2.1
     fn freshness_lifetime(&self) -> Duration {
-        if self.config.shared {
-            if let Some(s_maxage) = self.response.headers.cc.s_maxage_seconds() {
-                let duration = Duration::from_secs(s_maxage);
-                tracing::trace!(
-                    "Freshness lifetime found via shared \
-                     cache-control max age setting: {duration:?}"
-                );
-                return duration;
-            }
+        if self.config.shared
+            && let Some(s_maxage) = self.response.headers.cc.s_maxage_seconds()
+        {
+            let duration = Duration::from_secs(s_maxage);
+            tracing::trace!(
+                "Freshness lifetime found via shared \
+                 cache-control max age setting: {duration:?}"
+            );
+            return duration;
         }
         if let Some(max_age) = self.response.headers.cc.max_age_seconds() {
             let duration = Duration::from_secs(max_age);
