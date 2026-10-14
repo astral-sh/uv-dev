@@ -388,7 +388,7 @@ async fn upgrade_tool(
         let tool_lock = ToolLock::from_resolution(
             &tool_dir,
             &universal_resolution,
-            &lock_manifest,
+            lock_manifest,
             &settings.resolver.index_locations,
         )?;
         let resolution = tool_lock.to_resolution(
