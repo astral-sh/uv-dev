@@ -2380,25 +2380,26 @@ fn python_install_relative_broken_link() -> anyhow::Result<()> {
 
 /// A minor-version request that resolves to a prerelease creates the default executable links.
 #[test]
-fn python_install_default_prerelease() {
+fn python_install_default_prerelease() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
+        .with_cpython_downloads_exclude_newer("20261003")?
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
         .with_managed_python_dirs();
 
-    // Python 3.16 is only available as a prerelease.
+    // At this build cutoff, Python 3.15 is only available as a prerelease.
     context
         .python_install()
         .arg("--default")
         .arg("--preview-features")
         .arg("python-install-default")
-        .arg("3.16")
+        .arg("3.15")
         .assert()
         .success();
 
-    let bin_python_minor_16 = context
+    let bin_python_minor_15 = context
         .bin_dir
-        .child(format!("python3.16{}", std::env::consts::EXE_SUFFIX));
+        .child(format!("python3.15{}", std::env::consts::EXE_SUFFIX));
 
     let bin_python_major = context
         .bin_dir
@@ -2409,9 +2410,10 @@ fn python_install_default_prerelease() {
         .child(format!("python{}", std::env::consts::EXE_SUFFIX));
 
     // Verify that all three executables are created when --default is used with a pre-release version
-    bin_python_minor_16.assert(predicate::path::exists());
+    bin_python_minor_15.assert(predicate::path::exists());
     bin_python_major.assert(predicate::path::exists());
     bin_python_default.assert(predicate::path::exists());
+    Ok(())
 }
 
 #[test]
@@ -2528,50 +2530,50 @@ fn python_install_patch_dylib() {
 }
 
 #[test]
-fn python_install_prerelease() {
+fn python_install_prerelease() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
+        .with_cpython_downloads_exclude_newer("20261003")?
         .with_filtered_python_keys()
-        .with_filtered_latest_python_versions()
         .with_managed_python_dirs()
         .with_filtered_python_install_bin()
         .with_filtered_python_names()
         .with_filtered_exe_suffix();
 
-    // Python 3.16 is only available as a prerelease.
-    uv_snapshot!(context.filters(), context.python_install().arg("3.16"), @"
+    // At this build cutoff, Python 3.15 is only available as a prerelease.
+    uv_snapshot!(context.filters(), context.python_install().arg("3.15"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed Python 3.16.[LATEST] in [TIME]
-     + cpython-3.16.[LATEST]-[PLATFORM] (python3.16)
+    Installed Python 3.15.0rc3 in [TIME]
+     + cpython-3.15.0rc3-[PLATFORM] (python3.15)
     ");
 
     // We should be able to find this version without opt-in, because there is no stable release
     // installed
-    uv_snapshot!(context.filters(), context.python_find().arg("3.16"), @"
+    uv_snapshot!(context.filters(), context.python_find().arg("3.15"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [TEMP_DIR]/managed/cpython-3.16-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    [TEMP_DIR]/managed/cpython-3.15-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
     // This also applies to `>=` requests, even though pre-releases aren't technically in the range
-    uv_snapshot!(context.filters(), context.python_find().arg(">=3.16"), @"
+    uv_snapshot!(context.filters(), context.python_find().arg(">=3.15"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [TEMP_DIR]/managed/cpython-3.16-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    [TEMP_DIR]/managed/cpython-3.15-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
     uv_snapshot!(context.filters(), context.python_find().arg("3"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    [TEMP_DIR]/managed/cpython-3.16-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
+    [TEMP_DIR]/managed/cpython-3.15-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
     // If we install a stable version, that should be preferred though
-    uv_snapshot!(context.filters(), context.python_install().arg("3.13"), @"
+    uv_snapshot!(context.filters(), context.python_install().arg("3.13.1"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed Python 3.13.[LATEST] in [TIME]
-     + cpython-3.13.[LATEST]-[PLATFORM] (python3.13)
+    Installed Python 3.13.1 in [TIME]
+     + cpython-3.13.1-[PLATFORM] (python3.13)
     ");
 
     uv_snapshot!(context.filters(), context.python_find().arg("3"), @"
@@ -2579,6 +2581,7 @@ fn python_install_prerelease() {
     ----- stdout -----
     [TEMP_DIR]/managed/cpython-3.13-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
+    Ok(())
 }
 
 #[test]

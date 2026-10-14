@@ -14,7 +14,7 @@ pub use path::{assert_link_target, assert_path_missing};
 
 use std::borrow::BorrowMut;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::io::Write as _;
 use std::iter::Iterator;
@@ -226,6 +226,34 @@ impl TestContext {
         self.extra_env
             .push((EnvVars::UV_EXCLUDE_NEWER.into(), exclude_newer.into()));
         self
+    }
+
+    /// Limit CPython downloads to PBS build tags at or before `build` (`YYYYMMDD`).
+    ///
+    /// This filters the current catalog; it does not recover builds replaced by a later release.
+    /// Downloads without a date-based build tag are excluded.
+    pub fn with_cpython_downloads_exclude_newer(self, build: &str) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            build.len() == 8 && build.bytes().all(|byte| byte.is_ascii_digit()),
+            "Expected a PBS build tag in YYYYMMDD format, got {build:?}"
+        );
+        let metadata_path = self
+            .workspace_root
+            .join("crates/uv-python-managed/download-metadata.json");
+        let mut downloads: BTreeMap<String, serde_json::Value> =
+            serde_json::from_slice(&fs_err::read(metadata_path)?)?;
+        downloads.retain(|_, download| {
+            download["name"].as_str() == Some("cpython")
+                && download["build"].as_str().is_some_and(|download_build| {
+                    download_build.len() == 8
+                        && download_build.bytes().all(|byte| byte.is_ascii_digit())
+                        && download_build <= build
+                })
+        });
+
+        let metadata = self.temp_dir.child("python-downloads.json");
+        metadata.write_str(&serde_json::to_string(&downloads)?)?;
+        Ok(self.with_env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, metadata.path()))
     }
 
     /// Set the "http timeout" for all commands in this context.
