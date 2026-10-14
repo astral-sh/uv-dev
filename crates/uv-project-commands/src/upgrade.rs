@@ -24,7 +24,7 @@ use uv_lock::{Lock, implicit_constraints_marker};
 use uv_lock_operations::{LockMode, LockOperation, LockResult, LockTarget};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
-use uv_pep508::{MarkerTree, Pep508ErrorSource, Requirement, VerbatimUrl, VersionOrUrl};
+use uv_pep508::{MarkerTree, Pep508ErrorSource, Pep508Url, Requirement, VerbatimUrl, VersionOrUrl};
 use uv_preview::Preview;
 use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
 use uv_pypi_types::{PyProjectToml, ResolutionMetadata, SupportedEnvironments, VerbatimParsedUrl};
@@ -279,13 +279,13 @@ pub async fn upgrade(
     let relaxed_requirements = requirements
         .iter()
         .map(|selected| {
+            let existing = into_verbatim_requirement(selected.requirement.clone())?;
+            let replacement = relax_requirement(existing.clone());
             Ok(RequirementUpdate {
                 dependency_type: selected.dependency_type.clone(),
                 original_text: selected.original_text.clone(),
-                existing: into_verbatim_requirement(selected.requirement.clone())?,
-                replacement: into_verbatim_requirement(relax_requirement(
-                    selected.requirement.clone(),
-                ))?,
+                existing,
+                replacement,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -424,10 +424,9 @@ pub async fn upgrade(
                 }
             };
 
-        let existing = into_verbatim_requirement(selected.requirement.clone())?;
-        let mut proposed_requirement = selected.requirement;
-        proposed_requirement.version_or_url = Some(VersionOrUrl::VersionSpecifier(specifiers));
-        let replacement = into_verbatim_requirement(proposed_requirement)?;
+        let existing = into_verbatim_requirement(selected.requirement)?;
+        let mut replacement = existing.clone();
+        replacement.version_or_url = Some(VersionOrUrl::VersionSpecifier(specifiers));
         let update = RequirementUpdate {
             dependency_type: selected.dependency_type,
             original_text: selected.original_text,
@@ -1049,9 +1048,7 @@ fn increment_version_at_precision(version: &Version, precision: usize) -> Result
 }
 
 /// Remove upper and exact constraints while retaining lower bounds and exclusions.
-fn relax_requirement(
-    mut requirement: Requirement<VerbatimParsedUrl>,
-) -> Requirement<VerbatimParsedUrl> {
+fn relax_requirement<T: Pep508Url>(mut requirement: Requirement<T>) -> Requirement<T> {
     let Some(VersionOrUrl::VersionSpecifier(specifiers)) = &requirement.version_or_url else {
         return requirement;
     };
