@@ -604,7 +604,7 @@ mod tests {
             _ = launch_bytecode_compiler(cache.root(), environment.python_executable(), &script) => {
                 anyhow::bail!("bytecode compiler exited before startup was cancelled")
             }
-            _ = tokio::time::sleep(Duration::from_secs(30)) => {
+            () = tokio::time::sleep(Duration::from_secs(30)) => {
                 anyhow::bail!("bytecode compiler did not start")
             }
         };
