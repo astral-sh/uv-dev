@@ -4,6 +4,7 @@ use std::fs::Permissions;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
+#[cfg(unix)]
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -333,14 +334,8 @@ fn python_pin_global_use_local_if_available() -> Result<()> {
     3.12
     ");
 
-    let mut global_version_path = PathBuf::from(uv.path());
-    global_version_path.push(PYTHON_VERSION_FILENAME);
-    let global_python_version = context.read(&global_version_path);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(global_python_version, @"3.12");
-    });
+    let global_version_file = uv.child(PYTHON_VERSION_FILENAME);
+    assert_eq!(context.read(&global_version_file), "3.12\n");
 
     // Request Python 3.11 for local .python-version
     uv_snapshot!(context.filters(), context.python_pin().arg("3.11"), @"
@@ -363,17 +358,8 @@ fn python_pin_global_use_local_if_available() -> Result<()> {
     3.12
     ");
 
-    // Local .python-version exists and has the right version.
-    let local_python_version = context.read(PYTHON_VERSION_FILENAME);
-    assert_snapshot!(local_python_version, @"3.11");
-
-    // Global .python-version still exists and has the right version.
-    let global_python_version = context.read(&global_version_path);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(global_python_version, @"3.12");
-    });
+    assert_eq!(context.read(PYTHON_VERSION_FILENAME), "3.11\n");
+    assert_eq!(context.read(&global_version_file), "3.12\n");
 
     Ok(())
 }
