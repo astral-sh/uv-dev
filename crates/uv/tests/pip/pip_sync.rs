@@ -1298,6 +1298,9 @@ fn check_sync() -> Result<()> {
 /// Resolve a local wheel.
 #[test]
 fn install_local_wheel() -> Result<()> {
+    // Use distinct timestamps even when the test runs faster than the filesystem clock resolution.
+    const INITIAL_MTIME: i64 = 1_700_000_000;
+
     let context = uv_test::test_context!("3.12");
 
     // Download a wheel.
@@ -1306,6 +1309,10 @@ fn install_local_wheel() -> Result<()> {
         "https://files.pythonhosted.org/packages/97/75/10a9ebee3fd790d20926a90a2547f0bf78f371b2f13aa822c759680ca7b9/tomli-2.0.1-py3-none-any.whl",
         &archive,
     );
+    filetime::set_file_mtime(
+        &archive,
+        filetime::FileTime::from_unix_time(INITIAL_MTIME, 0),
+    )?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(&format!(
@@ -1348,9 +1355,10 @@ fn install_local_wheel() -> Result<()> {
     // Create a new virtual environment.
     context.reset_venv();
 
-    // "Modify" the wheel.
-    // The `filetime` crate works on Windows unlike the std.
-    filetime::set_file_mtime(&archive, filetime::FileTime::now()).unwrap();
+    filetime::set_file_mtime(
+        &archive,
+        filetime::FileTime::from_unix_time(INITIAL_MTIME + 2, 0),
+    )?;
 
     // Reinstall. The wheel should be "downloaded" again.
     uv_snapshot!(context.filters(), context.pip_sync()
@@ -1368,8 +1376,10 @@ fn install_local_wheel() -> Result<()> {
 
     context.assert_command("import tomli").success();
 
-    // "Modify" the wheel.
-    filetime::set_file_mtime(&archive, filetime::FileTime::now()).unwrap();
+    filetime::set_file_mtime(
+        &archive,
+        filetime::FileTime::from_unix_time(INITIAL_MTIME + 4, 0),
+    )?;
 
     // Reinstall into the same virtual environment. The wheel should be reinstalled.
     uv_snapshot!(context.filters(), context.pip_sync()
