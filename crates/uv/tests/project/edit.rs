@@ -10,7 +10,7 @@ use conditional_imports::*;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::prelude::*;
+use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
@@ -31,7 +31,7 @@ use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
 use uv_test::subdirectory_archive::SubdirectoryArchive;
-use uv_test::{TestContext, diff_snapshot, uv_snapshot, venv_bin_path};
+use uv_test::{TestContext, diff_snapshot, site_packages_path, uv_snapshot, venv_bin_path};
 
 /// Add a PyPI requirement.
 #[test]
@@ -4433,13 +4433,16 @@ fn edit_no_sync_active_environment_mismatch() -> Result<()> {
 
     assert!(!context.venv.exists());
 
+    let active = context.temp_dir.child("active");
     context
         .venv()
-        .arg("active")
+        .arg(&active)
         .arg("--python")
         .arg("3.12")
         .assert()
         .success();
+    let active_package =
+        ChildPath::new(site_packages_path(active.path(), "python3.12")).child("ok/__init__.py");
 
     // An explicitly requested active environment still determines the interpreter.
     uv_snapshot!(context.filters(), context
@@ -4456,6 +4459,17 @@ fn edit_no_sync_active_environment_mismatch() -> Result<()> {
     ");
 
     assert!(!context.venv.exists());
+    active_package.assert(predicate::path::missing());
+
+    context
+        .pip_install()
+        .arg("--python")
+        .arg(&active)
+        .arg("--offline")
+        .arg("./ok-1.0.0-py3-none-any.whl")
+        .assert()
+        .success();
+    active_package.assert(predicate::path::is_file());
 
     uv_snapshot!(context.filters(), context
         .remove()
@@ -4471,6 +4485,7 @@ fn edit_no_sync_active_environment_mismatch() -> Result<()> {
     ");
 
     assert!(!context.venv.exists());
+    active_package.assert(predicate::path::is_file());
 
     // Commands that synchronize the project environment must retain the mismatch warning.
     uv_snapshot!(context.filters(), context
