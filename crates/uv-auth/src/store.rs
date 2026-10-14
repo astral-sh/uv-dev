@@ -183,15 +183,11 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
     fn try_from(value: TomlCredentialWire) -> Result<Self, Self::Error> {
         let credentials = match value.scheme {
             AuthScheme::Basic => {
-                if value.username.as_deref().is_none() {
-                    return Err(TomlCredentialError::BasicAuthError(
-                        BasicAuthError::MissingUsername,
-                    ));
+                if value.username.is_none() {
+                    return Err(BasicAuthError::MissingUsername.into());
                 }
                 if value.token.is_some() {
-                    return Err(TomlCredentialError::BasicAuthError(
-                        BasicAuthError::UnexpectedToken,
-                    ));
+                    return Err(BasicAuthError::UnexpectedToken.into());
                 }
                 Credentials::Basic {
                     username: value.username,
@@ -200,18 +196,12 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
             }
             AuthScheme::Bearer => {
                 if value.username.is_some() {
-                    return Err(TomlCredentialError::BearerAuthError(
-                        BearerAuthError::UnexpectedUsername,
-                    ));
+                    return Err(BearerAuthError::UnexpectedUsername.into());
                 }
                 if value.password.is_some() {
-                    return Err(TomlCredentialError::BearerAuthError(
-                        BearerAuthError::UnexpectedPassword,
-                    ));
+                    return Err(BearerAuthError::UnexpectedPassword.into());
                 }
-                let token = value.token.ok_or(TomlCredentialError::BearerAuthError(
-                    BearerAuthError::MissingToken,
-                ))?;
+                let token = value.token.ok_or(BearerAuthError::MissingToken)?;
                 Credentials::Bearer {
                     token: Token::new(token.into_bytes()),
                 }
