@@ -13812,7 +13812,9 @@ fn sync_dry_run_and_locked() -> Result<()> {
 
     assert_eq!(context.read("uv.lock"), existing);
     context
-        .assert_command("import importlib.util; assert importlib.util.find_spec('iniconfig') is None")
+        .assert_command(
+            "import importlib.util; assert importlib.util.find_spec('iniconfig') is None",
+        )
         .success();
 
     Ok(())
@@ -18439,7 +18441,9 @@ async fn sync_malware_detected() {
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
     context
-        .assert_command("import importlib.util; assert importlib.util.find_spec('iniconfig') is None")
+        .assert_command(
+            "import importlib.util; assert importlib.util.find_spec('iniconfig') is None",
+        )
         .success();
 }
 
