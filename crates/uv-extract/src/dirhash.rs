@@ -184,28 +184,18 @@ impl<'a> SeenSymlinks<'a> {
     }
 
     fn iter(&self) -> impl Iterator<Item = &Path> {
-        let mut node = self.node.as_ref();
-        std::iter::from_fn(move || {
-            if let Some(next_node) = node {
-                let next_path = &next_node.canonical_path;
-                node = next_node.previous;
-                Some(next_path.as_path())
-            } else {
-                None
-            }
-        })
+        std::iter::successors(self.node.as_ref(), |node| node.previous)
+            .map(|node| node.canonical_path.as_path())
     }
 
     fn push(&'a self, symlink_path: &Path) -> Result<Self, DirhashError> {
         let canonical_path = canonical_path_to_symlink(symlink_path)?;
         // Walk the seen symlinks list and error out if we've seen this one before.
-        for seen in self.iter() {
-            if canonical_path == seen {
-                let mut paths: Vec<PathBuf> = self.iter().map(Path::to_owned).collect();
-                paths.reverse();
-                paths.push(canonical_path);
-                return Err(DirhashError::SymlinkCycle { paths });
-            }
+        if self.iter().any(|seen| canonical_path == seen) {
+            let mut paths: Vec<PathBuf> = self.iter().map(Path::to_owned).collect();
+            paths.reverse();
+            paths.push(canonical_path);
+            return Err(DirhashError::SymlinkCycle { paths });
         }
         Ok(Self {
             node: Some(SeenSymlinkNode {
@@ -325,43 +315,32 @@ impl DirhashTree {
         original_path: &str,
         create_dirs: bool,
     ) -> Result<Entry<'_, String, DirhashEntry>, DirhashError> {
-        if let Some((component, rest)) = normalized_path.split_once('/') {
-            // There are further path components after this one, so this one is a directory.
-            if self.children.contains_key(component) {
-                // This entry already exists.
-                //
-                // We have to do a double lookup here because of borrowck limitations. The
-                // alternative is using the `.entry()` API and always allocating a temporary
-                // `String` key. Polonius can't come soon enough, but also `BTreeMap` needs a "raw
-                // entry" API.
-                match self.children.get_mut(component).unwrap() {
-                    DirhashEntry::Directory(child) => {
-                        child.insertion_entry(rest, original_path, create_dirs)
-                    }
-                    DirhashEntry::File(_) => Err(DirhashError::FileDirectoryConflict {
-                        path: PathBuf::from(original_path),
-                    }),
-                }
-            } else {
-                // We need to create this directory, or error if `create_dirs` is false.
-                if create_dirs {
-                    let child = self
-                        .children
-                        .entry(String::from(component))
-                        .or_insert(DirhashEntry::Directory(Self::default()));
-                    let DirhashEntry::Directory(child) = child else {
-                        unreachable!()
-                    };
-                    child.insertion_entry(rest, original_path, create_dirs)
-                } else {
-                    Err(DirhashError::MissingPath {
-                        path: PathBuf::from(original_path),
-                    })
-                }
-            }
+        let Some((component, rest)) = normalized_path.split_once('/') else {
+            return Ok(self.children.entry(String::from(normalized_path)));
+        };
+
+        // The separate lookup avoids allocating an owned key for an existing directory.
+        let child = if self.children.contains_key(component) {
+            self.children.get_mut(component)
+        } else if create_dirs {
+            Some(
+                self.children
+                    .entry(String::from(component))
+                    .or_insert_with(|| DirhashEntry::Directory(Self::default())),
+            )
         } else {
-            // This is the final path component.
-            Ok(self.children.entry(String::from(normalized_path)))
+            None
+        };
+        match child {
+            Some(DirhashEntry::Directory(child)) => {
+                child.insertion_entry(rest, original_path, create_dirs)
+            }
+            Some(DirhashEntry::File(_)) => Err(DirhashError::FileDirectoryConflict {
+                path: PathBuf::from(original_path),
+            }),
+            None => Err(DirhashError::MissingPath {
+                path: PathBuf::from(original_path),
+            }),
         }
     }
 
