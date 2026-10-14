@@ -325,38 +325,30 @@ impl std::fmt::Display for PythonRequirementConflicts {
                         format_requires_python_sources(sources)
                     );
                 }
-                if let Some((RequiresPythonDeclaration::Workspace(group), _)) =
-                    sources.iter().next()
-                {
-                    return write!(
+                match sources.keys().next() {
+                    Some(RequiresPythonDeclaration::Workspace(group)) => write!(
                         f,
                         " (from the workspace root's `tool.uv.dependency-groups.{group}.requires-python`)."
-                    );
-                }
-                if let Some((RequiresPythonDeclaration::Member(package, group), _)) =
-                    sources.iter().next()
-                {
-                    if let Some(group) = group {
-                        if *multiple_members {
-                            return write!(
+                    ),
+                    Some(RequiresPythonDeclaration::Member(package, group)) => {
+                        match (group, *multiple_members) {
+                            (Some(group), true) => write!(
                                 f,
                                 " (from workspace member `{package}`'s `tool.uv.dependency-groups.{group}.requires-python`)."
-                            );
+                            ),
+                            (Some(group), false) => write!(
+                                f,
+                                " (from `tool.uv.dependency-groups.{group}.requires-python`)."
+                            ),
+                            (None, true) => write!(
+                                f,
+                                " (from workspace member `{package}`'s `project.requires-python`)."
+                            ),
+                            (None, false) => f.write_str(" (from `project.requires-python`)"),
                         }
-                        return write!(
-                            f,
-                            " (from `tool.uv.dependency-groups.{group}.requires-python`)."
-                        );
                     }
-                    if *multiple_members {
-                        return write!(
-                            f,
-                            " (from workspace member `{package}`'s `project.requires-python`)."
-                        );
-                    }
-                    return f.write_str(" (from `project.requires-python`)");
+                    None => Ok(()),
                 }
-                Ok(())
             }
             Self::Lockfile { locked, groups } => {
                 let count = usize::from(locked.is_some()) + groups.len();
