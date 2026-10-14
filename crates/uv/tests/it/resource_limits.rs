@@ -6,7 +6,7 @@ use uv_test::uv_snapshot;
 #[cfg(feature = "test-python")]
 #[test]
 fn adjust_open_file_limit() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let python = &context.python_versions[0].1;
 
     let mut command = context.external_command("sh");
@@ -33,7 +33,7 @@ fn adjust_open_file_limit() {
 #[cfg(feature = "test-python")]
 #[test]
 fn run_open_file_limit_override() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let python = &context.python_versions[0].1;
 
     let mut command = context.run();
@@ -76,7 +76,7 @@ fn run_open_file_limit_override_invalid() {
 #[cfg(feature = "test-python")]
 #[test]
 fn run_open_file_limit_override_exceeds_hard_limit() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let python = &context.python_versions[0].1;
 
     let mut command = context.external_command("sh");
