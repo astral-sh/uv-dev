@@ -43,7 +43,6 @@ fs-err = { workspace = true }
 indicatif = { workspace = true }
 itertools = { workspace = true }
 owo-colors = { workspace = true }
-rustc-hash = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
