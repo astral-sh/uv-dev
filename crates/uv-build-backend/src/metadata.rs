@@ -961,7 +961,7 @@ struct Project {
     dynamic: Option<Vec<String>>,
 }
 
-/// The string and table forms used by README and license metadata.
+/// The value forms used by project metadata fields.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum StringOrTable {
@@ -976,6 +976,15 @@ enum StringOrTable {
 enum StringOrIgnored {
     String(String),
     Ignored(de::IgnoredAny),
+}
+
+impl StringOrIgnored {
+    fn into_string<E: de::Error>(self, expected: &str) -> Result<String, E> {
+        match self {
+            Self::String(value) => Ok(value),
+            Self::Ignored(_) => Err(de::Error::custom(expected)),
+        }
+    }
 }
 
 /// The optional `project.readme` key in a pyproject.toml as specified in
@@ -1014,13 +1023,7 @@ impl<'de> Deserialize<'de> for Readme {
             };
             let charset = fields
                 .remove("charset")
-                .map(|value| {
-                    if let StringOrIgnored::String(charset) = value {
-                        Ok(charset)
-                    } else {
-                        Err(de::Error::custom(EXPECTED))
-                    }
-                })
+                .map(|value| value.into_string(EXPECTED))
                 .transpose()?;
             if let Some(StringOrIgnored::String(file)) = fields.remove("file") {
                 return Ok(Self::File {
@@ -1147,10 +1150,17 @@ impl<'de> Deserialize<'de> for Contact {
         D: Deserializer<'de>,
     {
         const EXPECTED: &str = "a table with 'name' and/or 'email' keys";
-        let mut fields = BTreeMap::<String, String>::deserialize(deserializer)
-            .map_err(|_| de::Error::custom(EXPECTED))?;
-        let name = fields.remove("name");
-        let email = fields.remove("email");
+        let StringOrTable::Table(mut fields) = StringOrTable::deserialize(deserializer)? else {
+            return Err(de::Error::custom(EXPECTED));
+        };
+        let name = fields
+            .remove("name")
+            .map(|value| value.into_string(EXPECTED))
+            .transpose()?;
+        let email = fields
+            .remove("email")
+            .map(|value| value.into_string(EXPECTED))
+            .transpose()?;
         if !fields.is_empty() {
             return Err(de::Error::custom(EXPECTED));
         }
@@ -1518,6 +1528,21 @@ mod tests {
         4 | authors = [{ name = "Alice", address = "alice@example.com" }]
           |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         a table with 'name' and/or 'email' keys
+        "#);
+    }
+
+    #[test]
+    fn contact_out_of_range_integer() {
+        let contents = extend_project(indoc! {r#"
+            authors = [{ name = 18446744073709551616 }]
+        "#});
+        let error = toml::from_str::<PyProjectToml>(&contents).unwrap_err();
+        assert_snapshot!(format_err(error), @r#"
+        TOML parse error at line 4, column 21
+          |
+        4 | authors = [{ name = 18446744073709551616 }]
+          |                     ^^^^^^^^^^^^^^^^^^^^
+        invalid type: integer `18446744073709551616` as i128, expected any value
         "#);
     }
 
