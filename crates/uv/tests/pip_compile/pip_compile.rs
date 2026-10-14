@@ -1,8 +1,7 @@
-#![expect(clippy::disallowed_types)]
-
 use std::collections::BTreeMap;
 use std::env::current_dir;
-use std::fs;
+#[cfg(unix)]
+use std::fs::Permissions;
 #[cfg(unix)]
 use std::io::pipe;
 #[cfg(unix)]
@@ -1899,7 +1898,7 @@ fn compile_fallback_interpreter_broken_in_path() -> Result<()> {
         .bin_dir
         .join(format!("python3{}", std::env::consts::EXE_SUFFIX));
     fs_err::write(&python, contents)?;
-    fs_err::set_permissions(&python, fs::Permissions::from_mode(0o755))?;
+    fs_err::set_permissions(&python, Permissions::from_mode(0o755))?;
     let sentinel = context.temp_dir.child("broken-python-invoked");
 
     uv_snapshot!(context.filters(), context.pip_compile()
@@ -5167,7 +5166,7 @@ fn generate_hashes_source_distribution_url() -> Result<()> {
 async fn generate_hashes_built_distribution_url() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let filename = "ok-1.0.0-py3-none-any.whl";
-    let wheel = fs::read(context.workspace_root.join("test/links").join(filename))?;
+    let wheel = read(context.workspace_root.join("test/links").join(filename))?;
     let expected_hash = hex::encode(Sha256::digest(&wheel));
     let context = context.with_filter((format!("sha256:{expected_hash}"), "sha256:[WHEEL_SHA256]"));
     let server = MockServer::start().await;

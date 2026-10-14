@@ -194,7 +194,8 @@ fn tar_dont_preserve_mtime() -> Result<()> {
         .find(|path| path.file_name().is_some_and(|name| name == "backend.py"))
         .context("source distribution was not extracted into the cache")?;
     let mtime = backend.metadata()?.modified()?;
-    let earliest_zip_date = SystemTime::UNIX_EPOCH + Duration::from_secs(315_532_800);
+    // ZIP timestamps cannot represent dates before 1980-01-01 UTC.
+    let earliest_zip_date = SystemTime::UNIX_EPOCH + Duration::from_hours(87_648);
     assert!(
         mtime >= earliest_zip_date,
         "extracted source mtime precedes 1980: {mtime:?}"
