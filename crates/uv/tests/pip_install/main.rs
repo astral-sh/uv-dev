@@ -9,6 +9,8 @@ mod binary_policy;
 mod direct_url_hashes;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod json;
+#[cfg(feature = "test-python")]
+mod no_index;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_install;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
