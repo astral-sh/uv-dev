@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::{borrow::Cow, collections::VecDeque, sync::Arc};
 
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -8,6 +8,7 @@ use tracing::trace;
 use uv_configuration::{Constraints, DependencyModifierScope, DependencyModifiers};
 use uv_distribution::{DistributionDatabase, Reporter};
 use uv_distribution_types::{Dist, Identifier, Requirement, RequirementSource};
+use uv_normalize::ExtraName;
 use uv_resolver::{InMemoryIndex, MetadataResponse, ResolverEnvironment};
 use uv_types::{BuildContext, HashStrategy, HashVerification, RequestedRequirements};
 
@@ -73,7 +74,7 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
         }
     }
 
-    /// Resolve the requirements from the provided source trees.
+    /// Resolve first-party requirements from direct URLs.
     ///
     /// When the environment is not given, this treats all marker expressions
     /// that reference the environment as true. In other words, it does
@@ -87,6 +88,10 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
         let mut futures = FuturesUnordered::new();
         let mut seen = FxHashSet::default();
         let mut hasher = self.hasher.clone();
+        let is_applicable = |requirement: &Requirement, extras: &[ExtraName]| {
+            !matches!(requirement.source, RequirementSource::Registry { .. })
+                && requirement.evaluate_markers(env.marker_environment(), extras)
+        };
 
         // Queue up the initial requirements.
         let mut queue: VecDeque<_> = self
@@ -95,16 +100,14 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
                 self.modifiers
                     .apply(DependencyModifierScope::Global, self.requirements),
             )
-            .filter(|requirement| requirement.evaluate_markers(env.marker_environment(), &[]))
-            .map(|requirement| (*requirement).clone())
+            .filter(|requirement| is_applicable(requirement, &[]))
+            .map(Cow::into_owned)
             .collect();
 
         while !queue.is_empty() || !futures.is_empty() {
             while let Some(requirement) = queue.pop_front() {
-                if !matches!(requirement.source, RequirementSource::Registry { .. }) {
-                    if seen.insert(requirement.clone()) {
-                        futures.push(self.lookahead(requirement, hasher.clone()));
-                    }
+                if seen.insert(requirement.clone()) {
+                    futures.push(self.lookahead(requirement, hasher.clone()));
                 }
             }
 
@@ -145,10 +148,8 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
                         DependencyModifierScope::Package(lookahead.package(), lookahead.version()),
                         lookahead.requirements(),
                     )) {
-                        if requirement
-                            .evaluate_markers(env.marker_environment(), lookahead.extras())
-                        {
-                            queue.push_back((*requirement).clone());
+                        if is_applicable(&requirement, lookahead.extras()) {
+                            queue.push_back(requirement.into_owned());
                         }
                     }
                     results.push(lookahead);
@@ -159,7 +160,7 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
         Ok((results, hasher))
     }
 
-    /// Infer the package name for a given "unnamed" requirement.
+    /// Resolve the first-party dependencies of a direct URL requirement.
     async fn lookahead(
         &self,
         requirement: Requirement,
