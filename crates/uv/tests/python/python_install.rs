@@ -3997,19 +3997,6 @@ fn python_install_armv7() {
 
 #[test]
 fn python_install_compile_bytecode() -> anyhow::Result<()> {
-    fn count_files_by_ext(dir: &Path, extension: &str) -> anyhow::Result<usize> {
-        let mut count = 0;
-        let walker = WalkDir::new(dir).into_iter();
-        for entry in walker {
-            let entry = entry?;
-            let path = entry.path();
-            if entry.metadata()?.is_file() && path.extension().is_some_and(|ext| ext == extension) {
-                count += 1;
-            }
-        }
-        Ok(count)
-    }
-
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -4046,9 +4033,28 @@ fn python_install_compile_bytecode() -> anyhow::Result<()> {
         .context("Python binary should be a child of the installation path")?
         .join("Lib");
 
-    // And the count should match
-    let pyc_count = count_files_by_ext(&stdlib, "pyc")?;
-    let py_count = count_files_by_ext(&stdlib, "py")?;
+    let mut py_count = 0;
+    let mut pyc_count = 0;
+    for entry in WalkDir::new(&stdlib) {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        match entry
+            .path()
+            .extension()
+            .and_then(|extension| extension.to_str())
+        {
+            Some("py") => py_count += 1,
+            Some("pyc") => pyc_count += 1,
+            _ => {}
+        }
+    }
+    assert!(
+        py_count > 0,
+        "expected Python sources in {}",
+        stdlib.display()
+    );
     assert_eq!(pyc_count, py_count);
 
     // Attempting to install with --compile-bytecode should (currently)
