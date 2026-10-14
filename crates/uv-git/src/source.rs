@@ -190,8 +190,8 @@ impl Fetch {
         &self.path
     }
 
-    pub fn lfs_ready(&self) -> &bool {
-        &self.lfs_ready
+    pub fn lfs_ready(&self) -> bool {
+        self.lfs_ready
     }
 }
 
