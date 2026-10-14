@@ -9,11 +9,15 @@ use uv_configuration::{Concurrency, Constraints, GitLfsSetting};
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    IndexCapabilities, Requirement, RequirementScope, RequirementSource, UnresolvedRequirement,
+    UnresolvedRequirementSpecification,
 };
+use uv_pep440::{VersionSpecifier, VersionSpecifiers};
+use uv_pep508::MarkerTree;
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::NamedRequirementsResolver;
+use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::FlatIndex;
 use uv_settings::ResolverSettings;
@@ -22,6 +26,7 @@ use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
 use crate::error::ToolError;
+use crate::{Target, ToolRequest};
 
 /// Resolve any [`UnresolvedRequirementSpecification`] into a fully-qualified [`Requirement`].
 pub(super) async fn resolve_names(
@@ -173,4 +178,67 @@ pub(super) async fn resolve_names(
     );
 
     Ok(requirements)
+}
+
+/// Resolve `@latest` to an exact version constraint to prevent backtracking.
+pub(super) async fn resolve_latest<E>(
+    request: &ToolRequest<'_>,
+    interpreter: &Interpreter,
+    settings: &ResolverSettings,
+    client_builder: &BaseClientBuilder<'_>,
+    concurrency: &Concurrency,
+    cache: &Cache,
+) -> Result<Option<Requirement>, E>
+where
+    E: From<uv_client::ClientBuildError> + From<uv_client::Error>,
+{
+    let ToolRequest::Package {
+        target: Target::Latest(_, name, _),
+        ..
+    } = request
+    else {
+        return Ok(None);
+    };
+
+    let client = RegistryClientBuilder::new(
+        client_builder.clone().keyring(settings.keyring_provider),
+        cache.clone(),
+    )
+    .index_locations(settings.index_locations.clone())
+    .index_strategy(settings.index_strategy)
+    .markers(interpreter.markers())
+    .platform(interpreter.platform())
+    .build()?;
+
+    let capabilities = IndexCapabilities::default();
+    let latest_client = LatestClient {
+        client: &client,
+        capabilities: &capabilities,
+        prerelease: &settings.prerelease,
+        exclude_newer: &settings.exclude_newer,
+        index_locations: &settings.index_locations,
+        tags: None,
+        requires_python: None,
+    };
+    let Some(filename) = latest_client
+        .find_latest(name, None, &concurrency.downloads_semaphore)
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    let version = filename.version().clone();
+    Ok(Some(Requirement {
+        name: name.clone(),
+        extras: Box::new([]),
+        groups: Box::new([]),
+        marker: MarkerTree::default(),
+        source: RequirementSource::Registry {
+            specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
+            index: None,
+            conflict: None,
+        },
+        scope: RequirementScope::Global,
+        origin: None,
+    }))
 }
