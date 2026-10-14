@@ -750,7 +750,7 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
 
     insta::assert_json_snapshot!(metadata["environment"]["packages"], @"{}");
-    assert!(metadata["module_owners"].is_null());
+    assert_metadata_field_absent(&metadata, "module_owners");
     uv_snapshot!(context.filters(), context.pip_show().arg("metadata-extra"), @"
     exit_code: 1 (failure)
     ----- stderr -----
