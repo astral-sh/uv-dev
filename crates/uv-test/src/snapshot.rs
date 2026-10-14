@@ -7,6 +7,7 @@ use std::env;
 use std::io::Write as _;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::thread;
 
 use regex::{Regex, regex};
 
@@ -135,16 +136,18 @@ pub fn run_and_format_silent<T: AsRef<str>>(
             .stderr(Stdio::piped())
             .spawn()
             .unwrap_or_else(|err| panic!("Failed to spawn {program}: {err}"));
-        child
-            .stdin
-            .as_mut()
-            .expect("Failed to open stdin")
-            .write_all(input.as_bytes())
-            .expect("Failed to write to stdin");
-
-        child
-            .wait_with_output()
-            .unwrap_or_else(|err| panic!("Failed to read output from {program}: {err}"))
+        let mut stdin = child.stdin.take().expect("Failed to open stdin");
+        thread::scope(|scope| {
+            // Drain stdout and stderr while writing stdin so neither side can fill its pipe and
+            // block waiting for the other.
+            let writer = scope.spawn(move || stdin.write_all(input.as_bytes()));
+            let output = child.wait_with_output();
+            writer
+                .join()
+                .expect("Stdin writer panicked")
+                .unwrap_or_else(|err| panic!("Failed to write to {program} stdin: {err}"));
+            output.unwrap_or_else(|err| panic!("Failed to read output from {program}: {err}"))
+        })
     } else {
         command
             .borrow_mut()
@@ -405,6 +408,28 @@ mod process_status_tests {
             run_and_format_silent(command, filters, "preserves_exit_code", None, None);
 
         insta::assert_snapshot!(snapshot, @"exit_code: 7 (failure)");
+    }
+
+    #[test]
+    fn drains_output_while_writing_input() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "dd if=/dev/zero bs=1024 count=2048 2>/dev/null && cat >/dev/null && printf done",
+        ]);
+        let input = "x".repeat(2 * 1024 * 1024);
+        let filters: &[(&str, &str)] = &[];
+        let (_, output) = run_and_format_silent(
+            command,
+            filters,
+            "drains_output_while_writing_input",
+            None,
+            Some(&input),
+        );
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout.len(), input.len() + b"done".len());
+        assert!(output.stdout.ends_with(b"done"));
     }
 }
 
