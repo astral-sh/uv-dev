@@ -268,10 +268,11 @@ pub async fn compile_files(
     cache: &Path,
 ) -> Result<usize, CompileError> {
     let mut files = files.into_iter();
-    let mut initial_files = Vec::with_capacity(concurrency.installs);
-    for file in files.by_ref().take(concurrency.installs) {
-        initial_files.push(file.map_err(CompileError::SourceFiles)?);
-    }
+    let initial_files = files
+        .by_ref()
+        .take(concurrency.installs)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(CompileError::SourceFiles)?;
     if initial_files.is_empty() {
         return Ok(0);
     }
