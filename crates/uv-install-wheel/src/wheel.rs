@@ -1117,9 +1117,9 @@ pub(crate) fn find_dist_info(path: impl AsRef<Path>) -> Result<String, Error> {
             let entry = entry.ok()?;
             let file_type = entry.file_type().ok()?;
             if file_type.is_dir() {
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "dist-info") {
-                    return Some(path);
+                let filename = PathBuf::from(entry.file_name());
+                if filename.extension().is_some_and(|ext| ext == "dist-info") {
+                    return Some(filename);
                 }
             }
             None
