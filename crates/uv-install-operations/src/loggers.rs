@@ -3,15 +3,13 @@ use std::fmt;
 use std::fmt::Write;
 
 use itertools::Itertools;
-use owo_colors::OwoColorize;
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use owo_colors::{AnsiColors, OwoColorize};
 
 use uv_configuration::DryRun;
 use uv_distribution_types::Name;
 use uv_normalize::PackageName;
 
-use crate::{ChangeEvent, ChangeEventKind};
-use crate::{Changelog, ShortSpecifier};
+use crate::{ChangeEvent, ChangeEventKind, ChangedDist, Changelog, ShortSpecifier};
 use uv_command_support::Printer;
 use uv_command_support::elapsed;
 
@@ -62,6 +60,49 @@ pub trait InstallLogger {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultInstallLogger;
 
+/// An installation phase with a package-count summary.
+enum InstallPhase<'a> {
+    Prepare(Option<&'a str>),
+    Uninstall,
+    Install,
+}
+
+impl InstallPhase<'_> {
+    fn write(
+        self,
+        count: usize,
+        start: std::time::Instant,
+        printer: Printer,
+        dry_run: DryRun,
+    ) -> fmt::Result {
+        let (completed, pending, suffix) = match self {
+            Self::Prepare(suffix) => ("Prepared", "Would download", suffix),
+            Self::Uninstall => ("Uninstalled", "Would uninstall", None),
+            Self::Install => ("Installed", "Would install", None),
+        };
+        let plural = if count == 1 { "" } else { "s" };
+        let what = if let Some(suffix) = suffix {
+            format!("{count} package{plural} {suffix}")
+        } else {
+            format!("{count} package{plural}")
+        };
+        let what = what.bold();
+        writeln!(
+            printer.stderr(),
+            "{}",
+            if dry_run.enabled() {
+                format!("{pending} {what}")
+            } else {
+                format!(
+                    "{completed} {what} {}",
+                    format!("in {}", elapsed(start.elapsed())).dimmed()
+                )
+            }
+            .dimmed()
+        )
+    }
+}
+
 impl InstallLogger for DefaultInstallLogger {
     fn on_check(
         &self,
@@ -103,26 +144,7 @@ impl InstallLogger for DefaultInstallLogger {
         printer: Printer,
         dry_run: DryRun,
     ) -> fmt::Result {
-        let s = if count == 1 { "" } else { "s" };
-        let what = if let Some(suffix) = suffix {
-            format!("{count} package{s} {suffix}")
-        } else {
-            format!("{count} package{s}")
-        };
-        let what = what.bold();
-        writeln!(
-            printer.stderr(),
-            "{}",
-            if dry_run.enabled() {
-                format!("Would download {what}")
-            } else {
-                format!(
-                    "Prepared {what} {}",
-                    format!("in {}", elapsed(start.elapsed())).dimmed()
-                )
-            }
-            .dimmed()
-        )
+        InstallPhase::Prepare(suffix).write(count, start, printer, dry_run)
     }
 
     fn on_uninstall(
@@ -132,22 +154,7 @@ impl InstallLogger for DefaultInstallLogger {
         printer: Printer,
         dry_run: DryRun,
     ) -> fmt::Result {
-        let s = if count == 1 { "" } else { "s" };
-        let what = format!("{count} package{s}");
-        let what = what.bold();
-        writeln!(
-            printer.stderr(),
-            "{}",
-            if dry_run.enabled() {
-                format!("Would uninstall {what}")
-            } else {
-                format!(
-                    "Uninstalled {what} {}",
-                    format!("in {}", elapsed(start.elapsed())).dimmed()
-                )
-            }
-            .dimmed()
-        )
+        InstallPhase::Uninstall.write(count, start, printer, dry_run)
     }
 
     fn on_install(
@@ -157,22 +164,7 @@ impl InstallLogger for DefaultInstallLogger {
         printer: Printer,
         dry_run: DryRun,
     ) -> fmt::Result {
-        let s = if count == 1 { "" } else { "s" };
-        let what = format!("{count} package{s}");
-        let what = what.bold();
-        writeln!(
-            printer.stderr(),
-            "{}",
-            if dry_run.enabled() {
-                format!("Would install {what}")
-            } else {
-                format!(
-                    "Installed {what} {}",
-                    format!("in {}", elapsed(start.elapsed())).dimmed()
-                )
-            }
-            .dimmed()
-        )
+        InstallPhase::Install.write(count, start, printer, dry_run)
     }
 
     fn on_complete(
@@ -209,35 +201,18 @@ impl InstallLogger for DefaultInstallLogger {
                     .then_with(|| a.dist.long_specifier().cmp(&b.dist.long_specifier()))
             })
         {
-            match event.kind {
-                ChangeEventKind::Added => {
-                    writeln!(
-                        printer.stderr(),
-                        " {} {}{}",
-                        "+".green(),
-                        event.dist.name().bold(),
-                        event.dist.long_specifier().dimmed()
-                    )?;
-                }
-                ChangeEventKind::Removed => {
-                    writeln!(
-                        printer.stderr(),
-                        " {} {}{}",
-                        "-".red(),
-                        event.dist.name().bold(),
-                        event.dist.long_specifier().dimmed()
-                    )?;
-                }
-                ChangeEventKind::Reinstalled => {
-                    writeln!(
-                        printer.stderr(),
-                        " {} {}{}",
-                        "~".yellow(),
-                        event.dist.name().bold(),
-                        event.dist.long_specifier().dimmed()
-                    )?;
-                }
-            }
+            let (symbol, color) = match event.kind {
+                ChangeEventKind::Added => ("+", AnsiColors::Green),
+                ChangeEventKind::Removed => ("-", AnsiColors::Red),
+                ChangeEventKind::Reinstalled => ("~", AnsiColors::Yellow),
+            };
+            writeln!(
+                printer.stderr(),
+                " {} {}{}",
+                symbol.color(color),
+                event.dist.name().bold(),
+                event.dist.long_specifier().dimmed()
+            )?;
         }
         Ok(())
     }
@@ -313,6 +288,33 @@ impl UpgradeInstallLogger {
     }
 }
 
+/// The distinct specifiers associated with an upgrade target.
+#[derive(Debug, PartialEq, Eq)]
+struct TargetSpecifiers<'a>(BTreeSet<ShortSpecifier<'a>>);
+
+impl<'a> TargetSpecifiers<'a> {
+    fn for_package(
+        package: &PackageName,
+        distributions: impl IntoIterator<Item = &'a ChangedDist>,
+    ) -> Option<Self> {
+        let specifiers = distributions
+            .into_iter()
+            .filter(|distribution| distribution.name() == package)
+            .map(ChangedDist::short_specifier)
+            .collect::<BTreeSet<_>>();
+        (!specifiers.is_empty()).then_some(Self(specifiers))
+    }
+}
+
+impl fmt::Display for TargetSpecifiers<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let specifiers = self.0.iter().format_with(", ", |specifier, write| {
+            write(&format_args!("v{specifier}"))
+        });
+        write!(formatter, "{specifiers}")
+    }
+}
+
 impl InstallLogger for UpgradeInstallLogger {
     fn on_check(
         &self,
@@ -362,73 +364,31 @@ impl InstallLogger for UpgradeInstallLogger {
         // TODO(tk): Adjust format for dry_run
         _dry_run: DryRun,
     ) -> fmt::Result {
-        // Index the removals by package name.
-        let removals: FxHashMap<&PackageName, BTreeSet<ShortSpecifier>> =
-            changelog.uninstalled.iter().fold(
-                FxHashMap::with_capacity_and_hasher(changelog.uninstalled.len(), FxBuildHasher),
-                |mut acc, distribution| {
-                    acc.entry(distribution.name())
-                        .or_default()
-                        .insert(distribution.short_specifier());
-                    acc
-                },
-            );
-
-        // Index the additions by package name.
-        let additions: FxHashMap<&PackageName, BTreeSet<ShortSpecifier>> =
-            changelog.installed.iter().fold(
-                FxHashMap::with_capacity_and_hasher(changelog.installed.len(), FxBuildHasher),
-                |mut acc, distribution| {
-                    acc.entry(distribution.name())
-                        .or_default()
-                        .insert(distribution.short_specifier());
-                    acc
-                },
-            );
+        let removals = TargetSpecifiers::for_package(&self.target, &changelog.uninstalled);
+        let additions = TargetSpecifiers::for_package(&self.target, &changelog.installed);
 
         // Summarize the change for the target.
-        match (removals.get(&self.target), additions.get(&self.target)) {
+        match (removals, additions) {
+            (Some(removals), Some(additions)) if removals == additions => {
+                writeln!(
+                    printer.stderr(),
+                    "{} {} {}",
+                    "Reinstalled".yellow().bold(),
+                    self.target,
+                    additions
+                )?;
+            }
             (Some(removals), Some(additions)) => {
-                if removals == additions {
-                    let reinstalls = additions
-                        .iter()
-                        .map(|version| format!("v{version}"))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    writeln!(
-                        printer.stderr(),
-                        "{} {} {}",
-                        "Reinstalled".yellow().bold(),
-                        self.target,
-                        reinstalls
-                    )?;
-                } else {
-                    let removals = removals
-                        .iter()
-                        .map(|version| format!("v{version}"))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let additions = additions
-                        .iter()
-                        .map(|version| format!("v{version}"))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    writeln!(
-                        printer.stderr(),
-                        "{} {} {} -> {}",
-                        "Updated".green().bold(),
-                        self.target,
-                        removals,
-                        additions
-                    )?;
-                }
+                writeln!(
+                    printer.stderr(),
+                    "{} {} {} -> {}",
+                    "Updated".green().bold(),
+                    self.target,
+                    removals,
+                    additions
+                )?;
             }
             (Some(removals), None) => {
-                let removals = removals
-                    .iter()
-                    .map(|version| format!("v{version}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
                 writeln!(
                     printer.stderr(),
                     "{} {} {}",
@@ -438,11 +398,6 @@ impl InstallLogger for UpgradeInstallLogger {
                 )?;
             }
             (None, Some(additions)) => {
-                let additions = additions
-                    .iter()
-                    .map(|version| format!("v{version}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
                 writeln!(
                     printer.stderr(),
                     "{} {} {}",
