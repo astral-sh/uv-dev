@@ -5,6 +5,22 @@ use assert_fs::prelude::*;
 use uv_cache::{Cache, CacheBucket};
 use uv_test::{assert_path_missing, uv_snapshot};
 
+/// `cache prune --ci` should be a no-op if the cache does not contain any buckets.
+#[test]
+fn prune_ci_empty_cache() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_cache_dir("empty-cache");
+    context.cache_dir.create_dir_all()?;
+
+    uv_snapshot!(context.filters(), context.prune().arg("--ci"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Pruning cache at: [CACHE_DIR]/
+    No unused entries found
+    ");
+
+    Ok(())
+}
+
 /// Cache pruning removes obsolete bucket versions without touching the current bucket.
 #[test]
 fn prune_stale_directory() -> Result<()> {
