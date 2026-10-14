@@ -994,25 +994,25 @@ fn create_venv_reads_request_from_python_versions_file() -> Result<()> {
 
 #[test]
 fn create_venv_respects_pyproject_requires_python() -> Result<()> {
-    let mut context = uv_test::test_context_with_versions!(&["3.11", "3.9", "3.10", "3.12"]);
+    let mut context = uv_test::test_context_with_versions!(&["3.12", "3.10", "3.11"]);
 
     // Without a Python requirement, we use the first on the PATH
     uv_snapshot!(context.filters(), context.venv(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     "
     );
 
-    // With `requires-python = "<3.11"`, we prefer the first available version
+    // Skip the incompatible first interpreter and select the first of two compatible versions.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
-        requires-python = "<3.11"
+        requires-python = "<3.12"
         dependencies = []
         "#
     })?;
@@ -1020,14 +1020,14 @@ fn create_venv_respects_pyproject_requires_python() -> Result<()> {
     uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+    Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     "
     );
 
-    // Put an incompatible interpreter first so the following requirements must filter it out.
-    context.python_versions.swap(0, 1);
+    // Put 3.10 first to distinguish requirements that accept it from those requiring 3.11 or later.
+    context.python_versions.rotate_left(1);
 
     // With `requires-python = "==3.11.*"`, we prefer exact version (3.11)
     pyproject_toml.write_str(indoc! { r#"
@@ -1067,7 +1067,7 @@ fn create_venv_respects_pyproject_requires_python() -> Result<()> {
     "
     );
 
-    // With `requires-python = ">=3.10"`, we prefer first compatible version (3.11)
+    // With `requires-python = ">=3.10"`, we prefer the first compatible version (3.10).
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
@@ -1080,7 +1080,7 @@ fn create_venv_respects_pyproject_requires_python() -> Result<()> {
     uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
+    Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     "
@@ -1161,20 +1161,19 @@ fn create_venv_respects_pyproject_requires_python() -> Result<()> {
 
 #[test]
 fn create_venv_respects_group_requires_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.10", "3.11", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.10", "3.11", "3.12"]);
 
     // Without a Python requirement, we use the first on the PATH
     uv_snapshot!(context.filters(), context.venv(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+    Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     "
     );
 
-    // With `requires-python = ">=3.10"` on the default group, we pick 3.10
-    // However non-default groups should not be consulted!
+    // The default group's lower bound applies, while the stricter non-default group is ignored.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
@@ -1187,7 +1186,7 @@ fn create_venv_respects_group_requires_python() -> Result<()> {
         other = ["sniffio"]
 
         [tool.uv.dependency-groups]
-        dev = {requires-python = ">=3.10"}
+        dev = {requires-python = ">=3.11"}
         other = {requires-python = ">=3.12"}
         "#
     })?;
@@ -1195,7 +1194,7 @@ fn create_venv_respects_group_requires_python() -> Result<()> {
     uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.10.[X] interpreter at: [PYTHON-3.10]
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     "
