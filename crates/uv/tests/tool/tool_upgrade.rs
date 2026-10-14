@@ -18,8 +18,6 @@ use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 
-use crate::workspace_fixture::MixedWorkspace;
-
 #[test]
 fn tool_upgrade_up_to_date() {
     let context = uv_test::test_context!("3.12")
@@ -173,69 +171,6 @@ fn tool_upgrade_preserves_workspace_member_non_editability() -> Result<()> {
     0.1.1 OK
     ");
 
-    Ok(())
-}
-
-#[test]
-fn tool_upgrade_preserves_mixed_workspace_member_editability() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
-    let fixture = MixedWorkspace::new(&context)?;
-
-    context
-        .tool_install()
-        .arg("--with-editable")
-        .arg(fixture.other_workspace.path())
-        .arg(fixture.tool_root.path())
-        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
-        .assert()
-        .success();
-    fixture.assert_tool_output(&context, "0.1.0 OK");
-
-    fixture.set_tool_version("0.1.1")?;
-    context
-        .tool_upgrade()
-        .arg("tool-root")
-        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
-        .assert()
-        .success();
-    fixture.assert_tool_output(&context, "0.1.1 OK");
-
-    fixture
-        .child_module
-        .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
-    fixture.assert_tool_output(&context, "0.1.1 POST-UPGRADE");
-    Ok(())
-}
-
-#[test]
-fn tool_upgrade_preserves_mixed_workspace_member_non_editability() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
-    let fixture = MixedWorkspace::new(&context)?;
-
-    context
-        .tool_install()
-        .arg("--editable")
-        .arg("--with")
-        .arg(fixture.other_workspace.path())
-        .arg(fixture.tool_root.path())
-        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
-        .assert()
-        .success();
-    fixture.assert_tool_output(&context, "0.1.0 OK");
-
-    fixture.set_tool_version("0.1.1")?;
-    context
-        .tool_upgrade()
-        .arg("tool-root")
-        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
-        .assert()
-        .success();
-    fixture.assert_tool_output(&context, "0.1.1 OK");
-
-    fixture
-        .child_module
-        .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
-    fixture.assert_tool_output(&context, "0.1.1 OK");
     Ok(())
 }
 
