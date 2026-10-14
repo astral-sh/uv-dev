@@ -628,7 +628,13 @@ fn sync_recovers_from_centralized_environment_path_file() -> Result<()> {
 
     // An arbitrary `.venv` file is preserved.
     environment.write_str("user-data")?;
-    context.sync().assert().failure();
+    context
+        .sync()
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "expected directory but found a file",
+        ));
     assert_eq!(context.read(".venv"), "user-data");
 
     // A centralized path file can be replaced when returning to a local environment.
