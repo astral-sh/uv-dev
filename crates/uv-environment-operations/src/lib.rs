@@ -114,40 +114,34 @@ impl std::fmt::Display for ConflictError {
             (None, "declared conflicts")
         };
 
-        let conflicts = self
-            .conflicts
-            .iter()
-            .enumerate()
-            .map(|(index, conflict)| {
-                let (kind, name, enabled_by_default): (&str, &str, bool) = match conflict.kind() {
-                    ConflictKind::Project => ("package ", conflict.package().as_ref(), false),
-                    ConflictKind::Extra(extra) => ("extra ", extra.as_ref(), false),
-                    ConflictKind::Group(group) => (
-                        "group ",
-                        group.as_ref(),
-                        self.groups.contains_because_default(group),
-                    ),
-                };
-                let kind = if shared_kind.is_none() { kind } else { "" };
-                let default_suffix = if enabled_by_default {
-                    " (enabled by default)"
-                } else {
-                    ""
-                };
-                let conflict = format!("{kind}`{name}`{default_suffix}");
-                if index == 0 && shared_kind.is_none() {
-                    capitalize(&conflict)
-                } else {
-                    conflict
-                }
-            })
-            .collect();
+        let conflicts = conjunction(self.conflicts.iter().enumerate().map(|(index, conflict)| {
+            let (kind, name, enabled_by_default): (&str, &str, bool) = match conflict.kind() {
+                ConflictKind::Project => ("package ", conflict.package().as_ref(), false),
+                ConflictKind::Extra(extra) => ("extra ", extra.as_ref(), false),
+                ConflictKind::Group(group) => (
+                    "group ",
+                    group.as_ref(),
+                    self.groups.contains_because_default(group),
+                ),
+            };
+            let kind = if shared_kind.is_none() { kind } else { "" };
+            let default_suffix = if enabled_by_default {
+                " (enabled by default)"
+            } else {
+                ""
+            };
+            let conflict = format!("{kind}`{name}`{default_suffix}");
+            if index == 0 && shared_kind.is_none() {
+                capitalize(&conflict)
+            } else {
+                conflict
+            }
+        }));
 
         write!(
             f,
-            "{}{} are incompatible with the {description}: {{{set}}}",
-            shared_kind.unwrap_or_default(),
-            conjunction(conflicts)
+            "{}{conflicts} are incompatible with the {description}: {{{set}}}",
+            shared_kind.unwrap_or_default()
         )
     }
 }
