@@ -64,13 +64,14 @@ pub enum LegacySourceDistExtension {
 impl DistExtension {
     /// Extract the [`DistExtension`] from a path.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ExtensionError> {
-        let Some(extension) = path.as_ref().extension().and_then(|ext| ext.to_str()) else {
+        let path = path.as_ref();
+        let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
             return Err(ExtensionError::Dist);
         };
 
         match extension {
             "whl" => Ok(Self::Wheel),
-            _ => SourceDistExtension::from_path(path)
+            _ => SourceDistExtension::from_path_with_extension(path, extension)
                 .map(Self::Source)
                 .map_err(|_| ExtensionError::Dist),
         }
@@ -88,6 +89,14 @@ impl DistExtension {
 impl SourceDistExtension {
     /// Extract the [`SourceDistExtension`] from a path.
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ExtensionError> {
+        let path = path.as_ref();
+        let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+            return Err(ExtensionError::SourceDist);
+        };
+        Self::from_path_with_extension(path, extension)
+    }
+
+    fn from_path_with_extension(path: &Path, extension: &str) -> Result<Self, ExtensionError> {
         /// Returns true if the path is a tar file (e.g., `.tar.gz`).
         fn is_tar(path: &Path) -> bool {
             path.file_stem().is_some_and(|stem| {
@@ -97,23 +106,19 @@ impl SourceDistExtension {
             })
         }
 
-        let Some(extension) = path.as_ref().extension().and_then(|ext| ext.to_str()) else {
-            return Err(ExtensionError::SourceDist);
-        };
-
         match extension {
-            "gz" if is_tar(path.as_ref()) => Ok(Self::TarGz),
+            "gz" if is_tar(path) => Ok(Self::TarGz),
             "zip" => Ok(Self::Legacy(LegacySourceDistExtension::Zip)),
             "tar" => Ok(Self::Legacy(LegacySourceDistExtension::Tar)),
             "tgz" => Ok(Self::Legacy(LegacySourceDistExtension::Tgz)),
             "tbz" => Ok(Self::Legacy(LegacySourceDistExtension::Tbz)),
             "txz" => Ok(Self::Legacy(LegacySourceDistExtension::Txz)),
             "tlz" => Ok(Self::Legacy(LegacySourceDistExtension::Tlz)),
-            "bz2" if is_tar(path.as_ref()) => Ok(Self::Legacy(LegacySourceDistExtension::TarBz2)),
-            "xz" if is_tar(path.as_ref()) => Ok(Self::Legacy(LegacySourceDistExtension::TarXz)),
-            "lz" if is_tar(path.as_ref()) => Ok(Self::Legacy(LegacySourceDistExtension::TarLz)),
-            "lzma" if is_tar(path.as_ref()) => Ok(Self::Legacy(LegacySourceDistExtension::TarLzma)),
-            "zst" if is_tar(path.as_ref()) => Ok(Self::Legacy(LegacySourceDistExtension::TarZst)),
+            "bz2" if is_tar(path) => Ok(Self::Legacy(LegacySourceDistExtension::TarBz2)),
+            "xz" if is_tar(path) => Ok(Self::Legacy(LegacySourceDistExtension::TarXz)),
+            "lz" if is_tar(path) => Ok(Self::Legacy(LegacySourceDistExtension::TarLz)),
+            "lzma" if is_tar(path) => Ok(Self::Legacy(LegacySourceDistExtension::TarLzma)),
+            "zst" if is_tar(path) => Ok(Self::Legacy(LegacySourceDistExtension::TarZst)),
             _ => Err(ExtensionError::SourceDist),
         }
     }
