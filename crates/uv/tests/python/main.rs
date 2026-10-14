@@ -24,7 +24,7 @@ mod python_install_repair;
 
 mod python_list;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod python_module;
 
 mod python_pin;
