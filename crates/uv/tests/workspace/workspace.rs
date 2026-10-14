@@ -833,7 +833,7 @@ fn workspace_to_workspace_paths_dependencies() -> Result<()> {
     "#};
     make_project(&other_workspace.join("packages").join("e"), "e", deps)?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&main_workspace), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&main_workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -859,6 +859,24 @@ fn workspace_to_workspace_paths_dependencies() -> Result<()> {
       }
     }
     "#);
+
+    context
+        .sync()
+        .args(["--frozen", "--offline", "--package", "a"])
+        .current_dir(&main_workspace)
+        .assert()
+        .success();
+    let python = uv_test::venv_bin_path(main_workspace.join(".venv"))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    std::process::Command::new(python)
+        .args([
+            "-I",
+            "-c",
+            "from importlib.metadata import distributions; print('\\n'.join(sorted(d.metadata['Name'] for d in distributions())))",
+        ])
+        .assert()
+        .success()
+        .stdout("a\nb\nc\nd\n");
 
     Ok(())
 }
