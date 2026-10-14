@@ -1,6 +1,5 @@
 #![cfg(not(windows))]
 
-#[cfg(any(feature = "test-pypi", feature = "test-python"))]
 use assert_fs::fixture::{FileWriteStr, PathChild};
 
 use uv_test::uv_snapshot;
@@ -99,7 +98,6 @@ fn nested_dependencies() {
 }
 
 #[test]
-#[cfg(feature = "test-python")]
 fn reverse_dependencies() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     write_branching_dependency_metadata(&context)?;
@@ -187,7 +185,6 @@ fn depth() {
     );
 }
 
-#[cfg(feature = "test-python")]
 fn write_branching_dependency_metadata(context: &uv_test::TestContext) -> anyhow::Result<()> {
     use assert_fs::fixture::{ChildPath, PathCreateDir};
 
@@ -212,7 +209,6 @@ fn write_branching_dependency_metadata(context: &uv_test::TestContext) -> anyhow
 }
 
 #[test]
-#[cfg(feature = "test-python")]
 fn prune() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     write_branching_dependency_metadata(&context)?;
