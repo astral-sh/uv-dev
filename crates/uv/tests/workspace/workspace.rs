@@ -957,8 +957,8 @@ fn workspace_gitignored_member() -> Result<()> {
         members = ["packages/*"]
     "#})?;
 
-    // ... with a `.gitignore` that ignores `__pycache__` ...
-    workspace.child(".gitignore").write_str("__pycache__/\n")?;
+    let gitignore = workspace.child(".gitignore");
+    gitignore.write_str("uv-workspace-test-generated/\n")?;
 
     // ... with a  ...
     let deps = indoc! {r#"
@@ -974,16 +974,9 @@ fn workspace_gitignored_member() -> Result<()> {
     "};
     make_project(&workspace.join("packages").join("b"), "b", deps)?;
 
-    // ... and a c that only contains gitignored files.
-    fs_err::create_dir_all(workspace.join("packages").join("c").join("__pycache__"))?;
-    fs_err::write(
-        workspace
-            .join("packages")
-            .join("c")
-            .join("__pycache__")
-            .join("test.cpython-312.pyc"),
-        "fake",
-    )?;
+    workspace
+        .child("packages/c/uv-workspace-test-generated/content.txt")
+        .write_str("generated content")?;
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
     exit_code: 0 (success)
@@ -1005,6 +998,13 @@ fn workspace_gitignored_member() -> Result<()> {
       }
     }
     "#);
+
+    fs_err::remove_file(gitignore.path())?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Workspace member `[TEMP_DIR]/workspace/packages/c` is missing a `pyproject.toml` (matches: `packages/*`)
+    ");
 
     Ok(())
 }
@@ -1023,8 +1023,8 @@ fn workspace_gitignored_member_in_subdirectory() -> Result<()> {
         members = ["packages/*"]
     "#})?;
 
-    // ... with a `.gitignore` that ignores `__pycache__` ...
-    workspace.child(".gitignore").write_str("__pycache__/\n")?;
+    let gitignore = workspace.child(".gitignore");
+    gitignore.write_str("uv-workspace-test-generated/\n")?;
 
     // ... with a  ...
     let deps = indoc! {r#"
@@ -1040,23 +1040,9 @@ fn workspace_gitignored_member_in_subdirectory() -> Result<()> {
     "};
     make_project(&workspace.join("packages").join("b"), "b", deps)?;
 
-    // ... and a c that only contains gitignored files.
-    fs_err::create_dir_all(
-        workspace
-            .join("packages")
-            .join("c")
-            .join("foo")
-            .join("__pycache__"),
-    )?;
-    fs_err::write(
-        workspace
-            .join("packages")
-            .join("c")
-            .join("foo")
-            .join("__pycache__")
-            .join("test.cpython-312.pyc"),
-        "fake",
-    )?;
+    workspace
+        .child("packages/c/foo/uv-workspace-test-generated/content.txt")
+        .write_str("generated content")?;
 
     uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
     exit_code: 0 (success)
@@ -1078,6 +1064,13 @@ fn workspace_gitignored_member_in_subdirectory() -> Result<()> {
       }
     }
     "#);
+
+    fs_err::remove_file(gitignore.path())?;
+    uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Workspace member `[TEMP_DIR]/workspace/packages/c` is missing a `pyproject.toml` (matches: `packages/*`)
+    ");
 
     Ok(())
 }
