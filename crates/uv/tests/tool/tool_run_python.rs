@@ -1,4 +1,5 @@
 use assert_cmd::assert::OutputAssertExt;
+use indoc::indoc;
 use uv_test::{TestContext, uv_snapshot};
 
 fn context_with_global_python_pin() -> TestContext {
@@ -184,5 +185,74 @@ fn tool_run_python_at_version() {
 
     ----- stderr -----
     Resolved in [TIME]
+    ");
+}
+
+#[test]
+fn tool_run_python_from() {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_filtered_counts();
+
+    uv_snapshot!(context.filters(), context.tool_run().args(["--offline", "--from", "python", "python", "--version"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved in [TIME]
+    Checked in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.tool_run().args(["--offline", "--from", "python@3.11", "python", "--version"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.11.[X]
+
+    ----- stderr -----
+    Resolved in [TIME]
+    Checked in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.tool_run().args(["--offline", "--from", "python311", "python", "--version"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.11.[X]
+
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.tool_run().args(["--offline", "--from", "python>3.11,<3.13", "python", "--version"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Python 3.12.[X]
+
+    ----- stderr -----
+    Resolved in [TIME]
+    ");
+}
+
+#[test]
+fn tool_run_python_from_exposes_selected_interpreter_to_child() {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_filtered_counts();
+    let outer_python = context.python_command();
+    let script = indoc! {r#"
+        import subprocess
+        import sys
+
+        child = subprocess.check_output(["python", "--version"], text=True).strip()
+        print(f"outer={sys.version_info.major}.{sys.version_info.minor}; child={child}")
+    "#};
+
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--offline", "--from", "python@3.11"])
+        .arg(outer_python.get_program())
+        .args(["-c", script]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    outer=3.12; child=Python 3.11.[X]
+
+    ----- stderr -----
+    Resolved in [TIME]
+    Checked in [TIME]
     ");
 }
