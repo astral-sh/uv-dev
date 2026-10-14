@@ -960,7 +960,9 @@ impl TestContext {
 
         // The workspace root directory is not available without walking up the tree
         // https://github.com/rust-lang/cargo/issues/3946
-        let workspace_root = Path::new(&env::var(EnvVars::CARGO_MANIFEST_DIR).unwrap())
+        let manifest_dir = env::var_os(EnvVars::CARGO_MANIFEST_DIR)
+            .expect("CARGO_MANIFEST_DIR must be set for test contexts");
+        let workspace_root = Path::new(&manifest_dir)
             .parent()
             .expect("CARGO_MANIFEST_DIR should be nested in workspace")
             .parent()
@@ -1283,9 +1285,9 @@ impl TestContext {
 
         // Push the test context bin to the front of the PATH
         let path = env::join_paths(std::iter::once(self.bin_dir.to_path_buf()).chain(
-            env::split_paths(&env::var(EnvVars::PATH).unwrap_or_default()),
+            env::split_paths(&env::var_os(EnvVars::PATH).unwrap_or_default()),
         ))
-        .unwrap();
+        .expect("Failed to add test bin directory to PATH");
 
         // Ensure the tests aren't sensitive to the running user's shell without forcing
         // `bash` on Windows
