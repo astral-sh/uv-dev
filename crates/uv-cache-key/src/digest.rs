@@ -43,19 +43,18 @@ fn to_hex(num: u64) -> String {
 /// If `max_len` is provided, the output is truncated to at most that many bytes
 /// (trailing dashes from truncation are stripped).
 pub fn cache_name(name: &str, max_len: Option<usize>) -> Option<Cow<'_, str>> {
-    let limit = max_len.unwrap_or(usize::MAX);
+    let limit = name.len().min(max_len.unwrap_or(usize::MAX));
+    if limit == 0 {
+        return None;
+    }
 
     if name
         .bytes()
         .all(|char| matches!(char, b'0'..=b'9' | b'a'..=b'f'))
     {
-        return if name.is_empty() {
-            None
-        } else {
-            Some(Cow::Borrowed(name.get(..limit).unwrap_or(name)))
-        };
+        return Some(Cow::Borrowed(&name[..limit]));
     }
-    let mut normalized = String::with_capacity(name.len().min(limit));
+    let mut normalized = String::with_capacity(limit);
     let mut dash = false;
     for char in name.bytes().take(limit) {
         match char {
@@ -98,6 +97,7 @@ mod tests {
 
     #[test]
     fn test_cache_name_max_len() {
+        assert_eq!(cache_name("abc", Some(0)), None);
         let long = "a".repeat(300);
         assert_eq!(
             cache_name(&long, Some(100)).as_deref().map(str::len),
