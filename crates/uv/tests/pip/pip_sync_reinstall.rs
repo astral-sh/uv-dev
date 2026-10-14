@@ -71,6 +71,11 @@ fn all_packages() -> Result<()> {
 #[test]
 fn selected_package() -> Result<()> {
     let (context, index) = setup()?;
+    // The version check must inspect the installed package even when the project shadows it.
+    fs_err::write(
+        context.temp_dir.join("tomli.py"),
+        "__version__ = 'project-local'\n",
+    )?;
     uv_snapshot!(sync(&context, &index).args(["--reinstall-package", "tomli"]), @"
     exit_code: 0 (success)
     ----- stderr -----
