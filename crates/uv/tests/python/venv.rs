@@ -1654,10 +1654,10 @@ fn empty_dir_exists() -> Result<()> {
 fn non_empty_dir_exists() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
-    // Create a non-empty directory at `.venv`. Creating a virtualenv at the same path should fail,
-    // unless `--clear` is specified.
+    // Neither ordinary creation nor `--clear` may remove files from a non-venv directory.
     context.venv.create_dir_all()?;
-    context.venv.child("file").touch()?;
+    let existing_file = context.venv.child("file");
+    existing_file.write_str("existing contents\n")?;
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -1672,6 +1672,7 @@ fn non_empty_dir_exists() -> Result<()> {
 
     hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
     ");
+    assert_eq!(context.read(&existing_file), "existing contents\n");
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -1689,10 +1690,7 @@ fn non_empty_dir_exists() -> Result<()> {
     "
     );
 
-    context
-        .venv
-        .child("file")
-        .assert(predicates::path::is_file());
+    assert_eq!(context.read(&existing_file), "existing contents\n");
 
     Ok(())
 }
@@ -1717,7 +1715,10 @@ fn non_empty_dir_exists_clear_force() -> Result<()> {
     Activate with: source not-a-virtualenv/[BIN]/activate
     ");
 
-    directory.child("file").assert(predicates::path::missing());
+    assert_path_missing(directory.child("file"));
+    directory
+        .child("pyvenv.cfg")
+        .assert(predicates::path::is_file());
 
     Ok(())
 }
