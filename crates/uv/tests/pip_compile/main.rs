@@ -6,6 +6,8 @@ use uv_test::pypi_proxy;
 #[cfg(feature = "test-python")]
 mod artifact_hash_filtering;
 #[cfg(feature = "test-python")]
+mod build_failures;
+#[cfg(feature = "test-python")]
 mod editable;
 #[cfg(feature = "test-python")]
 mod find_links_inputs;
