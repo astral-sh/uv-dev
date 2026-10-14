@@ -96,7 +96,7 @@ pub enum TomlCredentialError {
     #[error("Failed to determine credentials directory")]
     CredentialsDirError,
     #[error("Token is not valid unicode")]
-    TokenNotUnicode(#[from] std::string::FromUtf8Error),
+    TokenNotUnicode(#[from] std::str::Utf8Error),
 }
 
 impl TomlCredentialError {
@@ -185,7 +185,7 @@ impl TryFrom<TomlCredential> for TomlCredentialWire {
                 username: Username::new(None),
                 scheme: AuthScheme::Bearer,
                 password: None,
-                token: Some(String::from_utf8(token.into_bytes())?),
+                token: Some(String::from_utf8(token.into_bytes()).map_err(|err| err.utf8_error())?),
             },
         })
     }
@@ -661,10 +661,13 @@ password = "pass2"
             Credentials::bearer(vec![0xff]),
         );
 
-        assert!(matches!(
-            store.write(lock),
-            Err(TomlCredentialError::TokenNotUnicode(_))
-        ));
+        let error = store.write(lock).unwrap_err();
+        assert!(matches!(error, TomlCredentialError::TokenNotUnicode(_)));
+        assert!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .is::<std::str::Utf8Error>()
+        );
         assert!(!path.exists());
     }
 
