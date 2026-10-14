@@ -3852,16 +3852,10 @@ impl Lock {
     /// matching packages, then an error is returned. If there are no
     /// matching packages, then `Ok(None)` is returned.
     pub fn find_by_name(&self, name: &PackageName) -> Result<Option<&Package>, String> {
-        let mut found_dist = None;
-        for dist in &self.packages {
-            if &dist.id.name == name {
-                if found_dist.is_some() {
-                    return Err(format!("found multiple packages matching `{name}`"));
-                }
-                found_dist = Some(dist);
-            }
-        }
-        Ok(found_dist)
+        self.packages_for_name(name)
+            .iter()
+            .at_most_one()
+            .map_err(|_| format!("found multiple packages matching `{name}`"))
     }
 
     /// Returns the package with the given name.
@@ -3878,23 +3872,17 @@ impl Lock {
         name: &PackageName,
         marker_env: &MarkerEnvironment,
     ) -> Result<Option<&Package>, String> {
-        let mut found_dist = None;
-        for dist in &self.packages {
-            if &dist.id.name == name {
-                if dist.fork_markers.is_empty()
+        self.packages_for_name(name)
+            .iter()
+            .filter(|dist| {
+                dist.fork_markers.is_empty()
                     || dist
                         .fork_markers
                         .iter()
                         .any(|marker| marker.evaluate_no_extras(marker_env))
-                {
-                    if found_dist.is_some() {
-                        return Err(format!("found multiple packages matching `{name}`"));
-                    }
-                    found_dist = Some(dist);
-                }
-            }
-        }
-        Ok(found_dist)
+            })
+            .at_most_one()
+            .map_err(|_| format!("found multiple packages matching `{name}`"))
     }
 
     /// Return the [`Package`] at an index in this lock's package ordering.
