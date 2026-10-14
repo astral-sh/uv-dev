@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use assert_fs::prelude::*;
 use indoc::indoc;
@@ -5,6 +7,7 @@ use predicates::prelude::predicate;
 use serde_json::json;
 use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::uv_snapshot;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -85,19 +88,31 @@ fn ordinary_wheels_are_selected_over_variants() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let links = context.temp_dir.child("links");
     links.create_dir_all()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &"ok".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[("ok/ordinary.py", "selected = True\n")],
+    );
+    links.child(filename).write_binary(&wheel)?;
+
+    // Both variants contain valid wheel data, so rejecting an invalid archive cannot cause uv to
+    // fall back to the ordinary wheel.
     fs_err::copy(
         context
             .workspace_root
             .join("test/links/ok-1.0.0-py3-none-any.whl"),
-        links.child("ok-1.0.0-py3-none-any.whl"),
+        links.child("ok-1.0.0-9-py3-none-any-cpu.whl"),
     )?;
-    // A higher build tag and a newer version must not make a variant selectable.
-    links
-        .child("ok-1.0.0-9-py3-none-any-cpu.whl")
-        .write_str("invalid wheel")?;
-    links
-        .child("ok-2.0.0-py3-none-any-null.whl")
-        .write_str("invalid wheel")?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-2.0.0-py3-none-any.whl"),
+        links.child("ok-2.0.0-py3-none-any-null.whl"),
+    )?;
 
     uv_snapshot!(
         context.filters(),
@@ -118,6 +133,10 @@ fn ordinary_wheels_are_selected_over_variants() -> Result<()> {
      + ok==1.0.0
     "
     );
+    context
+        .assert_command("from ok import ordinary; assert ordinary.selected")
+        .success();
+
     Ok(())
 }
 
