@@ -331,16 +331,14 @@ impl PythonInstallation {
         installed.ensure_build_file().await?;
 
         let minor_version = installed.minor_version_key();
-        let highest_patch = installations
-            .find_all()?
-            .filter(|installation| installation.minor_version_key() == minor_version)
-            .filter_map(|installation| installation.version().patch())
-            .fold(0, std::cmp::max);
-        if installed
-            .version()
-            .patch()
-            .is_some_and(|p| p >= highest_patch)
-        {
+        let existing_installations = installations.find_all()?;
+        let is_highest_patch = installed.version().patch().is_some_and(|patch| {
+            existing_installations
+                .filter(|installation| installation.minor_version_key() == minor_version)
+                .filter_map(|installation| installation.version().patch())
+                .all(|existing_patch| patch >= existing_patch)
+        });
+        if is_highest_patch {
             installed.ensure_minor_version_link().await?;
         }
 
