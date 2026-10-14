@@ -1,6 +1,7 @@
 //! Provenance and reuse of direct URL installations.
 
 use anyhow::Result;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use serde_json::{Value, json};
 use url::Url;
@@ -10,7 +11,7 @@ use wiremock::{
 };
 
 use uv_test::archive::generate_source_archive;
-use uv_test::packse::generate_wheel;
+use uv_test::packse::{generate_wheel, generate_wheel_with_files};
 use uv_test::{TestContext, uv_snapshot};
 
 fn assert_archive_provenance(context: &TestContext, dist_info: &str, url: &str) -> Result<()> {
@@ -21,6 +22,66 @@ fn assert_archive_provenance(context: &TestContext, dist_info: &str, url: &str) 
             .join("direct_url.json"),
     )?)?;
     assert_eq!(provenance, json!({ "url": url, "archive_info": {} }));
+    Ok(())
+}
+
+/// A same-version wheel at a new path must replace the installed payload and provenance.
+#[test]
+fn path_changes_with_same_name() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let one = context.temp_dir.child("one/ok-1.0.0-py3-none-any.whl");
+    let two = context.temp_dir.child("two/ok-1.0.0-py3-none-any.whl");
+    let name = "ok".parse()?;
+    let version = "1.0.0".parse()?;
+    for (wheel, payload) in [(&one, "one"), (&two, "two")] {
+        let (_, bytes) = generate_wheel_with_files(
+            &name,
+            &version,
+            &[],
+            &Default::default(),
+            None,
+            "py3-none-any",
+            &[("ok/origin.txt", payload)],
+        );
+        wheel.write_binary(&bytes)?;
+    }
+    let installed_payload = ChildPath::new(context.site_packages().join("ok/origin.txt"));
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(one.path()).arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0 (from file://[TEMP_DIR]/one/ok-1.0.0-py3-none-any.whl)
+    ");
+    installed_payload.assert("one");
+    assert_archive_provenance(
+        &context,
+        "ok-1.0.0.dist-info",
+        Url::from_file_path(one.path())
+            .expect("absolute wheel path")
+            .as_str(),
+    )?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(two.path()).arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - ok==1.0.0 (from file://[TEMP_DIR]/one/ok-1.0.0-py3-none-any.whl)
+     + ok==1.0.0 (from file://[TEMP_DIR]/two/ok-1.0.0-py3-none-any.whl)
+    ");
+    installed_payload.assert("two");
+    assert_archive_provenance(
+        &context,
+        "ok-1.0.0.dist-info",
+        Url::from_file_path(two.path())
+            .expect("absolute wheel path")
+            .as_str(),
+    )?;
     Ok(())
 }
 
