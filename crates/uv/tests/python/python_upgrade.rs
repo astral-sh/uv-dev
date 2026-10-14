@@ -8,7 +8,7 @@ use assert_fs::prelude::PathChild;
 use insta::assert_snapshot;
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
-use uv_test::{LATEST_PYTHON_3_12, TestContext, uv_snapshot};
+use uv_test::{LATEST_PYTHON_3_12, TestContext, uv_snapshot, venv_bin_path};
 
 #[test]
 fn python_upgrade() {
@@ -149,7 +149,7 @@ fn python_upgrade_transparent_from_venv() {
     Activate with: source .venv/[BIN]/activate
     ");
 
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -167,8 +167,9 @@ fn python_upgrade_transparent_from_venv() {
     Activate with: source .venv2/[BIN]/activate
     ");
 
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version")
-        .env(EnvVars::VIRTUAL_ENV, second_venv), @"
+    let second_interpreter = venv_bin_path(context.temp_dir.join(second_venv))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -184,7 +185,7 @@ fn python_upgrade_transparent_from_venv() {
     ");
 
     // First virtual environment should reflect upgraded patch
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.[LATEST]
@@ -192,8 +193,7 @@ fn python_upgrade_transparent_from_venv() {
     );
 
     // Second virtual environment should reflect upgraded patch
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version")
-        .env(EnvVars::VIRTUAL_ENV, second_venv), @"
+    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.[LATEST]
@@ -348,10 +348,9 @@ fn python_transparent_upgrade_venv_venv() {
     Activate with: source .venv2/[BIN]/activate
     ");
 
-    // Check version from within second virtual environment
-    uv_snapshot!(context.filters(), context.run()
-        .arg("python").arg("--version")
-        .env(EnvVars::VIRTUAL_ENV, second_venv), @"
+    let second_interpreter = venv_bin_path(context.temp_dir.join(second_venv))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -367,9 +366,7 @@ fn python_transparent_upgrade_venv_venv() {
     ");
 
     // Should have transparently upgraded in second virtual environment
-    uv_snapshot!(context.filters(), context.run()
-        .arg("python").arg("--version")
-        .env(EnvVars::VIRTUAL_ENV, second_venv), @"
+    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.[LATEST]
@@ -468,10 +465,9 @@ fn python_upgrade_transparent_from_venv_module_in_venv() {
     exit_code: 0 (success)
     ");
 
-    // Check version within second virtual environment
-    uv_snapshot!(context.filters(), context.run()
-        .env(EnvVars::VIRTUAL_ENV, second_venv)
-        .arg("python").arg("--version"), @"
+    let second_interpreter = venv_bin_path(context.temp_dir.join(second_venv))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -488,9 +484,7 @@ fn python_upgrade_transparent_from_venv_module_in_venv() {
     );
 
     // Second virtual environment should reflect upgraded patch.
-    uv_snapshot!(context.filters(), context.run()
-        .env(EnvVars::VIRTUAL_ENV, second_venv)
-        .arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.[LATEST]
