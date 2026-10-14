@@ -8268,6 +8268,8 @@ fn remove_locked_reverts_project() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn add_locked_readonly_workspace() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("pyproject.toml");
     workspace.write_str(indoc! {r#"
@@ -8288,6 +8290,13 @@ fn add_locked_readonly_workspace() -> Result<()> {
     let member = context.read("member/pyproject.toml");
     let lock = context.read("uv.lock");
     fs_err::set_permissions(&workspace, Permissions::from_mode(0o444))?;
+    let error = fs_err::OpenOptions::new()
+        .write(true)
+        .open(workspace.path())
+        .expect_err("the workspace manifest must reject writes");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    // Holding the original inode prevents its reuse if rollback replaces the file.
+    let original_workspace = fs_err::File::open(workspace.path())?;
 
     uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--package").arg("member").arg("--locked").arg("--no-sync"), @"
     exit_code: 1 (failure)
@@ -8299,6 +8308,13 @@ fn add_locked_readonly_workspace() -> Result<()> {
     ");
     assert_eq!(context.read("member/pyproject.toml"), member);
     assert_eq!(context.read("uv.lock"), lock);
+    let original = original_workspace.metadata()?;
+    let current = fs_err::metadata(workspace.path())?;
+    assert_eq!(
+        (current.dev(), current.ino()),
+        (original.dev(), original.ino()),
+        "rollback replaced the unchanged workspace manifest"
+    );
     Ok(())
 }
 
@@ -8320,6 +8336,8 @@ fn add_remove_frozen_unreadable_lockfile() -> Result<()> {
     let lock = context.temp_dir.child("uv.lock");
     lock.write_str("unreadable lockfile\n")?;
     fs_err::set_permissions(&lock, Permissions::from_mode(0o000))?;
+    let error = fs_err::read(lock.path()).expect_err("the lockfile must reject reads");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
 
     uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--frozen"), @"
     exit_code: 0 (success)
