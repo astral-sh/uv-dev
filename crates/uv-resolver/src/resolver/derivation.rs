@@ -66,22 +66,17 @@ impl DerivationChainBuilder {
                     return true;
                 };
 
-                // Add to the current path.
-                path.push(DerivationStep::new(
-                    name.clone(),
-                    parent.extra().cloned(),
-                    parent.group().cloned(),
-                    Some(parent_version.clone()),
-                    dependency_versions.encoded_versions().clone(),
-                ));
-
-                // Recursively search the next package.
+                // Build the path from the root as the successful search unwinds.
                 if find_path(*parent_id, parent_version, state, solution, path) {
+                    path.push(DerivationStep::new(
+                        name.clone(),
+                        parent.extra().cloned(),
+                        parent.group().cloned(),
+                        Some(parent_version.clone()),
+                        dependency_versions.encoded_versions().clone(),
+                    ));
                     return true;
                 }
-
-                // Backtrack if the path didn't lead to the root.
-                path.pop();
             }
             false
         }
@@ -91,7 +86,6 @@ impl DerivationChainBuilder {
         if !find_path(id, version, state, &solution, &mut path) {
             return None;
         }
-        path.reverse();
         Some(path.into_iter().collect())
     }
 }
