@@ -815,84 +815,67 @@ pub async fn install(
 
             // If we're creating a new environment, ensure that we can resolve the requirements prior
             // to removing any existing tools.
-            let resolution = resolve_environment(
-                spec.clone(),
-                resolution_scope,
-                &interpreter,
-                python_platform.as_ref(),
-                SourceTreeEditablePolicy::Tool,
-                &build_constraints,
-                &settings.resolver,
-                &client_builder,
-                &state,
-                Box::new(DefaultResolveLogger),
-                &concurrency,
-                &cache,
-                workspace_cache,
-                printer,
-                preview,
-            )
-            .await;
+            let resolve = async |interpreter: &Interpreter| {
+                resolve_environment(
+                    spec.clone(),
+                    resolution_scope,
+                    interpreter,
+                    python_platform.as_ref(),
+                    SourceTreeEditablePolicy::Tool,
+                    &build_constraints,
+                    &settings.resolver,
+                    &client_builder,
+                    &state,
+                    Box::new(DefaultResolveLogger),
+                    &concurrency,
+                    &cache,
+                    workspace_cache,
+                    printer,
+                    preview,
+                )
+                .await
+            };
+            let resolution = resolve(&interpreter).await;
 
             // If the resolution failed, retry with the inferred `requires-python` constraint.
             let (resolution, interpreter) = match resolution {
                 Ok(resolution) => (resolution, interpreter),
-                Err(err) => match err {
-                    EnvironmentError::Resolve(err) => {
-                        let err = *err;
-                        // If the resolution failed due to the discovered interpreter not satisfying the
-                        // `requires-python` constraint, we can try to refine the interpreter.
-                        //
-                        // For example, if we discovered a Python 3.8 interpreter on the user's machine,
-                        // but the tool requires Python 3.10 or later, we can try to download a
-                        // Python 3.10 interpreter and re-resolve.
-                        let Some(interpreter) = refine_interpreter(
-                            &interpreter,
-                            python_request.as_ref(),
-                            &err,
-                            &client_builder,
-                            &reporter,
-                            &install_mirrors,
-                            python_preference,
-                            python_arch,
-                            python_downloads,
-                            &cache,
-                        )
-                        .await
-                        .ok()
-                        .flatten() else {
-                            return Err(UvError::from(err).into());
-                        };
+                Err(EnvironmentError::Resolve(err)) => {
+                    let err = *err;
+                    // If the resolution failed due to the discovered interpreter not satisfying the
+                    // `requires-python` constraint, we can try to refine the interpreter.
+                    //
+                    // For example, if we discovered a Python 3.8 interpreter on the user's machine,
+                    // but the tool requires Python 3.10 or later, we can try to download a
+                    // Python 3.10 interpreter and re-resolve.
+                    let Some(interpreter) = refine_interpreter(
+                        &interpreter,
+                        python_request.as_ref(),
+                        &err,
+                        &client_builder,
+                        &reporter,
+                        &install_mirrors,
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &cache,
+                    )
+                    .await
+                    .ok()
+                    .flatten() else {
+                        return Err(UvError::from(err).into());
+                    };
 
-                        debug!(
-                            "Re-resolving with Python {} (`{}`)",
-                            interpreter.python_version(),
-                            interpreter.sys_executable().display()
-                        );
+                    debug!(
+                        "Re-resolving with Python {} (`{}`)",
+                        interpreter.python_version(),
+                        interpreter.sys_executable().display()
+                    );
 
-                        let resolution = resolve_environment(
-                            spec.clone(),
-                            resolution_scope,
-                            &interpreter,
-                            python_platform.as_ref(),
-                            SourceTreeEditablePolicy::Tool,
-                            &build_constraints,
-                            &settings.resolver,
-                            &client_builder,
-                            &state,
-                            Box::new(DefaultResolveLogger),
-                            &concurrency,
-                            &cache,
-                            workspace_cache,
-                            printer,
-                            preview,
-                        )
-                        .await
-                        .map_err(UvError::from)?;
-                        (resolution, interpreter)
-                    }
-                    err => return Err(err.into()),
-                },
+                    let resolution = resolve(&interpreter).await.map_err(UvError::from)?;
+                    (resolution, interpreter)
+                }
+                Err(err) => return Err(err.into()),
             };
 
             if tool_locks {
