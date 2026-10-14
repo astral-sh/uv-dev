@@ -8489,7 +8489,7 @@ fn convert_to_virtual() -> Result<()> {
         .child("src")
         .child("project")
         .child("__init__.py")
-        .touch()?;
+        .write_str("__version__ = '0.1.0'\n")?;
 
     // Running `uv sync` should install the project itself.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -8501,6 +8501,7 @@ fn convert_to_virtual() -> Result<()> {
      + iniconfig==2.0.0
      + project==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_installed("project", "0.1.0");
 
     let lock = context.read("uv.lock");
 
@@ -8558,6 +8559,7 @@ fn convert_to_virtual() -> Result<()> {
     Uninstalled 1 package in [TIME]
      - project==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_not_installed("project");
 
     let lock = context.read("uv.lock");
 
@@ -8614,6 +8616,12 @@ fn convert_to_package() -> Result<()> {
         dependencies = ["iniconfig"]
         "#,
     )?;
+    context
+        .temp_dir
+        .child("src")
+        .child("project")
+        .child("__init__.py")
+        .write_str("__version__ = '0.1.0'\n")?;
 
     // Running `uv sync` should not install the project itself.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -8624,6 +8632,7 @@ fn convert_to_package() -> Result<()> {
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
+    context.assert_not_installed("project");
 
     let lock = context.read("uv.lock");
 
@@ -8676,13 +8685,6 @@ fn convert_to_package() -> Result<()> {
         build-backend = "uv_build"
         "#,
     )?;
-    context
-        .temp_dir
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .touch()?;
-
     // Running `uv sync` should install the project itself.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -8692,6 +8694,7 @@ fn convert_to_package() -> Result<()> {
     Installed 1 package in [TIME]
      + project==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_installed("project", "0.1.0");
 
     let lock = context.read("uv.lock");
 
