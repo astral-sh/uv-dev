@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
@@ -50,6 +51,20 @@ impl AuthBackend {
                 ))
             }
             Err(err) => Err(err),
+        }
+    }
+
+    /// Retrieve credentials for a URL and optional username from the selected backend.
+    pub async fn get_credentials(
+        &self,
+        url: &DisplaySafeUrl,
+        username: Option<&str>,
+    ) -> Result<Option<Cow<'_, Credentials>>, LookupError> {
+        match self {
+            Self::System(provider) => Ok(provider.fetch(url, username).await.map(Cow::Owned)),
+            Self::TextStore(store, _lock) => {
+                Ok(store.get_credentials(url, username)?.map(Cow::Borrowed))
+            }
         }
     }
 }
