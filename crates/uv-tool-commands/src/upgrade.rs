@@ -1,6 +1,5 @@
 use crate::common::finalize_tool_install;
 use anyhow::{Context, Result};
-use itertools::Itertools;
 use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -123,14 +122,11 @@ pub async fn upgrade(
         None
     };
 
-    // Determine whether we applied any upgrades.
-    let mut did_upgrade_tool = vec![];
-
-    // Determine whether we applied any upgrades.
-    let mut did_upgrade_environment = vec![];
+    let mut upgraded_tool_or_dependencies = false;
+    let mut upgraded_environments = Vec::new();
 
     // Constraints that caused upgrades to be skipped or altered.
-    let mut collected_constraints: Vec<(PackageName, UpgradeConstraint)> = Vec::new();
+    let mut collected_constraints = Vec::new();
 
     let mut errors = Vec::new();
     for (name, constraints) in &names {
@@ -157,18 +153,18 @@ pub async fn upgrade(
             Ok(report) => {
                 match report.outcome {
                     UpgradeOutcome::UpgradeEnvironment => {
-                        did_upgrade_environment.push(name);
+                        upgraded_environments.push(name);
                     }
                     UpgradeOutcome::UpgradeTool | UpgradeOutcome::UpgradeDependencies => {
-                        did_upgrade_tool.push(name);
+                        upgraded_tool_or_dependencies = true;
                     }
                     UpgradeOutcome::NoOp => {
                         debug!("Upgrading `{name}` was a no-op");
                     }
                 }
 
-                if let Some(constraint) = report.constraint.clone() {
-                    collected_constraints.push((name.clone(), constraint));
+                if let Some(constraint) = report.constraint {
+                    collected_constraints.push((name, constraint));
                 }
             }
             Err(err) => {
@@ -178,10 +174,7 @@ pub async fn upgrade(
     }
 
     if !errors.is_empty() {
-        for (name, err) in errors
-            .into_iter()
-            .sorted_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b))
-        {
+        for (name, err) in errors {
             trace!("Error trace: {err:?}");
             render_error(
                 &err.context(format!("Failed to upgrade {}", name.green())),
@@ -191,13 +184,13 @@ pub async fn upgrade(
         return Ok(ExitStatus::Failure);
     }
 
-    if did_upgrade_tool.is_empty() && did_upgrade_environment.is_empty() {
+    if !upgraded_tool_or_dependencies && upgraded_environments.is_empty() {
         writeln!(printer.stderr(), "Nothing to upgrade")?;
     }
 
     if let Some(python_request) = python_request {
-        if !did_upgrade_environment.is_empty() {
-            let tools = did_upgrade_environment
+        if !upgraded_environments.is_empty() {
+            let tools = upgraded_environments
                 .iter()
                 .map(|name| format!("`{}`", name.cyan()))
                 .collect::<Vec<_>>();
@@ -216,7 +209,7 @@ pub async fn upgrade(
     }
 
     for (name, constraint) in collected_constraints {
-        constraint.print(&name, printer)?;
+        constraint.print(name, printer)?;
     }
 
     Ok(ExitStatus::Success)
