@@ -48,24 +48,22 @@ impl PythonRequirement {
         )
     }
 
+    /// Convert a Python version into a minimum release requirement.
+    fn minimum_requirement(version: &Version) -> RequiresPython {
+        RequiresPython::greater_than_equal_version(&version.only_release().without_trailing_zeros())
+    }
+
     /// Create a [`PythonRequirement`] to resolve against both an [`Interpreter`] and a
     /// [`PythonVersion`].
     pub fn from_python_version(interpreter: &Interpreter, python_version: &PythonVersion) -> Self {
         let exact = interpreter.python_full_version().version.clone();
-        let installed = interpreter
-            .python_full_version()
-            .version
-            .only_release()
-            .without_trailing_zeros();
-        let target = python_version
-            .python_full_version()
-            .only_release()
-            .without_trailing_zeros();
+        let installed = Self::minimum_requirement(&exact);
+        let target = Self::minimum_requirement(&python_version.python_full_version());
         Self::new(
             PythonRequirementSource::PythonVersion,
             exact,
-            RequiresPython::greater_than_equal_version(&installed),
-            RequiresPython::greater_than_equal_version(&target),
+            installed,
+            target,
         )
     }
 
@@ -80,21 +78,14 @@ impl PythonRequirement {
 
     /// Create a [`PythonRequirement`] to resolve against an [`Interpreter`].
     pub fn from_interpreter(interpreter: &Interpreter) -> Self {
-        let exact = interpreter
-            .python_full_version()
-            .version
-            .clone()
-            .without_trailing_zeros();
-        let installed = interpreter
-            .python_full_version()
-            .version
-            .only_release()
-            .without_trailing_zeros();
+        let version = &interpreter.python_full_version().version;
+        let exact = version.clone().without_trailing_zeros();
+        let installed = Self::minimum_requirement(version);
         Self::new(
             PythonRequirementSource::Interpreter,
             exact,
-            RequiresPython::greater_than_equal_version(&installed),
-            RequiresPython::greater_than_equal_version(&installed),
+            installed.clone(),
+            installed,
         )
     }
 
@@ -108,20 +99,13 @@ impl PythonRequirement {
         marker_env: &MarkerEnvironment,
         requires_python: RequiresPython,
     ) -> Self {
-        let exact = marker_env
-            .python_full_version()
-            .version
-            .clone()
-            .without_trailing_zeros();
-        let installed = marker_env
-            .python_full_version()
-            .version
-            .only_release()
-            .without_trailing_zeros();
+        let version = &marker_env.python_full_version().version;
+        let exact = version.clone().without_trailing_zeros();
+        let installed = Self::minimum_requirement(version);
         Self::new(
             PythonRequirementSource::RequiresPython,
             exact,
-            RequiresPython::greater_than_equal_version(&installed),
+            installed,
             requires_python,
         )
     }
