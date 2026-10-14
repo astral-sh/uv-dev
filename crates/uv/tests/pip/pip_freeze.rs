@@ -7,6 +7,7 @@ use uv_redacted::SafeUrl;
 use uv_test::uv_snapshot;
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn freeze_many() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -65,6 +66,7 @@ fn freeze_duplicate() -> Result<()> {
 
 /// List a direct URL package in a virtual environment.
 #[test]
+#[cfg(feature = "test-pypi")]
 fn freeze_url() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -202,6 +204,7 @@ fn freeze_direct_archive_hash_roundtrip() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn freeze_with_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -361,6 +364,7 @@ Version: 0.22.0
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn freeze_path() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -392,6 +396,7 @@ fn freeze_path() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn freeze_multiple_paths() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -454,6 +459,7 @@ fn freeze_nonexistent_path() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn freeze_with_quiet_flag() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -480,6 +486,7 @@ fn freeze_with_quiet_flag() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn freeze_target() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -519,6 +526,7 @@ fn freeze_target() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn freeze_prefix() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -558,6 +566,7 @@ fn freeze_prefix() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn freeze_exclude() {
     let context = uv_test::test_context!("3.12");
 
