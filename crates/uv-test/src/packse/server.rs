@@ -23,7 +23,7 @@ use uv_normalize::PackageName;
 use uv_pep440::VersionSpecifiers;
 
 use crate::http_server::{FileData, HttpServer, content_type_for_filename};
-use crate::vendor::vendor_artifacts;
+use crate::vendor::{VendorArtifact, vendor_artifacts};
 
 use super::scenario::{Scenario, WheelTag};
 use super::scenarios_dir;
@@ -91,7 +91,7 @@ impl PackseServer {
     }
 
     fn start(scenario: &Scenario, hashes: bool) -> Self {
-        let index = Arc::new(build_server_index(scenario));
+        let index = Arc::new(build_server_index(scenario, vendor_artifacts()));
         let server_index = Arc::clone(&index);
         let server = HttpServer::start(move |request, server_uri| {
             handle_request(request, server_uri, &server_index, hashes)
@@ -122,7 +122,10 @@ impl PackseServer {
 }
 
 /// Build the complete [`ServerIndex`] from a scenario and cached build dependencies.
-fn build_server_index(scenario: &Scenario) -> ServerIndex {
+fn build_server_index(
+    scenario: &Scenario,
+    vendor_artifacts: &'static [VendorArtifact],
+) -> ServerIndex {
     let mut packages = BTreeMap::new();
     let mut files: HashMap<String, FileData> = HashMap::new();
 
@@ -183,7 +186,7 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
         packages.insert(package_name.clone(), PackageEntry { dists });
     }
 
-    for artifact in vendor_artifacts() {
+    for artifact in vendor_artifacts {
         if !Path::new(artifact.filename)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("whl"))
@@ -404,7 +407,7 @@ mod tests {
     use reqwest::{Client, StatusCode};
     use wiremock::MockServer;
 
-    use crate::vendor::vendor_artifacts;
+    use crate::vendor::VendorArtifact;
 
     use super::{
         PackseServer, Scenario, build_server_index, extract_package_name,
@@ -430,13 +433,11 @@ mod tests {
 
     #[test]
     fn server_index_construction_does_not_load_vendor_artifacts() {
-        let _index = build_server_index(&Scenario::empty());
+        static ARTIFACTS: [VendorArtifact; 1] = [VendorArtifact::test_fixture()];
+        let index = build_server_index(&Scenario::empty(), &ARTIFACTS);
 
-        assert!(
-            vendor_artifacts()
-                .iter()
-                .all(|artifact| !artifact.is_loaded())
-        );
+        assert!(index.files.contains_key(ARTIFACTS[0].filename));
+        assert!(!ARTIFACTS[0].is_loaded());
     }
 
     #[tokio::test]
