@@ -2532,13 +2532,26 @@ fn run_dev_overrides_uv_no_dev() -> Result<()> {
     )?;
 
     context.lock().assert().success();
+    let import_iniconfig = [
+        "python",
+        "-I",
+        "-c",
+        "import iniconfig; print(iniconfig.__name__)",
+    ];
+    context
+        .run()
+        .args(import_iniconfig)
+        .env(EnvVars::UV_NO_DEV, "1")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "ModuleNotFoundError: No module named 'iniconfig'",
+        ));
 
     uv_snapshot!(context.filters(), context
         .run()
         .arg("--dev")
-        .arg("python")
-        .arg("-c")
-        .arg("import iniconfig; print(iniconfig.__name__)")
+        .args(import_iniconfig)
         .env(EnvVars::UV_NO_DEV, "1"), @"
     exit_code: 0 (success)
     ----- stdout -----
