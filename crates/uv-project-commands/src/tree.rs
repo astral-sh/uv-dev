@@ -129,6 +129,23 @@ pub async fn tree(
     let interpreter = if frozen.is_some() && universal {
         None
     } else {
+        let discover_project = async |target, project_python| {
+            ProjectInterpreter::discover(
+                target,
+                project_python,
+                client_builder,
+                python_preference,
+                python_arch,
+                python_downloads,
+                &install_mirrors,
+                ProjectEnvironmentPolicy::Optional,
+                ActiveEnvironment::Ignore,
+                cache,
+                printer,
+            )
+            .await
+            .map(ProjectInterpreter::into_interpreter)
+        };
         Some(match source {
             TreeSource::Manifest(LockTarget::Script(script)) => ScriptInterpreter::discover(
                 script.into(),
@@ -155,21 +172,7 @@ pub async fn tree(
                     config_discovery,
                 )
                 .await?;
-                ProjectInterpreter::discover(
-                    ProjectEnvironmentTarget::from(workspace),
-                    project_python,
-                    client_builder,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    &install_mirrors,
-                    ProjectEnvironmentPolicy::Optional,
-                    ActiveEnvironment::Ignore,
-                    cache,
-                    printer,
-                )
-                .await?
-                .into_interpreter()
+                discover_project(ProjectEnvironmentTarget::from(workspace), project_python).await?
             }
             TreeSource::Lockfile(workspace) => {
                 let root = workspace.root();
@@ -196,21 +199,11 @@ pub async fn tree(
                 )
                 .await
                 .map_err(EnvironmentError::from)?;
-                ProjectInterpreter::discover(
+                discover_project(
                     ProjectEnvironmentTarget::Lockfile { root, lock },
                     project_python,
-                    client_builder,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    &install_mirrors,
-                    ProjectEnvironmentPolicy::Optional,
-                    ActiveEnvironment::Ignore,
-                    cache,
-                    printer,
                 )
                 .await?
-                .into_interpreter()
             }
         })
     };
@@ -254,13 +247,16 @@ pub async fn tree(
     };
 
     // Determine the markers to use for resolution.
-    let markers = (!universal).then(|| {
-        resolution_markers(
-            python_version.as_ref(),
-            python_platform.as_ref(),
-            interpreter.as_ref().unwrap(),
-        )
-    });
+    let markers = interpreter
+        .as_ref()
+        .filter(|_| !universal)
+        .map(|interpreter| {
+            resolution_markers(
+                python_version.as_ref(),
+                python_platform.as_ref(),
+                interpreter,
+            )
+        });
 
     // If necessary, look up the latest version of each package.
     let latest = if let TreeSource::Manifest(target) = source

@@ -114,14 +114,7 @@ pub async fn check(
         };
 
         match discovery {
-            Ok(project) => {
-                for name in &package {
-                    if !project.workspace().packages().contains_key(name) {
-                        anyhow::bail!("Package `{name}` not found in workspace");
-                    }
-                }
-                Some(project)
-            }
+            Ok(project) => Some(project),
             Err(err) => {
                 if let WorkspaceErrorKind::NoSuchMember(name, _) = err.as_ref() {
                     anyhow::bail!("Package `{name}` not found in workspace");
@@ -143,37 +136,26 @@ pub async fn check(
         }
     };
 
-    if no_project {
+    if no_project || (project.is_none() && script.is_none()) {
+        let context = if no_project {
+            "alongside `--no-project`"
+        } else {
+            "outside of a project"
+        };
         for flag in extras.history().as_flags_pretty() {
-            warn_user!("`{flag}` has no effect when used alongside `--no-project`");
+            warn_user!("`{flag}` has no effect when used {context}");
         }
         for flag in groups.history().as_flags_pretty() {
-            warn_user!("`{flag}` has no effect when used alongside `--no-project`");
+            warn_user!("`{flag}` has no effect when used {context}");
         }
         if let LockCheck::Enabled(lock_check) = lock_check {
-            warn_user!("`{lock_check}` has no effect when used alongside `--no-project`");
+            warn_user!("`{lock_check}` has no effect when used {context}");
         }
         if frozen.is_some() {
-            warn_user!("`--frozen` has no effect when used alongside `--no-project`");
+            warn_user!("`--frozen` has no effect when used {context}");
         }
         if no_sync {
-            warn_user!("`--no-sync` has no effect when used alongside `--no-project`");
-        }
-    } else if project.is_none() && script.is_none() {
-        for flag in extras.history().as_flags_pretty() {
-            warn_user!("`{flag}` has no effect when used outside of a project");
-        }
-        for flag in groups.history().as_flags_pretty() {
-            warn_user!("`{flag}` has no effect when used outside of a project");
-        }
-        if let LockCheck::Enabled(lock_check) = lock_check {
-            warn_user!("`{lock_check}` has no effect when used outside of a project");
-        }
-        if frozen.is_some() {
-            warn_user!("`--frozen` has no effect when used outside of a project");
-        }
-        if no_sync {
-            warn_user!("`--no-sync` has no effect when used outside of a project");
+            warn_user!("`--no-sync` has no effect when used {context}");
         }
     }
 
@@ -192,7 +174,6 @@ pub async fn check(
     let target_dir = script
         .as_ref()
         .and_then(|script| script.path.parent())
-        .map(Path::to_path_buf)
         .or_else(|| {
             project.as_ref().map(|project| {
                 // If multiple packages are selected, or the package is outside the workspace dir,
@@ -202,16 +183,16 @@ pub async fn check(
                     || !normalize_path(project.root())
                         .starts_with(project.workspace().install_path())
                 {
-                    project.workspace().install_path().to_owned()
+                    project.workspace().install_path().as_path()
                 } else {
-                    project.root().to_owned()
+                    project.root()
                 }
             })
         })
-        .unwrap_or_else(|| project_dir.to_owned());
+        .unwrap_or(project_dir);
 
     let check_targets = if let Some(script) = script.as_ref() {
-        vec![script.path.clone()]
+        vec![script.path.as_path()]
     } else if let Some(project) = project.as_ref() {
         if defacto_all_packages {
             // In --all-packages mode, and anything equivalent like virtual workspaces,
@@ -232,7 +213,7 @@ pub async fn check(
                 .workspace()
                 .packages()
                 .values()
-                .map(|member| member.root().clone())
+                .map(|member| member.root().as_path())
                 .collect()
         } else if !package.is_empty() {
             // If the user has specified a list of packages, tell ty to only check those packages.
@@ -243,13 +224,13 @@ pub async fn check(
                         .workspace()
                         .packages()
                         .get(name)
-                        .map(|member| member.root().clone())
+                        .map(|member| member.root().as_path())
                         .ok_or_else(|| anyhow::anyhow!("Package `{name}` not found in workspace"))
                 })
                 .collect::<Result<Vec<_>>>()?
         } else {
             // Otherwise we're checking just this one package (nearest ancestor).
-            vec![project.root().to_owned()]
+            vec![project.root()]
         }
     } else {
         Vec::new()
@@ -281,7 +262,7 @@ pub async fn check(
                         .iter()
                         .any(|target| member.root().starts_with(target))
             })
-            .map(|(_, member)| member.root().clone())
+            .map(|(_, member)| member.root().as_path())
             .collect()
     } else {
         Vec::new()
@@ -358,8 +339,7 @@ pub async fn check(
     };
 
     // Select an environment and, if we found a project, sync it before running checks.
-    let mut locked_ty_path = None;
-    let venv = if let Some(script) = &script {
+    let (venv, locked_ty_path) = if let Some(script) = &script {
         let extras = extras.with_defaults(DefaultExtras::default());
         let venv = if let Some(venv) = isolated_venv {
             venv
@@ -422,7 +402,7 @@ pub async fn check(
         .map_err(UvError::from)?;
 
         let marker_environment = venv.interpreter().to_resolver_marker_environment();
-        if ty_path.is_none()
+        let locked_ty_path = (ty_path.is_none()
             && ty_version.is_none()
             && result
                 .lock()
@@ -433,19 +413,17 @@ pub async fn check(
                 )
                 .map_err(anyhow::Error::msg)?
                 .root()
-                .is_some()
-        {
-            locked_ty_path = Some(
-                venv.scripts()
-                    .join(format!("ty{}", std::env::consts::EXE_SUFFIX)),
-            );
-        }
+                .is_some())
+        .then(|| {
+            venv.scripts()
+                .join(format!("ty{}", std::env::consts::EXE_SUFFIX))
+        });
 
         let target = InstallTarget::Script {
             script,
             lock: result.lock(),
         };
-        match sync_from_lock(
+        sync_from_lock(
             target,
             &venv,
             &extras,
@@ -468,10 +446,7 @@ pub async fn check(
             MalwareCheckContext::from(&malware_settings),
         )
         .await
-        {
-            Ok(_) => {}
-            Err(err) => return Err(UvError::from(err).into()),
-        }
+        .map_err(UvError::from)?;
 
         if no_sync {
             warn_user!(
@@ -479,7 +454,7 @@ pub async fn check(
             );
         }
 
-        Some(venv)
+        (Some(venv), locked_ty_path)
     } else if let Some(project) = &project {
         let extras = extras.with_defaults(DefaultExtras::default());
         let mut malware_context = MalwareCheckContext::from(&malware_settings);
@@ -602,7 +577,7 @@ pub async fn check(
         target.validate_extras(&extras)?;
         target.validate_groups(&groups)?;
 
-        if ty_path.is_none()
+        let locked_ty_path = if ty_path.is_none()
             && ty_version.is_none()
             && let Some(tool) = toolchain::find_locked_tool(
                 project,
@@ -611,9 +586,8 @@ pub async fn check(
                 &PackageName::from_str("ty")?,
                 &DEV_DEPENDENCIES,
                 &groups,
-            )?
-        {
-            locked_ty_path = Some(if !tool.requires_separate_environment() && !no_sync {
+            )? {
+            Some(if !tool.requires_separate_environment() && !no_sync {
                 // Synchronization will install the locked tool into the selected project or
                 // isolated environment.
                 venv.scripts()
@@ -632,7 +606,7 @@ pub async fn check(
                 )?;
                 store_credentials_from_target(target, &client_builder)?;
                 let ty_state = state.fork();
-                let environment = match CachedEnvironment::from_locked_resolution(
+                let environment = CachedEnvironment::from_locked_resolution(
                     &resolution,
                     result
                         .lock()
@@ -650,22 +624,21 @@ pub async fn check(
                     preview,
                 )
                 .await
-                {
-                    Ok(environment) => environment,
-                    Err(err) => return Err(UvError::from(err).into()),
-                };
+                .map_err(UvError::from)?;
                 malware_context.record_resolution(&resolution);
                 PythonEnvironment::from(environment)
                     .scripts()
                     .join(format!("ty{}", std::env::consts::EXE_SUFFIX))
-            });
-        }
+            })
+        } else {
+            None
+        };
 
         if no_sync {
             debug!("Skipping environment synchronization due to `--no-sync`");
         } else {
             let sync_state = state.fork();
-            match sync_from_lock(
+            sync_from_lock(
                 target,
                 &venv,
                 &extras,
@@ -688,15 +661,12 @@ pub async fn check(
                 malware_context,
             )
             .await
-            {
-                Ok(_) => {}
-                Err(err) => return Err(UvError::from(err).into()),
-            }
+            .map_err(UvError::from)?;
         }
 
-        Some(venv)
+        (Some(venv), locked_ty_path)
     } else {
-        isolated_venv
+        (isolated_venv, None)
     };
 
     // Forward the user's explicit Python request so ty can apply its own version selection rules.
@@ -740,7 +710,7 @@ pub async fn check(
         ty_version,
         ty_path.or(locked_ty_path),
         fix,
-        &target_dir,
+        target_dir,
         project
             .as_ref()
             .map(|project| project.workspace().install_path().as_path()),

@@ -42,10 +42,9 @@ pub async fn format(
         );
     }
 
-    // If `no_project` is provided, we use the provided directory
-    // Otherwise, we discover the project and use the project root.
-    let target_dir = if no_project {
-        project_dir.to_owned()
+    // Format from the project root when one is found, or the provided directory otherwise.
+    let project_root = if no_project {
+        None
     } else {
         match VirtualProject::discover(
             project_dir,
@@ -55,10 +54,7 @@ pub async fn format(
         )
         .await
         {
-            // If we found a project, we use the project root
-            Ok(proj) => proj.root().to_owned(),
-            // If there is a problem finding a project, we just use the provided directory,
-            // e.g., for unmanaged projects
+            Ok(project) => Some(project.root().to_path_buf()),
             Err(err)
                 if matches!(
                     err.as_ref(),
@@ -67,7 +63,7 @@ pub async fn format(
                         | WorkspaceErrorKind::NonWorkspace(_)
                 ) =>
             {
-                project_dir.to_owned()
+                None
             }
             Err(err) => return Err(err.into()),
         }
@@ -184,7 +180,7 @@ pub async fn format(
     };
 
     let mut command = Command::new(&ruff_path);
-    command.current_dir(target_dir);
+    command.current_dir(project_root.as_deref().unwrap_or(project_dir));
     command.arg("format");
 
     if check {

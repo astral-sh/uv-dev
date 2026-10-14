@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
-use uv_audit_operations::{AuditResults, artifact_uri, audit_lock, warn_unmatched_ignores};
+use uv_audit_operations::{AuditResults, audit_lock, warn_unmatched_ignores};
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
@@ -100,11 +100,7 @@ pub async fn audit(
     let groups = groups.with_defaults(default_groups);
 
     // Determine the extras to include.
-    let default_extras = match &target {
-        LockTarget::Workspace(_) => DefaultExtras::All,
-        LockTarget::Script(_) => DefaultExtras::All,
-    };
-    let extras = extras.with_defaults(default_extras);
+    let extras = extras.with_defaults(DefaultExtras::All);
 
     // Determine whether we're performing a universal audit.
     let universal = python_version.is_none() && python_platform.is_none();
@@ -194,13 +190,16 @@ pub async fn audit(
     .into_lock();
 
     // Determine the markers to use for resolution.
-    let markers = (!universal).then(|| {
-        resolution_markers(
-            python_version.as_ref(),
-            python_platform.as_ref(),
-            interpreter.as_ref().unwrap(),
-        )
-    });
+    let markers = interpreter
+        .as_ref()
+        .filter(|_| !universal)
+        .map(|interpreter| {
+            resolution_markers(
+                python_version.as_ref(),
+                python_platform.as_ref(),
+                interpreter,
+            )
+        });
 
     let outcome = audit_lock(
         lock.auditable(
@@ -235,18 +234,17 @@ pub async fn audit(
         n_packages: outcome.n_packages,
         output_format,
         findings: outcome.findings,
-        artifact_uri: {
+        artifact_path: {
             let lock_path = target.lock_path();
             // If we've run `uv audit --script`, we might only have an in-memory lockfile.
             // In that case, use the script's own path as the artifact path.
-            let artifact_path = if let LockTarget::Script(script) = target
+            if let LockTarget::Script(script) = target
                 && !lock_path.is_file()
             {
-                script.path.as_path()
+                script.path.clone()
             } else {
-                lock_path.as_path()
-            };
-            artifact_uri(artifact_path)
+                lock_path
+            }
         },
     };
     display.render()
