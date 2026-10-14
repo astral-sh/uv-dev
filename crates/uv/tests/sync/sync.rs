@@ -2163,6 +2163,42 @@ fn mixed_requires_python() -> Result<()> {
     Ok(())
 }
 
+/// Attribute an incompatible workspace interpreter to the root when it sets the stricter bound.
+#[test]
+fn mixed_requires_python_root_constraint() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.9"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "albatross"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv.workspace]
+        members = ["bird-feeder"]
+    "#})?;
+    context
+        .temp_dir
+        .child("bird-feeder/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "bird-feeder"
+        version = "0.1.0"
+        requires-python = ">=3.9"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().args(["--python", "3.9", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+    error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `albatross`'s `project.requires-python`).
+    ");
+
+    Ok(())
+}
+
 /// Non-project root groups constrain Python selection, including inherited group requirements.
 #[test]
 fn non_project_group_requires_python() -> Result<()> {
