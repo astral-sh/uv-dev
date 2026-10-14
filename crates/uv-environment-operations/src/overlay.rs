@@ -277,7 +277,12 @@ impl SharedEnvironmentFiles {
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.into()),
         };
-        let manifest: Self = serde_json::from_slice(&bytes)?;
+        let manifest: Self = serde_json::from_slice(&bytes).with_context(|| {
+            format!(
+                "Failed to parse shared environment manifest at: {}",
+                path.user_display()
+            )
+        })?;
         for name in &manifest.names {
             validate_shared_entrypoint_name(name)?;
         }
@@ -444,7 +449,12 @@ fn load_pending_shared_entrypoints(
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
     };
-    let pending: BTreeMap<PathBuf, String> = serde_json::from_slice(&bytes)?;
+    let pending: BTreeMap<PathBuf, String> = serde_json::from_slice(&bytes).with_context(|| {
+        format!(
+            "Failed to parse shared entrypoint journal at: {}",
+            path.user_display()
+        )
+    })?;
     for name in pending.keys() {
         validate_shared_entrypoint_name(name)?;
     }
@@ -512,7 +522,12 @@ fn load_pending_shared_data(path: &Path) -> anyhow::Result<Option<BTreeMap<PathB
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
     };
-    let data = serde_json::from_slice(&bytes)?;
+    let data = serde_json::from_slice(&bytes).with_context(|| {
+        format!(
+            "Failed to parse shared data journal at: {}",
+            path.user_display()
+        )
+    })?;
     validate_shared_data_paths(&data)?;
     Ok(Some(data))
 }
