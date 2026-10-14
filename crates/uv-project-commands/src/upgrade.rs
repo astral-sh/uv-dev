@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, hash_map::Entry};
-use std::fmt::Write;
+use std::fmt::{self, Write};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -133,12 +133,12 @@ impl DeclarationOutcome {
     }
 }
 
-impl BlockedReason {
-    fn message(&self) -> String {
+impl fmt::Display for BlockedReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnrepresentableRequirement(error) => error.to_string(),
+            Self::UnrepresentableRequirement(error) => fmt::Display::fmt(error, f),
             Self::ConflictExtra { extra } => {
-                format!("declared under conflicting extra `{extra}`")
+                write!(f, "declared under conflicting extra `{extra}`")
             }
         }
     }
@@ -795,11 +795,10 @@ fn render_declaration_outcomes(outcomes: &[DeclarationOutcome], printer: Printer
             } => {
                 writeln!(
                     printer.stderr(),
-                    "warning: Could not update dependency `{}` in {}: `{}` ({})",
+                    "warning: Could not update dependency `{}` in {}: `{}` ({reason})",
                     declaration.package,
                     declaration.dependency_type.toml_table_name(),
-                    declaration.text,
-                    reason.message()
+                    declaration.text
                 )?;
             }
             DeclarationOutcome::Changed(_) | DeclarationOutcome::Unchanged(_) => {}
