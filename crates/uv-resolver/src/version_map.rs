@@ -3,6 +3,7 @@ use std::collections::Bound;
 use std::ops::RangeBounds;
 use std::sync::OnceLock;
 
+use itertools::{EitherOrBoth, merge_join_by};
 use jiff::Timestamp;
 use pubgrub::Ranges;
 use tracing::{instrument, trace};
@@ -367,41 +368,28 @@ struct VersionMapLazyIndex {
 impl VersionMapLazyIndex {
     /// Merge the sorted flat index into the sorted simple entries in one pass.
     fn merge_flat(self, flat_index: FlatDistributions) -> Self {
-        let flat_count = flat_index.iter().size_hint().0;
-        let mut merged = Vec::with_capacity(self.entries.len() + flat_count);
-        let mut simple = self.entries.into_iter().peekable();
-        let mut flat = flat_index.into_iter().peekable();
-        let flat_entry = |(version, dist)| VersionMapLazyEntry {
-            version,
-            dist: LazyPrioritizedDist {
-                flat: Some(dist),
-                simple: None,
-            },
-        };
-        while let (Some(simple_entry), Some((flat_version, _))) = (simple.peek(), flat.peek()) {
-            match simple_entry.version.cmp(flat_version) {
-                std::cmp::Ordering::Less => {
-                    if let Some(entry) = simple.next() {
-                        merged.push(entry);
-                    }
+        let flat = flat_index.into_iter();
+        let mut entries = Vec::with_capacity(self.entries.len() + flat.len());
+        merge_join_by(self.entries, flat, |simple, (version, _)| {
+            simple.version.cmp(version)
+        })
+        .for_each(|entry| {
+            entries.push(match entry {
+                EitherOrBoth::Left(simple) => simple,
+                EitherOrBoth::Right((version, flat)) => VersionMapLazyEntry {
+                    version,
+                    dist: LazyPrioritizedDist {
+                        flat: Some(flat),
+                        simple: None,
+                    },
+                },
+                EitherOrBoth::Both(mut simple, (_, flat)) => {
+                    simple.dist.flat = Some(flat);
+                    simple
                 }
-                std::cmp::Ordering::Greater => {
-                    if let Some(entry) = flat.next() {
-                        merged.push(flat_entry(entry));
-                    }
-                }
-                std::cmp::Ordering::Equal => {
-                    if let (Some(mut entry), Some((_, dist))) = (simple.next(), flat.next()) {
-                        entry.dist.flat = Some(dist);
-                        merged.push(entry);
-                    }
-                }
-            }
-        }
-        merged.extend(simple);
-        merged.extend(flat.map(flat_entry));
-
-        Self { entries: merged }
+            });
+        });
+        Self { entries }
     }
 
     fn get(&self, version: &Version) -> Option<&VersionMapLazyEntry> {
