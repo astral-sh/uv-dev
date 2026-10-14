@@ -1,13 +1,5 @@
 //! Fetch and build source distributions from remote sources.
 
-// This is to squash warnings about `|r| r.into_git_reporter()`. Clippy wants
-// me to eta-reduce that and write it as
-// `<(dyn reporter::Reporter + 'static)>::into_git_reporter`
-// instead. But that's a monster. On the other hand, applying this suppression
-// instruction more granularly is annoying. So we just slap it on the module
-// for now. ---AG
-#![expect(clippy::redundant_closure_for_method_calls)]
-
 use std::borrow::Cow;
 use std::ops::Bound;
 use std::path::Path;
@@ -1827,9 +1819,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 resource.git,
                 client.unmanaged.git_http_settings(resource.git.url()),
                 self.build_context.cache().bucket(CacheBucket::Git),
-                self.reporter
-                    .clone()
-                    .map(|reporter| reporter.into_git_reporter()),
+                self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
             )
             .await?;
 
@@ -1926,9 +1916,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 resource.git,
                 client.unmanaged.git_http_settings(resource.git.url()),
                 self.build_context.cache().bucket(CacheBucket::Git),
-                self.reporter
-                    .clone()
-                    .map(|reporter| reporter.into_git_reporter()),
+                self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
             )
             .await?;
 
@@ -2082,9 +2070,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             resource.subdirectory,
             client.unmanaged.git_http_settings(resource.git.url()),
             self.build_context.cache(),
-            self.reporter
-                .clone()
-                .map(|reporter| reporter.into_git_reporter()),
+            self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
         )
         .await?;
 
@@ -2186,10 +2172,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                     WheelCache::Git(resource.url, oid.as_short_str()).root(),
                 )
             });
-        if cache_shard
-            .as_ref()
-            .is_some_and(|cache_shard| cache_shard.is_dir())
-        {
+        if cache_shard.as_deref().is_some_and(Path::is_dir) {
             debug!("Skipping GitHub fast path for: {source} (shard exists)");
         } else {
             debug!("Attempting GitHub fast path for: {source}");
@@ -2263,9 +2246,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             resource.subdirectory,
             client.unmanaged.git_http_settings(resource.git.url()),
             self.build_context.cache(),
-            self.reporter
-                .clone()
-                .map(|reporter| reporter.into_git_reporter()),
+            self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
         )
         .await?;
 
@@ -2509,9 +2490,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 git,
                 client.unmanaged.git_http_settings(git.url()),
                 self.build_context.cache().bucket(CacheBucket::Git),
-                self.reporter
-                    .clone()
-                    .map(|reporter| reporter.into_git_reporter()),
+                self.reporter.clone().map(<dyn Reporter>::into_git_reporter),
             )
             .await?;
 
