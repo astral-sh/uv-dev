@@ -230,13 +230,8 @@ pub async fn upgrade(
         {
             Ok(interpreter) => Some(interpreter.into_interpreter()),
             Err(error) => {
-                let DeclarationSelection {
-                    active,
-                    skipped,
-                    packages,
-                } = select_requirements(&project, &packages, &exclude, None)?;
-                render_skipped_requirements(&skipped, printer)?;
-                validate_requirements(&project, &active, &packages)?;
+                render_skipped_requirements(&selection.skipped, printer)?;
+                validate_requirements(&project, &selection.active, &selection.packages)?;
                 return Err(error.into());
             }
         }
