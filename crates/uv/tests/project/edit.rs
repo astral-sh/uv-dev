@@ -14080,7 +14080,7 @@ async fn pip_install_redirect_with_netrc_cross_origin() -> Result<()> {
         .arg("anyio")
         .arg("--index-url")
         .arg(redirect_url.as_str())
-        .env(EnvVars::NETRC, netrc.to_str().unwrap())
+        .env(EnvVars::NETRC, netrc.path())
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
