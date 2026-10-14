@@ -37,6 +37,7 @@ impl PackageServer {
 
     /// Replace all responses with one archive and its index entry, keeping the server address.
     ///
+    /// Existing request expectations are verified before replacing the responses.
     /// The advertised SHA-256 digest is independent of the archive's bytes. Pass `None` to omit it.
     pub async fn serve(&self, filename: &str, bytes: &[u8], advertised_sha256: Option<&str>) {
         self.serve_with(filename, bytes, advertised_sha256, json!({}))
@@ -53,6 +54,7 @@ impl PackageServer {
         advertised_sha256: Option<&str>,
         file_metadata: Value,
     ) {
+        self.server.verify().await;
         self.server.reset().await;
         let hashes = if let Some(sha256) = advertised_sha256 {
             json!({ "sha256": sha256 })
@@ -88,5 +90,34 @@ impl PackageServer {
             .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes.to_vec()))
             .mount(&self.server)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    use super::PackageServer;
+
+    #[tokio::test]
+    #[should_panic(expected = "original package version")]
+    async fn replacing_content_verifies_previous_request_expectations() {
+        let server = PackageServer::new(&"example".parse().expect("valid package name")).await;
+        let filename = "example-1.0.0-py3-none-any.whl";
+        server.serve(filename, b"original", None).await;
+        Mock::given(method("GET"))
+            .and(path(format!("/{filename}")))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .named("original package version")
+            .mount(server.mock_server())
+            .await;
+
+        server
+            .serve("example-2.0.0-py3-none-any.whl", b"replacement", None)
+            .await;
+        // A panic from dropping the server must not satisfy the assertion.
+        server.mock_server().reset().await;
     }
 }
