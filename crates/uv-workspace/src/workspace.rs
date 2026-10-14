@@ -602,60 +602,34 @@ impl Workspace {
             "cannot modify workspace still in use",
         );
 
-        let slf = Arc::unwrap_or_clone(self);
-        let mut packages = slf.packages;
-
-        let Some(member) = Arc::make_mut(&mut packages).get_mut(package_name) else {
+        let mut workspace = Arc::unwrap_or_clone(self);
+        let Some(member) = Arc::make_mut(&mut workspace.packages).get_mut(package_name) else {
             return Ok(None);
         };
 
-        if member.root == slf.install_path {
+        if member.root == workspace.install_path {
             // If the member is also the workspace root, update _both_ the member entry and the
             // root `pyproject.toml`.
-            let workspace_pyproject_toml = pyproject_toml.clone();
+            workspace.pyproject_toml = pyproject_toml.clone();
 
             // Refresh the workspace sources.
-            let workspace_sources = workspace_pyproject_toml
+            workspace.sources = workspace
+                .pyproject_toml
                 .tool
                 .clone()
                 .and_then(|tool| tool.uv)
                 .and_then(|uv| uv.sources)
                 .map(ToolUvSources::into_inner)
                 .unwrap_or_default();
-
-            // Set the `pyproject.toml` for the member.
-            member.pyproject_toml = pyproject_toml;
-
-            // Recompute required_members with the updated data
-            let required_members = Self::collect_required_members(
-                &packages,
-                &workspace_sources,
-                &workspace_pyproject_toml,
-            )?;
-
-            let workspace = Self {
-                pyproject_toml: workspace_pyproject_toml,
-                sources: workspace_sources,
-                packages,
-                required_members,
-                ..slf
-            };
-            Ok(Some(Arc::new(workspace)))
-        } else {
-            // Set the `pyproject.toml` for the member.
-            member.pyproject_toml = pyproject_toml;
-
-            // Recompute required_members with the updated member data
-            let required_members =
-                Self::collect_required_members(&packages, &slf.sources, &slf.pyproject_toml)?;
-
-            let workspace = Self {
-                packages,
-                required_members,
-                ..slf
-            };
-            Ok(Some(Arc::new(workspace)))
         }
+
+        member.pyproject_toml = pyproject_toml;
+        workspace.required_members = Self::collect_required_members(
+            &workspace.packages,
+            &workspace.sources,
+            &workspace.pyproject_toml,
+        )?;
+        Ok(Some(Arc::new(workspace)))
     }
 
     /// Returns `true` if the workspace has a non-project root.
