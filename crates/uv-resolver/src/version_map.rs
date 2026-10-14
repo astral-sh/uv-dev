@@ -666,8 +666,8 @@ impl VersionMapLazy {
                             upload_time,
                         );
                         let dist = RegistrySourceDist {
-                            name: filename.name.clone(),
-                            version: filename.version.clone(),
+                            name: filename.name,
+                            version: filename.version,
                             ext: filename.extension,
                             file: Box::new(file),
                             index: self.index.clone(),
