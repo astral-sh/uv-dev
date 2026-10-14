@@ -2631,7 +2631,7 @@ fn install_git_full_commit_ignores_same_named_branch() -> Result<()> {
      + example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
     ");
 
-    let assert_revision = |version: &str, revision: &str| -> Result<()> {
+    let assert_revision = |version: &'static str, revision: &str| -> Result<()> {
         context.assert_installed("example", version);
         let direct_url: serde_json::Value = serde_json::from_slice(&fs::read(
             context
