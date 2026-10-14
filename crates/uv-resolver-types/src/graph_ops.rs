@@ -186,27 +186,16 @@ pub fn simplify_conflict_markers(
         inferences.insert(node_id, new_sets);
     }
 
+    // Inferences are not always sufficient to disambiguate edges to packages with the same name.
+    let ambiguous_edges = find_ambiguous_edges(graph, inferences.keys().copied());
     for edge_index in (0..graph.edge_count()).map(EdgeIndex::new) {
-        let (from_index, to_index) = graph.edge_endpoints(edge_index).unwrap();
-        // If there are ambiguous edges (i.e., two or more edges
-        // with the same package name), then we specifically skip
-        // conflict marker simplification. It seems that in some
-        // cases, the logic encoded in `inferences` isn't quite enough
-        // to perfectly disambiguate between them. It's plausible we
-        // could do better here, but it requires smarter simplification
-        // logic. ---AG
-        let target_name = graph[to_index].package_name();
-        let ambiguous = graph
-            .edges_directed(from_index, Direction::Outgoing)
-            .any(|edge| {
-                edge.id() != edge_index && target_name == graph[edge.target()].package_name()
-            });
-        if ambiguous {
-            continue;
-        }
+        let (from_index, _) = graph.edge_endpoints(edge_index).unwrap();
         let Some(inference_sets) = inferences.get(&from_index) else {
             continue;
         };
+        if ambiguous_edges.contains(&edge_index) {
+            continue;
+        }
         // If not all possible paths (represented by our inferences)
         // satisfy the conflict marker on this edge, then we can't make any
         // simplifications. Namely, because it follows that out inferences
@@ -231,6 +220,29 @@ pub fn simplify_conflict_markers(
             graph[edge_index].unify_inference_sets(inference_sets);
         }
     }
+}
+
+/// Find edges from each source whose target package name is shared by another outgoing edge.
+fn find_ambiguous_edges(
+    graph: &Graph<ResolutionGraphNode, UniversalMarker>,
+    sources: impl Iterator<Item = NodeIndex>,
+) -> FxHashSet<EdgeIndex> {
+    let mut ambiguous = FxHashSet::default();
+    for source in sources {
+        let mut edges = graph.edges_directed(source, Direction::Outgoing);
+        let (Some(first), Some(second)) = (edges.next(), edges.next()) else {
+            continue;
+        };
+        let mut seen = FxHashMap::default();
+        seen.insert(graph[first.target()].package_name(), first.id());
+        for edge in std::iter::once(second).chain(edges) {
+            if let Some(previous) = seen.insert(graph[edge.target()].package_name(), edge.id()) {
+                ambiguous.insert(previous);
+                ambiguous.insert(edge.id());
+            }
+        }
+    }
+    ambiguous
 }
 
 pub trait Reachable<T> {
