@@ -413,7 +413,7 @@ impl PyProjectToml {
         let pyproject_toml =
             tracing::info_span!("toml::from_str uv build backend", path = %path.display())
                 .in_scope(|| toml::from_str(&contents))
-                .map_err(|err| Error::Toml(path.to_path_buf(), err))?;
+                .map_err(|err| Error::Toml(path.to_path_buf(), Box::new(err)))?;
         Ok(pyproject_toml)
     }
 
