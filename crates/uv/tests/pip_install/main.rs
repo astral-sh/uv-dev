@@ -12,6 +12,8 @@ mod index;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod json;
 #[cfg(feature = "test-python")]
+mod link_mode;
+#[cfg(feature = "test-python")]
 mod no_index;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_install;
