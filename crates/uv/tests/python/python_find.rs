@@ -54,14 +54,10 @@ fn python_find_default_arch() -> Result<()> {
     ----- stdout -----
     [PYTHON-3.12]
     ");
-    let python = context
-        .python_find()
-        .env(EnvVars::UV_PYTHON_ARCH, &arch)
-        .output()?;
-    let python = String::from_utf8(python.stdout)?;
+    let (_, python) = context.python_versions.first().unwrap();
     uv_snapshot!(context.filters(), context.python_find()
         .env(EnvVars::UV_PYTHON_ARCH, "wasm32")
-        .arg(python.trim()), @"
+        .arg(python), @"
     exit_code: 0 (success)
     ----- stdout -----
     [PYTHON-3.12]
