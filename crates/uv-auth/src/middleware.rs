@@ -448,27 +448,22 @@ impl Middleware for AuthMiddleware {
             .as_ref()
             .map(|credentials| credentials.to_username())
             .unwrap_or(Username::none());
-        let credentials = if let Some(index) = index {
-            self.cache().get_url(&index.url, &username).or_else(|| {
+        let credentials = index
+            .and_then(|index| self.cache().get_url(&index.url, &username))
+            .or_else(|| {
                 self.cache()
                     .get_realm(Realm::from(&**retry_request_url), username)
             })
-        } else {
-            // Since there is no known index for this URL, check if there are credentials in
-            // the realm-level cache.
-            self.cache()
-                .get_realm(Realm::from(&**retry_request_url), username)
-        }
-        .or(credentials);
+            .or(credentials);
 
-        if let Some(credentials) = credentials.as_ref() {
-            if credentials.is_authenticated() {
-                trace!("Retrying request for `{url}` with credentials from cache {credentials:?}");
-                retry_request = credentials.authenticate(retry_request).await?;
-                return self
-                    .complete_request(None, retry_request, extensions, next, auth_policy)
-                    .await;
-            }
+        if let Some(credentials) = credentials.as_ref()
+            && credentials.is_authenticated()
+        {
+            trace!("Retrying request for `{url}` with credentials from cache {credentials:?}");
+            retry_request = credentials.authenticate(retry_request).await?;
+            return self
+                .complete_request(None, retry_request, extensions, next, auth_policy)
+                .await;
         }
 
         // Then, fetch from external services.
@@ -495,23 +490,17 @@ impl Middleware for AuthMiddleware {
                 .await;
         }
 
-        if let Some(credentials) = credentials.as_ref() {
-            if !attempt_has_username {
-                trace!("Retrying request for `{url}` with username from cache {credentials:?}");
-                retry_request = credentials.authenticate(retry_request).await?;
-                return self
-                    .complete_request(None, retry_request, extensions, next, auth_policy)
-                    .await;
-            }
+        if let Some(credentials) = credentials.as_ref()
+            && !attempt_has_username
+        {
+            trace!("Retrying request for `{url}` with username from cache {credentials:?}");
+            retry_request = credentials.authenticate(retry_request).await?;
+            return self
+                .complete_request(None, retry_request, extensions, next, auth_policy)
+                .await;
         }
 
-        if let Some(response) = response {
-            Ok(response)
-        } else {
-            Err(Error::Middleware(format_err!(
-                "Missing credentials for: {url}"
-            )))
-        }
+        response.ok_or_else(|| Error::Middleware(format_err!("Missing credentials for: {url}")))
     }
 }
 
@@ -752,16 +741,12 @@ impl AuthMiddleware {
             }
         }
 
+        let username = credentials.and_then(Authentication::username);
+
         // Netrc support based on: <https://github.com/gribouille/netrc>.
         let credentials = if let Some(credentials) = self.netrc.get().and_then(|netrc| {
             debug!("Checking netrc for credentials for `{url}`");
-            Credentials::from_netrc(
-                netrc,
-                url,
-                credentials
-                    .as_ref()
-                    .and_then(|credentials| credentials.username()),
-            )
+            Credentials::from_netrc(netrc, url, username)
         }) {
             debug!("Found credentials in netrc file for `{url}`");
             Some(credentials)
@@ -769,12 +754,7 @@ impl AuthMiddleware {
         // Text credential store support.
         } else if let Some(credentials) = self.text_store.get().await.and_then(|text_store| {
             debug!("Checking text store for credentials for `{url}`");
-            match text_store.get_credentials(
-                url,
-                credentials
-                    .as_ref()
-                    .and_then(|credentials| credentials.username()),
-            ) {
+            match text_store.get_credentials(url, username) {
                 Ok(credentials) => credentials.cloned(),
                 Err(err) => {
                     debug!("Failed to get credentials from text store: {err}");
@@ -787,28 +767,28 @@ impl AuthMiddleware {
         } else if let Some(credentials) = {
             if self.preview.is_enabled(PreviewFeature::NativeAuth) {
                 let native_store = KeyringProvider::native();
-                let username = credentials.and_then(|credentials| credentials.username());
                 let display_username = if let Some(username) = username {
                     format!("{username}@")
                 } else {
                     String::new()
                 };
-                if let Some(index) = index {
+                let lookup_url = if let Some(index) = index {
                     // N.B. The native store performs an exact look up right now, so we use the root
                     // URL of the index instead of relying on prefix-matching.
                     debug!(
                         "Checking native store for credentials for index URL {}{}",
                         display_username, index.root_url
                     );
-                    native_store.fetch(&index.root_url, username).await
+                    &index.root_url
                 } else {
                     debug!(
                         "Checking native store for credentials for URL `{}{}`",
                         display_username, url
                     );
-                    native_store.fetch(url, username).await
-                }
+                    url
+                };
                 // TODO(zanieb): We should have a realm fallback here too
+                native_store.fetch(lookup_url, username).await
             } else {
                 None
             }
@@ -824,22 +804,21 @@ impl AuthMiddleware {
                 // The subprocess keyring provider is _slow_ so we do not perform fetches for all
                 // URLs; instead, we fetch if there's a username or if the user has requested to
                 // always authenticate.
-                if let Some(username) = credentials.and_then(|credentials| credentials.username()) {
-                    if let Some(index) = index {
+                if let Some(username) = username {
+                    let lookup_url = if let Some(index) = index {
                         debug!(
                             "Checking keyring for credentials for index URL `{}@{}`",
                             username, index.url
                         );
-                        keyring
-                            .fetch(DisplaySafeUrl::ref_cast(&index.url), Some(username))
-                            .await
+                        DisplaySafeUrl::ref_cast(&index.url)
                     } else {
                         debug!(
                             "Checking keyring for credentials for full URL `{}@{}`",
                             username, url
                         );
-                        keyring.fetch(url, Some(username)).await
-                    }
+                        url
+                    };
+                    keyring.fetch(lookup_url, Some(username)).await
                 } else if matches!(auth_policy, AuthPolicy::Always) {
                     if let Some(index) = index {
                         debug!(
