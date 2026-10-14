@@ -23,7 +23,6 @@ with the appropriate error.  The next entry method called on the credential
 will fail with the error you set.  The error will then be cleared, so the next
 call on the mock will operate as usual.
  */
-use std::cell::RefCell;
 use std::sync::Mutex;
 
 use crate::credential::CredentialApi;
@@ -33,17 +32,9 @@ use crate::error::{Error, Result, decode_password};
 ///
 /// Mocks use an internal mutability pattern since entries are read-only.
 /// The mutex is used to make sure these are Sync.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct MockCredential {
-    inner: Mutex<RefCell<MockData>>,
-}
-
-impl Default for MockCredential {
-    fn default() -> Self {
-        Self {
-            inner: Mutex::new(RefCell::new(MockData::default())),
-        }
-    }
+    inner: Mutex<MockData>,
 }
 
 /// The (in-memory) persisted data for a mock credential.
@@ -67,8 +58,7 @@ impl CredentialApi for MockCredential {
     /// and the password will _not_ be set.  The error will
     /// be cleared, so calling again will set the password.
     async fn set_password(&self, password: &str) -> Result<()> {
-        let mut inner = self.inner.lock().expect("Can't access mock data for set");
-        let data = inner.get_mut();
+        let mut data = self.inner.lock().expect("Can't access mock data for set");
         let err = data.error.take();
         match err {
             None => {
@@ -85,8 +75,7 @@ impl CredentialApi for MockCredential {
     /// and the password will _not_ be set.  The error will
     /// be cleared, so calling again will set the password.
     async fn set_secret(&self, secret: &[u8]) -> Result<()> {
-        let mut inner = self.inner.lock().expect("Can't access mock data for set");
-        let data = inner.get_mut();
+        let mut data = self.inner.lock().expect("Can't access mock data for set");
         let err = data.error.take();
         match err {
             None => {
@@ -102,8 +91,7 @@ impl CredentialApi for MockCredential {
     /// If there is an error set in the mock, it will
     /// be returned instead of a password.
     async fn get_password(&self) -> Result<String> {
-        let mut inner = self.inner.lock().expect("Can't access mock data for get");
-        let data = inner.get_mut();
+        let mut data = self.inner.lock().expect("Can't access mock data for get");
         let err = data.error.take();
         match err {
             None => match &data.secret {
@@ -119,8 +107,7 @@ impl CredentialApi for MockCredential {
     /// If there is an error set in the mock, it will
     /// be returned instead of a password.
     async fn get_secret(&self) -> Result<Vec<u8>> {
-        let mut inner = self.inner.lock().expect("Can't access mock data for get");
-        let data = inner.get_mut();
+        let mut data = self.inner.lock().expect("Can't access mock data for get");
         let err = data.error.take();
         match err {
             None => match &data.secret {
@@ -139,11 +126,10 @@ impl CredentialApi for MockCredential {
     /// If there is no password, a [NoEntry](Error::NoEntry) error
     /// will be returned.
     async fn delete_credential(&self) -> Result<()> {
-        let mut inner = self
+        let mut data = self
             .inner
             .lock()
             .expect("Can't access mock data for delete");
-        let data = inner.get_mut();
         let err = data.error.take();
         match err {
             None => match data.secret {
@@ -185,11 +171,10 @@ impl MockCredential {
     /// behavior of the mock.  But once an error has been
     /// returned it is removed, so the mock works thereafter.
     fn set_error(&self, err: Error) {
-        let mut inner = self
+        let mut data = self
             .inner
             .lock()
             .expect("Can't access mock data for set_error");
-        let data = inner.get_mut();
         data.error = Some(err);
     }
 }
