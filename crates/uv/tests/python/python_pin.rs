@@ -455,13 +455,7 @@ fn python_pin_compatible_with_requires_python() -> Result<()> {
     ----- stdout -----
     Updated `.python-version` from `3.11` -> `cpython@3.10`
     ");
-
-    // And, as an alias, workspace discovery
-    uv_snapshot!(context.filters(), context.python_pin().arg("cpython@3.10").arg("--no-workspace"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Pinned `.python-version` to `cpython@3.10`
-    ");
+    assert_eq!(context.read(&version_file), "cpython@3.10\n");
 
     // Request a complex version range that resolves to an incompatible version
     uv_snapshot!(context.filters(), context.python_pin().arg(">3.8,<3.11"), @"

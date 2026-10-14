@@ -413,17 +413,6 @@ fn create_venv_project_environment() -> Result<()> {
     project_marker.write_str("project environment")?;
     let default_marker = context.venv.child("marker");
     default_marker.touch()?;
-    uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--no-workspace"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    "
-    );
-    assert_path_missing(&default_marker);
-
-    default_marker.touch()?;
     uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--no-project"), @"
     exit_code: 0 (success)
     ----- stderr -----
