@@ -3122,13 +3122,11 @@ impl<'index> ForkState<'index> {
                     continue;
                 };
                 let (self_package, dependency_package) = (*self_package, *dependency_package);
-                let Some((self_range, dependency_range)) =
+                let Some((self_range, Some(dependency_range))) =
                     incompatibility.dependency_version_sets()
                 else {
                     continue;
                 };
-                let dependency_range =
-                    dependency_range.map_or_else(|| Cow::Owned(Range::empty()), Cow::Borrowed);
                 if *package != self_package {
                     continue;
                 }
