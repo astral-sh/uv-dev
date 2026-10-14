@@ -45,7 +45,7 @@ pub fn uninstall_wheel(
 
     // Uninstall the files, keeping track of any directories that are left empty.
     let mut visited = BTreeSet::new();
-    for entry in &record {
+    for entry in record {
         let Some(path) = record_path_in_scheme(&entry.path, site_packages, &distribution, layout)
         else {
             continue;
@@ -93,7 +93,7 @@ pub fn uninstall_wheel(
 
     // If any directories were left empty, remove them. Iterate in reverse order such that we visit
     // the deepest directories first.
-    for path in visited.iter().rev() {
+    for path in visited.into_iter().rev() {
         // No need to look at directories outside of `site-packages` (like `bin`).
         if !path.starts_with(site_packages) {
             continue;
