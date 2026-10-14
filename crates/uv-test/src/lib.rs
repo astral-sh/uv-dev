@@ -659,11 +659,11 @@ impl TestContext {
         self
     }
 
-    /// Add a filter for (bytecode) compilation file counts
+    /// Normalize positive bytecode compilation counts while keeping zero visible.
     #[must_use]
     pub fn with_filtered_compiled_file_count(mut self) -> Self {
         self.filters.push((
-            r"compiled \d+ files".to_string(),
+            r"compiled [1-9][0-9]* files".to_string(),
             "compiled [COUNT] files".to_string(),
         ));
         self
@@ -2636,6 +2636,20 @@ mod python_discovery_tests {
 #[cfg(test)]
 mod filter_tests {
     use super::{LATEST_PYTHON_3_12, TestContext, apply_filters};
+
+    #[test]
+    fn zero_bytecode_compilation_count_remains_visible() {
+        let context = TestContext::new_with_versions_and_bin(&[], "uv".into())
+            .with_filtered_compiled_file_count();
+
+        assert_eq!(
+            apply_filters(
+                "Bytecode compiled 0 files\nBytecode compiled 12 files\n".to_string(),
+                context.filters()
+            ),
+            "Bytecode compiled 0 files\nBytecode compiled [COUNT] files\n"
+        );
+    }
 
     #[test]
     fn canonical_path_has_one_pattern() -> anyhow::Result<()> {
