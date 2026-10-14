@@ -78,6 +78,7 @@ fn find_uv_bin_target() -> anyhow::Result<()> {
 
     // Install in a target directory
     uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-index")
         .arg(fake_uv(&context)?)
         .arg("--target")
         .arg("target"), @"
@@ -119,6 +120,7 @@ fn find_uv_bin_prefix() -> anyhow::Result<()> {
     let prefix = context.temp_dir.child("prefix");
 
     uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-index")
         .arg(fake_uv(&context)?)
         .arg("--prefix")
         .arg(prefix.path()), @"
@@ -199,6 +201,7 @@ fn find_uv_bin_in_ephemeral_environment() -> anyhow::Result<()> {
 
     // We should find the binary in an ephemeral `--with` environment
     uv_snapshot!(context.filters(), context.run()
+        .arg("--no-index")
         .arg("--with")
         .arg(fake_uv(&context)?)
         .arg("python")
@@ -249,6 +252,7 @@ fn find_uv_bin_in_parent_of_ephemeral_environment() -> anyhow::Result<()> {
     // Import the package from the ephemeral environment to verify it is active while finding
     // the binary in the project environment.
     uv_snapshot!(context.filters(), context.run()
+        .arg("--no-index")
         .arg("--with")
         .arg(context.workspace_root.join("test/links/ok-1.0.0-py3-none-any.whl"))
         .arg("python")
@@ -289,6 +293,7 @@ fn find_uv_bin_user_bin() -> anyhow::Result<()> {
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-index")
         .arg(fake_uv(&context)?), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -339,6 +344,7 @@ fn find_uv_bin_error_message() -> anyhow::Result<()> {
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--no-index")
         .arg(fake_uv(&context)?), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -379,6 +385,7 @@ fn find_uv_bin_in_venv(python_version: &str) -> anyhow::Result<()> {
     let context = uv_test::test_context!(python_version);
     context
         .pip_install()
+        .arg("--no-index")
         .arg(fake_uv(&context)?)
         .assert()
         .success();
