@@ -2301,6 +2301,7 @@ fn sync_editable_and_registry() -> Result<()> {
     Ok(())
 }
 
+/// Switching installation modes must change where Python imports the package from.
 #[test]
 fn sync_editable_and_local() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -2310,6 +2311,20 @@ fn sync_editable_and_local() -> Result<()> {
         context.workspace_root.join("test/packages/black_editable"),
         context.temp_dir.join("black_editable"),
     )?;
+    let source_module = context.temp_dir.join("black_editable/black/__init__.py");
+    let installed_module = context.site_packages().join("black/__init__.py");
+    let assert_import_origin = |expected: &Path| {
+        context
+            .python_command()
+            .args([
+                "-I",
+                "-c",
+                "import black, os, sys; assert os.path.samefile(black.__file__, sys.argv[1]), black.__file__",
+            ])
+            .arg(expected)
+            .assert()
+            .success();
+    };
 
     // Install the editable version of Black.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -2328,9 +2343,9 @@ fn sync_editable_and_local() -> Result<()> {
      + black==0.1.0 (from file://[TEMP_DIR]/black_editable)
     "
     );
+    assert_import_origin(&source_module);
 
     // Install the non-editable version of Black. This should replace the editable version.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc::indoc! {r"
         black @ file:./black_editable
         "
@@ -2347,9 +2362,9 @@ fn sync_editable_and_local() -> Result<()> {
      ~ black==0.1.0 (from file://[TEMP_DIR]/black_editable)
     "
     );
+    assert_import_origin(&installed_module);
 
     // Reinstall the editable version of Black. This should replace the non-editable version.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc::indoc! {r"
         -e file:./black_editable
         "
@@ -2365,6 +2380,7 @@ fn sync_editable_and_local() -> Result<()> {
      ~ black==0.1.0 (from file://[TEMP_DIR]/black_editable)
     "
     );
+    assert_import_origin(&source_module);
 
     Ok(())
 }
