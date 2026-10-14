@@ -7,7 +7,6 @@ use itertools::Itertools;
 use petgraph::{
     Directed,
     graph::{Graph, NodeIndex},
-    visit::EdgeRef,
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::fmt::{Display, Formatter};
@@ -406,6 +405,12 @@ impl Display for ConflictingDistributionError {
 /// single version of each package to be present in the graph.
 impl From<ResolverOutput> for uv_distribution_types::Resolution {
     fn from(output: ResolverOutput) -> Self {
+        struct SourceNode {
+            name: PackageName,
+            kind: PackageNodeKind,
+            base_index: Option<NodeIndex>,
+        }
+
         let ResolverOutput {
             graph,
             diagnostics,
@@ -419,41 +424,56 @@ impl From<ResolverOutput> for uv_distribution_types::Resolution {
         );
 
         let mut transformed = Graph::with_capacity(graph.node_count(), graph.edge_count());
-        let mut inverse = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
-
         // Create the root node.
         let root = transformed.add_node(Node::Root);
 
-        // Re-add the nodes to the reduced graph.
-        for index in graph.node_indices() {
-            let ResolutionGraphNode::Dist(dist) = &graph[index] else {
-                continue;
-            };
-            if dist.is_base() {
-                inverse.insert(
-                    &dist.name,
-                    transformed.add_node(Node::Dist {
-                        dist: dist.dist.clone(),
-                        hashes: dist.hashes.clone(),
-                        install: true,
-                    }),
-                );
-            }
-        }
+        // Move base distributions into the reduced graph, retaining source-node identities in
+        // index order to translate edges.
+        let (nodes, edges) = graph.into_nodes_edges();
+        let nodes: Vec<_> = nodes
+            .into_iter()
+            .map(|node| match node.weight {
+                ResolutionGraphNode::Root => None,
+                ResolutionGraphNode::Dist(AnnotatedDist {
+                    dist,
+                    hashes,
+                    name,
+                    kind,
+                    ..
+                }) => {
+                    let base_index = kind.is_base().then(|| {
+                        transformed.add_node(Node::Dist {
+                            dist,
+                            hashes,
+                            install: true,
+                        })
+                    });
+                    Some(SourceNode {
+                        name,
+                        kind,
+                        base_index,
+                    })
+                }
+            })
+            .collect();
+        let mut inverse = FxHashMap::with_capacity_and_hasher(nodes.len(), FxBuildHasher);
+        inverse.extend(
+            nodes
+                .iter()
+                .flatten()
+                .filter_map(|node| node.base_index.map(|index| (&node.name, index))),
+        );
 
         // Re-add the edges to the reduced graph.
-        for edge in graph.edge_references() {
-            match (&graph[edge.source()], &graph[edge.target()]) {
-                (ResolutionGraphNode::Root, ResolutionGraphNode::Dist(target_dist)) => {
-                    let target = inverse[&target_dist.name()];
+        for edge in edges {
+            match (&nodes[edge.source().index()], &nodes[edge.target().index()]) {
+                (None, Some(target_dist)) => {
+                    let target = inverse[&target_dist.name];
                     transformed.update_edge(root, target, Edge::Prod);
                 }
-                (
-                    ResolutionGraphNode::Dist(source_dist),
-                    ResolutionGraphNode::Dist(target_dist),
-                ) => {
-                    let source = inverse[&source_dist.name()];
-                    let target = inverse[&target_dist.name()];
+                (Some(source_dist), Some(target_dist)) => {
+                    let source = inverse[&source_dist.name];
+                    let target = inverse[&target_dist.name];
 
                     let edge = match &source_dist.kind {
                         PackageNodeKind::Base => Edge::Prod,
