@@ -3231,16 +3231,15 @@ impl Lock {
     /// Return local workspace member names and their paths relative to the workspace root.
     pub fn workspace_member_paths(&self) -> impl Iterator<Item = (&PackageName, &Path)> {
         self.workspace_packages().filter_map(|package| {
-            let path = match &package.id.source {
-                Source::Directory(path) | Source::Editable(path) | Source::Virtual(path) => {
-                    path.as_ref()
-                }
-                Source::Registry(_) | Source::Git(..) | Source::Direct(..) | Source::Path(_) => {
-                    return None;
-                }
-            };
+            let path = package.id.source.directory_path()?;
             Some((package.name(), path))
         })
+    }
+
+    /// Return a local workspace member's path relative to the workspace root.
+    pub fn workspace_member_path(&self, name: &PackageName) -> Option<&Path> {
+        let index = *self.workspace_members.get(name)?;
+        self.package(index).id.source.directory_path()
     }
 
     /// Returns `true` if the package is a workspace member.
@@ -8084,6 +8083,16 @@ impl Display for Source {
 }
 
 impl Source {
+    /// Return the path for a local directory source.
+    fn directory_path(&self) -> Option<&Path> {
+        match self {
+            Self::Directory(path) | Self::Editable(path) | Self::Virtual(path) => {
+                Some(path.as_ref())
+            }
+            Self::Registry(_) | Self::Git(..) | Self::Direct(..) | Self::Path(_) => None,
+        }
+    }
+
     /// Return whether this source identifies an implicit single-project root.
     ///
     /// Directory sources require explicit workspace membership.
