@@ -925,81 +925,80 @@ impl std::fmt::Display for NoSolutionError {
 }
 
 #[expect(clippy::print_stderr)]
-fn display_tree(
-    error: &DerivationTree<PubGrubPackage, Range<Version>, UnavailableReason>,
-    name: &str,
-) {
-    let mut lines = Vec::new();
-    display_tree_inner(error, &mut lines);
-    lines.reverse();
-
+fn display_tree(error: &ErrorTree, name: &str) {
+    let tree = DerivationTreeDisplay(error);
     if std::env::var_os(EnvVars::UV_INTERNAL__SHOW_DERIVATION_TREE).is_some() {
-        eprintln!("{name}\n{}", lines.join("\n"));
+        eprintln!("{name}\n{tree}");
     } else {
-        trace!("{name}\n{}", lines.join("\n"));
+        trace!("{name}\n{tree}");
     }
 }
 
-fn display_tree_inner(
-    error: &DerivationTree<PubGrubPackage, Range<Version>, UnavailableReason>,
-    lines: &mut Vec<String>,
-) {
-    enum Frame<'a> {
-        Tree(&'a ErrorTree, usize),
-        Terms(&'a ErrorTerms, usize),
-    }
+struct DerivationTreeDisplay<'a>(&'a ErrorTree);
 
-    let mut frames = vec![Frame::Tree(error, 0)];
-    while let Some(frame) = frames.pop() {
-        match frame {
-            Frame::Tree(DerivationTree::Derived(derived), depth) => {
-                frames.push(Frame::Terms(&derived.terms, depth));
-                frames.push(Frame::Tree(&derived.cause2, depth + 1));
-                frames.push(Frame::Tree(&derived.cause1, depth + 1));
-            }
-            Frame::Tree(DerivationTree::External(external), depth) => {
-                let prefix = "  ".repeat(depth);
-                match external {
-                    External::FromDependencyOf(
-                        package,
-                        version,
-                        dependency,
-                        dependency_version,
-                    ) => {
-                        lines.push(format!(
-                            "{prefix}{package}{version} depends on {dependency}{dependency_version}"
-                        ));
-                    }
-                    External::Custom(package, versions, reason) => match reason {
-                        UnavailableReason::Package(_) => {
-                            lines.push(format!("{prefix}{package} {reason}"));
-                        }
-                        UnavailableReason::Version(_) => {
-                            lines.push(format!("{prefix}{package}{versions} {reason}"));
-                        }
-                    },
-                    External::NoVersions(package, versions) => {
-                        lines.push(format!("{prefix}no versions of {package}{versions}"));
-                    }
-                    External::NotRoot(package, versions) => {
-                        lines.push(format!("{prefix}not root {package}{versions}"));
-                    }
+impl std::fmt::Display for DerivationTreeDisplay<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        enum Frame<'a> {
+            Tree(&'a ErrorTree, usize),
+            Term(&'a PubGrubPackage, &'a Term<Range<Version>>, usize),
+        }
+
+        let mut separator = "";
+        let mut start_line = |f: &mut Formatter<'_>, depth: usize| {
+            f.write_str(separator)?;
+            separator = "\n";
+            write!(f, "{:indent$}", "", indent = 2 * depth)
+        };
+        let mut frames = vec![Frame::Tree(self.0, 0)];
+        while let Some(frame) = frames.pop() {
+            match frame {
+                Frame::Tree(DerivationTree::Derived(derived), depth) => {
+                    // Render terms in reverse iteration order, then the second and first causes.
+                    frames.push(Frame::Tree(&derived.cause1, depth + 1));
+                    frames.push(Frame::Tree(&derived.cause2, depth + 1));
+                    frames.extend(
+                        derived
+                            .terms
+                            .iter()
+                            .map(|(package, term)| Frame::Term(package, term, depth)),
+                    );
                 }
-            }
-            Frame::Terms(terms, depth) => {
-                let prefix = "  ".repeat(depth);
-                for (package, term) in terms {
+                Frame::Tree(DerivationTree::External(external), depth) => {
+                    start_line(f, depth)?;
+                    match external {
+                        External::FromDependencyOf(
+                            package,
+                            version,
+                            dependency,
+                            dependency_version,
+                        ) => write!(
+                            f,
+                            "{package}{version} depends on {dependency}{dependency_version}"
+                        ),
+                        External::Custom(package, versions, reason) => match reason {
+                            UnavailableReason::Package(_) => write!(f, "{package} {reason}"),
+                            UnavailableReason::Version(_) => {
+                                write!(f, "{package}{versions} {reason}")
+                            }
+                        },
+                        External::NoVersions(package, versions) => {
+                            write!(f, "no versions of {package}{versions}")
+                        }
+                        External::NotRoot(package, versions) => {
+                            write!(f, "not root {package}{versions}")
+                        }
+                    }?;
+                }
+                Frame::Term(package, term, depth) => {
+                    start_line(f, depth)?;
                     match term {
-                        Term::Positive(versions) => {
-                            lines.push(format!("{prefix}term {package}{versions}"));
-                        }
-                        Term::Negative(versions) => {
-                            lines.push(format!("{prefix}term not {package}{versions}"));
-                        }
-                    }
+                        Term::Positive(versions) => write!(f, "term {package}{versions}"),
+                        Term::Negative(versions) => write!(f, "term not {package}{versions}"),
+                    }?;
                 }
             }
         }
+        Ok(())
     }
 }
 
