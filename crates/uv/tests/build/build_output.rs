@@ -68,6 +68,30 @@ fn assert_artifacts(context: &TestContext) {
 }
 
 #[test]
+fn build_ignores_output_directory_by_default() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = write_noisy_project(&context)?;
+
+    uv_snapshot!(context.build().args(["project", "--offline", "--wheel", "--quiet"]), @"exit_code: 0 (success)");
+    let dist = project.child("dist");
+    dist.child(WHEEL).assert(predicate::path::is_file());
+    dist.child(".gitignore").assert("*");
+    Ok(())
+}
+
+#[test]
+fn build_can_leave_output_directory_unignored() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = write_noisy_project(&context)?;
+
+    uv_snapshot!(context.build().args(["project", "--offline", "--wheel", "--quiet", "--no-create-gitignore"]), @"exit_code: 0 (success)");
+    let dist = project.child("dist");
+    dist.child(WHEEL).assert(predicate::path::is_file());
+    dist.child(".gitignore").assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
 fn build_shows_backend_output() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let project = write_noisy_project(&context)?;
