@@ -1079,44 +1079,35 @@ impl PubGrubReportFormatter<'_> {
             IncompatibleTag::Invalid | IncompatibleTag::Variant => None,
             IncompatibleTag::Python => {
                 let best = tags.and_then(Tags::python_tag);
-                let tags = prioritized.python_tags().collect::<BTreeSet<_>>();
-                if tags.is_empty() {
-                    None
-                } else {
-                    Some(PubGrubHint::LanguageTags {
-                        package: name.clone(),
-                        version: candidate.version().clone(),
-                        tags,
-                        best,
-                    })
-                }
+                let tags = Self::collect_hint_tags(prioritized.python_tags())?;
+                Some(PubGrubHint::LanguageTags {
+                    package: name.clone(),
+                    version: candidate.version().clone(),
+                    tags,
+                    best,
+                })
             }
             IncompatibleTag::Abi
             | IncompatibleTag::FreethreadedAbi
             | IncompatibleTag::AbiPythonVersion => {
                 let best = tags.and_then(Tags::abi_tag);
-                let tags = prioritized
-                    .abi_tags()
-                    // Ignore `none`, which is universally compatible.
-                    //
-                    // As an example, `none` can appear here if we're solving for Python 3.13, and
-                    // the distribution includes a wheel for `cp312-none-macosx_11_0_arm64`.
-                    //
-                    // In that case, the wheel isn't compatible, but when solving for Python 3.13,
-                    // the `cp312` Python tag _can_ be compatible (e.g., for `cp312-abi3-macosx_11_0_arm64.whl`),
-                    // so this is considered an ABI incompatibility rather than Python incompatibility.
-                    .filter(|tag| *tag != AbiTag::None)
-                    .collect::<BTreeSet<_>>();
-                if tags.is_empty() {
-                    None
-                } else {
-                    Some(PubGrubHint::AbiTags {
-                        package: name.clone(),
-                        version: candidate.version().clone(),
-                        tags,
-                        best,
-                    })
-                }
+                // Ignore `none`, which is universally compatible.
+                //
+                // As an example, `none` can appear here if we're solving for Python 3.13, and
+                // the distribution includes a wheel for `cp312-none-macosx_11_0_arm64`.
+                //
+                // In that case, the wheel isn't compatible, but when solving for Python 3.13,
+                // the `cp312` Python tag _can_ be compatible (e.g., for `cp312-abi3-macosx_11_0_arm64.whl`),
+                // so this is considered an ABI incompatibility rather than Python incompatibility.
+                let tags = Self::collect_hint_tags(
+                    prioritized.abi_tags().filter(|tag| *tag != AbiTag::None),
+                )?;
+                Some(PubGrubHint::AbiTags {
+                    package: name.clone(),
+                    version: candidate.version().clone(),
+                    tags,
+                    best,
+                })
             }
             IncompatibleTag::Platform => {
                 // We don't want to report all available platforms, since it's plausible that there
@@ -1129,21 +1120,20 @@ impl PubGrubReportFormatter<'_> {
                 // So, instead, we only show the platforms that are linked to otherwise-compatible
                 // wheels (e.g., `manylinux2014` in `cp313-cp313-manylinux2014`). In other words,
                 // we only show platforms for ABI-compatible wheels.
-                let tags = prioritized
-                    .platform_tags(self.tags?)
-                    .cloned()
-                    .collect::<BTreeSet<_>>();
-                if tags.is_empty() {
-                    None
-                } else {
-                    Some(PubGrubHint::PlatformTags {
-                        package: name.clone(),
-                        version: candidate.version().clone(),
-                        tags,
-                    })
-                }
+                let tags = Self::collect_hint_tags(prioritized.platform_tags(self.tags?).cloned())?;
+                Some(PubGrubHint::PlatformTags {
+                    package: name.clone(),
+                    version: candidate.version().clone(),
+                    tags,
+                })
             }
         }
+    }
+
+    /// Collect the available wheel tags, suppressing hints without a relevant tag.
+    fn collect_hint_tags<T: Ord>(tags: impl Iterator<Item = T>) -> Option<BTreeSet<T>> {
+        let tags = tags.collect::<BTreeSet<_>>();
+        (!tags.is_empty()).then_some(tags)
     }
 
     fn index_hints(
