@@ -2136,7 +2136,13 @@ fn check_uses_workspace_ty_subgraph_from_lock() -> Result<()> {
     "
     );
 
-    assert!(!context.site_packages().join("ty").exists());
+    // An editable workspace install would create distribution metadata without a `ty` directory
+    // in site-packages.
+    uv_snapshot!(context.filters(), context.pip_show().arg("ty"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Package(s) not found for: ty
+    ");
 
     Ok(())
 }
