@@ -874,6 +874,37 @@ fn edits(
     index: Option<&IndexName>,
     toml: &mut PyProjectTomlMut,
 ) -> Result<Vec<DependencyEdit>> {
+    if requirements.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let script_path;
+    let source_context = if raw {
+        None
+    } else {
+        Some(match target {
+            EditTarget::Script(script) => {
+                script_path = std::path::absolute(&script.path)?;
+                (
+                    script_path.parent().expect("script path has no parent"),
+                    Some(script.sources()),
+                    None,
+                )
+            }
+            EditTarget::Project(project) => (
+                project.root(),
+                project
+                    .pyproject_toml()
+                    .tool
+                    .as_ref()
+                    .and_then(|tool| tool.uv.as_ref())
+                    .and_then(|uv| uv.sources.as_ref())
+                    .map(ToolUvSources::inner),
+                Some(project.workspace()),
+            ),
+        })
+    };
+
     let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
     for mut requirement in requirements {
         let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
@@ -885,47 +916,25 @@ fn edits(
         merged_extras.dedup();
         requirement.extras = merged_extras.into_boxed_slice();
 
-        let (requirement, mut source) = if raw {
-            (uv_pep508::Requirement::from(requirement), None)
-        } else {
-            let script_path;
-            let (root, existing_sources, is_workspace_member) = match target {
-                EditTarget::Script(script) => {
-                    script_path = std::path::absolute(&script.path)?;
-                    (
-                        script_path.parent().expect("script path has no parent"),
-                        Some(script.sources()),
-                        false,
-                    )
-                }
-                EditTarget::Project(project) => (
-                    project.root(),
-                    project
-                        .pyproject_toml()
-                        .tool
-                        .as_ref()
-                        .and_then(|tool| tool.uv.as_ref())
-                        .and_then(|uv| uv.sources.as_ref())
-                        .map(ToolUvSources::inner),
-                    project
-                        .workspace()
-                        .packages()
-                        .contains_key(&requirement.name),
-                ),
+        let (requirement, mut source) =
+            if let Some((root, existing_sources, workspace)) = source_context {
+                let is_workspace_member = workspace
+                    .is_some_and(|workspace| workspace.packages().contains_key(&requirement.name));
+                resolve_requirement(
+                    requirement,
+                    is_workspace_member,
+                    editable,
+                    index.cloned(),
+                    rev.map(ToString::to_string),
+                    tag.map(ToString::to_string),
+                    branch.map(ToString::to_string),
+                    lfs,
+                    root,
+                    existing_sources,
+                )?
+            } else {
+                (uv_pep508::Requirement::from(requirement), None)
             };
-            resolve_requirement(
-                requirement,
-                is_workspace_member,
-                editable,
-                index.cloned(),
-                rev.map(ToString::to_string),
-                tag.map(ToString::to_string),
-                branch.map(ToString::to_string),
-                lfs,
-                root,
-                existing_sources,
-            )?
-        };
 
         // Remove any credentials. By default, we avoid writing sensitive credentials to files that
         // will be checked into version control (e.g., `pyproject.toml` and `uv.lock`). Instead,
