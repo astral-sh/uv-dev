@@ -6,6 +6,9 @@ use uv_test::pypi_proxy;
 #[cfg(all(feature = "test-python", feature = "test-r2"))]
 mod check;
 
+#[cfg(feature = "test-python")]
+mod compiled_scripts;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod edit;
 
