@@ -25,7 +25,7 @@ use serde::{Deserialize, Deserializer};
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{OnceCell, Semaphore};
 use tracing::{Instrument, debug, info_span, instrument, warn};
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
@@ -216,7 +216,7 @@ impl Pep517Backend {
 #[derive(Debug, Clone)]
 pub struct SourceBuildContext {
     /// An in-memory resolution of the default backend's requirements for PEP 517 builds.
-    default_resolution: Arc<Mutex<Option<ResolvedRequirements>>>,
+    default_resolution: Arc<OnceCell<ResolvedRequirements>>,
     /// A shared semaphore to limit the number of concurrent builds.
     concurrent_build_slots: Arc<Semaphore>,
 }
@@ -615,16 +615,16 @@ impl SourceBuild {
         if pep517_backend.requirements == DEFAULT_BACKEND.requirements
             && extra_build_dependencies.is_empty()
         {
-            let mut resolution = source_build_context.default_resolution.lock().await;
-            if let Some(resolved_requirements) = &*resolution {
-                return Ok(resolved_requirements.clone());
-            }
-            let resolved_requirements = build_context
-                .resolve(&DEFAULT_BACKEND.requirements, None, build_stack)
+            return source_build_context
+                .default_resolution
+                .get_or_try_init(|| async {
+                    build_context
+                        .resolve(&DEFAULT_BACKEND.requirements, None, build_stack)
+                        .await
+                        .map_err(|err| Error::RequirementsResolve("`setup.py` build", err.into()))
+                })
                 .await
-                .map_err(|err| Error::RequirementsResolve("`setup.py` build", err.into()))?;
-            *resolution = Some(resolved_requirements.clone());
-            return Ok(resolved_requirements);
+                .cloned();
         }
 
         let requirements: Cow<'_, [Requirement]> = if extra_build_dependencies.is_empty() {
