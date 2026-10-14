@@ -493,37 +493,36 @@ fn freeze_path() -> Result<()> {
 fn freeze_multiple_paths() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    let requirements_txt1 = context.temp_dir.child("requirements1.txt");
-    requirements_txt1.write_str(indoc! {"
+    let first_requirements = context.temp_dir.child("requirements1.txt");
+    first_requirements.write_str(indoc! {"
         MarkupSafe==2.1.3
         tomli==2.0.1
     "})?;
+    let first_target = context.temp_dir.child("install-path1");
+    context
+        .pip_sync()
+        .arg(first_requirements.path())
+        .arg("--target")
+        .arg(first_target.path())
+        .assert()
+        .success();
 
-    let requirements_txt2 = context.temp_dir.child("requirements2.txt");
-    requirements_txt2.write_str(indoc! {"
+    let second_requirements = context.temp_dir.child("requirements2.txt");
+    second_requirements.write_str(indoc! {"
         MarkupSafe==2.1.3
         requests==2.31.0
     "})?;
-
-    let target1 = context.temp_dir.child("install-path1");
-    let target2 = context.temp_dir.child("install-path2");
-
-    // Run `pip sync`.
-    for (target, requirements_txt) in [
-        (target1.path(), requirements_txt1),
-        (target2.path(), requirements_txt2),
-    ] {
-        context
-            .pip_sync()
-            .arg(requirements_txt.path())
-            .arg("--target")
-            .arg(target)
-            .assert()
-            .success();
-    }
+    let second_target = context.temp_dir.child("install-path2");
+    context
+        .pip_sync()
+        .arg(second_requirements.path())
+        .arg("--target")
+        .arg(second_target.path())
+        .assert()
+        .success();
 
     // Run `pip freeze`.
-    uv_snapshot!(context.filters(), context.pip_freeze().arg("--path").arg(target1.path()).arg("--path").arg(target2.path()), @"
+    uv_snapshot!(context.filters(), context.pip_freeze().arg("--path").arg(first_target.path()).arg("--path").arg(second_target.path()), @"
     exit_code: 0 (success)
     ----- stdout -----
     markupsafe==2.1.3
