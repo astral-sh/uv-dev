@@ -305,17 +305,21 @@ impl UniversalMarker {
     }
 
     /// Returns true if the marker always evaluates to true if the given set of extras is activated.
-    pub(crate) fn evaluate_only_extras<P, E, G>(self, extras: &[(P, E)], groups: &[(P, G)]) -> bool
+    pub(crate) fn evaluate_only_extras<P, E, G>(
+        self,
+        extras: impl IntoIterator<Item = (P, E)>,
+        groups: impl IntoIterator<Item = (P, G)>,
+    ) -> bool
     where
         P: Borrow<PackageName>,
         E: Borrow<ExtraName>,
         G: Borrow<GroupName>,
     {
         let extras = extras
-            .iter()
+            .into_iter()
             .map(|(package, extra)| encode_package_extra(package.borrow(), extra.borrow()));
         let groups = groups
-            .iter()
+            .into_iter()
             .map(|(package, group)| encode_package_group(package.borrow(), group.borrow()));
         self.marker
             .evaluate_only_extras(&extras.chain(groups).collect::<Vec<ExtraName>>())
@@ -969,7 +973,7 @@ mod tests {
                 .collect::<Vec<(PackageName, ExtraName)>>();
             let groups = Vec::<(PackageName, GroupName)>::new();
             assert!(
-                !UniversalMarker::new(MarkerTree::TRUE, cm).evaluate_only_extras(&extras, &groups),
+                !UniversalMarker::new(MarkerTree::TRUE, cm).evaluate_only_extras(extras, groups),
                 "expected `{extra_names:?}` to evaluate to `false` in `{cm:?}`"
             );
         }
@@ -992,7 +996,7 @@ mod tests {
                 .collect::<Vec<(PackageName, ExtraName)>>();
             let groups = Vec::<(PackageName, GroupName)>::new();
             assert!(
-                UniversalMarker::new(MarkerTree::TRUE, cm).evaluate_only_extras(&extras, &groups),
+                UniversalMarker::new(MarkerTree::TRUE, cm).evaluate_only_extras(extras, groups),
                 "expected `{extra_names:?}` to evaluate to `true` in `{cm:?}`"
             );
         }
