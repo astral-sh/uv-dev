@@ -40,11 +40,10 @@ pub struct SitePackages {
     interpreter: Interpreter,
     /// The vector of all installed distributions. The `by_name` and `by_url` indices index into
     /// this vector. The vector may contain `None` values, which represent distributions that were
-    /// removed from the virtual environment.
+    /// removed from this index.
     distributions: Vec<Option<InstalledDist>>,
-    /// The installed distributions, keyed by name. Although the Python runtime does not support it,
-    /// it is possible to have multiple distributions with the same name to be present in the
-    /// virtual environment, which we handle gracefully.
+    /// The remaining installed distributions, keyed by name. Although the Python runtime does not
+    /// support it, multiple distributions with the same name can be present in the environment.
     by_name: FxHashMap<PackageName, Vec<usize>>,
     /// The installed editable distributions, keyed by URL.
     by_url: FxHashMap<DisplaySafeUrl, Vec<usize>>,
@@ -202,12 +201,12 @@ impl SitePackages {
 
     /// Remove the given packages from the index, returning all installed versions, if any.
     pub(crate) fn remove_packages(&mut self, name: &PackageName) -> Vec<InstalledDist> {
-        let Some(indexes) = self.by_name.get(name) else {
+        let Some(indexes) = self.by_name.remove(name) else {
             return Vec::new();
         };
         indexes
-            .iter()
-            .filter_map(|index| std::mem::take(&mut self.distributions[*index]))
+            .into_iter()
+            .filter_map(|index| self.distributions[index].take())
             .collect()
     }
 
@@ -218,7 +217,7 @@ impl SitePackages {
 
     /// Returns `true` if there are any installed packages.
     pub(crate) fn any(&self) -> bool {
-        self.distributions.iter().any(Option::is_some)
+        !self.by_name.is_empty()
     }
 
     /// Validate the installed packages in the virtual environment.
