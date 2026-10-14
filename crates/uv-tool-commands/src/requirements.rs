@@ -248,10 +248,9 @@ where
         return Ok(None);
     };
 
-    let version = filename.version().clone();
     Ok(Some(registry_requirement(
         name.clone(),
         Box::new([]),
-        Some(version),
+        Some(filename.into_version()),
     )))
 }
