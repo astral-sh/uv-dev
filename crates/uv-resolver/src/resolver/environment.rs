@@ -314,20 +314,14 @@ impl ResolverEnvironment {
                 let mut include = Arc::clone(include);
                 let mut exclude = Arc::clone(exclude);
                 for rule in rules {
-                    match rule {
-                        Ok(item) => {
-                            if exclude.contains(&item) {
-                                return None;
-                            }
-                            Arc::make_mut(&mut include).insert(item);
-                        }
-                        Err(item) => {
-                            if include.contains(&item) {
-                                return None;
-                            }
-                            Arc::make_mut(&mut exclude).insert(item);
-                        }
+                    let (item, selected, conflicting) = match rule {
+                        Ok(item) => (item, &mut include, &exclude),
+                        Err(item) => (item, &mut exclude, &include),
+                    };
+                    if conflicting.contains(&item) {
+                        return None;
                     }
+                    Arc::make_mut(selected).insert(item);
                 }
                 let kind = Kind::Universal {
                     initial_forks: Arc::clone(initial_forks),
