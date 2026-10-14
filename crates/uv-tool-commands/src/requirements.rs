@@ -205,17 +205,14 @@ pub(super) async fn resolve_names(
 }
 
 /// Resolve `@latest` to an exact version constraint to prevent backtracking.
-pub(super) async fn resolve_latest<E>(
+pub(super) async fn resolve_latest(
     request: &ToolRequest<'_>,
     interpreter: &Interpreter,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
     concurrency: &Concurrency,
     cache: &Cache,
-) -> Result<Option<Requirement>, E>
-where
-    E: From<uv_client::ClientBuildError> + From<uv_client::Error>,
-{
+) -> Result<Option<Requirement>, ToolError> {
     let ToolRequest::Package {
         target: Target::Latest(_, name, _),
         ..
