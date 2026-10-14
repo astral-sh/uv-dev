@@ -38,20 +38,8 @@ impl AuthBackend {
 
         // Otherwise, we'll use the plaintext credential store
         let path = TextCredentialStore::default_file()?;
-        match TextCredentialStore::read(&path).await {
-            Ok((store, lock)) => Ok(Self::TextStore(store, lock)),
-            Err(err)
-                if err
-                    .as_io_error()
-                    .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
-            {
-                Ok(Self::TextStore(
-                    TextCredentialStore::default(),
-                    TextCredentialStore::lock(&path).await?,
-                ))
-            }
-            Err(err) => Err(err),
-        }
+        let (store, lock) = TextCredentialStore::read(&path).await?;
+        Ok(Self::TextStore(store.unwrap_or_default(), lock))
     }
 
     /// Retrieve credentials for a URL and optional username from the selected backend.
@@ -103,21 +91,6 @@ pub enum TomlCredentialError {
     CredentialsDirError,
     #[error("Token is not valid unicode")]
     TokenNotUnicode(#[from] std::string::FromUtf8Error),
-}
-
-impl TomlCredentialError {
-    pub(crate) fn as_io_error(&self) -> Option<&std::io::Error> {
-        match self {
-            Self::Io(err) => Some(err),
-            Self::LockedFile(err) => err.as_io_error(),
-            Self::ParseError(_)
-            | Self::SerializeError(_)
-            | Self::BasicAuthError(_)
-            | Self::BearerAuthError(_)
-            | Self::CredentialsDirError
-            | Self::TokenNotUnicode(_) => None,
-        }
-    }
 }
 
 #[derive(Debug, Error)]
@@ -289,14 +262,20 @@ impl TextCredentialStore {
 
     /// Read credentials from a file.
     ///
-    /// Returns [`TextCredentialStore`] and a [`LockedFile`] to hold if mutating the store.
+    /// Returns the existing store, if any, and a [`LockedFile`] to hold if mutating the store.
+    /// The lock is retained when the file is absent so another writer cannot create it between
+    /// the read and a subsequent write.
     ///
     /// If the store will not be written to following the read, the lock can be dropped.
     pub(crate) async fn read<P: AsRef<Path>>(
         path: P,
-    ) -> Result<(Self, LockedFile), TomlCredentialError> {
+    ) -> Result<(Option<Self>, LockedFile), TomlCredentialError> {
         let lock = Self::lock(path.as_ref()).await?;
-        let store = Self::from_file(path)?;
+        let store = match Self::from_file(path) {
+            Ok(store) => Some(store),
+            Err(TomlCredentialError::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err),
+        };
         Ok((store, lock))
     }
 
@@ -552,6 +531,22 @@ password = "pass2"
         let content = fs::read_to_string(temp_output.path()).unwrap();
         assert!(content.contains("example.com"));
         assert!(content.contains("testuser"));
+    }
+
+    #[tokio::test]
+    async fn missing_credential_store_retains_the_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("credentials.toml");
+        let (_store, _lock) = TextCredentialStore::read(&path).await.unwrap();
+
+        assert!(
+            LockedFile::acquire_no_wait(
+                path.with_added_extension("lock"),
+                LockedFileMode::Exclusive,
+                "credentials store",
+            )
+            .is_none()
+        );
     }
 
     #[tokio::test]
