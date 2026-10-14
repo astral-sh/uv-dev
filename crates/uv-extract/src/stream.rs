@@ -466,8 +466,9 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
 
     // Track the file modes on Unix, to ensure that they're consistent across duplicates.
     #[cfg(unix)]
-    let mut modes =
-        FxHashMap::with_capacity_and_hasher(local_headers.len(), rustc_hash::FxBuildHasher);
+    let mut modes = (!skip_validation).then(|| {
+        FxHashMap::with_capacity_and_hasher(local_headers.len(), rustc_hash::FxBuildHasher)
+    });
 
     let mut directory = async_zip::base::read::cd::CentralDirectoryReader::new(&mut reader, offset);
     loop {
@@ -526,17 +527,14 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 #[cfg(unix)]
                 if let Some(mode) = unix_permissions {
                     // If the file is included multiple times, ensure that the mode is consistent.
-                    match modes.entry(relpath.clone()) {
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            entry.insert(mode);
-                        }
-                        std::collections::hash_map::Entry::Occupied(entry) => {
-                            if !skip_validation && mode != *entry.get() {
-                                return Err(Error::DuplicateExecutableFileHeader {
-                                    path: relpath.to_path_buf(),
-                                });
-                            }
-                        }
+                    if let Some(modes) = &mut modes
+                        && modes
+                            .insert(relpath.clone(), mode)
+                            .is_some_and(|previous| previous != mode)
+                    {
+                        return Err(Error::DuplicateExecutableFileHeader {
+                            path: relpath.to_path_buf(),
+                        });
                     }
 
                     if mode & 0o111 != 0 {
