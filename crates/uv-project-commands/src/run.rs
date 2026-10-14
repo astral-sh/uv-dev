@@ -1770,63 +1770,39 @@ impl RunCommand {
 
 impl std::fmt::Display for RunCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
+        let args = match self {
             Self::Python(args) => {
                 write!(f, "python")?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                args
             }
             Self::PythonPackage(target, args) => {
                 write!(f, "{}", target.to_string_lossy())?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                args
             }
             Self::PythonScript(target, args) | Self::PythonZipapp(target, args) => {
                 write!(f, "python {}", target.display())?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                args
             }
             Self::PythonModule(module, args) => {
-                write!(f, "python -m")?;
-                write!(f, " {}", module.to_string_lossy())?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                write!(f, "python -m {}", module.to_string_lossy())?;
+                args
             }
             Self::PythonGuiScript(target, args) => {
                 write!(f, "pythonw {}", target.display())?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                args
             }
-            Self::PythonStdin(..) | Self::PythonRemote(..) => {
-                write!(f, "python -c")?;
-                Ok(())
-            }
-            Self::PythonGuiStdin(..) => {
-                write!(f, "pythonw -c")?;
-                Ok(())
-            }
+            Self::PythonStdin(..) | Self::PythonRemote(..) => return f.write_str("python -c"),
+            Self::PythonGuiStdin(..) => return f.write_str("pythonw -c"),
             Self::External(executable, args) => {
                 write!(f, "{}", executable.to_string_lossy())?;
-                for arg in args {
-                    write!(f, " {}", arg.to_string_lossy())?;
-                }
-                Ok(())
+                args
             }
-            Self::Empty => {
-                write!(f, "python")?;
-                Ok(())
-            }
+            Self::Empty => return f.write_str("python"),
+        };
+        for arg in args {
+            write!(f, " {}", arg.to_string_lossy())?;
         }
+        Ok(())
     }
 }
 
