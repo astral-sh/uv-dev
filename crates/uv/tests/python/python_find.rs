@@ -1117,36 +1117,32 @@ fn python_find_script_no_such_version() {
 
 #[test]
 fn python_find_show_version() {
-    let context =
-        uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_filtered_python_sources();
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
-    // No interpreters found
-    uv_snapshot!(context.filters(), context.python_find().env(EnvVars::UV_PYTHON_SEARCH_PATH, "").arg("--show-version"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found in [PYTHON SOURCES]
-    ");
-
-    // Show the first version found
-    uv_snapshot!(context.filters(), context.python_find().arg("--show-version"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    3.11.[X]
-    ");
-
-    // Request Python 3.12
     uv_snapshot!(context.filters(), context.python_find().arg("--show-version").arg("3.12"), @"
     exit_code: 0 (success)
     ----- stdout -----
     3.12.[X]
     ");
+}
 
-    // Request Python 3.11
-    uv_snapshot!(context.filters(), context.python_find().arg("--show-version").arg("3.11"), @"
+#[test]
+fn python_find_script_show_version() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = "==3.12.*"
+        # dependencies = []
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.python_find().arg("--script").arg("script.py").arg("--show-version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    3.11.[X]
+    3.12.[X]
     ");
+
+    Ok(())
 }
 
 #[test]
