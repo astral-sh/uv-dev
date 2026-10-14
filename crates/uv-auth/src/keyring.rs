@@ -268,17 +268,19 @@ impl KeyringProvider {
             std::io::stderr().write_all(&output.stderr).ok();
 
             // On success, parse the newline terminated credentials
-            let output = String::from_utf8(output.stdout)
+            let mut output = String::from_utf8(output.stdout)
                 .inspect_err(|err| warn!("Failed to parse response from `keyring` command: {err}"))
                 .ok()?;
 
             let (username, password) = if let Some(username) = username {
                 // `keyring get` prints the password with a trailing newline.
-                let password = output
+                let password_len = output
                     .strip_suffix("\r\n")
                     .or_else(|| output.strip_suffix('\n'))
-                    .unwrap_or(&output);
-                (username, password)
+                    .unwrap_or(&output)
+                    .len();
+                output.truncate(password_len);
+                (username.to_owned(), output)
             } else {
                 // We're expecting a username and password
                 let mut lines = output.lines();
@@ -289,7 +291,7 @@ impl KeyringProvider {
                     );
                     return None;
                 };
-                (username, password)
+                (username.to_owned(), password.to_owned())
             };
 
             if password.is_empty() {
@@ -299,7 +301,7 @@ impl KeyringProvider {
                 warn!("Got empty password for `{username}@{service_name}` from `keyring` command");
             }
 
-            Some((username.to_string(), password.to_string()))
+            Some((username, password))
         } else {
             // On failure, no password was available
             let stderr = std::str::from_utf8(&output.stderr).ok()?;
