@@ -351,15 +351,14 @@ impl<'script> ValidatedScript<'script> {
     }
 }
 
-/// Return the script destination relative to `site_packages` for use in `RECORD`.
+/// Return a lexical path between locations in the installation scheme.
 ///
-/// The scripts directory may sit outside `site_packages`, so use a lexical diff rather than
-/// stripping a prefix.
-fn script_relative_to_site_packages(script: &Path, site_packages: &Path) -> Result<PathBuf, Error> {
-    pathdiff::diff_paths(script, site_packages).ok_or_else(|| {
+/// Script destinations and their interpreters may sit outside the base directory.
+fn relative_install_path(path: &Path, base: &Path) -> Result<PathBuf, Error> {
+    pathdiff::diff_paths(path, base).ok_or_else(|| {
         Error::Io(io::Error::other(format!(
             "Could not find relative path for: {}",
-            script.simplified_display()
+            path.simplified_display()
         )))
     })
 }
@@ -375,8 +374,7 @@ pub(crate) fn write_script_entrypoints(
 ) -> Result<(), Error> {
     for script in entrypoints {
         let script = ValidatedScript::try_from_script(script, layout)?;
-        let entrypoint_relative =
-            script_relative_to_site_packages(script.as_path(), site_packages)?;
+        let entrypoint_relative = relative_install_path(script.as_path(), site_packages)?;
 
         // Generate the launcher script.
         let launcher_executable = get_script_executable(&layout.sys_executable, is_gui);
@@ -585,7 +583,7 @@ fn install_script(
 
     let script_absolute = layout.scheme.scripts.join(file.file_name());
     validate_data_script_destination(&script_absolute, &layout.scheme.scripts)?;
-    let script_relative = script_relative_to_site_packages(&script_absolute, site_packages)?;
+    let script_relative = relative_install_path(&script_absolute, site_packages)?;
 
     let path = file.path();
     let mut script = BufReader::new(File::open(&path)?);
@@ -946,16 +944,10 @@ fn get_relocatable_executable(
     layout: &Layout,
     relocatable: bool,
 ) -> Result<PathBuf, Error> {
-    Ok(if relocatable {
-        pathdiff::diff_paths(&executable, &layout.scheme.scripts).ok_or_else(|| {
-            Error::Io(io::Error::other(format!(
-                "Could not find relative path for: {}",
-                executable.simplified_display()
-            )))
-        })?
-    } else {
-        executable
-    })
+    if !relocatable {
+        return Ok(executable);
+    }
+    relative_install_path(&executable, &layout.scheme.scripts)
 }
 
 /// Reads the record file
