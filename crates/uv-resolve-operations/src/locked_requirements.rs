@@ -44,26 +44,20 @@ pub async fn read_requirements_txt(
     let requirements_txt = RequirementsTxt::parse(output_file, &*CWD).await?;
 
     // Map each entry in the lockfile to a preference.
-    let preferences = requirements_txt
+    let mut preferences = requirements_txt
         .requirements
         .into_iter()
         .map(Preference::from_entry)
         .filter_map(Result::transpose)
         .collect::<Result<Vec<_>, PreferenceError>>()?;
 
-    // Apply the upgrade strategy to the requirements.
-    let upgrade_packages = UpgradePackages::for_non_project(upgrade);
-
-    Ok(if upgrade.is_none() {
-        // Respect all pinned versions from the existing lockfile.
-        preferences
-    } else {
+    if !upgrade.is_none() {
         // Ignore all pinned versions for packages that should be upgraded.
-        preferences
-            .into_iter()
-            .filter(|preference| !upgrade_packages.contains(preference.name()))
-            .collect()
-    })
+        let upgrade_packages = UpgradePackages::for_non_project(upgrade);
+        preferences.retain(|preference| !upgrade_packages.contains(preference.name()));
+    }
+
+    Ok(preferences)
 }
 
 /// Load the preferred requirements from an existing lockfile, applying the upgrade strategy.
