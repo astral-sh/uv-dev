@@ -18094,14 +18094,11 @@ fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sources_archive() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Download the source.
+    let archive = crate::workspace_sources::archive()?;
+    let context = uv_test::test_context!("3.12")
+        .with_filter((hex::encode(Sha256::digest(&archive)), "[WORKSPACE_HASH]"));
     let workspace_archive = context.temp_dir.child("workspace.zip");
-    download_to_disk(
-        "https://github.com/user-attachments/files/16592193/workspace.zip",
-        &workspace_archive,
-    );
+    fs_err::write(&workspace_archive, archive)?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {
@@ -18184,7 +18181,7 @@ fn lock_sources_archive() -> Result<()> {
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:ba690a925dc3d1b53e0675201c9ec26ab59eeec72ab271562f53297bf1817263" }
+        sdist = { hash = "sha256:[WORKSPACE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
