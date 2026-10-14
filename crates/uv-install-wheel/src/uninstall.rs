@@ -62,7 +62,7 @@ pub fn uninstall_wheel(
         {
             tracing::debug!("Detected self-delete of executable: {}", path.display());
             match self_replace::self_delete_outside_path(site_packages) {
-                Ok(()) => uninstall.record_removed_wheel_file(&path, &mut visited),
+                Ok(()) => uninstall.record_removed_wheel_file(path, &mut visited),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err.into()),
             }
@@ -70,7 +70,7 @@ pub fn uninstall_wheel(
         }
 
         match fs_err::remove_file(&path) {
-            Ok(()) => uninstall.record_removed_wheel_file(&path, &mut visited),
+            Ok(()) => uninstall.record_removed_wheel_file(path, &mut visited),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => {
                 match contains_installation_scheme(&path, layout) {
@@ -484,11 +484,11 @@ pub struct Uninstall {
 }
 
 impl Uninstall {
-    /// Record a removed wheel file and its parent for empty-directory cleanup.
-    fn record_removed_wheel_file(&mut self, path: &Path, visited: &mut BTreeSet<PathBuf>) {
-        self.record_removed_file(path);
-        if let Some(parent) = path.parent() {
-            visited.insert(normalize_path(parent));
+    /// Record a removed wheel file and retain its resolved parent for empty-directory cleanup.
+    fn record_removed_wheel_file(&mut self, mut path: PathBuf, visited: &mut BTreeSet<PathBuf>) {
+        self.record_removed_file(&path);
+        if path.pop() {
+            visited.insert(path);
         }
     }
 
