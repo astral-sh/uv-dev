@@ -586,15 +586,15 @@ fn format_version_constraints() -> Result<()> {
         x    = 1
     "})?;
 
-    // Run format with version constraints - should find the latest version matching >=0.8.0
-    uv_snapshot!(context.filters(), context.format().arg("--version").arg(">=0.8.0").arg("--show-version"), @"
+    // The upper bound excludes the default version and leaves multiple matching releases.
+    uv_snapshot!(context.filters(), context.format().arg("--version").arg(">=0.8.0,<0.8.3").arg("--show-version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
     ----- stderr -----
     warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
-    ruff 0.15.1
+    ruff 0.8.2
     ");
 
     Ok(())
