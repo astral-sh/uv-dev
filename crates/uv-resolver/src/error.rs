@@ -1053,12 +1053,11 @@ fn restate_available_versions(
             let first = ruled_out_versions(&package, &cause1);
             let second = ruled_out_versions(&package, &cause2);
             if first.is_empty() && second.is_empty() {
-                let concluded = metadata
-                    .terms
-                    .get(&package)
-                    .cloned()
-                    .unwrap_or_else(|| Term::Positive(unlisted.clone()));
                 let mut inner = metadata;
+                let concluded = inner
+                    .terms
+                    .remove_entry(&package)
+                    .unwrap_or_else(|| (package.clone(), Term::Positive(unlisted.clone())));
                 let shared_id = inner.shared_id.take();
                 inner.terms = Map::from_iter([(
                     package.clone(),
@@ -1068,7 +1067,7 @@ fn restate_available_versions(
                     ),
                 )]);
                 return DerivationTree::Derived(Derived {
-                    terms: Map::from_iter([(package.clone(), concluded)]),
+                    terms: Map::from_iter([concluded]),
                     shared_id,
                     cause1: Arc::new(derived_tree(inner, cause1, cause2)),
                     cause2: Arc::new(statement()),
