@@ -3423,10 +3423,9 @@ impl ForkedDependencies {
                         continue;
                     }
                     ForkingPossibility::NoForkingPossible => {
-                        // Or, if the markers are always true, then we just
-                        // add the dependency to every fork unconditionally.
-                        for fork in &mut forks {
-                            fork.add_dependency(dep.clone());
+                        // An unconditional dependency belongs to every fork. Move it into the last.
+                        for (dep, fork) in std::iter::repeat_n(dep, forks.len()).zip(&mut forks) {
+                            fork.add_dependency(dep);
                         }
                         continue;
                     }
