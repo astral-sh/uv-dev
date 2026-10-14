@@ -432,11 +432,7 @@ impl ExcludeNewer {
     /// Returns the effective exclude-newer timestamp for a specific package, falling back to the
     /// global value if no package-specific setting exists.
     pub fn exclude_newer_package(&self, package_name: &PackageName) -> Option<Timestamp> {
-        match self.package.get(package_name) {
-            Some(ExcludeNewerOverride::Enabled(value)) => Some(value.timestamp()),
-            Some(ExcludeNewerOverride::Disabled) => None,
-            None => self.global.as_ref().map(ExcludeNewerValue::timestamp),
-        }
+        self.exclude_newer_package_for_index(package_name, None)
     }
 
     /// Returns the effective exclude-newer timestamp for a package resolved from a specific index.
@@ -456,28 +452,21 @@ impl ExcludeNewer {
         package_name: &PackageName,
         index: Option<&ExcludeNewerOverride>,
     ) -> Option<(Timestamp, EffectiveExcludeNewerSource)> {
-        match self.package.get(package_name) {
-            Some(ExcludeNewerOverride::Enabled(value)) => {
-                Some((value.timestamp(), EffectiveExcludeNewerSource::Package))
-            }
-            Some(ExcludeNewerOverride::Disabled) => None,
-            None => match index {
-                Some(ExcludeNewerOverride::Disabled) => {
-                    Self::warn_index_exclude_newer_preview();
-                    None
-                }
-                Some(ExcludeNewerOverride::Enabled(value)) => Some((
-                    {
-                        Self::warn_index_exclude_newer_preview();
-                        value.timestamp()
-                    },
-                    EffectiveExcludeNewerSource::Index,
-                )),
-                None => self
-                    .global
-                    .as_ref()
-                    .map(|value| (value.timestamp(), EffectiveExcludeNewerSource::Global)),
-            },
+        let (setting, source) = if let Some(setting) = self.package.get(package_name) {
+            (setting, EffectiveExcludeNewerSource::Package)
+        } else if let Some(setting) = index {
+            Self::warn_index_exclude_newer_preview();
+            (setting, EffectiveExcludeNewerSource::Index)
+        } else {
+            return self
+                .global
+                .as_ref()
+                .map(|value| (value.timestamp(), EffectiveExcludeNewerSource::Global));
+        };
+
+        match setting {
+            ExcludeNewerOverride::Enabled(value) => Some((value.timestamp(), source)),
+            ExcludeNewerOverride::Disabled => None,
         }
     }
 
