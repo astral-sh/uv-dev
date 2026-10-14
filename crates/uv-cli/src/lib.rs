@@ -1060,6 +1060,14 @@ pub enum Maybe<T> {
 }
 
 impl<T> Maybe<T> {
+    fn parse_with<E>(input: &str, parse: impl FnOnce(&str) -> Result<T, E>) -> Result<Self, E> {
+        if input.is_empty() {
+            Ok(Self::None)
+        } else {
+            parse(input).map(Self::Some)
+        }
+    }
+
     fn into_option(self) -> Option<T> {
         match self {
             Self::Some(value) => Some(value),
@@ -1079,63 +1087,33 @@ where
     type Err = T::Err;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        if input.is_empty() {
-            Ok(Self::None)
-        } else {
-            input.parse().map(Self::Some)
-        }
+        Self::parse_with(input, str::parse)
     }
 }
 
 /// Parse an `--index-url` argument into an [`PipIndex`], mapping the empty string to `None`.
 fn parse_index_url(input: &str) -> Result<Maybe<PipIndex>, String> {
-    if input.is_empty() {
-        Ok(Maybe::None)
-    } else {
-        IndexUrl::from_str(input)
-            .map(Index::from_index_url)
-            .map(|index| Index {
-                origin: Some(Origin::Cli),
-                ..index
-            })
-            .map(PipIndex::from)
-            .map(Maybe::Some)
-            .map_err(|err| err.to_string())
-    }
+    parse_pip_index(input, Index::from_index_url)
 }
 
 /// Parse an `--extra-index-url` argument into an [`PipExtraIndex`], mapping the empty string to `None`.
 fn parse_extra_index_url(input: &str) -> Result<Maybe<PipExtraIndex>, String> {
-    if input.is_empty() {
-        Ok(Maybe::None)
-    } else {
-        IndexUrl::from_str(input)
-            .map(Index::from_extra_index_url)
-            .map(|index| Index {
-                origin: Some(Origin::Cli),
-                ..index
-            })
-            .map(PipExtraIndex::from)
-            .map(Maybe::Some)
-            .map_err(|err| err.to_string())
-    }
+    parse_pip_index(input, Index::from_extra_index_url)
 }
 
 /// Parse a `--find-links` argument into an [`PipFindLinks`], mapping the empty string to `None`.
 fn parse_find_links(input: &str) -> Result<Maybe<PipFindLinks>, String> {
-    if input.is_empty() {
-        Ok(Maybe::None)
-    } else {
-        IndexUrl::from_str(input)
-            .map(Index::from_find_links)
-            .map(|index| Index {
-                origin: Some(Origin::Cli),
-                ..index
-            })
-            .map(PipFindLinks::from)
-            .map(Maybe::Some)
-            .map_err(|err| err.to_string())
-    }
+    parse_pip_index(input, Index::from_find_links)
+}
+
+fn parse_pip_index<T: From<Index>>(
+    input: &str,
+    into_index: impl FnOnce(IndexUrl) -> Index,
+) -> Result<Maybe<T>, String> {
+    Maybe::parse_with(input, |input| {
+        IndexUrl::from_str(input).map(|url| T::from(into_index(url).with_origin(Origin::Cli)))
+    })
+    .map_err(|err| err.to_string())
 }
 
 /// An unresolved index passed by the user by its name.
@@ -1249,51 +1227,33 @@ impl IndexArg {
 /// which is necessary to parse environment variables like `PIP_EXTRA_INDEX_URL`.
 /// The standard `clap::Args` `value_delimiter` only supports single-character delimiters.
 fn parse_indices(input: &str) -> Result<Vec<Maybe<IndexArg>>, String> {
-    if input.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut indices = Vec::new();
-    for token in input.split_whitespace() {
-        match IndexArg::from_index(token) {
-            Ok(index) => indices.push(Maybe::Some(index)),
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-    Ok(indices)
+    input
+        .split_whitespace()
+        .map(|token| {
+            IndexArg::from_index(token)
+                .map(Maybe::Some)
+                .map_err(|err| err.to_string())
+        })
+        .collect()
 }
 
 /// Parse a `--default-index` argument into an [`IndexArg`], mapping the empty string to `None`.
 fn parse_default_index(input: &str) -> Result<Maybe<IndexArg>, String> {
-    if input.is_empty() {
-        Ok(Maybe::None)
-    } else {
-        match IndexArg::from_default_index(input) {
-            Ok(index) => Ok(Maybe::Some(index)),
-            Err(err) => Err(err.to_string()),
-        }
-    }
+    Maybe::parse_with(input, IndexArg::from_default_index).map_err(|err| err.to_string())
 }
 
 /// Parse a string into a [`TrustedHost`], mapping the empty string to `None`.
 fn parse_insecure_host(input: &str) -> Result<Maybe<TrustedHost>, String> {
-    if input.is_empty() {
-        Ok(Maybe::None)
-    } else {
-        match TrustedHost::from_str(input) {
-            Ok(host) => Ok(Maybe::Some(host)),
-            Err(err) => Err(err.to_string()),
-        }
-    }
+    input
+        .parse::<Maybe<TrustedHost>>()
+        .map_err(|err| err.to_string())
 }
 
 /// Parse a string into a [`PathBuf`]. The string can represent a file, either as a path or a
 /// `file://` URL.
 fn parse_file_path(input: &str) -> Result<PathBuf, String> {
     if input.starts_with("file://") {
-        let url = match url::Url::from_str(input) {
-            Ok(url) => url,
-            Err(err) => return Err(err.to_string()),
-        };
+        let url = url::Url::from_str(input).map_err(|err| err.to_string())?;
         url.to_file_path()
             .map_err(|()| "invalid file URL".to_string())
     } else {
