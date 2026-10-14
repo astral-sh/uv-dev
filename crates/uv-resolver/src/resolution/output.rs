@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeSet, hash_map::Entry};
 
 use petgraph::{
-    Directed, Direction,
+    Direction,
     graph::{Graph, NodeIndex},
 };
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
@@ -29,7 +29,7 @@ use crate::{InMemoryIndex, MetadataResponse, Options, ResolveError, VersionsResp
 
 /// Create a new [`ResolverOutput`] from the resolved PubGrub state.
 pub(crate) fn from_state(
-    mut resolutions: Vec<ResolvedFork>,
+    resolutions: Vec<ResolvedFork>,
     project: Option<&PackageName>,
     workspace_members: &BTreeSet<PackageName>,
     requirements: Vec<Requirement>,
@@ -43,67 +43,14 @@ pub(crate) fn from_state(
     resolution_strategy: &ResolutionStrategy,
     options: Options,
 ) -> Result<ResolverOutput, ResolveError> {
-    let size_guess = resolutions[0].nodes.len();
-    let mut graph: Graph<ResolutionGraphNode, UniversalMarker, Directed> =
-        Graph::with_capacity(size_guess, size_guess);
-    let mut inverse: FxHashMap<ResolutionNode, NodeIndex<u32>> =
-        FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher);
-    let mut diagnostics = Vec::new();
-
-    // Add the root node.
-    let root_index = graph.add_node(ResolutionGraphNode::Root);
-
-    for resolution in &mut resolutions {
-        // Add every package to the graph and release the fork's node buffer before processing edges.
-        for (package, selected) in std::mem::take(&mut resolution.nodes) {
-            let node = ResolutionNode {
-                package,
-                version: selected.version().clone(),
-            };
-            let Entry::Vacant(entry) = inverse.entry(node) else {
-                // Insert each node only once.
-                continue;
-            };
-            let package = &entry.key().package;
-            let node = add_version(
-                &mut graph,
-                &mut diagnostics,
-                preferences,
-                hasher,
-                index,
-                package,
-                selected,
-                project == Some(&package.name) || workspace_members.contains(&package.name),
-            );
-            entry.insert(node);
-        }
-    }
-
-    let multiple_forks = resolutions.len() > 1;
-    let mut fork_markers = if multiple_forks {
-        Vec::with_capacity(resolutions.len())
-    } else {
-        Vec::new()
-    };
-    let mut seen = FxHashSet::default();
-    for resolution in &resolutions {
-        let marker = resolution.env.try_universal_markers().unwrap_or_default();
-        // A single unconditional environment does not represent a fork.
-        if multiple_forks || !marker.is_true() {
-            fork_markers.push(marker);
-        }
-
-        // Add every edge to the graph, propagating the marker for the current fork, if
-        // necessary.
-        for edge in &resolution.edges {
-            if !seen.insert((edge, marker)) {
-                // Insert each edge only once.
-                continue;
-            }
-
-            add_edge(&mut graph, &inverse, root_index, edge, marker);
-        }
-    }
+    let (mut graph, fork_markers, mut diagnostics) = build_graph(
+        resolutions,
+        project,
+        workspace_members,
+        preferences,
+        hasher,
+        index,
+    );
 
     // Compute and apply the marker reachability.
     let mut reachability = marker_reachability(&graph, &fork_markers);
@@ -180,6 +127,83 @@ pub(crate) fn from_state(
         }
     }
     Ok(output)
+}
+
+/// Build the graph and release the resolved forks and temporary indexes before marker propagation.
+fn build_graph(
+    mut resolutions: Vec<ResolvedFork>,
+    project: Option<&PackageName>,
+    workspace_members: &BTreeSet<PackageName>,
+    preferences: &Preferences,
+    hasher: &HashStrategy,
+    index: &InMemoryIndex,
+) -> (
+    Graph<ResolutionGraphNode, UniversalMarker>,
+    Vec<UniversalMarker>,
+    Vec<ResolutionDiagnostic>,
+) {
+    let size_guess = resolutions[0].nodes.len();
+    let mut graph = Graph::with_capacity(size_guess, size_guess);
+    let mut inverse: FxHashMap<ResolutionNode, NodeIndex> =
+        FxHashMap::with_capacity_and_hasher(size_guess, FxBuildHasher);
+    let mut diagnostics = Vec::new();
+
+    // Add the root node.
+    let root_index = graph.add_node(ResolutionGraphNode::Root);
+
+    for resolution in &mut resolutions {
+        // Add every package to the graph and release the fork's node buffer before processing edges.
+        for (package, selected) in std::mem::take(&mut resolution.nodes) {
+            let node = ResolutionNode {
+                package,
+                version: selected.version().clone(),
+            };
+            let Entry::Vacant(entry) = inverse.entry(node) else {
+                // Insert each node only once.
+                continue;
+            };
+            let package = &entry.key().package;
+            let node = add_version(
+                &mut graph,
+                &mut diagnostics,
+                preferences,
+                hasher,
+                index,
+                package,
+                selected,
+                project == Some(&package.name) || workspace_members.contains(&package.name),
+            );
+            entry.insert(node);
+        }
+    }
+
+    let multiple_forks = resolutions.len() > 1;
+    let mut fork_markers = if multiple_forks {
+        Vec::with_capacity(resolutions.len())
+    } else {
+        Vec::new()
+    };
+    let mut seen = FxHashSet::default();
+    for resolution in &resolutions {
+        let marker = resolution.env.try_universal_markers().unwrap_or_default();
+        // A single unconditional environment does not represent a fork.
+        if multiple_forks || !marker.is_true() {
+            fork_markers.push(marker);
+        }
+
+        // Add every edge to the graph, propagating the marker for the current fork, if
+        // necessary.
+        for edge in &resolution.edges {
+            if !seen.insert((edge, marker)) {
+                // Insert each edge only once.
+                continue;
+            }
+
+            add_edge(&mut graph, &inverse, root_index, edge, marker);
+        }
+    }
+
+    (graph, fork_markers, diagnostics)
 }
 
 fn add_edge(
