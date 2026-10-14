@@ -8890,7 +8890,7 @@ fn lock_requires_python() -> Result<()> {
     ");
 
     // The copied lock requires a compatible interpreter for validation and installation.
-    let context_unsupported = uv_test::test_context!("3.9").with_filtered_python_sources();
+    let context_unsupported = uv_test::test_context!("3.11").with_filtered_python_sources();
 
     fs_err::copy(
         pyproject_toml,
@@ -42388,10 +42388,8 @@ fn lock_path_dependency_no_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_path_dependency_marker_gated_requires_python() -> Result<()> {
-    // Use Python 3.9 as the interpreter to reproduce the issue: the installed Python (3.9)
-    // does not satisfy the child's `requires-python = ">=3.12"`, but the child is gated
-    // behind `python_version >= '3.12'`, so it should still resolve.
-    let context = uv_test::test_context!("3.9");
+    // The active interpreter is outside the child's marker range.
+    let context = uv_test::test_context!("3.11");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -42426,12 +42424,29 @@ fn lock_path_dependency_marker_gated_requires_python() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
+    let locked = context.read("uv.lock");
+    let project = locked_package(&locked, "project")?;
+    let dependency = project
+        .get("dependencies")
+        .and_then(toml::Value::as_array)
+        .and_then(|dependencies| {
+            dependencies.iter().find(|dependency| {
+                dependency.get("name").and_then(toml::Value::as_str) == Some("child")
+            })
+        })
+        .ok_or_else(|| anyhow!("missing project dependency on child"))?;
+    assert_eq!(
+        dependency.get("marker").and_then(toml::Value::as_str),
+        Some("python_full_version >= '3.12'")
+    );
+
     // Re-lock with `--refresh` should also succeed.
     uv_snapshot!(context.filters(), context.lock().arg("--refresh"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
+    assert_eq!(context.read("uv.lock"), locked);
 
     Ok(())
 }
