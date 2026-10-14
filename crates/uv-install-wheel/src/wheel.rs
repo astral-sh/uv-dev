@@ -769,8 +769,7 @@ pub(crate) fn install_data(
     site_packages: &Path,
     data_dir: &Path,
     dist_name: &PackageName,
-    console_scripts: &[Script],
-    gui_scripts: &[Script],
+    entrypoints: &EntryPoints,
     record: &mut [RecordEntry],
 ) -> Result<(), Error> {
     for entry in fs::read_dir(data_dir)? {
@@ -800,9 +799,10 @@ pub(crate) fn install_data(
                         .or_else(|| name.strip_suffix("-script.py"))
                         .or_else(|| name.strip_suffix(".pya"))
                         .unwrap_or(&name);
-                    if console_scripts
+                    if entrypoints
+                        .console_scripts
                         .iter()
-                        .chain(gui_scripts)
+                        .chain(&entrypoints.gui_scripts)
                         .any(|script| script.name == match_name)
                     {
                         continue;
@@ -1149,24 +1149,15 @@ pub(crate) fn dist_info_file(base: &Path, prefix: &str, file: &str) -> PathBuf {
     base.join(format!("{prefix}.dist-info/{file}"))
 }
 
-/// Parses the `entry_points.txt` entry in the wheel for console scripts
-///
-/// Returns (`script_name`, module, function)
-///
-/// Extras declared by an entry point are accepted but ignored.
+/// Parse the wheel's `entry_points.txt` metadata.
 pub(crate) fn parse_scripts(
     wheel: impl AsRef<Path>,
     dist_info_prefix: &str,
     python_minor: u8,
-) -> Result<(Vec<Script>, Vec<Script>), Error> {
+) -> Result<EntryPoints, Error> {
     let entry_points_path = dist_info_file(wheel.as_ref(), dist_info_prefix, "entry_points.txt");
 
-    let EntryPoints {
-        console_scripts,
-        gui_scripts,
-    } = EntryPoints::read(entry_points_path, python_minor)?;
-
-    Ok((console_scripts, gui_scripts))
+    EntryPoints::read(entry_points_path, python_minor)
 }
 
 /// Rename a file with a fallback to copy that switches over on the first failure.
