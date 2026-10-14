@@ -205,15 +205,11 @@ fn add_edge(
         edge_marker
     };
 
-    if let Some(weight) = graph
-        .find_edge(from_index, to_index)
-        .and_then(|edge| graph.edge_weight_mut(edge))
-    {
-        // If either the existing marker or new marker is `true`, then the dependency is
-        // included unconditionally, and so the combined marker is `true`.
-        weight.or(edge_marker);
+    if let Some(edge_index) = graph.find_edge(from_index, to_index) {
+        // The dependency is active under the union of the markers that reach it.
+        graph[edge_index].or(edge_marker);
     } else {
-        graph.update_edge(from_index, to_index, edge_marker);
+        graph.add_edge(from_index, to_index, edge_marker);
     }
 }
 
