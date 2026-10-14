@@ -2267,8 +2267,13 @@ fn install_no_editable() {
     "
     );
 
-    let path = context.site_packages().join("executable_file.pth");
-    assert!(!path.exists());
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("executable_file/__init__.py")
+        .assert(predicates::path::is_file());
+    site_packages
+        .child("executable_file.pth")
+        .assert(predicates::path::missing());
 }
 
 #[test]
@@ -2294,8 +2299,16 @@ fn install_no_editable_package() {
     "
     );
 
-    assert!(context.site_packages().join("black.pth").is_file());
-    assert!(!context.site_packages().join("executable_file.pth").exists());
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("executable_file/__init__.py")
+        .assert(predicates::path::is_file());
+    site_packages
+        .child("executable_file.pth")
+        .assert(predicates::path::missing());
+    site_packages
+        .child("black.pth")
+        .assert(predicates::path::is_file());
 }
 
 #[test]
@@ -2319,8 +2332,13 @@ fn install_no_editable_requirements_txt() -> Result<()> {
     "
     );
 
-    let path = context.site_packages().join("executable_file.pth");
-    assert!(!path.exists());
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("executable_file/__init__.py")
+        .assert(predicates::path::is_file());
+    site_packages
+        .child("executable_file.pth")
+        .assert(predicates::path::missing());
 
     Ok(())
 }
@@ -2343,8 +2361,13 @@ fn install_no_editable_env_var() {
     "
     );
 
-    let path = context.site_packages().join("executable_file.pth");
-    assert!(!path.exists());
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("executable_file/__init__.py")
+        .assert(predicates::path::is_file());
+    site_packages
+        .child("executable_file.pth")
+        .assert(predicates::path::missing());
 }
 
 #[test]
