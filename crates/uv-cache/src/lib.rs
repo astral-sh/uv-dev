@@ -1305,8 +1305,6 @@ impl CacheBucket {
             Self::Git => "git-v1",
             Self::Interpreter => "interpreter-v4",
             Self::Simple => "simple-v27",
-            // Note that when bumping this, you'll also need to bump it
-            // in `crates/uv/tests/build/cache_prune.rs`.
             Self::Wheels => "wheels-v7",
             // Note that when bumping this, you'll also need to bump
             // `ARCHIVE_VERSION` in `crates/uv-cache/src/lib.rs`.

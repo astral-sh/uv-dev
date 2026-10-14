@@ -3,9 +3,10 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
+use uv_cache::{Cache, CacheBucket};
 use uv_static::EnvVars;
 
-use uv_test::uv_snapshot;
+use uv_test::{assert_path_missing, uv_snapshot};
 
 /// `cache prune` should be a no-op if there's nothing out-of-date in the cache.
 #[test]
@@ -111,9 +112,9 @@ fn prune_cached_env() {
     ");
 }
 
-/// `cache prune` should remove any stale symlink from the cache.
+/// `cache prune` should remove cached wheel archives that no longer have a reference.
 #[test]
-fn prune_stale_symlink() -> Result<()> {
+fn prune_unreferenced_archive() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_sizes_and_units();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -126,9 +127,14 @@ fn prune_stale_symlink() -> Result<()> {
         .assert()
         .success();
 
-    // Remove the wheels directory, causing the symlink to become stale.
-    let wheels = context.cache_dir.child("wheels-v7");
-    fs_err::remove_dir_all(wheels)?;
+    let cache = Cache::from_path(context.cache_dir.path());
+    let archives = fs_err::read_dir(cache.bucket(CacheBucket::Archive))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    assert!(!archives.is_empty(), "expected cached wheel archives");
+
+    // Removing the wheel bucket leaves the cached archives without references.
+    fs_err::remove_dir_all(cache.bucket(CacheBucket::Wheels))?;
 
     let filters: Vec<_> = context
         .filters()
@@ -151,6 +157,10 @@ fn prune_stale_symlink() -> Result<()> {
     DEBUG Removing dangling cache archive: [CACHE_DIR]/archive-v0/[ENTRY]
     Removed 44 files ([SIZE])
     ");
+
+    for archive in archives {
+        assert_path_missing(archive);
+    }
 
     Ok(())
 }
