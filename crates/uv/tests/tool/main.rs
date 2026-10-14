@@ -1,7 +1,5 @@
 //! Integration tests for `uv tool`.
 
-mod tool_receipt;
-
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 use uv_test::pypi_proxy;
 
