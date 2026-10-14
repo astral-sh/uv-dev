@@ -5,6 +5,7 @@ use rustc_hash::{FxBuildHasher, FxHashSet};
 use std::cmp::Reverse;
 use std::env::consts::EXE_SUFFIX;
 use std::fmt::{self, Debug, Formatter};
+use std::sync::LazyLock;
 use std::{env, io, iter};
 use std::{path::Path, path::PathBuf};
 use thiserror::Error;
@@ -563,20 +564,8 @@ fn find_all_minor(
         | VersionRequest::Default
         | VersionRequest::Major(_, _)
         | VersionRequest::Range(_, _) => {
-            let regex = if let Some(implementation) = implementation {
-                Regex::new(&format!(
-                    r"^({}|python3)\.(?<minor>\d\d?)t?{}$",
-                    regex::escape(&implementation.to_string()),
-                    regex::escape(EXE_SUFFIX)
-                ))
-                .unwrap()
-            } else {
-                Regex::new(&format!(
-                    r"^python3\.(?<minor>\d\d?)t?{}$",
-                    regex::escape(EXE_SUFFIX)
-                ))
-                .unwrap()
-            };
+            static MINOR_VERSION: LazyLock<Regex> =
+                LazyLock::new(|| Regex::new(r"^(?<minor>\d\d?)t?$").unwrap());
             fs_err::read_dir(dir)
                 .into_iter()
                 .flatten()
@@ -589,7 +578,19 @@ fn find_all_minor(
                     let Some(filename) = filename.to_str() else {
                         return false;
                     };
-                    let Some(captures) = regex.captures(filename) else {
+                    let Some((name, version)) = filename
+                        .strip_suffix(EXE_SUFFIX)
+                        .and_then(|filename| filename.split_once('.'))
+                    else {
+                        return false;
+                    };
+                    if name != "python3"
+                        && implementation
+                            .is_none_or(|implementation| name != implementation.long_name())
+                    {
+                        return false;
+                    }
+                    let Some(captures) = MINOR_VERSION.captures(version) else {
                         return false;
                     };
 
