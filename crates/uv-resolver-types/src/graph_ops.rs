@@ -203,11 +203,12 @@ pub fn simplify_conflict_markers(
         // to perfectly disambiguate between them. It's plausible we
         // could do better here, but it requires smarter simplification
         // logic. ---AG
+        let target_name = graph[to_index].package_name();
         let ambiguous = graph
             .edges_directed(from_index, Direction::Outgoing)
-            .filter(|edge| graph[to_index].package_name() == graph[edge.target()].package_name())
-            .nth(1)
-            .is_some();
+            .any(|edge| {
+                edge.id() != edge_index && target_name == graph[edge.target()].package_name()
+            });
         if ambiguous {
             continue;
         }
