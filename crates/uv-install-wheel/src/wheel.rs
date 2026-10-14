@@ -1029,20 +1029,18 @@ pub fn validate_and_heal_record<'a>(
     let mut record_file = File::open(&record_path)?;
     let mut record = read_record(&mut record_file)?;
 
-    // Remove matching files from both collections.
-    let mut extra_record_entries = Vec::new();
-    record.retain(|entry| {
-        let path = Path::new(&entry.path);
-        if files.remove(path).is_some() {
-            return true;
-        }
-        // Allow non-canonical spellings such as `./foo`.
-        if files.remove(uv_fs::normalize_path(path).as_ref()).is_some() {
-            return true;
-        }
-        extra_record_entries.push(path.to_path_buf());
-        false
-    });
+    // Match recorded files against the archive and extract stale entries.
+    let extra_record_entries = record
+        .extract_if(.., |entry| {
+            let path = Path::new(&entry.path);
+            if files.remove(path).is_some() {
+                return false;
+            }
+            // Allow non-canonical spellings such as `./foo`.
+            files.remove(uv_fs::normalize_path(path).as_ref()).is_none()
+        })
+        .map(|entry| PathBuf::from(entry.path))
+        .collect::<Vec<_>>();
 
     if !files.is_empty() {
         // Deprecated, but not listed in RECORD if used.
