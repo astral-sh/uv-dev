@@ -383,10 +383,9 @@ fn create_venv_project_environment() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn create_venv_project_environment_lock() -> Result<()> {
+/// Hold a project's environment lock in a temporary directory owned by the test.
+async fn locked_project_environment() -> Result<(uv_test::TestContext, LockedFile)> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-
     context.temp_dir.child("pyproject.toml").write_str(
         r#"
             [project]
@@ -396,16 +395,28 @@ async fn create_venv_project_environment_lock() -> Result<()> {
             "#,
     )?;
 
-    // Simulate another project command holding the environment lock.
+    let system_temp = context.root.child("system-temp");
+    system_temp.create_dir_all()?;
     let install_path = dunce::canonicalize(context.temp_dir.path())?;
-    let lock_path = std::env::temp_dir().join(format!("uv-{}.lock", cache_digest(&install_path)));
+    let lock_path = system_temp.join(format!("uv-{}.lock", cache_digest(&install_path)));
     let lock = LockedFile::acquire(
         &lock_path,
         LockedFileMode::Exclusive,
         context.temp_dir.path().display(),
     )
     .await?;
-    let context = context.with_filtered_path(&lock_path, "PROJECT_ENVIRONMENT_LOCK");
+    let context = context
+        .with_env(
+            if cfg!(windows) { "TMP" } else { "TMPDIR" },
+            system_temp.as_os_str(),
+        )
+        .with_filtered_path(&lock_path, "PROJECT_ENVIRONMENT_LOCK");
+    Ok((context, lock))
+}
+
+#[tokio::test]
+async fn create_venv_project_environment_lock() -> Result<()> {
+    let (context, lock) = locked_project_environment().await?;
 
     // A pathless invocation from the project root uses the workspace-derived lock, including when
     // `UV_PROJECT_ENVIRONMENT` changes the environment path. Lock errors warn and continue.
@@ -433,29 +444,9 @@ async fn create_venv_project_environment_lock() -> Result<()> {
 /// Project aliases share the workspace lock even before the environment exists.
 #[tokio::test]
 async fn create_venv_project_environment_lock_symlink() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
-
-    context.temp_dir.child("pyproject.toml").write_str(
-        r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            requires-python = ">=3.12"
-            "#,
-    )?;
+    let (context, lock) = locked_project_environment().await?;
     let project_link = context.temp_dir.child("project-link");
     uv_fs::create_symlink(context.temp_dir.path(), project_link.path())?;
-
-    // Simulate another project command holding the environment lock.
-    let install_path = dunce::canonicalize(context.temp_dir.path())?;
-    let lock_path = std::env::temp_dir().join(format!("uv-{}.lock", cache_digest(&install_path)));
-    let lock = LockedFile::acquire(
-        &lock_path,
-        LockedFileMode::Exclusive,
-        context.temp_dir.path().display(),
-    )
-    .await?;
-    let context = context.with_filtered_path(&lock_path, "PROJECT_ENVIRONMENT_LOCK");
 
     // A project alias uses the same lock, including when `UV_PROJECT_ENVIRONMENT` changes the
     // environment path. Lock errors warn and continue.
