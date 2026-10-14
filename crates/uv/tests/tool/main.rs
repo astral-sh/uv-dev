@@ -15,6 +15,9 @@ mod tool_dir;
 mod tool_install;
 
 #[cfg(feature = "test-python")]
+mod tool_install_platform;
+
+#[cfg(feature = "test-python")]
 mod tool_install_validation;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
