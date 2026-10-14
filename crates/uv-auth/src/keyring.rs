@@ -59,14 +59,14 @@ impl std::fmt::Display for KeyringProviderBackend {
 }
 
 impl KeyringProvider {
-    /// Create a new [`KeyringProvider::Native`].
+    /// Create a provider backed by the native system keyring.
     pub(crate) fn native() -> Self {
         Self {
             backend: KeyringProviderBackend::Native,
         }
     }
 
-    /// Create a new [`KeyringProvider::Subprocess`].
+    /// Create a provider backed by the external `keyring` command.
     pub fn subprocess() -> Self {
         Self {
             backend: KeyringProviderBackend::Subprocess,
@@ -157,7 +157,7 @@ impl KeyringProvider {
             .then(|| &url[Position::BeforeHost..Position::AfterPort])
     }
 
-    /// Fetch credentials for the given [`Url`] from the keyring.
+    /// Fetch credentials for the given [`DisplaySafeUrl`] from the keyring.
     ///
     /// Returns [`None`] if no password was found for the username or if any errors
     /// are encountered in the keyring backend.
