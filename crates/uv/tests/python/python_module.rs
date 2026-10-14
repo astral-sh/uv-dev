@@ -398,7 +398,8 @@ fn find_uv_bin_in_venv(python_version: &str) -> anyhow::Result<()> {
     );
     assert!(
         actual.is_absolute(),
-        "expected an absolute path: {actual:?}"
+        "expected an absolute path: {}",
+        actual.display()
     );
     let expected = venv_bin_path(&context.venv).join(format!("uv{}", std::env::consts::EXE_SUFFIX));
     assert_eq!(fs::canonicalize(actual)?, fs::canonicalize(expected)?);

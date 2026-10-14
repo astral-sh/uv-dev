@@ -632,7 +632,11 @@ fn interpreter_path_from_output(output: &Output) -> Result<&Path> {
             .or_else(|| stdout.strip_suffix('\n'))
             .expect("the interpreter path should end with a newline"),
     );
-    assert!(path.is_absolute(), "expected an absolute path: {path:?}");
+    assert!(
+        path.is_absolute(),
+        "expected an absolute path: {}",
+        path.display()
+    );
     Ok(path)
 }
 
@@ -642,7 +646,11 @@ fn assert_venv_python(command: &mut Command, environment: &Path) -> Result<()> {
     let actual = interpreter_path_from_output(output.get_output())?;
     let expected =
         venv_bin_path(environment).join(format!("python{}", std::env::consts::EXE_SUFFIX));
-    assert!(actual.is_file(), "interpreter does not exist: {actual:?}");
+    assert!(
+        actual.is_file(),
+        "interpreter does not exist: {}",
+        actual.display()
+    );
     assert_eq!(actual.file_name(), expected.file_name());
     // Resolve directory aliases without following the Python executable, which may point to a
     // system interpreter shared by multiple environments.

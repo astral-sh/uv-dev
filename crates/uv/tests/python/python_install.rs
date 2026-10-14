@@ -1635,7 +1635,8 @@ fn python_install_default_preview() -> anyhow::Result<()> {
         assert_eq!(
             canonicalize_link_path(launcher),
             python_315_target,
-            "launcher: {launcher:?}"
+            "launcher: {}",
+            launcher.display()
         );
     }
     assert_eq!(
