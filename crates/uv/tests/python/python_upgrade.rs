@@ -394,11 +394,12 @@ fn python_upgrade_transparent_from_venv_module() {
      + cpython-3.12.9-[PLATFORM] (python3.12)
     ");
 
-    let managed_python = context
-        .bin_dir
-        .join(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
-    uv_snapshot!(context.filters(), context.external_command(managed_python)
-        .arg("-m").arg("venv").arg(context.venv.as_os_str()).arg("--without-pip"), @"
+    // CPython records the interpreter's directory as the environment's home, so create it
+    // through the managed minor-version interpreter instead of the user-bin launcher.
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--python", "3.12", "python", "-m", "venv"])
+        .arg(context.venv.as_os_str())
+        .arg("--without-pip"), @"
     exit_code: 0 (success)
     ");
 
