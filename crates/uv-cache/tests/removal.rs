@@ -1,8 +1,8 @@
 #![cfg(unix)]
 
-use std::fs::Metadata;
+use std::fs::{Metadata, Permissions};
 use std::io;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 use fs_err::{File, OpenOptions};
@@ -32,6 +32,24 @@ fn remove_path_allocated_blocks() -> io::Result<()> {
     assert!(summary.coarse_bytes >= 512);
     assert!(!path.exists());
 
+    Ok(())
+}
+
+#[test]
+fn remove_path_counts_unreadable_directories_once() -> io::Result<()> {
+    let cache = Cache::temp()?;
+    let root = cache.root().join("stale");
+    for name in ["first", "second"] {
+        let directory = root.join(name);
+        fs_err::create_dir_all(&directory)?;
+        fs_err::write(directory.join("cached.bin"), [0])?;
+        fs_err::set_permissions(&directory, Permissions::from_mode(0o200))?;
+    }
+
+    let summary = cache.remove_path(&root)?;
+    assert_eq!(summary.num_files, 2);
+    assert_eq!(summary.num_dirs, 3);
+    assert!(!root.exists());
     Ok(())
 }
 
