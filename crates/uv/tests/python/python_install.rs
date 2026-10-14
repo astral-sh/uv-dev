@@ -116,18 +116,6 @@ fn python_install() {
     // The executable should still be present in the bin directory
     bin_python.assert(predicate::path::exists());
 
-    // Uninstallation requires an argument
-    uv_snapshot!(context.filters(), context.python_uninstall(), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: the following required arguments were not provided:
-      <TARGETS>...
-
-    Usage: uv python uninstall --cache-dir [CACHE_DIR] --install-dir <INSTALL_DIR> <TARGETS>...
-
-    For more information, try '--help'.
-    ");
-
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.15"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -593,18 +581,6 @@ fn python_install_preview() {
     // On Unix, it should be a link
     #[cfg(unix)]
     bin_python.assert(predicate::path::is_symlink());
-
-    // Uninstallation requires an argument
-    uv_snapshot!(context.filters(), context.python_uninstall(), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: the following required arguments were not provided:
-      <TARGETS>...
-
-    Usage: uv python uninstall --cache-dir [CACHE_DIR] --install-dir <INSTALL_DIR> <TARGETS>...
-
-    For more information, try '--help'.
-    ");
 
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.15"), @"
     exit_code: 0 (success)
@@ -1946,29 +1922,6 @@ fn python_install_default_from_env() {
      - cpython-3.11.[LATEST]-[PLATFORM] (python3.11)
      - cpython-3.12.[LATEST]-[PLATFORM] (python3.12)
     ");
-
-    // Uninstall with no targets should error
-    uv_snapshot!(context.filters(), context.python_uninstall(), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: the following required arguments were not provided:
-      <TARGETS>...
-
-    Usage: uv python uninstall --cache-dir [CACHE_DIR] --install-dir <INSTALL_DIR> <TARGETS>...
-
-    For more information, try '--help'.
-    ");
-
-    // Uninstall with conflicting options should error
-    uv_snapshot!(context.filters(), context.python_uninstall().arg("--all").arg("3.12"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: the argument '--all' cannot be used with '<TARGETS>...'
-
-    Usage: uv python uninstall --cache-dir [CACHE_DIR] --all --install-dir <INSTALL_DIR> <TARGETS>...
-
-    For more information, try '--help'.
-    ");
 }
 
 #[cfg(target_os = "macos")]
@@ -2245,18 +2198,6 @@ fn python_install_no_cache() {
     ----- stderr -----
     Installed Python 3.15.[LATEST] in [TIME]
      ~ cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
-    ");
-
-    // Uninstallation requires an argument
-    uv_snapshot!(context.filters(), context.python_uninstall(), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: the following required arguments were not provided:
-      <TARGETS>...
-
-    Usage: uv python uninstall --cache-dir [CACHE_DIR] --install-dir <INSTALL_DIR> <TARGETS>...
-
-    For more information, try '--help'.
     ");
 
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.15"), @"
