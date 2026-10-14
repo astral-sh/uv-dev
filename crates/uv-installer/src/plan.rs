@@ -658,14 +658,11 @@ fn cached_wheel_matches_source(
 
 /// Returns `true` if the given distribution is a seed package.
 fn is_seed_package(dist_info: &InstalledDist, venv: &PythonEnvironment) -> bool {
-    if venv.interpreter().python_tuple() >= (3, 12) {
-        matches!(dist_info.name().as_ref(), "uv" | "pip")
-    } else {
-        // Include `setuptools` and `wheel` on Python <3.12.
-        matches!(
-            dist_info.name().as_ref(),
-            "pip" | "setuptools" | "wheel" | "uv"
-        )
+    let python_version = venv.interpreter().python_tuple();
+    match dist_info.name().as_ref() {
+        "uv" | "pip" => true,
+        "setuptools" | "wheel" => python_version < (3, 12),
+        _ => false,
     }
 }
 
