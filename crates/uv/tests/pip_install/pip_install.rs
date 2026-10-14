@@ -10600,11 +10600,10 @@ fn stale_egg_info() -> Result<()> {
     Ok(())
 }
 
-/// `suds-community` has an incorrect layout whereby the wheel includes `suds_community.egg-info` at
-/// the top-level. We're then under the impression that `suds` is installed twice, but when we go to
-/// uninstall the second "version", we can't find the `egg-info` directory.
+/// The wheel owns an extra `.egg-info` directory, so removing the wheel also removes the duplicate
+/// metadata before its own uninstall runs. Reinstallation must still leave the package usable.
 #[test]
-fn missing_top_level() {
+fn missing_top_level() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -10616,6 +10615,19 @@ fn missing_top_level() {
     Installed 1 package in [TIME]
      + suds-community==0.8.5
     "
+    );
+    let site_packages = ChildPath::new(context.site_packages());
+    site_packages
+        .child("suds_community.egg-info/PKG-INFO")
+        .assert(predicates::path::is_file().follow_links(true));
+    let record = read_record(File::open(
+        site_packages.child("suds_community-0.8.5.dist-info/RECORD"),
+    )?)?;
+    assert!(
+        record
+            .iter()
+            .any(|entry| entry.path == "suds_community.egg-info/PKG-INFO"),
+        "the wheel must own the duplicate egg metadata"
     );
 
     uv_snapshot!(context.filters(), context.pip_install()
@@ -10629,6 +10641,13 @@ fn missing_top_level() {
      ~ suds-community==0.8.5
     "
     );
+    context
+        .assert_command(
+            "import suds; from importlib.metadata import version; print(version('suds-community'))",
+        )
+        .success()
+        .stdout("0.8.5\n");
+    Ok(())
 }
 
 /// Show a dedicated error when the user attempts to install `sklearn`.
