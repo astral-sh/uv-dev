@@ -774,42 +774,14 @@ pub(crate) fn install_data(
                     "Installing data/scripts to `{}`",
                     layout.scheme.scripts.user_display()
                 );
-                let mut rename_or_copy = RenameOrCopy::default();
-                let mut initialized = false;
-                for file in fs::read_dir(path)? {
-                    let file = file?;
-
-                    // Couldn't find any docs for this, took it directly from
-                    // https://github.com/pypa/pip/blob/b5457dfee47dd9e9f6ec45159d9d410ba44e5ea1/src/pip/_internal/operations/install/wheel.py#L565-L583
-                    let name = file.file_name();
-                    let name = name.to_string_lossy();
-                    let match_name = name
-                        .strip_suffix(".exe")
-                        .or_else(|| name.strip_suffix("-script.py"))
-                        .or_else(|| name.strip_suffix(".pya"))
-                        .unwrap_or(&name);
-                    if entrypoints
-                        .scripts()
-                        .any(|script| script.name == match_name)
-                    {
-                        continue;
-                    }
-
-                    // Create the scripts directory, if it doesn't exist.
-                    if !initialized {
-                        fs::create_dir_all(&layout.scheme.scripts)?;
-                        initialized = true;
-                    }
-
-                    install_script(
-                        layout,
-                        relocatable,
-                        site_packages,
-                        record,
-                        &file,
-                        &mut rename_or_copy,
-                    )?;
-                }
+                install_data_scripts(
+                    layout,
+                    relocatable,
+                    site_packages,
+                    &path,
+                    entrypoints,
+                    record,
+                )?;
                 continue;
             }
             Some(kind @ "headers") => (
@@ -836,6 +808,54 @@ pub(crate) fn install_data(
             &layout.scheme.scripts,
             site_packages,
             record,
+        )?;
+    }
+    Ok(())
+}
+
+/// Install wheel-provided scripts that are not generated entry-point wrappers.
+fn install_data_scripts(
+    layout: &Layout,
+    relocatable: bool,
+    site_packages: &Path,
+    source: &Path,
+    entrypoints: &EntryPoints,
+    record: &mut [RecordEntry],
+) -> Result<(), Error> {
+    let mut rename_or_copy = RenameOrCopy::default();
+    let mut destination_ready = false;
+    for file in fs::read_dir(source)? {
+        let file = file?;
+
+        // Recognize the wrapper filename variants used by pip.
+        // https://github.com/pypa/pip/blob/b5457dfee47dd9e9f6ec45159d9d410ba44e5ea1/src/pip/_internal/operations/install/wheel.py#L565-L583
+        let name = file.file_name();
+        let name = name.to_string_lossy();
+        let match_name = name
+            .strip_suffix(".exe")
+            .or_else(|| name.strip_suffix("-script.py"))
+            .or_else(|| name.strip_suffix(".pya"))
+            .unwrap_or(&name);
+        if entrypoints
+            .scripts()
+            .any(|script| script.name == match_name)
+        {
+            continue;
+        }
+
+        // Create the destination on the first script that needs installing.
+        if !destination_ready {
+            fs::create_dir_all(&layout.scheme.scripts)?;
+            destination_ready = true;
+        }
+
+        install_script(
+            layout,
+            relocatable,
+            site_packages,
+            record,
+            &file,
+            &mut rename_or_copy,
         )?;
     }
     Ok(())
