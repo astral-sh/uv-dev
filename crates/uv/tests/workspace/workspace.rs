@@ -1723,8 +1723,8 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_threeway() -> Result<
     "#})?;
     knot.child("src/__init__.py").touch()?;
 
-    // We'll raise the first conflict in the resolver, so `bird` shouldn't be
-    // present in the error even though it also incompatible
+    // The diagnostic should report a sufficient conflicting pair, even though all three
+    // members have incompatible pins.
     let bird = workspace.child("packages").child("bird");
     bird.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -1748,6 +1748,52 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_threeway() -> Result<
              And because your workspace requires bird and knot, we can conclude that your workspace's requirements are unsatisfiable.
     "
     );
+
+    Ok(())
+}
+
+/// Every pair of members is satisfiable, but their combined requirements have no solution.
+#[cfg(feature = "test-universal")]
+#[test]
+fn workspace_unsatisfiable_member_dependencies_requires_three_members() -> Result<()> {
+    use predicates::prelude::{PredicateBooleanExt, predicate};
+
+    let server = uv_test::packse::PackseServer::new("fork/conflict-unsatisfiable.toml");
+    let context = uv_test::test_context!("3.12");
+    let workspace = context.temp_dir.child("workspace");
+    make_project(
+        workspace.path(),
+        "workspace",
+        indoc! {r#"
+            dependencies = []
+
+            [tool.uv.workspace]
+            members = ["packages/*"]
+        "#},
+    )?;
+    let packages = workspace.join("packages");
+    // The index provides a==1, a==2, and a==3. Each member excludes a different one.
+    make_project(&packages.join("red"), "red", r#"dependencies = ["a<3"]"#)?;
+    make_project(&packages.join("knot"), "knot", r#"dependencies = ["a>=2"]"#)?;
+    make_project(
+        &packages.join("bird"),
+        "bird",
+        r#"dependencies = ["a!=2.*"]"#,
+    )?;
+
+    context
+        .lock()
+        .current_dir(&workspace)
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .code(1)
+        .stderr(
+            predicate::str::contains("No solution found when resolving dependencies")
+                .and(predicate::str::is_match(r"\bbird\b")?)
+                .and(predicate::str::is_match(r"\bknot\b")?)
+                .and(predicate::str::is_match(r"\bred\b")?),
+        );
 
     Ok(())
 }
