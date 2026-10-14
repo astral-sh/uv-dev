@@ -1,49 +1,16 @@
-/*!
-
-# Mock credential store
-
-To facilitate testing of clients, this crate provides a Mock credential store
-that is platform-independent, provides no persistence, and allows the client
-to specify the return values (including errors) for each call. The credentials
-in this store have no attributes at all.
-
-To use this credential store instead of the default, call
-[`set_default_credential_builder`](crate::set_default_credential_builder)
-with [`default_credential_builder`] during application startup
-_before_ creating any entries.
-
-You can then create entries as you usually do, and call their usual methods
-to set, get, and delete passwords.  There is no persistence other than
-in the entry itself, so getting a password before setting it will always result
-in a [`NoEntry`](Error::NoEntry) error.
-
-If you want a method call on an entry to fail in a specific way, you can
-downcast the entry to a [`MockCredential`] and then call [`set_error`](MockCredential::set_error)
-with the appropriate error.  The next entry method called on the credential
-will fail with the error you set.  The error will then be cleared, so the next
-call on the mock will operate as usual.
- */
+//! An in-memory credential used by platform-independent keyring tests.
+//!
+//! Each credential owns its secret and can return a configured error once.
 use std::sync::Mutex;
 
 use crate::credential::CredentialApi;
 use crate::error::{Error, Result};
 
-/// The concrete mock credential
-///
-/// Mocks use an internal mutability pattern since entries are read-only.
-/// The mutex is used to make sure these are Sync.
 #[derive(Debug, Default)]
 struct MockCredential {
     inner: Mutex<MockData>,
 }
 
-/// The (in-memory) persisted data for a mock credential.
-///
-/// We keep a password, but unlike most keystores
-/// we also keep an intended error to return on the next call.
-///
-/// (Everything about this structure is public for transparency.
-/// Most keystore implementation hide their internals.)
 #[derive(Debug, Default)]
 struct MockData {
     secret: Option<Vec<u8>>,
@@ -62,11 +29,6 @@ impl MockData {
 
 #[async_trait::async_trait]
 impl CredentialApi for MockCredential {
-    /// Set a password on a mock credential.
-    ///
-    /// If there is an error in the mock, it will be returned
-    /// and the password will _not_ be set.  The error will
-    /// be cleared, so calling again will set the password.
     async fn set_secret(&self, secret: &[u8]) -> Result<()> {
         let mut data = self.inner.lock().expect("Can't access mock data for set");
         data.check_error()?;
@@ -74,23 +36,12 @@ impl CredentialApi for MockCredential {
         Ok(())
     }
 
-    /// Get the password from a mock credential, if any.
-    ///
-    /// If there is an error set in the mock, it will
-    /// be returned instead of a password.
     async fn get_secret(&self) -> Result<Vec<u8>> {
         let mut data = self.inner.lock().expect("Can't access mock data for get");
         data.check_error()?;
         data.secret.clone().ok_or(Error::NoEntry)
     }
 
-    /// Delete the password in a mock credential
-    ///
-    /// If there is an error, it will be returned and
-    /// the deletion will not happen.
-    ///
-    /// If there is no password, a [NoEntry](Error::NoEntry) error
-    /// will be returned.
     async fn delete_credential(&self) -> Result<()> {
         let mut data = self
             .inner
@@ -101,28 +52,16 @@ impl CredentialApi for MockCredential {
         Ok(())
     }
 
-    /// Return this mock credential concrete object
-    /// wrapped in the [Any](std::any::Any) trait,
-    /// so it can be downcast.
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
-    /// Expose the concrete debug formatter for use via the [Credential] trait
     fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(self, f)
     }
 }
 
 impl MockCredential {
-    /// Make a new mock credential.
-    ///
-    /// Since mocks have no persistence between sessions,
-    /// new mocks always have no password.
-    fn new_with_target(_target: Option<&str>, _service: &str, _user: &str) -> Self {
-        Self::default()
-    }
-
     /// Set an error to be returned from this mock credential.
     ///
     /// Error returns always take precedence over the normal
@@ -144,9 +83,8 @@ mod tests {
     use super::MockCredential;
     use crate::{Entry, Error, tests::generate_random_string};
 
-    fn entry_new(service: &str, user: &str) -> Entry {
-        let credential = MockCredential::new_with_target(None, service, user);
-        Entry::new_with_credential(Box::new(credential))
+    fn entry_new(_service: &str, _user: &str) -> Entry {
+        Entry::new_with_credential(Box::<MockCredential>::default())
     }
 
     #[tokio::test]
