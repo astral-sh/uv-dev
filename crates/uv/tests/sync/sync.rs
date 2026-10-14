@@ -4310,22 +4310,23 @@ fn sync_extra_build_dependencies_sources() -> Result<()> {
     "#})?;
     child.child("src/child/__init__.py").touch()?;
 
+    // A direct URL keeps the child available when `--no-sources` disables the build dependency override.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
             [project]
             name = "project"
             version = "0.1.0"
             requires-python = ">=3.12"
-            dependencies = ["child"]
+            dependencies = ["child @ {child_url}"]
 
             [tool.uv.sources]
             anyio = {{ path = "{anyio_local}" }}
-            child = {{ path = "child" }}
 
             [tool.uv.extra-build-dependencies]
             child = ["anyio"]
         "#,
         anyio_local = anyio_local.portable_display(),
+        child_url = Url::from_file_path(child.path()).unwrap(),
     })?;
 
     // Running `uv sync` should succeed, as `anyio` is provided as a source
@@ -4338,8 +4339,14 @@ fn sync_extra_build_dependencies_sources() -> Result<()> {
      + child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    // TODO(zanieb): We want to test with `--no-sources` too but unfortunately that's not easy
-    // because it'll disable the `child` path source too!
+    context
+        .sync()
+        .args(["--no-sources", "--no-cache", "--reinstall-package", "child"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "Found system anyio instead of local anyio",
+        ));
 
     Ok(())
 }
