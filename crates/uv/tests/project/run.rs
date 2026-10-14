@@ -3608,6 +3608,25 @@ fn run_stdin() -> Result<()> {
 }
 
 #[test]
+#[cfg(windows)]
+fn run_stdin_non_utf8() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let script = context.temp_dir.child("script.py");
+    script.write_binary(&[0xff])?;
+
+    context
+        .run()
+        .arg("--no-project")
+        .arg("-")
+        .stdin(std::fs::File::open(script)?)
+        .assert()
+        .code(2)
+        .stderr(contains("Script read from stdin is not valid UTF-8"));
+
+    Ok(())
+}
+
+#[test]
 fn run_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 

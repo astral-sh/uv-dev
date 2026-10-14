@@ -1194,7 +1194,7 @@ pub async fn run(
     };
 
     debug!("Running `{command}`");
-    let mut process = command.as_command(interpreter);
+    let mut process = command.as_command(interpreter)?;
     process.envs(env_file_environment);
 
     // Construct the `PATH` environment variable.
@@ -1653,8 +1653,15 @@ impl RunCommand {
     }
 
     /// Convert a [`RunCommand`] into a [`Command`].
-    fn as_command(&self, interpreter: &Interpreter) -> Command {
-        match self {
+    #[cfg_attr(
+        unix,
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "stdin scripts require UTF-8 on non-Unix platforms"
+        )
+    )]
+    fn as_command(&self, interpreter: &Interpreter) -> anyhow::Result<Command> {
+        Ok(match self {
             Self::Python(args) => {
                 let mut process = Command::new(interpreter.sys_executable());
                 process.args(args);
@@ -1715,8 +1722,8 @@ impl RunCommand {
                         process.arg(OsStr::from_bytes(script));
                     },
                     _ => {
-                        let script =
-                            String::from_utf8(script.clone()).expect("script is valid UTF-8");
+                        let script = std::str::from_utf8(script)
+                            .context("Script read from stdin is not valid UTF-8")?;
                         process.arg(script);
                     },
                 }
@@ -1734,7 +1741,7 @@ impl RunCommand {
                 process
             }
             Self::Empty => Command::new(interpreter.sys_executable()),
-        }
+        })
     }
 
     /// Use `pythonw` if it exists, otherwise fall back to the interpreter's executable.
