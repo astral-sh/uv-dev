@@ -38,6 +38,20 @@ use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
 use uv_test::{download_to_disk, venv_bin_path};
 
+#[cfg(feature = "test-universal")]
+fn locked_package(lock: &str, name: &str) -> Result<toml::Value> {
+    let lock: toml::Value = toml::from_str(lock)?;
+    lock.get("package")
+        .and_then(toml::Value::as_array)
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package.get("name").and_then(toml::Value::as_str) == Some(name))
+        })
+        .cloned()
+        .ok_or_else(|| anyhow!("package `{name}` not found in lockfile"))
+}
+
 /// Lock validation warnings should explain why a local dependency's metadata could not be read.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -15187,12 +15201,6 @@ fn lock_index_url_username_change_no_update() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-
-    // Verify anyio 4.0.0 is locked
-    assert!(lock.contains("name = \"anyio\""));
-    assert!(lock.contains("version = \"4.0.0\""));
-
     // Update pyproject.toml to simulate availability of newer package with more open but still compatible constraint
     pyproject_toml.write_str(
         r#"
@@ -15219,12 +15227,8 @@ fn lock_index_url_username_change_no_update() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    let lock_after = context.read("uv.lock");
-
-    assert!(
-        lock_after.contains("version = \"4.0.0\""),
-        "anyio should remain at version 4.0.0, not update despite >=4.0.0 constraint"
-    );
+    let anyio = locked_package(&context.read("uv.lock"), "anyio")?;
+    assert_eq!(anyio["version"].as_str(), Some("4.0.0"));
 
     Ok(())
 }
@@ -42625,11 +42629,12 @@ async fn lock_exclude_newer_index_disable() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-    assert!(lock.contains(&format!(
-        "source = {{ registry = \"{}/no-upload-time/simple\" }}",
-        proxy.uri()
-    )));
+    let iniconfig = locked_package(&context.read("uv.lock"), "iniconfig")?;
+    let registry = format!("{}/no-upload-time/simple", proxy.uri());
+    assert_eq!(
+        iniconfig["source"]["registry"].as_str(),
+        Some(registry.as_str())
+    );
 
     Ok(())
 }
