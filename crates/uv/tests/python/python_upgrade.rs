@@ -6,8 +6,9 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::prelude::PathChild;
 use insta::assert_snapshot;
-use uv_python_managed::platform_key_from_env;
-use uv_test::{LATEST_PYTHON_3_12, TestContext, uv_snapshot, venv_bin_path};
+use uv_test::{TestContext, uv_snapshot, venv_bin_path};
+
+use crate::build_upgrade::OutdatedPythonBuild;
 
 #[test]
 fn python_upgrade() {
@@ -557,7 +558,7 @@ fn python_upgrade_implementation() {
 }
 
 #[test]
-fn python_upgrade_build_version() {
+fn python_upgrade_build_version() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -579,29 +580,7 @@ fn python_upgrade_build_version() {
     Python 3.12 is already on the latest supported patch release
     ");
 
-    // Overwrite the BUILD file with an older build version
-    let installation_dir = context.temp_dir.child("managed").child(format!(
-        "cpython-{}-{}",
-        LATEST_PYTHON_3_12,
-        platform_key_from_env().unwrap()
-    ));
-    let build_file = installation_dir.join("BUILD");
-    fs_err::write(&build_file, "19000101").unwrap();
-    // A build upgrade retains the Python version and installation key, so set the interpreter's
-    // modification time to a known value to detect whether the interpreter is replaced.
-    let python_executable = if cfg!(windows) {
-        installation_dir.join("python.exe")
-    } else {
-        installation_dir.join("bin").join("python3.12")
-    };
-    filetime::set_file_mtime(
-        &python_executable,
-        filetime::FileTime::from_unix_time(1_700_000_000, 0),
-    )
-    .unwrap();
-    let previous_mtime = filetime::FileTime::from_last_modification_time(
-        &fs_err::metadata(&python_executable).unwrap(),
-    );
+    let outdated = OutdatedPythonBuild::python_3_12(&context)?;
 
     // Now upgrade should detect the outdated build version and reinstall
     uv_snapshot!(context.filters(), context.python_upgrade().arg("3.12"), @"
@@ -611,12 +590,7 @@ fn python_upgrade_build_version() {
      ~ cpython-3.12.[LATEST]-[PLATFORM]
     ");
 
-    assert_ne!(
-        filetime::FileTime::from_last_modification_time(
-            &fs_err::metadata(&python_executable).unwrap()
-        ),
-        previous_mtime
-    );
+    outdated.assert_replaced()?;
 
     // Should be a no-op again after upgrade
     uv_snapshot!(context.filters(), context.python_upgrade().arg("3.12"), @"
@@ -624,6 +598,8 @@ fn python_upgrade_build_version() {
     ----- stderr -----
     Python 3.12 is already on the latest supported patch release
     ");
+
+    Ok(())
 }
 
 // A project environment should survive a transparent Python patch upgrade.
