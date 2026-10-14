@@ -5,7 +5,6 @@ use std::sync::Arc;
 use reqwest::StatusCode;
 
 use uv_distribution::Error as DistributionError;
-use uv_distribution_types::{Requirement, RequirementSource};
 use uv_metadata::Error as WheelMetadataError;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
@@ -13,7 +12,6 @@ use uv_platform_tags::{AbiTag, Tags};
 use uv_pypi_types::MetadataError;
 
 use crate::prioritized_distribution::IncompatibleDist;
-use crate::pubgrub::Range;
 use crate::resolver::{MetadataUnavailable, VersionFork};
 
 /// The reason why a package or a version cannot be used.
@@ -47,15 +45,16 @@ impl UnsatisfiableRequirement {
     ///
     /// PubGrub ranges do not retain the specifiers that produced them, but the original
     /// requirement is needed to explain the conflict in the resolution report.
-    pub(crate) fn from_requirement(requirement: &Requirement) -> Option<Self> {
-        let RequirementSource::Registry { specifier, .. } = &requirement.source else {
-            return None;
-        };
-        (Range::from(specifier.clone()) == Range::empty()).then(|| Self {
-            name: requirement.name.clone(),
-            extras: requirement.extras.clone(),
-            version_specifiers: specifier.clone(),
-        })
+    pub(crate) fn new(
+        name: PackageName,
+        extras: Box<[ExtraName]>,
+        version_specifiers: VersionSpecifiers,
+    ) -> Self {
+        Self {
+            name,
+            extras,
+            version_specifiers,
+        }
     }
 
     fn fmt_package(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
