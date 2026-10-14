@@ -2247,19 +2247,11 @@ fn venv_python_preference() {
 #[cfg(unix)]
 fn create_venv_symlink_clear_preservation() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-
-    // Create a target directory
     let target_dir = context.temp_dir.child("target");
     target_dir.create_dir_all()?;
-
-    // Create a symlink pointing to the target directory
     let symlink_path = context.temp_dir.child(".venv");
     symlink(&target_dir, &symlink_path)?;
 
-    // Verify symlink exists
-    assert!(symlink_path.path().is_symlink());
-
-    // Create virtual environment at symlink location
     uv_snapshot!(context.filters(), context.venv()
         .arg(symlink_path.as_os_str())
         .arg("--python")
@@ -2272,10 +2264,10 @@ fn create_venv_symlink_clear_preservation() -> Result<()> {
     "
     );
 
-    // Verify symlink is still preserved after creation
-    assert!(symlink_path.path().is_symlink());
+    assert_link_target(&symlink_path, &target_dir);
+    let marker = target_dir.child("marker");
+    marker.touch()?;
 
-    // Run uv venv with --clear to test symlink preservation during clear
     uv_snapshot!(context.filters(), context.venv()
         .arg(symlink_path.as_os_str())
         .arg("--clear")
@@ -2289,8 +2281,11 @@ fn create_venv_symlink_clear_preservation() -> Result<()> {
     "
     );
 
-    // Verify symlink is STILL preserved after --clear
-    assert!(symlink_path.path().is_symlink());
+    assert_link_target(&symlink_path, &target_dir);
+    assert_path_missing(marker);
+    target_dir
+        .child("pyvenv.cfg")
+        .assert(predicates::path::is_file());
 
     Ok(())
 }
@@ -2299,24 +2294,13 @@ fn create_venv_symlink_clear_preservation() -> Result<()> {
 #[cfg(unix)]
 fn create_venv_nested_symlink_preservation() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-
-    // Create a target directory
     let target_dir = context.temp_dir.child("target");
     target_dir.create_dir_all()?;
-
-    // Create first symlink level: intermediate -> target
     let intermediate_link = context.temp_dir.child("intermediate");
     symlink(&target_dir, &intermediate_link)?;
-
-    // Create second symlink level: .venv -> intermediate (nested symlink)
     let symlink_path = context.temp_dir.child(".venv");
     symlink(&intermediate_link, &symlink_path)?;
 
-    // Verify nested symlink exists
-    assert!(symlink_path.path().is_symlink());
-    assert!(intermediate_link.path().is_symlink());
-
-    // Create virtual environment at nested symlink location
     uv_snapshot!(context.filters(), context.venv()
         .arg(symlink_path.as_os_str())
         .arg("--python")
@@ -2329,11 +2313,11 @@ fn create_venv_nested_symlink_preservation() -> Result<()> {
     "
     );
 
-    // Verify both symlinks are preserved
-    assert!(symlink_path.path().is_symlink());
-    assert!(intermediate_link.path().is_symlink());
+    assert_link_target(&symlink_path, &intermediate_link);
+    assert_link_target(&intermediate_link, &target_dir);
+    let marker = target_dir.child("marker");
+    marker.touch()?;
 
-    // Run uv venv again with --clear to test nested symlink preservation during recreation
     uv_snapshot!(context.filters(), context.venv()
         .arg(symlink_path.as_os_str())
         .arg("--clear")
@@ -2347,9 +2331,12 @@ fn create_venv_nested_symlink_preservation() -> Result<()> {
     "
     );
 
-    // Verify nested symlinks are STILL preserved
-    assert!(symlink_path.path().is_symlink());
-    assert!(intermediate_link.path().is_symlink());
+    assert_link_target(&symlink_path, &intermediate_link);
+    assert_link_target(&intermediate_link, &target_dir);
+    assert_path_missing(marker);
+    target_dir
+        .child("pyvenv.cfg")
+        .assert(predicates::path::is_file());
 
     Ok(())
 }
