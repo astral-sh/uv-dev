@@ -140,9 +140,6 @@ pub async fn sync_from_lock(
     .into_inner();
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
-    // Save an authenticated builder for the malware check before moving the
-    // primary builder into the registry client below.
-    let malware_check_client_builder = client_builder.clone();
 
     // Validate that the Python version is supported by the lockfile.
     if !target
@@ -244,7 +241,7 @@ pub async fn sync_from_lock(
         maybe_check_malware(
             &target,
             &resolution,
-            &malware_check_client_builder,
+            &client_builder,
             concurrency,
             cache,
             preview,
@@ -262,7 +259,8 @@ pub async fn sync_from_lock(
         )?);
     }
 
-    // Initialize the registry client.
+    // Initialize the registry client and retain the authenticated builder for the malware check.
+    let malware_check_client_builder = client_builder.clone();
     let client = RegistryClientBuilder::new(client_builder, cache.clone())
         .index_locations(index_locations.clone())
         .index_strategy(index_strategy)
