@@ -286,27 +286,26 @@ impl InstallationPlan {
     ) -> Result<Changelog, Error> {
         debug_assert!(self.is_noop(modifications, compile, dry_run));
 
-        let (plan, start) = self.into_parts();
+        let (plan, start) = self.into_execution_parts(modifications);
         if dry_run.enabled() {
-            report_dry_run(
-                dry_run,
-                resolution,
-                plan,
-                modifications,
-                start,
-                logger,
-                printer,
-            )
+            report_dry_run(dry_run, resolution, plan, start, logger, printer)
         } else {
             logger.on_check(resolution.len(), start, printer, dry_run)?;
             Ok(Changelog::default())
         }
     }
 
-    fn into_parts(self) -> (Plan, Instant) {
+    fn into_execution_parts(self, modifications: Modifications) -> (Plan, Instant) {
         let now = Instant::now();
         let start = now.checked_sub(self.elapsed).unwrap_or(now);
-        (self.plan, start)
+        let plan = match modifications {
+            Modifications::Sufficient => Plan {
+                extraneous: Vec::new(),
+                ..self.plan
+            },
+            Modifications::Exact => self.plan,
+        };
+        (plan, start)
     }
 }
 
@@ -399,40 +398,14 @@ impl InstallationPlan {
         printer: Printer,
         preview: Preview,
     ) -> Result<Changelog, Error> {
-        let (plan, start) = self.into_parts();
+        let (plan, start) = self.into_execution_parts(modifications);
 
         if dry_run.enabled() {
-            return report_dry_run(
-                dry_run,
-                resolution,
-                plan,
-                modifications,
-                start,
-                logger.as_ref(),
-                printer,
-            );
+            return report_dry_run(dry_run, resolution, plan, start, logger.as_ref(), printer);
         }
 
-        let Plan {
-            cached,
-            remote,
-            reinstalls,
-            extraneous,
-        } = plan;
-
-        // If we're in `install` mode, ignore any extraneous distributions.
-        let extraneous = match modifications {
-            Modifications::Sufficient => vec![],
-            Modifications::Exact => extraneous,
-        };
-
         // Nothing to do.
-        if remote.is_empty()
-            && cached.is_empty()
-            && reinstalls.is_empty()
-            && extraneous.is_empty()
-            && compile.is_none()
-        {
+        if plan.is_empty() && compile.is_none() {
             logger.on_check(resolution.len(), start, printer, dry_run)?;
             return Ok(Changelog::default());
         }
@@ -440,25 +413,21 @@ impl InstallationPlan {
         // Partition into two sets: those that require build isolation, and those that disable it. This
         // is effectively a heuristic to make `--no-build-isolation` work "more often" by way of giving
         // `--no-build-isolation` packages "access" to the rest of the environment.
-        let (isolated_phase, shared_phase) = Plan {
-            cached,
-            remote,
-            reinstalls,
-            extraneous,
-        }
-        .partition(|name| build_dispatch.build_isolation().is_isolated(Some(name)));
+        let (isolated_phase, shared_phase) =
+            plan.partition(|name| build_dispatch.build_isolation().is_isolated(Some(name)));
 
-        let has_isolated_phase = !isolated_phase.is_empty();
-        let has_shared_phase = !shared_phase.is_empty();
+        let shared_phase_label = (!isolated_phase.is_empty()).then_some(InstallPhase::Shared);
 
         let mut installs = vec![];
         let mut uninstalls = vec![];
 
-        // Execute the isolated-build phase.
-        if has_isolated_phase {
-            let (isolated_installs, isolated_uninstalls) = execute_plan(
-                isolated_phase,
-                None,
+        for (plan, phase) in [(isolated_phase, None), (shared_phase, shared_phase_label)] {
+            if plan.is_empty() {
+                continue;
+            }
+            let (phase_installs, phase_uninstalls) = execute_plan(
+                plan,
+                phase,
                 resolution,
                 build_options,
                 link_mode,
@@ -476,37 +445,8 @@ impl InstallationPlan {
                 preview,
             )
             .await?;
-            installs.extend(isolated_installs);
-            uninstalls.extend(isolated_uninstalls);
-        }
-
-        if has_shared_phase {
-            let (shared_installs, shared_uninstalls) = execute_plan(
-                shared_phase,
-                if has_isolated_phase {
-                    Some(InstallPhase::Shared)
-                } else {
-                    None
-                },
-                resolution,
-                build_options,
-                link_mode,
-                hasher,
-                tags,
-                client,
-                in_flight,
-                concurrency,
-                build_dispatch,
-                cache,
-                venv,
-                logger.as_ref(),
-                installer_metadata,
-                printer,
-                preview,
-            )
-            .await?;
-            installs.extend(shared_installs);
-            uninstalls.extend(shared_uninstalls);
+            installs.extend(phase_installs);
+            uninstalls.extend(phase_uninstalls);
         }
 
         if let Some(compile) = compile {
@@ -794,11 +734,16 @@ fn report_dry_run(
     dry_run: DryRun,
     resolution: &Resolution,
     plan: Plan,
-    modifications: Modifications,
     start: std::time::Instant,
     logger: &dyn InstallLogger,
     printer: Printer,
 ) -> Result<Changelog, Error> {
+    // Nothing to do.
+    if plan.is_empty() {
+        logger.on_check(resolution.len(), start, printer, dry_run)?;
+        return Ok(Changelog::default());
+    }
+
     let Plan {
         cached,
         remote,
@@ -806,25 +751,10 @@ fn report_dry_run(
         extraneous,
     } = plan;
 
-    // If we're in `install` mode, ignore any extraneous distributions.
-    let extraneous = match modifications {
-        Modifications::Sufficient => vec![],
-        Modifications::Exact => extraneous,
-    };
-
-    // Nothing to do.
-    if remote.is_empty() && cached.is_empty() && reinstalls.is_empty() && extraneous.is_empty() {
-        logger.on_check(resolution.len(), start, printer, dry_run)?;
-        return Ok(Changelog::default());
-    }
-
-    // Download, build, and unzip any missing distributions.
-    let wheels = if remote.is_empty() {
-        vec![]
-    } else {
+    // Report any distributions that would need to be prepared.
+    if !remote.is_empty() {
         logger.on_prepare(remote.len(), None, start, printer, dry_run)?;
-        remote
-    };
+    }
 
     // Remove any upgraded or extraneous installations.
     let uninstalls = extraneous.len() + reinstalls.len();
@@ -834,7 +764,7 @@ fn report_dry_run(
     }
 
     // Install the resolved distributions.
-    let installs = wheels.len() + cached.len();
+    let installs = remote.len() + cached.len();
 
     if installs > 0 {
         logger.on_install(installs, start, printer, dry_run)?;
@@ -844,7 +774,7 @@ fn report_dry_run(
         .into_iter()
         .chain(extraneous)
         .map(|dist| ChangedDist::Local(dist.into()));
-    let installed = wheels.into_iter().map(ChangedDist::Remote).chain(
+    let installed = remote.into_iter().map(ChangedDist::Remote).chain(
         cached
             .into_iter()
             .map(|dist| ChangedDist::Local(dist.into())),
