@@ -190,8 +190,7 @@ pub async fn remove(
         }
     }
 
-    // Update the `pypackage.toml` in-memory.
-    let target = target.update(&content, &WorkspaceCache::default())?;
+    let target = target.update(content, &WorkspaceCache::default())?;
 
     // Determine enabled groups and extras
     let default_groups = match &target {
