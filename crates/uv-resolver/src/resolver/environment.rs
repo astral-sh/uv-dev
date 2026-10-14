@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use itertools::Itertools;
+use smallvec::SmallVec;
 use tracing::trace;
 
 use uv_distribution_types::{RequiresPython, RequiresPythonRange};
@@ -587,12 +588,12 @@ impl<'d> Forker<'d> {
     }
 }
 
-/// Fork the resolver based on a `Requires-Python` specifier.
+/// Fork the resolver into at most two environments based on a `Requires-Python` specifier.
 pub(crate) fn fork_version_by_python_requirement(
     requires_python: &VersionSpecifiers,
     python_requirement: &PythonRequirement,
     env: &ResolverEnvironment,
-) -> Vec<ResolverEnvironment> {
+) -> SmallVec<[ResolverEnvironment; 2]> {
     let requires_python = RequiresPython::from_specifiers(requires_python.clone());
     let lower = requires_python.range().lower().clone();
 
@@ -609,7 +610,7 @@ pub(crate) fn fork_version_by_python_requirement(
             python_requirement.target(),
             requires_python,
         );
-        return vec![];
+        return SmallVec::new();
     };
 
     let Kind::Universal {
@@ -620,7 +621,7 @@ pub(crate) fn fork_version_by_python_requirement(
         panic!("resolver must be in universal mode for forking")
     };
 
-    let mut envs = vec![];
+    let mut envs = SmallVec::new();
     for marker in [lower.to_marker_tree(), upper.to_marker_tree()] {
         if !env_marker.is_disjoint(marker) {
             envs.push(env.narrow_environment(marker));
