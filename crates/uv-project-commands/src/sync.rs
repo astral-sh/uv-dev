@@ -596,10 +596,7 @@ impl Outcome<'_> {
     /// Return the [`Lock`] associated with this outcome.
     fn lock(&self) -> &Lock {
         match self {
-            Self::Success(lock) => match lock {
-                LockResult::Changed(_, lock) => lock,
-                LockResult::Unchanged(lock) => lock,
-            },
+            Self::Success(result) => result.lock(),
             Self::Frozen(lock) => lock,
             Self::LockMismatch(_prev, cur, _lock_source) => cur,
         }
