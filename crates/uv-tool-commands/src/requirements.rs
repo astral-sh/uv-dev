@@ -112,24 +112,21 @@ pub(super) async fn resolve_names(
     let client_builder = client_builder.clone().keyring(*keyring_provider);
 
     // Determine the PyTorch backend.
-    let torch_backend = torch_backend
-        .map(|mode| {
-            TorchStrategy::from_mode(
-                mode,
-                interpreter.platform().os(),
-                cuda_driver_version.clone(),
-                *amd_gpu_architecture,
-            )
-        })
-        .transpose()
+    let torch_backend = torch_backend.and_then(|mode| {
+        TorchStrategy::from_mode(
+            mode,
+            interpreter.platform().os(),
+            cuda_driver_version.clone(),
+            *amd_gpu_architecture,
+        )
         .ok()
-        .flatten();
+    });
 
     // Initialize the registry client.
     let client = RegistryClientBuilder::new(client_builder, cache.clone())
         .index_locations(index_locations.clone())
         .index_strategy(*index_strategy)
-        .torch_backend(torch_backend.clone())
+        .torch_backend(torch_backend)
         .markers(interpreter.markers())
         .platform(interpreter.platform())
         .build()?;
