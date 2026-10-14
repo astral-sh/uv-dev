@@ -25100,7 +25100,7 @@ fn lock_dev_dependencies_alias() -> Result<()> {
 
     let lock = context.temp_dir.child("uv.lock");
 
-    // Write a lockfile with `[package.dev-dependencies]`.
+    // Write a lockfile with the legacy `[package.dependency-groups]` spelling.
     lock.write_str(r#"
         version = 1
         revision = 2
@@ -25132,6 +25132,17 @@ fn lock_dev_dependencies_alias() -> Result<()> {
         ]
     "#)?;
 
+    let legacy_lock = context.read("uv.lock");
+    // A frozen consumer must follow the dependency edge stored under the legacy group name.
+    uv_snapshot!(context.filters(), context.export().args(["--frozen", "--offline", "--only-group", "dev", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==2.0.0
+
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    ");
+
     // Re-locking should be a no-op.
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
     exit_code: 0 (success)
@@ -25139,8 +25150,9 @@ fn lock_dev_dependencies_alias() -> Result<()> {
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 2 packages in [TIME]
     ");
+    assert_eq!(context.read("uv.lock"), legacy_lock);
 
-    // If we add a package, re-locking should use `dependency-groups`.
+    // A new resolution writes the canonical `[package.dev-dependencies]` spelling.
     pyproject_toml.write_str(
         r#"
         [project]
