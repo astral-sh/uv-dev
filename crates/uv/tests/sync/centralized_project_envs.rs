@@ -319,23 +319,31 @@ fn sync_centralized_env_reuses_symlinked_workspace() -> Result<()> {
 #[test]
 fn sync_centralized_env_respects_explicit_environments() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    write_project(&context, ">=3.12", &[])?;
+    let wheel_url = url::Url::from_file_path(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+    )
+    .expect("fixture path is absolute");
+    write_project(&context, ">=3.12", &[&format!("ok @ {wheel_url}")])?;
+    let override_environment = context.temp_dir.child("override");
 
     context
         .sync()
+        .arg("--offline")
         .arg("--preview-features")
         .arg("centralized-project-envs")
         .env(EnvVars::UV_PROJECT_ENVIRONMENT, "override")
         .assert()
         .success();
     // `UV_PROJECT_ENVIRONMENT` bypasses centralized environments.
-    assert!(context.temp_dir.child("override").is_dir());
     assert_path_missing(context.temp_dir.child(".venv"));
 
     let active = context.temp_dir.child("active");
     context.venv().arg(active.path()).assert().success();
     context
         .sync()
+        .arg("--offline")
         .arg("--preview-features")
         .arg("centralized-project-envs")
         .arg("--active")
@@ -344,8 +352,17 @@ fn sync_centralized_env_respects_explicit_environments() -> Result<()> {
         .assert()
         .success();
     // `--active` uses `VIRTUAL_ENV` directly.
-    assert!(active.is_dir());
     assert_path_missing(context.temp_dir.child(".venv"));
+
+    for environment in [override_environment, active] {
+        let python = uv_test::venv_bin_path(environment.path())
+            .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+        Command::new(python)
+            .args(["-I", "-c", "import ok; print(ok.__version__, end='')"])
+            .assert()
+            .success()
+            .stdout("1.0.0");
+    }
     Ok(())
 }
 
