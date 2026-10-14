@@ -2,7 +2,11 @@
 
 use std::collections::BTreeMap;
 use std::env::current_dir;
+#[cfg(all(unix, feature = "test-git"))]
+use std::ffi::OsStr;
 use std::fs;
+#[cfg(all(unix, feature = "test-git"))]
+use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
 #[cfg(unix)]
@@ -15,7 +19,7 @@ use std::thread;
 use anyhow::Result;
 #[cfg(all(feature = "test-git", feature = "test-universal"))]
 use anyhow::{Context, anyhow};
-#[cfg(feature = "test-universal")]
+#[cfg(any(feature = "test-universal", all(unix, feature = "test-git")))]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use fs_err::{File, read};
@@ -14807,6 +14811,64 @@ fn git_source_missing_tag() -> Result<()> {
              fatal: couldn't find remote ref refs/tags/missing
     ");
 
+    Ok(())
+}
+
+/// Git must receive the original cache path bytes when cloning a checkout.
+#[test]
+#[cfg(all(unix, feature = "test-git"))]
+fn git_source_non_utf8_cache_path() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_cache_dir(OsStr::from_bytes(b"cache-\xff"))
+        .with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"));
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+    "#})?;
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args(["add", "pyproject.toml"])
+        .assert()
+        .success();
+    Command::new("git")
+        .arg("-C")
+        .arg(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "commit",
+            "-m",
+            "Initial commit",
+        ])
+        .assert()
+        .success();
+
+    let repository_url =
+        Url::from_directory_path(repository.path()).expect("temporary directory has a file URL");
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&format!("example @ git+{repository_url}"))?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in").arg("--offline").arg("--no-header").arg("--no-annotate"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    example @ git+file://[TEMP_DIR]/repository@[COMMIT]
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
     Ok(())
 }
 
