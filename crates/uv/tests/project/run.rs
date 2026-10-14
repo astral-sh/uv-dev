@@ -4848,10 +4848,19 @@ fn run_gui_script_explicit_stdin_unix() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn run_remote_pep723_script() {
+#[tokio::test]
+async fn run_remote_pep723_script() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_python_names();
-    uv_snapshot!(context.filters(), context.run().arg("https://raw.githubusercontent.com/astral-sh/uv/df45b9ac2584824309ff29a6a09421055ad730f6/scripts/uv-run-remote-script-test.py").arg(EnvVars::CI), @"
+    let script = "uv-run-remote-script-test.py";
+    let script_contents = fs_err::read(context.workspace_root.join("scripts").join(script))?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{script}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(script_contents))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.run().arg(format!("{}/{script}", server.uri())).arg(EnvVars::CI), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hello CI, from uv!
@@ -4865,6 +4874,7 @@ fn run_remote_pep723_script() {
      + pygments==2.17.2
      + rich==13.7.1
     ");
+    Ok(())
 }
 
 #[test]
