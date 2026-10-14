@@ -88,15 +88,10 @@ async fn read_exact_or_eof(
     mut buf: &mut [u8],
 ) -> io::Result<usize> {
     let length = buf.len();
-    loop {
+    while !buf.is_empty() {
         match reader.read(buf).await {
             Ok(0) => break,
-            Ok(n) => {
-                buf = &mut buf[n..];
-                if buf.is_empty() {
-                    break;
-                }
-            }
+            Ok(n) => buf = &mut buf[n..],
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(e) => return Err(e),
         }
