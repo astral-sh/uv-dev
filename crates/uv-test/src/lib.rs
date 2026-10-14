@@ -1790,19 +1790,19 @@ impl TestContext {
         }
     }
 
+    /// Create a command for the fixture virtual environment's Python, or the first configured
+    /// interpreter when no environment exists.
     pub fn python_command(&self) -> Command {
-        let mut interpreter = self.interpreter();
-
-        // If there's not a virtual environment, use the first Python interpreter in the context
-        if !interpreter.exists() {
-            interpreter.clone_from(
-                &self
-                    .python_versions
-                    .first()
-                    .expect("At least one Python version is required")
-                    .1,
-            );
-        }
+        let interpreter = match fs_err::symlink_metadata(self.venv.path()) {
+            Ok(_) => self.interpreter(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => self
+                .python_versions
+                .first()
+                .expect("At least one Python version is required")
+                .1
+                .clone(),
+            Err(error) => panic!("Failed to inspect fixture virtual environment: {error}"),
+        };
 
         self.python_command_at(&interpreter)
     }
@@ -2499,6 +2499,8 @@ mod file_read_tests {
 mod python_discovery_tests {
     use std::path::PathBuf;
 
+    use assert_fs::fixture::PathCreateDir;
+
     use super::{TestContext, assert_path_missing};
 
     #[test]
@@ -2506,6 +2508,25 @@ mod python_discovery_tests {
         let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
 
         assert_path_missing(context.temp_dir.join("cache"));
+    }
+
+    #[test]
+    fn python_command_uses_base_only_without_fixture_environment() -> anyhow::Result<()> {
+        let mut context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
+        let base_python = context.temp_dir.join("base-python");
+        context
+            .python_versions
+            .push(("3.12".parse()?, base_python.clone()));
+
+        assert_eq!(context.python_command().get_program(), base_python);
+
+        context.venv.create_dir_all()?;
+        assert_eq!(
+            context.python_command().get_program(),
+            context.interpreter()
+        );
+
+        Ok(())
     }
 }
 
