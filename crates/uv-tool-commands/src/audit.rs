@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 use std::io;
+use std::path::Path;
 
 use anyhow::{Result, bail};
 use rustc_hash::FxHashSet;
@@ -120,66 +121,8 @@ pub async fn audit(
 
         let root = installed_tools.tool_dir(&name);
         let lock_path = root.join("uv.lock");
-        let contents = match fs_err::read_to_string(&lock_path) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if explicit_tool {
-                    bail!(
-                        "Tool `{name}` does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it"
-                    );
-                }
-                warn_user!(
-                    "Skipping tool `{name}` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it"
-                );
-                continue;
-            }
-            Err(error) => {
-                if explicit_tool {
-                    bail!(
-                        "Failed to read the lockfile for tool `{name}` at `{}`: {error}",
-                        lock_path.user_display()
-                    );
-                }
-                warn_user!(
-                    "Skipping tool `{name}` because its lockfile at `{}` could not be read: {error}",
-                    lock_path.user_display()
-                );
-                continue;
-            }
-        };
-        let lock = match Lock::from_toml(&contents) {
-            Ok(lock) => lock,
-            Err(
-                LockParseError::UnsupportedVersion { supported, version }
-                | LockParseError::UnparsableVersion {
-                    supported, version, ..
-                },
-            ) => {
-                if explicit_tool {
-                    bail!(
-                        "The lockfile for tool `{name}` at `{}` uses an unsupported schema version (v{version}, but only v{supported} is supported)",
-                        lock_path.user_display()
-                    );
-                }
-                warn_user!(
-                    "Skipping tool `{name}` because its lockfile at `{}` uses an unsupported schema version (v{version}, but only v{supported} is supported)",
-                    lock_path.user_display()
-                );
-                continue;
-            }
-            Err(LockParseError::Toml(error)) => {
-                if explicit_tool {
-                    bail!(
-                        "Failed to parse the lockfile for tool `{name}` at `{}`: {error}",
-                        lock_path.user_display()
-                    );
-                }
-                warn_user!(
-                    "Skipping tool `{name}` because its lockfile at `{}` is invalid: {error}",
-                    lock_path.user_display()
-                );
-                continue;
-            }
+        let Some(lock) = read_tool_lock(&name, &lock_path, explicit_tool)? else {
+            continue;
         };
 
         let settings = ResolverInstallerSettings::from(
@@ -227,6 +170,75 @@ pub async fn audit(
     }
 
     render_audits(&audits, output_format, printer)
+}
+
+/// Load a tool lockfile, skipping it on failure only when auditing every tool.
+fn read_tool_lock(
+    name: &PackageName,
+    lock_path: &Path,
+    explicit_tool: bool,
+) -> Result<Option<Lock>> {
+    let contents = match fs_err::read_to_string(lock_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            if explicit_tool {
+                bail!(
+                    "Tool `{name}` does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it"
+                );
+            }
+            warn_user!(
+                "Skipping tool `{name}` because it does not have a lockfile; reinstall it with `--preview-features tool-install-locks` to audit it"
+            );
+            return Ok(None);
+        }
+        Err(error) => {
+            if explicit_tool {
+                bail!(
+                    "Failed to read the lockfile for tool `{name}` at `{}`: {error}",
+                    lock_path.user_display()
+                );
+            }
+            warn_user!(
+                "Skipping tool `{name}` because its lockfile at `{}` could not be read: {error}",
+                lock_path.user_display()
+            );
+            return Ok(None);
+        }
+    };
+    match Lock::from_toml(&contents) {
+        Ok(lock) => Ok(Some(lock)),
+        Err(
+            LockParseError::UnsupportedVersion { supported, version }
+            | LockParseError::UnparsableVersion {
+                supported, version, ..
+            },
+        ) => {
+            if explicit_tool {
+                bail!(
+                    "The lockfile for tool `{name}` at `{}` uses an unsupported schema version (v{version}, but only v{supported} is supported)",
+                    lock_path.user_display()
+                );
+            }
+            warn_user!(
+                "Skipping tool `{name}` because its lockfile at `{}` uses an unsupported schema version (v{version}, but only v{supported} is supported)",
+                lock_path.user_display()
+            );
+            Ok(None)
+        }
+        Err(LockParseError::Toml(error)) => {
+            if explicit_tool {
+                bail!(
+                    "Failed to parse the lockfile for tool `{name}` at `{}`: {error}",
+                    lock_path.user_display()
+                );
+            }
+            warn_user!(
+                "Skipping tool `{name}` because its lockfile at `{}` is invalid: {error}",
+                lock_path.user_display()
+            );
+            Ok(None)
+        }
+    }
 }
 
 fn render_audits(
