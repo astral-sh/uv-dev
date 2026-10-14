@@ -6,6 +6,7 @@ use std::str::FromStr;
 
 use arcstr::ArcStr;
 use itertools::Itertools;
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use version_ranges::Ranges;
 
@@ -1366,24 +1367,24 @@ impl MarkerTree {
     /// The operator provided to the function is guaranteed to be
     /// `MarkerOperator::Equal` or `MarkerOperator::NotEqual`.
     pub fn visit_extras(self, mut f: impl FnMut(MarkerOperator, &ExtraName)) {
+        fn visit_distinct<T>(
+            edges: impl Iterator<Item = (T, MarkerTree)>,
+            f: &mut impl FnMut(MarkerOperator, &ExtraName),
+        ) {
+            let mut seen = FxHashSet::default();
+            for (_, tree) in edges {
+                if seen.insert(tree) {
+                    imp(tree, f);
+                }
+            }
+        }
+
         fn imp(tree: MarkerTree, f: &mut impl FnMut(MarkerOperator, &ExtraName)) {
             match tree.kind() {
                 MarkerTreeKind::True | MarkerTreeKind::False => {}
-                MarkerTreeKind::Version(kind) => {
-                    for (tree, _) in simplify::collect_edges(kind.edges()) {
-                        imp(tree, f);
-                    }
-                }
-                MarkerTreeKind::VersionString(kind) => {
-                    for (tree, _) in simplify::collect_edges(kind.edges()) {
-                        imp(tree, f);
-                    }
-                }
-                MarkerTreeKind::String(kind) => {
-                    for (tree, _) in simplify::collect_edges(kind.children()) {
-                        imp(tree, f);
-                    }
-                }
+                MarkerTreeKind::Version(kind) => visit_distinct(kind.edges(), f),
+                MarkerTreeKind::VersionString(kind) => visit_distinct(kind.edges(), f),
+                MarkerTreeKind::String(kind) => visit_distinct(kind.children(), f),
                 MarkerTreeKind::In(kind) => {
                     for (_, tree) in kind.children() {
                         imp(tree, f);
