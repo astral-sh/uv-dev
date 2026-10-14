@@ -3608,6 +3608,36 @@ fn run_stdin() -> Result<()> {
 }
 
 #[test]
+#[cfg(windows)]
+fn run_stdin_non_utf8() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    let script = context.temp_dir.child("script.py");
+    script.write_binary(&[0xff])?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .current_dir(&project)
+        .arg("-")
+        .stdin(std::fs::File::open(script)?), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Script read from stdin is not valid UTF-8
+      cause: invalid utf-8 sequence of 1 bytes from index 0
+    ");
+
+    assert!(!project.child(".venv").exists());
+    assert!(!project.child("uv.lock").exists());
+
+    Ok(())
+}
+
+#[test]
 fn run_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -3707,8 +3737,13 @@ fn run_module() {
 #[test]
 fn run_module_stdin() {
     let context = uv_test::test_context!("3.12");
+    let mut command = context.run();
+    command.args(["-m", "-"]);
+    // Reading a directory fails, so the module error must be raised before accessing stdin.
+    #[cfg(unix)]
+    command.stdin(std::fs::File::open(context.temp_dir.path()).unwrap());
 
-    uv_snapshot!(context.filters(), context.run().arg("-m").arg("-"), @"
+    uv_snapshot!(context.filters(), command, @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Cannot run a Python module from stdin
