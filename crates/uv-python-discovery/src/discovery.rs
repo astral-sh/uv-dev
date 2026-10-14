@@ -538,9 +538,10 @@ fn python_executables_from_search_path<'a>(
                 })
                 .chain(
                     iter::once_with(move || {
-                        find_all_minor(implementation, version, &minor_version_directory)
-                            .filter(|path| !is_windows_store_shim(path))
-                            .collect::<Vec<_>>()
+                        let mut paths =
+                            find_all_minor(implementation, version, &minor_version_directory);
+                        paths.retain(|path| !is_windows_store_shim(path));
+                        paths
                     })
                     .filter(|paths| !paths.is_empty()),
                 )
@@ -561,7 +562,7 @@ fn find_all_minor(
     implementation: Option<&ImplementationName>,
     version_request: &VersionRequest,
     dir: &Path,
-) -> impl Iterator<Item = PathBuf> + use<> {
+) -> Vec<PathBuf> {
     match version_request {
         &VersionRequest::Any
         | VersionRequest::Default
@@ -581,7 +582,7 @@ fn find_all_minor(
                 ))
                 .unwrap()
             };
-            let all_minors = fs_err::read_dir(dir)
+            fs_err::read_dir(dir)
                 .into_iter()
                 .flatten()
                 .flatten()
@@ -612,13 +613,12 @@ fn find_all_minor(
                     true
                 })
                 .filter(|path| is_executable(path))
-                .collect::<Vec<_>>();
-            Either::Left(all_minors.into_iter())
+                .collect()
         }
         VersionRequest::MajorMinor(_, _, _)
         | VersionRequest::MajorMinorPatch(_, _, _, _)
         | VersionRequest::MajorMinorPrerelease(_, _, _, _)
-        | VersionRequest::MajorMinorPatchPrerelease(_, _, _, _, _) => Either::Right(iter::empty()),
+        | VersionRequest::MajorMinorPatchPrerelease(_, _, _, _, _) => Vec::new(),
     }
 }
 
