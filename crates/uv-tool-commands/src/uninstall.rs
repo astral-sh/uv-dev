@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use anyhow::{Result, bail};
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use owo_colors::OwoColorize;
 use tracing::debug;
 
@@ -47,66 +47,48 @@ async fn do_uninstall(
     names: Vec<PackageName>,
     printer: Printer,
 ) -> Result<()> {
-    let mut dangling = false;
-    let mut entrypoints = if names.is_empty() {
-        let mut entrypoints = vec![];
-        for (name, receipt) in installed_tools.tools()? {
-            let Ok(receipt) = receipt else {
-                // If the tool is not installed properly, attempt to remove the environment anyway.
-                match installed_tools.remove_environment(&name) {
-                    Ok(()) => {
-                        dangling = true;
-                        writeln!(
-                            printer.stderr(),
-                            "Removed dangling environment for `{name}`"
-                        )?;
-                        continue;
-                    }
-                    Err(err)
-                        if err
-                            .as_io_error()
-                            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
-                    {
-                        bail!("`{name}` is not installed");
-                    }
-                    Err(err) => {
-                        return Err(err.into());
-                    }
-                }
-            };
-
-            entrypoints.extend(uninstall_tool(&name, &receipt, installed_tools).await?);
-        }
-        entrypoints
+    // `--all` removes malformed environments; named tools only fall back for missing receipts.
+    let tools = if names.is_empty() {
+        Either::Left(
+            installed_tools
+                .tools()?
+                .into_iter()
+                .map(|(name, receipt)| Ok((name, receipt.ok()))),
+        )
     } else {
-        let mut entrypoints = vec![];
-        for name in names {
-            let Some(receipt) = installed_tools.get_tool_receipt(&name)? else {
-                // If the tool is not installed properly, attempt to remove the environment anyway.
-                match installed_tools.remove_environment(&name) {
-                    Ok(()) => {
-                        dangling = true;
-                        writeln!(
-                            printer.stderr(),
-                            "Removed dangling environment for `{name}`"
-                        )?;
-                        continue;
-                    }
-                    Err(uv_tool::Error::VirtualEnvError(uv_virtualenv::Error::Io(err)))
-                        if err.kind() == std::io::ErrorKind::NotFound =>
-                    {
-                        bail!("`{name}` is not installed");
-                    }
-                    Err(err) => {
-                        return Err(err.into());
-                    }
-                }
-            };
-
-            entrypoints.extend(uninstall_tool(&name, &receipt, installed_tools).await?);
-        }
-        entrypoints
+        Either::Right(names.into_iter().map(|name| {
+            installed_tools
+                .get_tool_receipt(&name)
+                .map(|receipt| (name, receipt))
+        }))
     };
+    let mut dangling = false;
+    let mut entrypoints = Vec::new();
+    for tool in tools {
+        let (name, receipt) = tool?;
+        let Some(receipt) = receipt else {
+            match installed_tools.remove_environment(&name) {
+                Ok(()) => {
+                    dangling = true;
+                    writeln!(
+                        printer.stderr(),
+                        "Removed dangling environment for `{name}`"
+                    )?;
+                    continue;
+                }
+                Err(err)
+                    if err
+                        .as_io_error()
+                        .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    bail!("`{name}` is not installed");
+                }
+                Err(err) => return Err(err.into()),
+            }
+        };
+
+        entrypoints.extend(uninstall_tool(&name, &receipt, installed_tools).await?);
+    }
     entrypoints.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
     if entrypoints.is_empty() {
