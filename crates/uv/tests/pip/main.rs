@@ -29,6 +29,9 @@ mod pip_sync_archive;
 mod pip_sync_cache;
 
 #[cfg(feature = "test-python")]
+mod pip_sync_hashes;
+
+#[cfg(feature = "test-python")]
 mod pip_sync_markers;
 
 #[cfg(feature = "test-python")]
