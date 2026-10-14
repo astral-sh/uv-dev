@@ -6,6 +6,7 @@ mod error;
 mod pipreqs;
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fmt::Formatter;
 use std::fmt::Write;
@@ -1147,20 +1148,20 @@ impl PythonRunner {
     }
 
     async fn run_command(mut command: Command, printer: Printer) -> io::Result<PythonRunnerOutput> {
-        /// Read and capture lines from a process stream.
+        /// Read and print lines from a process stream.
         async fn read_from(
             reader: impl tokio::io::AsyncRead + Unpin,
             printer: Printer,
-        ) -> io::Result<Vec<String>> {
+            mut capture: impl FnMut(Cow<'_, str>),
+        ) -> io::Result<()> {
             let mut reader = tokio::io::BufReader::new(reader).split(b'\n');
-            let mut lines = Vec::new();
             while let Some(line_buf) = reader.next_segment().await? {
                 let line_buf = line_buf.strip_suffix(b"\r").unwrap_or(&line_buf);
-                let line = String::from_utf8_lossy(line_buf).into_owned();
+                let line = String::from_utf8_lossy(line_buf);
                 printer.print_line(&line);
-                lines.push(line);
+                capture(line);
             }
-            Ok(lines)
+            Ok(())
         }
 
         let mut child = command
@@ -1173,20 +1174,32 @@ impl PythonRunner {
         let stdout_reader = child.stdout.take().unwrap();
         let stderr_reader = child.stderr.take().unwrap();
 
-        // Asynchronously read from the in-memory pipes.
-        let (stdout, stderr) = tokio::join!(
-            read_from(stdout_reader, printer),
-            read_from(stderr_reader, printer),
+        // Only debug diagnostics include full output. Other modes need the stderr tail for hints.
+        let capture_all = printer == Printer::Debug;
+        let mut stdout = Vec::new();
+        let mut stderr = VecDeque::new();
+        let (stdout_result, stderr_result) = tokio::join!(
+            read_from(stdout_reader, printer, |line| {
+                if capture_all {
+                    stdout.push(line.into_owned());
+                }
+            }),
+            read_from(stderr_reader, printer, |line| {
+                if !capture_all && stderr.len() == error::HINT_LINES {
+                    stderr.pop_front();
+                }
+                stderr.push_back(line.into_owned());
+            }),
         );
-        let stdout = stdout?;
-        let stderr = stderr?;
+        stdout_result?;
+        stderr_result?;
 
         // Wait for the child process to finish.
         let status = child.wait().await?;
 
         Ok(PythonRunnerOutput {
             stdout,
-            stderr,
+            stderr: stderr.into(),
             status,
         })
     }
@@ -1244,6 +1257,28 @@ mod tests {
     use tokio::process::Command;
 
     use super::{Printer, PythonRunner};
+
+    #[tokio::test]
+    async fn captured_build_output_matches_verbosity() -> Result<(), Box<dyn std::error::Error>> {
+        for (printer, stdout, first_stderr, stderr_lines) in [
+            (Printer::Debug, Some("stdout"), "0", 11),
+            (Printer::Quiet, None, "1", 10),
+        ] {
+            let mut command = Command::new("/bin/sh");
+            command.args([
+                "-c",
+                "printf 'stdout\\n'; printf '%s\\n' 0 1 2 3 4 5 6 7 8 9 10 >&2",
+            ]);
+            let output = PythonRunner::run_command(command, printer).await?;
+            assert_eq!(output.stdout.first().map(String::as_str), stdout);
+            assert_eq!(
+                output.stderr.first().map(String::as_str),
+                Some(first_stderr)
+            );
+            assert_eq!(output.stderr.len(), stderr_lines);
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn cancelled_build_kills_direct_child() -> Result<(), Box<dyn std::error::Error>> {
