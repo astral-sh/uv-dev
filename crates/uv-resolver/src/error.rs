@@ -1028,8 +1028,8 @@ fn restate_available_versions(
             let statement = || {
                 DerivationTree::External(External::NoVersions(package.clone(), unlisted.clone()))
             };
-            let carry = |cause: ErrorTree| {
-                let carried = ruled_out_versions(&package, &cause).union(&unlisted);
+            let carry = |cause: ErrorTree, ruled_out: &Range<Version>| {
+                let carried = ruled_out.union(&unlisted);
                 DerivationTree::Derived(Derived {
                     terms: Map::from_iter([(package.clone(), Term::Positive(carried))]),
                     shared_id: None,
@@ -1066,9 +1066,9 @@ fn restate_available_versions(
                 });
             }
             if starts_lower(&first, &second) {
-                derived_tree(metadata, carry(cause1), cause2)
+                derived_tree(metadata, carry(cause1, &first), cause2)
             } else {
-                derived_tree(metadata, cause1, carry(cause2))
+                derived_tree(metadata, cause1, carry(cause2, &second))
             }
         },
     )
@@ -1133,17 +1133,19 @@ fn unlisted_versions(
 /// Whether the first version set starts below the second, treating an empty set as starting above
 /// every other.
 fn starts_lower(first: &Range<Version>, second: &Range<Version>) -> bool {
-    let lowest = |versions: &Range<Version>| {
-        versions.bounding_range().map(|(lower, _)| match lower {
-            Bound::Unbounded => None,
-            Bound::Included(version) | Bound::Excluded(version) => Some(version.clone()),
-        })
+    let Some((first, _)) = first.bounding_range() else {
+        return false;
     };
-    match (lowest(first), lowest(second)) {
-        // An unbounded start sorts below every version.
-        (Some(first), Some(second)) => first <= second,
-        (Some(_), None) => true,
-        (None, _) => false,
+    let Some((second, _)) = second.bounding_range() else {
+        return true;
+    };
+    match (first, second) {
+        (Bound::Unbounded, _) => true,
+        (_, Bound::Unbounded) => false,
+        (
+            Bound::Included(first) | Bound::Excluded(first),
+            Bound::Included(second) | Bound::Excluded(second),
+        ) => first <= second,
     }
 }
 
