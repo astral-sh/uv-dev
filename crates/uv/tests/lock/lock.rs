@@ -22864,7 +22864,15 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
             name = "dependency"
             version = "1.0.0"
             requires-python = ">=3.12"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
             "#})?;
+    context
+        .temp_dir
+        .child("dependency/src/dependency/__init__.py")
+        .touch()?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 0 (success)
@@ -22897,6 +22905,7 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.sync()
         .arg("--frozen")
+        .arg("--offline")
         .arg("--extra")
         .arg("original"), @"
     exit_code: 0 (success)
