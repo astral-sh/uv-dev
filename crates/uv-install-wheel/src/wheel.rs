@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::io;
@@ -779,22 +780,9 @@ pub(crate) fn install_data(
         let entry = entry?;
         let path = entry.path();
 
-        match path.file_name().and_then(|name| name.to_str()) {
-            Some("data") => {
-                trace!(
-                    ?dist_name,
-                    "Installing data/data to `{}`",
-                    layout.scheme.data.user_display()
-                );
-                // Move the content of the folder to the root of the venv
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.data,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
-            }
+        let kind = path.file_name().and_then(|name| name.to_str());
+        let (kind, target): (&str, Cow<'_, Path>) = match kind {
+            Some(kind @ "data") => (kind, Cow::Borrowed(&layout.scheme.data)),
             Some("scripts") => {
                 trace!(
                     ?dist_name,
@@ -837,57 +825,33 @@ pub(crate) fn install_data(
                         &mut rename_or_copy,
                     )?;
                 }
+                continue;
             }
-            Some("headers") => {
-                let target_path = layout.scheme.include.join(dist_name.as_str());
-                trace!(
-                    ?dist_name,
-                    "Installing data/headers to `{}`",
-                    target_path.user_display()
-                );
-                move_folder_recorded(
-                    &path,
-                    &target_path,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
-            }
-            Some("purelib") => {
-                trace!(
-                    ?dist_name,
-                    "Installing data/purelib to `{}`",
-                    layout.scheme.purelib.user_display()
-                );
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.purelib,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
-            }
-            Some("platlib") => {
-                trace!(
-                    ?dist_name,
-                    "Installing data/platlib to `{}`",
-                    layout.scheme.platlib.user_display()
-                );
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.platlib,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
-            }
+            Some(kind @ "headers") => (
+                kind,
+                Cow::Owned(layout.scheme.include.join(dist_name.as_str())),
+            ),
+            Some(kind @ "purelib") => (kind, Cow::Borrowed(&layout.scheme.purelib)),
+            Some(kind @ "platlib") => (kind, Cow::Borrowed(&layout.scheme.platlib)),
             _ => {
                 return Err(Error::InvalidWheel(format!(
                     "Unknown wheel data type: {}",
                     entry.file_name().display()
                 )));
             }
-        }
+        };
+        trace!(
+            ?dist_name,
+            "Installing data/{kind} to `{}`",
+            target.as_ref().user_display()
+        );
+        move_folder_recorded(
+            &path,
+            target.as_ref(),
+            &layout.scheme.scripts,
+            site_packages,
+            record,
+        )?;
     }
     Ok(())
 }
