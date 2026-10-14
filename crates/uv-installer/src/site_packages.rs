@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::fmt::Write;
 use std::iter::{Flatten, once};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -734,13 +735,15 @@ impl Diagnostic for SitePackagesDiagnostic {
                 "The package `{package}` requires `{requirement}`, but `{version}` is installed"
             ),
             Self::DuplicatePackage { package, paths } => {
-                let mut paths = paths.clone();
+                let mut paths = paths.iter().collect::<Vec<_>>();
                 paths.sort();
-                format!(
-                    "The package `{package}` has multiple installed distributions: {}",
-                    paths.iter().fold(String::new(), |acc, path| acc
-                        + &format!("\n  - {}", path.display()))
-                )
+                let mut message =
+                    format!("The package `{package}` has multiple installed distributions: ");
+                for path in paths {
+                    write!(message, "\n  - {}", path.display())
+                        .expect("writing to a String cannot fail");
+                }
+                message
             }
         }
     }
