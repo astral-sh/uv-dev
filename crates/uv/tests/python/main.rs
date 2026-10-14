@@ -3,6 +3,9 @@
 #[cfg(feature = "test-python-managed")]
 mod build_upgrade;
 
+#[cfg(feature = "test-python")]
+mod fixtures;
+
 #[cfg(feature = "test-python-managed")]
 mod managed_venv;
 

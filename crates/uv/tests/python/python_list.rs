@@ -1,8 +1,6 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-#[cfg(feature = "test-python")]
-use uv_platform::{Arch, Os};
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 
@@ -14,6 +12,9 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
+
+#[cfg(feature = "test-python")]
+use super::fixtures::interpreter_platform;
 
 #[test]
 fn python_list_default_arch() {
@@ -58,7 +59,7 @@ fn python_list_default_arch() {
 
 #[test]
 #[cfg(feature = "test-python")]
-fn python_list() {
+fn python_list() -> Result<()> {
     let mut context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
         .with_filtered_python_keys()
@@ -112,10 +113,9 @@ fn python_list() {
     cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
     ");
 
-    // Request CPython 3.12 for the current platform
-    let os = Os::from_env();
-    let arch = Arch::from_env();
-
+    // Request CPython 3.12 for the fixture interpreter's platform.
+    let (_, python) = &context.python_versions[1];
+    let (os, arch) = interpreter_platform(&context, python)?;
     uv_snapshot!(context.filters(), context.python_list().arg(format!("cpython-3.12-{os}-{arch}")), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -143,6 +143,7 @@ fn python_list() {
     ----- stdout -----
     cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
     ");
+    Ok(())
 }
 
 #[test]
