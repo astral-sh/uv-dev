@@ -322,11 +322,25 @@ pub struct BuildBackendError {
     stderr: Vec<String>,
 }
 
-impl Display for BuildBackendError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl BuildBackendError {
+    /// Write the backend error and return whether any command output was written.
+    fn fmt_message_and_output(&self, f: &mut Formatter<'_>) -> Result<bool, fmt::Error> {
         write!(f, "{} ({})", self.message, self.exit_code)?;
 
-        if fmt_command_output(f, &self.stdout, &self.stderr)? {
+        let mut non_empty = false;
+        for (label, lines) in [("[stdout]", &self.stdout), ("[stderr]", &self.stderr)] {
+            if lines.iter().any(|line| !line.trim().is_empty()) {
+                write!(f, "\n\n{}\n{}", label.red(), lines.iter().format("\n"))?;
+                non_empty = true;
+            }
+        }
+        Ok(non_empty)
+    }
+}
+
+impl Display for BuildBackendError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.fmt_message_and_output(f)? {
             writeln!(f)?;
         }
 
@@ -336,36 +350,15 @@ impl Display for BuildBackendError {
 
 #[derive(Debug, Error)]
 pub struct MissingHeaderError {
-    message: String,
-    exit_code: ExitStatus,
-    stdout: Vec<String>,
-    stderr: Vec<String>,
+    backend: BuildBackendError,
     cause: MissingHeaderCause,
 }
 
 impl Display for MissingHeaderError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.message, self.exit_code)?;
-
-        fmt_command_output(f, &self.stdout, &self.stderr)?;
+        self.backend.fmt_message_and_output(f)?;
         Ok(())
     }
-}
-
-/// Write non-empty command output streams and return whether any output was written.
-fn fmt_command_output(
-    f: &mut Formatter<'_>,
-    stdout: &[String],
-    stderr: &[String],
-) -> Result<bool, fmt::Error> {
-    let mut non_empty = false;
-    for (label, lines) in [("[stdout]", stdout), ("[stderr]", stderr)] {
-        if lines.iter().any(|line| !line.trim().is_empty()) {
-            write!(f, "\n\n{}\n{}", label.red(), lines.iter().format("\n"))?;
-            non_empty = true;
-        }
-    }
-    Ok(non_empty)
 }
 
 impl Error {
@@ -383,13 +376,16 @@ impl Error {
             BuildOutput::Stderr | BuildOutput::Quiet => (Vec::new(), Vec::new()),
             BuildOutput::Debug => (output.stdout, output.stderr),
         };
+        let backend = BuildBackendError {
+            message,
+            exit_code: output.status,
+            stdout,
+            stderr,
+        };
 
         if let Some(missing_library) = missing_library {
             return Self::MissingHeader(Box::new(MissingHeaderError {
-                message,
-                exit_code: output.status,
-                stdout,
-                stderr,
+                backend,
                 cause: MissingHeaderCause {
                     missing_library,
                     package_name: name.cloned(),
@@ -399,12 +395,7 @@ impl Error {
             }));
         }
 
-        Self::BuildBackend(BuildBackendError {
-            message,
-            exit_code: output.status,
-            stdout,
-            stderr,
-        })
+        Self::BuildBackend(backend)
     }
 }
 
