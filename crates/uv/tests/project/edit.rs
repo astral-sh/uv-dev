@@ -13922,30 +13922,13 @@ async fn add_redirect_cross_origin() -> Result<()> {
     })?;
 
     let redirect_server = MockServer::start().await;
-    let proxy_base = proxy.url("/basic-auth/simple/");
-
-    // Only an authenticated origin request can exercise credential stripping on the redirect.
-    Mock::given(method("GET"))
-        .and(path("/anyio/"))
-        .and(basic_auth("public", "heron"))
-        .respond_with(move |req: &wiremock::Request| {
-            let redirect_url = redirect_url_to_base(req, &proxy_base);
-            ResponseTemplate::new(302).insert_header("Location", &redirect_url)
-        })
-        .with_priority(1)
-        .expect(1..)
-        .mount(&redirect_server)
-        .await;
-    Mock::given(method("GET"))
-        .respond_with(
-            ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Basic realm=\"origin\""),
-        )
-        .mount(&redirect_server)
-        .await;
-
-    let mut redirect_url = SafeUrl::parse(&redirect_server.uri())?;
-    let _ = redirect_url.set_username("public");
-    let _ = redirect_url.set_password(Some("heron"));
+    let redirect_url = mount_authenticated_redirect(
+        &redirect_server,
+        proxy.url("/basic-auth/simple/"),
+        "public",
+        "heron",
+    )
+    .await;
 
     uv_snapshot!(context.filters(), context.add().arg("--default-index").arg(redirect_url.as_str()).arg("anyio"), @"
     exit_code: 1 (failure)
@@ -14094,18 +14077,14 @@ async fn pip_install_redirect_with_netrc_cross_origin() -> Result<()> {
     ))?;
 
     let redirect_server = MockServer::start().await;
-    let proxy_base = proxy.url("/basic-auth/simple/");
-
-    Mock::given(method("GET"))
-        .respond_with(move |req: &wiremock::Request| {
-            let redirect_url = redirect_url_to_base(req, &proxy_base);
-            ResponseTemplate::new(302).insert_header("Location", &redirect_url)
-        })
-        .mount(&redirect_server)
-        .await;
-
-    let mut redirect_url = SafeUrl::parse(&redirect_server.uri())?;
-    let _ = redirect_url.set_username("public");
+    // The origin credentials cannot authenticate to the target, so success requires netrc.
+    let redirect_url = mount_authenticated_redirect(
+        &redirect_server,
+        proxy.url("/basic-auth/simple/"),
+        "origin",
+        "origin-password",
+    )
+    .await;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio")
@@ -14127,6 +14106,37 @@ async fn pip_install_redirect_with_netrc_cross_origin() -> Result<()> {
     context.assert_command("import anyio").success();
 
     Ok(())
+}
+
+async fn mount_authenticated_redirect(
+    server: &MockServer,
+    destination_base: String,
+    username: &str,
+    password: &str,
+) -> SafeUrl {
+    Mock::given(method("GET"))
+        .and(basic_auth(username, password))
+        .respond_with(move |req: &wiremock::Request| {
+            let destination = redirect_url_to_base(req, &destination_base);
+            ResponseTemplate::new(302).insert_header("Location", &destination)
+        })
+        .with_priority(1)
+        .expect(1..)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Basic realm=\"origin\""),
+        )
+        .mount(server)
+        .await;
+
+    let mut url = SafeUrl::parse(&server.uri()).expect("mock server URI is valid");
+    url.set_username(username)
+        .expect("HTTP URL supports a username");
+    url.set_password(Some(password))
+        .expect("HTTP URL supports a password");
+    url
 }
 
 fn redirect_url_to_base(req: &wiremock::Request, base: &str) -> String {
