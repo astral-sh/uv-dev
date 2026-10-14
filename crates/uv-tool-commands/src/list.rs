@@ -185,63 +185,61 @@ pub async fn list(
             let Some(latest) = latest.get(&name).filter(|latest| *latest > &version) else {
                 continue;
             };
-            format!(" [latest: {latest}]")
+            Some(latest)
         } else {
-            String::new()
+            None
         };
 
-        let version_specifier = if show_version_specifiers {
-            format_annotation(
+        let mut summary = format!("{name} v{version}");
+        if show_version_specifiers {
+            write_annotation(
+                &mut summary,
                 "required",
                 tool.requirements()
                     .iter()
                     .filter(|req| req.name == name)
                     .map(|req| req.source.to_string())
                     .filter(|source| !source.is_empty()),
-            )
-        } else {
-            String::new()
-        };
+            )?;
+        }
 
-        let extra_requirements = if show_extras {
-            format_annotation(
+        if show_extras {
+            write_annotation(
+                &mut summary,
                 "extras",
                 tool.requirements()
                     .iter()
                     .filter(|req| req.name == name)
                     .flat_map(|req| req.extras.iter()),
-            )
-        } else {
-            String::new()
-        };
+            )?;
+        }
 
-        let python_version = if show_python {
-            let interpreter = tool_env.environment().interpreter();
-            let implementation = LenientImplementationName::from(interpreter.implementation_name());
-            format!(
-                " [{} {}]",
-                implementation.pretty(),
-                interpreter.python_full_version()
-            )
-        } else {
-            String::new()
-        };
-
-        let with_requirements = if show_with {
-            format_annotation(
+        if show_with {
+            write_annotation(
+                &mut summary,
                 "with",
                 tool.requirements()
                     .iter()
                     .filter(|req| req.name != name)
                     .map(|req| format!("{}{}", req.name, req.source)),
-            )
-        } else {
-            String::new()
-        };
+            )?;
+        }
 
-        let summary = format!(
-            "{name} v{version}{version_specifier}{extra_requirements}{with_requirements}{python_version}{latest_version}"
-        );
+        if show_python {
+            let interpreter = tool_env.environment().interpreter();
+            let implementation = LenientImplementationName::from(interpreter.implementation_name());
+            write!(
+                summary,
+                " [{} {}]",
+                implementation.pretty(),
+                interpreter.python_full_version()
+            )?;
+        }
+
+        if let Some(latest) = latest_version {
+            write!(summary, " [latest: {latest}]")?;
+        }
+
         if show_paths {
             writeln!(
                 printer.stdout(),
@@ -266,12 +264,15 @@ pub async fn list(
     Ok(ExitStatus::Success)
 }
 
-/// Format a nonempty list of values as a tool annotation.
-fn format_annotation<T: std::fmt::Display>(label: &str, values: impl Iterator<Item = T>) -> String {
+/// Append a nonempty list of values as a tool annotation.
+fn write_annotation<T: std::fmt::Display>(
+    output: &mut String,
+    label: &str,
+    values: impl Iterator<Item = T>,
+) -> std::fmt::Result {
     let mut values = values.peekable();
-    if values.peek().is_none() {
-        String::new()
-    } else {
-        format!(" [{label}: {}]", values.format(", "))
+    if values.peek().is_some() {
+        write!(output, " [{label}: {}]", values.format(", "))?;
     }
+    Ok(())
 }
