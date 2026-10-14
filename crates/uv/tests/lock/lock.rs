@@ -35308,13 +35308,13 @@ fn lock_dynamic_built_cache() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
+    let initial_lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            initial_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -35349,26 +35349,11 @@ fn lock_dynamic_built_cache() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "project"
-        source = { editable = "." }
-        "#
-        );
-    });
+    assert_eq!(
+        context.read("uv.lock"),
+        initial_lock,
+        "building the project must not affect its dynamically versioned lock entry"
+    );
 
     Ok(())
 }
