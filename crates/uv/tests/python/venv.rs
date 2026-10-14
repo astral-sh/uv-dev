@@ -31,7 +31,7 @@ fn assert_no_distutils_patch(site_packages: &Path) {
 }
 
 #[test]
-fn create_venv() {
+fn create_venv() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a virtual environment at `.venv`.
@@ -48,6 +48,8 @@ fn create_venv() {
     );
 
     context.venv.assert(predicates::path::is_dir());
+    let marker = context.venv.child("original-environment.txt");
+    marker.write_str("original environment\n")?;
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -63,6 +65,7 @@ fn create_venv() {
     hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
     "
     );
+    marker.assert("original environment\n");
 
     // Create a virtual environment at the same location using `--clear`,
     // which should replace it.
@@ -80,6 +83,8 @@ fn create_venv() {
     );
 
     context.venv.assert(predicates::path::is_dir());
+    assert_path_missing(marker);
+    Ok(())
 }
 
 #[test]
