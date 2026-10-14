@@ -3484,6 +3484,8 @@ fn assert_matching_index_settings(named: &str, explicit: &str, index: &str, case
     assert_eq!(named, explicit, "{case}");
 }
 
+type SettingsCommand = (&'static str, fn(&TestContext) -> Command);
+
 /// Named index arguments must resolve identically to their explicit CLI spellings.
 #[test]
 #[cfg_attr(
@@ -3532,7 +3534,7 @@ fn index_by_name() -> anyhow::Result<()> {
         assert_matching_index_settings(&named, &explicit, "example.invalid", argument);
     }
 
-    let commands: [(&str, fn(&TestContext) -> Command); 5] = [
+    let commands: [SettingsCommand; 5] = [
         ("lock", TestContext::lock),
         ("sync", TestContext::sync),
         ("upgrade", TestContext::upgrade),
@@ -3754,7 +3756,7 @@ fn tool_index_by_name() -> anyhow::Result<()> {
         default = true
     "#})?;
 
-    let tools: [(&str, fn(&TestContext) -> Command); 3] = [
+    let tools: [SettingsCommand; 3] = [
         ("run", TestContext::tool_run),
         ("install", TestContext::tool_install),
         ("upgrade", TestContext::tool_upgrade),
