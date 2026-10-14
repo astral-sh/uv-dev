@@ -1710,48 +1710,29 @@ impl<'a> PrefixMatch<'a> {
     /// Prefix matches are desugared to (e.g.) `>=2.4.dev0,<2.5.dev0`, but we want to render them
     /// as `==2.4.*` in error messages.
     pub(crate) fn from_range(lower: Bound<&'a Version>, upper: Bound<&'a Version>) -> Option<Self> {
-        let Bound::Included(lower) = lower else {
+        let (Bound::Included(lower), Bound::Excluded(upper)) = (lower, upper) else {
             return None;
         };
-        let Bound::Excluded(upper) = upper else {
-            return None;
-        };
-        if lower.is_pre() || lower.is_post() || lower.is_local() {
-            return None;
-        }
-        if upper.is_pre() || upper.is_post() || upper.is_local() {
-            return None;
-        }
-        if lower.dev() != Some(0) {
-            return None;
-        }
-        if upper.dev() != Some(0) {
-            return None;
-        }
-        if lower.release().len() != upper.release().len() {
-            return None;
-        }
-
-        // All segments should be the same, except the last one, which should be incremented.
-        let num_segments = lower.release().len();
-        for (i, (lower, upper)) in lower
-            .release()
-            .iter()
-            .zip(upper.release().iter())
-            .enumerate()
-        {
-            if i == num_segments - 1 {
-                if lower + 1 != *upper {
-                    return None;
-                }
-            } else {
-                if lower != upper {
-                    return None;
-                }
+        for version in [lower, upper] {
+            if version.is_pre()
+                || version.is_post()
+                || version.is_local()
+                || version.dev() != Some(0)
+            {
+                return None;
             }
         }
 
-        Some(PrefixMatch { version: lower })
+        // All segments should be the same, except the last one, which should be incremented.
+        let lower_release = lower.release();
+        let upper_release = upper.release();
+        let (lower_last, lower_prefix) = lower_release.split_last()?;
+        let (upper_last, upper_prefix) = upper_release.split_last()?;
+        if lower_prefix != upper_prefix || lower_last + 1 != *upper_last {
+            return None;
+        }
+
+        Some(Self { version: lower })
     }
 }
 
