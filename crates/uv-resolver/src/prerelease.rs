@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 
-use rustc_hash::FxHashMap;
 use uv_configuration::{Prerelease, PrereleaseMode, specifier_opts_into_prereleases};
 use uv_distribution_types::{Requirement, RequirementSource};
 use uv_normalize::PackageName;
@@ -8,70 +7,31 @@ use uv_normalize::PackageName;
 use crate::resolver::ForkSet;
 use crate::{DependencyMode, Manifest, ResolverEnvironment};
 
-/// Like [`PrereleaseMode`], but with any additional information required to select a candidate,
-/// like the set of direct dependencies.
+/// The configured pre-release modes and the requirements eligible for explicit opt-in.
 #[derive(Debug, Clone)]
 pub(crate) struct PrereleaseStrategy {
-    default: PrereleasePolicy,
-    package: FxHashMap<PackageName, PrereleasePolicy>,
-}
-
-#[derive(Debug, Clone)]
-enum PrereleasePolicy {
-    /// Disallow all pre-release versions.
-    Disallow,
-
-    /// Allow all pre-release versions.
-    Allow,
-
-    /// Prefer stable versions, falling back to pre-release versions when necessary.
-    IfNecessary,
-
-    /// Prefer stable versions for first-party packages with explicit pre-release specifiers,
-    /// falling back to pre-release versions when necessary. Disallow pre-release versions for all
-    /// other packages.
-    Explicit(ForkSet),
+    prerelease: Prerelease,
+    explicit_packages: ForkSet,
 }
 
 impl PrereleaseStrategy {
-    #[allow(deprecated)]
     pub(crate) fn from_prerelease(
         prerelease: &Prerelease,
         manifest: &Manifest,
         env: &ResolverEnvironment,
         dependencies: DependencyMode,
     ) -> Self {
+        let explicit_packages = if std::iter::once(&prerelease.global)
+            .chain(prerelease.package.values())
+            .any(|mode| *mode == PrereleaseMode::Explicit)
+        {
+            Self::explicit_packages(manifest.candidate_selection_requirements(env, dependencies))
+        } else {
+            ForkSet::default()
+        };
         Self {
-            default: Self::policy(prerelease.global, manifest, env, dependencies),
-            package: prerelease
-                .package
-                .iter()
-                .map(|(name, mode)| {
-                    (
-                        name.clone(),
-                        Self::policy(*mode, manifest, env, dependencies),
-                    )
-                })
-                .collect(),
-        }
-    }
-
-    #[allow(deprecated)]
-    fn policy(
-        mode: PrereleaseMode,
-        manifest: &Manifest,
-        env: &ResolverEnvironment,
-        dependencies: DependencyMode,
-    ) -> PrereleasePolicy {
-        match mode {
-            PrereleaseMode::Disallow => PrereleasePolicy::Disallow,
-            PrereleaseMode::Allow => PrereleasePolicy::Allow,
-            PrereleaseMode::IfNecessary | PrereleaseMode::IfNecessaryOrExplicit => {
-                PrereleasePolicy::IfNecessary
-            }
-            PrereleaseMode::Explicit => PrereleasePolicy::Explicit(Self::explicit_packages(
-                manifest.candidate_selection_requirements(env, dependencies),
-            )),
+            prerelease: prerelease.clone(),
+            explicit_packages,
         }
     }
 
@@ -94,17 +54,20 @@ impl PrereleaseStrategy {
     /// Pre-releases remain in the candidate universe but, unless they are globally allowed, are
     /// considered only after stable candidates. Keeping the candidate universe fixed is required
     /// for PubGrub's learned incompatibilities to remain valid.
+    #[allow(deprecated)]
     pub(crate) fn selection(
         &self,
         package_name: &PackageName,
         env: &ResolverEnvironment,
     ) -> PrereleaseSelection {
-        match self.package.get(package_name).unwrap_or(&self.default) {
-            PrereleasePolicy::Disallow => PrereleaseSelection::Disallow,
-            PrereleasePolicy::Allow => PrereleaseSelection::Allow,
-            PrereleasePolicy::IfNecessary => PrereleaseSelection::PreferStable,
-            PrereleasePolicy::Explicit(packages) => {
-                if packages.contains(package_name, env) {
+        match self.prerelease.mode(package_name) {
+            PrereleaseMode::Disallow => PrereleaseSelection::Disallow,
+            PrereleaseMode::Allow => PrereleaseSelection::Allow,
+            PrereleaseMode::IfNecessary | PrereleaseMode::IfNecessaryOrExplicit => {
+                PrereleaseSelection::PreferStable
+            }
+            PrereleaseMode::Explicit => {
+                if self.explicit_packages.contains(package_name, env) {
                     PrereleaseSelection::PreferStable
                 } else {
                     PrereleaseSelection::Disallow
