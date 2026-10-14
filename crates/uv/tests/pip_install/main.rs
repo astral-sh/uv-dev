@@ -17,6 +17,8 @@ mod no_index;
 mod pip_install;
 #[cfg(feature = "test-python")]
 mod pylock;
+#[cfg(feature = "test-python")]
+mod remote_requirements;
 
 #[cfg(feature = "test-python")]
 mod wheel_cache;
