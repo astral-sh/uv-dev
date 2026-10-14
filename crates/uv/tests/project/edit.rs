@@ -4436,7 +4436,7 @@ fn edit_no_sync_active_environment_mismatch() -> Result<()> {
     let active = context.temp_dir.child("active");
     context
         .venv()
-        .arg(&active)
+        .arg(active.path())
         .arg("--python")
         .arg("3.12")
         .assert()
@@ -4464,7 +4464,7 @@ fn edit_no_sync_active_environment_mismatch() -> Result<()> {
     context
         .pip_install()
         .arg("--python")
-        .arg(&active)
+        .arg(active.path())
         .arg("--offline")
         .arg("./ok-1.0.0-py3-none-any.whl")
         .assert()
