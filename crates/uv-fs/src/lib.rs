@@ -705,6 +705,37 @@ enum PersistRetryError {
     LostState,
 }
 
+#[cfg(windows)]
+impl PersistRetryError {
+    fn is_retryable(&self) -> bool {
+        matches!(self, Self::Persist(_))
+    }
+
+    fn warn_retry(&self, to: &Path) {
+        if let Self::Persist(message) = self {
+            warn!(
+                "Retrying to persist temporary file to `{}`: {}",
+                to.display(),
+                message,
+            );
+        }
+    }
+
+    fn into_io_error(self, to: &Path) -> io::Error {
+        match self {
+            Self::Persist(message) => io::Error::other(format!(
+                "Failed to persist temporary file to `{}`: {}",
+                to.display(),
+                message,
+            )),
+            Self::LostState => io::Error::other(format!(
+                "Failed to retrieve temporary file while trying to persist to `{}`",
+                to.display()
+            )),
+        }
+    }
+}
+
 /// Attempt to persist a temporary file, retaining it for another attempt on failure.
 #[cfg(windows)]
 fn persist_once(from: &mut Option<NamedTempFile>, to: &Path) -> Result<(), PersistRetryError> {
@@ -740,30 +771,11 @@ async fn persist_with_retry(
         let persisted = persist
             .retry(backoff_file_move())
             .sleep(tokio::time::sleep)
-            .when(|err| matches!(err, PersistRetryError::Persist(_)))
-            .notify(|err, _dur| {
-                if let PersistRetryError::Persist(error_message) = err {
-                    warn!(
-                        "Retrying to persist temporary file to `{}`: {}",
-                        to.display(),
-                        error_message,
-                    );
-                }
-            })
+            .when(PersistRetryError::is_retryable)
+            .notify(|err, _dur| err.warn_retry(to))
             .await;
 
-        match persisted {
-            Ok(_) => Ok(()),
-            Err(PersistRetryError::Persist(error_message)) => Err(std::io::Error::other(format!(
-                "Failed to persist temporary file to `{}`: {}",
-                to.display(),
-                error_message,
-            ))),
-            Err(PersistRetryError::LostState) => Err(std::io::Error::other(format!(
-                "Failed to retrieve temporary file while trying to persist to `{}`",
-                to.display()
-            ))),
-        }
+        persisted.map_err(|err| err.into_io_error(to))
     }
     #[cfg(not(windows))]
     {
@@ -795,30 +807,11 @@ pub fn persist_with_retry_sync(
         let persisted = persist
             .retry(backoff_file_move())
             .sleep(std::thread::sleep)
-            .when(|err| matches!(err, PersistRetryError::Persist(_)))
-            .notify(|err, _dur| {
-                if let PersistRetryError::Persist(error_message) = err {
-                    warn!(
-                        "Retrying to persist temporary file to `{}`: {}",
-                        to.display(),
-                        error_message,
-                    );
-                }
-            })
+            .when(PersistRetryError::is_retryable)
+            .notify(|err, _dur| err.warn_retry(to))
             .call();
 
-        match persisted {
-            Ok(_) => Ok(()),
-            Err(PersistRetryError::Persist(error_message)) => Err(std::io::Error::other(format!(
-                "Failed to persist temporary file to `{}`: {}",
-                to.display(),
-                error_message,
-            ))),
-            Err(PersistRetryError::LostState) => Err(std::io::Error::other(format!(
-                "Failed to retrieve temporary file while trying to persist to `{}`",
-                to.display()
-            ))),
-        }
+        persisted.map_err(|err| err.into_io_error(to))
     }
     #[cfg(not(windows))]
     {
