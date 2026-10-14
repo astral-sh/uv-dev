@@ -162,21 +162,7 @@ impl WorkspaceCache {
     fn insert(&self, result: CachedWorkspaceResult, install_path: &Path) {
         match result {
             Ok(workspace) => {
-                for package in workspace.packages.values() {
-                    // Publish the root once below, even when it is also a project member.
-                    if package.root == workspace.install_path {
-                        continue;
-                    }
-                    // Historically, upward workspace discovery stopped at an intermediate
-                    // `pyproject.toml`, so don't map this member to the outer workspace in that
-                    // case.
-                    // See: <https://github.com/astral-sh/uv/issues/19916>
-                    if has_intermediate_pyproject(&workspace.install_path, &package.root) {
-                        continue;
-                    }
-                    self.workspaces
-                        .done(package.root.clone(), Ok(workspace.clone()));
-                }
+                self.insert_members(&workspace);
                 self.workspaces
                     .done(workspace.install_path.clone(), Ok(workspace));
             }
@@ -186,12 +172,54 @@ impl WorkspaceCache {
         }
     }
 
-    /// Register workspace discovery for a root, or wait for an in-flight discovery.
-    ///
-    /// Calling this function ensures that - given a workspace root - the discovery is only done by
-    /// one thread.
-    async fn register_or_wait(&self, workspace_root: &PathBuf) -> Option<CachedWorkspaceResult> {
-        self.workspaces.register_or_wait(workspace_root).await
+    fn insert_members(&self, workspace: &Arc<Workspace>) {
+        for package in workspace.packages.values() {
+            // The root is published by the caller.
+            if package.root == workspace.install_path {
+                continue;
+            }
+            // Upward discovery stops at an intermediate `pyproject.toml`, so don't map this
+            // member to the outer workspace in that case.
+            // See: <https://github.com/astral-sh/uv/issues/19916>
+            if has_intermediate_pyproject(&workspace.install_path, &package.root) {
+                continue;
+            }
+            self.workspaces
+                .done(package.root.clone(), Ok(Arc::clone(workspace)));
+        }
+    }
+
+    /// Share complete discovery for a workspace root, retrying if the builder is cancelled.
+    async fn get_or_build<F: Future<Output = CachedWorkspaceResult>>(
+        &self,
+        workspace_root: PathBuf,
+        member_discovery: &MemberDiscovery,
+        build: impl FnOnce(PathBuf) -> F,
+    ) -> CachedWorkspaceResult {
+        let cache_key = (*member_discovery == MemberDiscovery::All).then(|| workspace_root.clone());
+        // Keep the builder in this frame instead of moving it through nested cache futures.
+        let build = std::pin::pin!(async {
+            debug!(
+                "Found workspace root: {}",
+                workspace_root.simplified_display()
+            );
+            // Keep the workspace-building future out of every discovery caller's async state.
+            Box::pin(build(workspace_root)).await
+        });
+        match cache_key {
+            Some(cache_key) => {
+                self.workspaces
+                    .get_or_init(cache_key, async {
+                        let result = build.await;
+                        if let Ok(workspace) = &result {
+                            self.insert_members(workspace);
+                        }
+                        result
+                    })
+                    .await
+            }
+            None => build.await,
+        }
     }
 
     /// Get the cached workspace, if any, from the path to the workspace root or to a member root.
@@ -512,46 +540,35 @@ impl Workspace {
                 )
             };
 
-        if options.members == MemberDiscovery::All {
-            // Ensure that workspace discovery runs only once for any given workspace root.
-            // If two threads start at different packages at the same time, they only read their
-            // package `pyproject.toml` and the workspace root `pyproject.toml` before arriving
-            // here. At this point, only one thread can continue and the other waits, then uses the
-            // cached workspace.
-            if let Some(workspace) = workspace_cache.register_or_wait(&workspace_root).await {
-                return workspace;
-            }
-        }
+        workspace_cache
+            .get_or_build(
+                workspace_root,
+                &options.members,
+                |workspace_root| async move {
+                    // Unlike in `ProjectWorkspace` discovery, we might be in a non-project root
+                    // without being in any specific project.
+                    let current_project =
+                        pyproject_toml
+                            .project
+                            .clone()
+                            .map(|project| WorkspaceMember {
+                                root: project_path,
+                                project,
+                                pyproject_toml,
+                            });
 
-        debug!(
-            "Found workspace root: {}",
-            workspace_root.simplified_display()
-        );
-
-        // Unlike in `ProjectWorkspace` discovery, we might be in a non-project root without
-        // being in any specific project.
-        let current_project = pyproject_toml
-            .project
-            .clone()
-            .map(|project| WorkspaceMember {
-                root: project_path,
-                project,
-                pyproject_toml,
-            });
-
-        let result = Self::build(
-            workspace_root.clone(),
-            workspace_definition,
-            workspace_pyproject_toml,
-            current_project,
-            options,
-            cache,
-        )
-        .await;
-        if options.members == MemberDiscovery::All {
-            workspace_cache.insert(result.clone(), &workspace_root);
-        }
-        result
+                    Self::build(
+                        workspace_root,
+                        workspace_definition,
+                        workspace_pyproject_toml,
+                        current_project,
+                        options,
+                        cache,
+                    )
+                    .await
+                },
+            )
+            .await
     }
 
     /// Set the current project to the given workspace member.
@@ -1841,39 +1858,23 @@ impl ProjectWorkspace {
             });
         };
 
-        if options.members == MemberDiscovery::All {
-            // Ensure that workspace discovery runs only once for any given workspace root.
-            if let Some(workspace) = workspace_cache.register_or_wait(&workspace_root).await {
-                return workspace.map(|workspace| Self {
-                    project_root: project_path.to_path_buf(),
-                    project_name: project.name.clone(),
-                    workspace,
-                });
-            }
-        }
-
-        debug!(
-            "Found workspace root: {}",
-            workspace_root.simplified_display()
-        );
-
-        let result = Workspace::build(
-            workspace_root.clone(),
-            workspace_definition,
-            workspace_pyproject_toml,
-            Some(current_project),
-            options,
-            cache,
-        )
-        .await;
-        if options.members == MemberDiscovery::All {
-            workspace_cache.insert(result.clone(), &workspace_root);
-        }
+        let workspace = workspace_cache
+            .get_or_build(workspace_root, &options.members, |workspace_root| {
+                Workspace::build(
+                    workspace_root,
+                    workspace_definition,
+                    workspace_pyproject_toml,
+                    Some(current_project),
+                    options,
+                    cache,
+                )
+            })
+            .await?;
 
         Ok(Self {
             project_root: project_path.to_path_buf(),
             project_name: project.name.clone(),
-            workspace: result?,
+            workspace,
         })
     }
 }
@@ -2914,6 +2915,39 @@ mod tests {
         assert_eq!(member_project.workspace().packages().len(), 2);
         assert!(member_project.workspace().packages().contains_key(&seeds));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_workspace_build_can_be_retried() -> Result<()> {
+        let root = tempfile::TempDir::new()?;
+        fs_err::write(
+            root.path().join("pyproject.toml"),
+            "[project]\nname = 'demo'\nversion = '0.1.0'\n",
+        )?;
+        let workspace_cache = WorkspaceCache::default();
+
+        tokio::select! {
+            biased;
+            _ = workspace_cache.get_or_build(root.path().to_path_buf(), &MemberDiscovery::All, |_| std::future::pending()) => {
+                panic!("pending workspace build completed");
+            }
+            () = std::future::ready(()) => {}
+        }
+
+        let cache = Cache::from_path(root.path().join("cache"));
+        let workspace = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            Workspace::discover(
+                root.path(),
+                &DiscoveryOptions::default(),
+                &cache,
+                &workspace_cache,
+            ),
+        )
+        .await
+        .expect("cancelled workspace build blocked discovery")?;
+        assert_eq!(workspace.install_path(), root.path());
         Ok(())
     }
 
