@@ -8,6 +8,7 @@ use insta::assert_snapshot;
 use toml_edit::{DocumentMut, value};
 use uv_lock::Lock;
 use uv_normalize::DefaultGroups;
+use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
 /// Record nonstandard workspace member defaults and update them when the selection changes.
@@ -924,6 +925,65 @@ fn metadata_free_group_python_requirements_in_lockfile() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+    Ok(())
+}
+
+/// Unrecognized package records cannot provide version preferences for a new resolution.
+#[test]
+fn lock_with_unrecognized_package_table() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/single-package.toml");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["a"]
+        "#})?;
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&formatdoc! {r#"
+        version = 1
+        revision = 2
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[distribution-term-we-dont-know]]
+        name = "a"
+        version = "1.0.0"
+        source = {{ registry = "{index_url}" }}
+
+        [[distribution-term-we-dont-know]]
+        name = "project"
+        version = "0.1.0"
+        source = {{ virtual = "." }}
+        dependencies = [{{ name = "a" }}]
+    "#, index_url = server.index_url()})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Added a v2.0.0
+    Added project v0.1.0
+    ");
+
+    let contents = context.read("uv.lock");
+    let lock = Lock::from_canonical_toml(&contents)?;
+    assert_eq!(lock.to_toml()?, contents);
+    assert_eq!(lock.len(), 2);
+    let package = lock
+        .packages()
+        .iter()
+        .find(|package| package.name().as_str() == "a")
+        .context("resolved lock has no package a")?;
+    assert_eq!(package.version(), Some(&"2.0.0".parse()?));
     Ok(())
 }
 
