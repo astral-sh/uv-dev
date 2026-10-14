@@ -10,6 +10,7 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 
 use crate::Overrides;
+use crate::dependency_modifier::select_scoped_entry;
 
 /// A set of exclusions that applies to the dependencies of a specific package version.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
@@ -147,12 +148,13 @@ impl Excludes {
             .map(ExcludeDependency::Dependency)
             .collect::<Vec<_>>();
         for (name, packages) in self.scoped {
-            for package in packages {
+            // Move the package name into the final scope.
+            for (name, package) in std::iter::repeat_n(name, packages.len()).zip(packages) {
                 let mut dependencies = package.excludes.into_iter().collect::<Vec<_>>();
                 dependencies.sort();
                 entries.push(ExcludeDependency::Package(PackageExclusion {
                     package: PackageExclusionTarget {
-                        name: name.clone(),
+                        name,
                         version: package.version,
                     },
                     dependencies: dependencies.into_boxed_slice(),
@@ -233,13 +235,12 @@ impl Excludes {
                 if let Some(recorder) = &self.recorder {
                     recorder.scoped_exclusion(package);
                 }
-                self.scoped.get(package).is_some_and(|entries| {
-                    entries
-                        .iter()
-                        .find(|entry| entry.version.as_ref() == Some(version))
-                        .or_else(|| entries.iter().find(|entry| entry.version.is_none()))
-                        .is_some_and(|entry| entry.excludes.contains(dependency))
-                })
+                self.scoped
+                    .get(package)
+                    .and_then(|entries| {
+                        select_scoped_entry(entries, version, |entry| entry.version.as_ref())
+                    })
+                    .is_some_and(|entry| entry.excludes.contains(dependency))
             })
     }
 }

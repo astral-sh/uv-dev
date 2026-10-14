@@ -90,9 +90,7 @@ impl From<Vec<Requirement>> for NormalizedConstraints {
     /// Normalize constraints, dropping false markers and empty declarations and ignoring extras.
     fn from(mut constraints: Vec<Requirement>) -> Self {
         constraints.retain_mut(|requirement| {
-            if let RequirementSource::Registry { specifier, .. } = &requirement.source
-                && specifier.is_empty()
-            {
+            if requirement.source.is_empty() {
                 return false;
             }
             requirement.extras = Box::new([]);
@@ -119,10 +117,11 @@ impl From<Vec<Override<Requirement>>> for NormalizedOverrideEntries {
             match entry {
                 Override::Requirement(requirement) => global.push(requirement),
                 Override::Package(package) => {
+                    let mut dependencies = package.dependencies.into_vec();
                     scoped
                         .entry(package.package)
-                        .or_default()
-                        .extend(package.dependencies);
+                        .and_modify(|existing| existing.append(&mut dependencies))
+                        .or_insert(dependencies);
                 }
             }
         }
@@ -201,24 +200,22 @@ impl PartialEq for SemanticRequirement<'_> {
     fn eq(&self, other: &Self) -> bool {
         let left = self.0;
         let right = other.0;
+        let (Some(left_specifiers), Some(right_specifiers)) = (
+            left.source.version_specifiers(),
+            right.source.version_specifiers(),
+        ) else {
+            return left == right;
+        };
+
         // Compare identical declarations without allocating semantic keys. Version equality ignores
         // release precision, which can affect wildcard and compatible clauses.
         if left == right
-            && if let (
-                RequirementSource::Registry {
-                    specifier: left, ..
-                },
-                RequirementSource::Registry {
-                    specifier: right, ..
-                },
-            ) = (&left.source, &right.source)
-            {
-                left.iter().zip(right.iter()).all(|(left, right)| {
+            && left_specifiers
+                .iter()
+                .zip(right_specifiers.iter())
+                .all(|(left, right)| {
                     left.version().release().len() == right.version().release().len()
                 })
-            } else {
-                true
-            }
         {
             return true;
         }
@@ -263,16 +260,18 @@ impl RequirementsKey {
 /// Intersect ranges in a balanced tree, avoiding repeated scans of a growing range.
 fn intersect_ranges(ranges: impl IntoIterator<Item = Ranges<Version>>) -> Ranges<Version> {
     let mut ranges: Vec<_> = ranges.into_iter().collect();
+    let mut merged = Vec::new();
     while ranges.len() > 1 {
-        let mut pairs = ranges.into_iter();
-        ranges = iter::from_fn(|| {
+        let mut pairs = ranges.drain(..);
+        merged.extend(iter::from_fn(move || {
             let left = pairs.next()?;
             Some(match pairs.next() {
                 Some(right) => left.intersection(&right),
                 None => left,
             })
-        })
-        .collect();
+        }));
+        // The drained input becomes the output buffer for the next level.
+        mem::swap(&mut ranges, &mut merged);
     }
     ranges.pop().unwrap_or_else(Ranges::full)
 }
@@ -290,6 +289,7 @@ fn normalize(mut requirements: Vec<Requirement>) -> Vec<Requirement> {
         requirement.extras = extras.into_boxed_slice();
         requirement.groups.sort();
     }
+    // Package names are the primary sort key, so normalizing each group retains global order.
     requirements.sort_by(compare_requirements);
 
     let mut normalized = Vec::with_capacity(requirements.len());
@@ -312,7 +312,6 @@ fn normalize(mut requirements: Vec<Requirement>) -> Vec<Requirement> {
             ));
         }
     }
-    normalized.sort_by(compare_requirements);
     normalized
 }
 
@@ -391,6 +390,7 @@ fn normalize_package_requirements(
         normalized.extend(regions);
     }
 
+    normalized.sort_by(compare_requirements);
     normalized
 }
 
@@ -413,22 +413,42 @@ fn coalesce(mut requirements: Vec<Requirement>) -> Vec<Requirement> {
         return requirements;
     }
 
-    let mut combined = IndexMap::<RequirementsKey, Requirement>::new();
-    for requirement in requirements {
-        let mut key = requirement.clone();
-        key.marker = MarkerTree::TRUE;
+    // Store the marker and registry specifiers separately because the semantic key discards them.
+    let mut combined = IndexMap::<RequirementsKey, (MarkerTree, VersionSpecifiers)>::new();
+    for mut requirement in requirements {
+        let marker = mem::replace(&mut requirement.marker, MarkerTree::TRUE);
+        let specifiers = requirement
+            .source
+            .version_specifiers()
+            .cloned()
+            .unwrap_or_default();
         combined
-            .entry(RequirementsKey::new(key))
-            .and_modify(|existing| existing.marker = existing.marker.or(requirement.marker))
-            .or_insert(requirement);
+            .entry(RequirementsKey::new(requirement))
+            .and_modify(|(existing, _)| *existing = existing.or(marker))
+            .or_insert((marker, specifiers));
     }
-    combined.into_values().collect()
+    combined
+        .into_iter()
+        .map(|(mut key, (marker, specifiers))| {
+            if let RequirementSource::Registry { specifier, .. } = &mut key.requirement.source {
+                *specifier = specifiers;
+            }
+            Requirement {
+                marker,
+                ..key.requirement
+            }
+        })
+        .collect()
 }
 
 /// Remove implied clauses without changing prerelease opt-in or yanked-version eligibility.
 /// For example, `>=1rc1,>=1` keeps both clauses because the first opts into prereleases.
 /// Likewise, `==1,>=0` keeps both clauses because a standalone pin would permit yanked versions.
 fn simplify_specifiers(specifiers: VersionSpecifiers) -> VersionSpecifiers {
+    if specifiers.is_empty() {
+        return specifiers;
+    }
+
     let mut specifiers = specifiers
         .into_iter()
         .map(normalize_specifier)
