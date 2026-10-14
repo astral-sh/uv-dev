@@ -4,7 +4,7 @@ use assert_fs::fixture::{ChildPath, PathChild};
 use predicates::prelude::predicate;
 
 use uv_static::EnvVars;
-use uv_test::{assert_path_missing, uv_snapshot};
+use uv_test::uv_snapshot;
 
 use crate::tool_fixture::local_tool_wheel;
 
@@ -36,7 +36,7 @@ fn tool_install_xdg_data_home() -> Result<()> {
         .env(EnvVars::UV_TOOL_DIR, context.temp_dir.child("tools").path())
         .env(EnvVars::XDG_DATA_HOME, context.temp_dir.child("data/home").path()), @"exit_code: 0 (success)");
     assert_formatter_launcher(&context.temp_dir.child("data/bin"));
-    assert_path_missing(context.home_dir.child(".local/bin"));
+    context.assert_path_missing(context.home_dir.child(".local/bin"));
     Ok(())
 }
 
@@ -50,7 +50,7 @@ fn tool_install_xdg_bin_home_overrides_data_home() -> Result<()> {
         .env(EnvVars::XDG_DATA_HOME, context.temp_dir.child("data/home").path())
         .env(EnvVars::XDG_BIN_HOME, context.temp_dir.child("xdg-bin").path()), @"exit_code: 0 (success)");
     assert_formatter_launcher(&context.temp_dir.child("xdg-bin"));
-    assert_path_missing(context.temp_dir.child("data/bin"));
+    context.assert_path_missing("data/bin");
     Ok(())
 }
 
@@ -64,6 +64,6 @@ fn tool_install_tool_bin_dir_overrides_xdg_bin_home() -> Result<()> {
         .env(EnvVars::XDG_BIN_HOME, context.temp_dir.child("xdg-bin").path())
         .env(EnvVars::UV_TOOL_BIN_DIR, context.temp_dir.child("tool-bin").path()), @"exit_code: 0 (success)");
     assert_formatter_launcher(&context.temp_dir.child("tool-bin"));
-    assert_path_missing(context.temp_dir.child("xdg-bin"));
+    context.assert_path_missing("xdg-bin");
     Ok(())
 }

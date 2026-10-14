@@ -9,7 +9,7 @@ use predicates::prelude::predicate;
 
 use uv_static::EnvVars;
 
-use uv_test::{TestContext, assert_path_missing, uv_snapshot};
+use uv_test::{TestContext, uv_snapshot};
 
 #[test]
 fn init() {
@@ -3876,7 +3876,7 @@ fn git_states() {
         .arg("none")
         .assert()
         .success();
-    assert_path_missing(context.temp_dir.child("working-no-git/.git"));
+    context.assert_path_missing("working-no-git/.git");
 
     context
         .init()
@@ -3892,7 +3892,7 @@ fn git_states() {
         .expect("Failed to setup disallowed `git` command");
 
     context.init().arg("broken").assert().success();
-    assert_path_missing(context.temp_dir.child("broken/.git"));
+    context.assert_path_missing("broken/.git");
 
     context
         .init()
@@ -3901,7 +3901,7 @@ fn git_states() {
         .arg("none")
         .assert()
         .success();
-    assert_path_missing(context.temp_dir.child("broken-no-git/.git"));
+    context.assert_path_missing("broken-no-git/.git");
 
     uv_snapshot!(context.filters(), context
         .init()
@@ -3914,7 +3914,7 @@ fn git_states() {
     stdout:
     stderr: error: `git` operations are not allowed — are you missing a cfg for the `git` feature?
     ");
-    assert_path_missing(context.temp_dir.child("broken-git/.git"));
+    context.assert_path_missing("broken-git/.git");
 }
 
 /// Using `uv init` with `--project` isn't allowed.

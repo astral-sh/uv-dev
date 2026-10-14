@@ -27,7 +27,7 @@ fn binary_payloads_stay_in_archive_without_preview_local() -> Result<()> {
      + binary-payload==0.1.0 (from file://[TEMP_DIR]/binary_payload-0.1.0-py3-none-any.whl)
     ");
 
-    assert_path_missing(context.cache_dir.child("files-v0"));
+    context.assert_path_missing(context.cache_dir.child("files-v0"));
     let archive_files = context.cache_files(CacheBucket::Archive)?;
     let archive_binary = archive_files
         .iter()
@@ -60,7 +60,7 @@ async fn binary_payloads_stay_in_archive_without_preview_streaming() -> Result<(
      + binary-payload==0.1.0 (from http://[LOCALHOST]/binary_payload-0.1.0-py3-none-any.whl)
     ");
 
-    assert_path_missing(context.cache_dir.child("files-v0"));
+    context.assert_path_missing(context.cache_dir.child("files-v0"));
     let archive_files = context.cache_files(CacheBucket::Archive)?;
     let archive_binary = archive_files
         .iter()

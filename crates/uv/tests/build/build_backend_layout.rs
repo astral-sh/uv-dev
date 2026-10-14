@@ -3,7 +3,7 @@ use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild, PathCreateDir};
 use indoc::indoc;
-use uv_test::{TestContext, assert_path_missing, uv_snapshot};
+use uv_test::{TestContext, uv_snapshot};
 
 const EXPLICIT_MODULE_WHEEL: &str = "django_plugin-1.0.0-py3-none-any.whl";
 
@@ -34,7 +34,7 @@ fn sdist_requires_source_directory() -> Result<()> {
     ----- stderr -----
     error: Expected a Python module at: src/foo/__init__.py
     ");
-    assert_path_missing(context.temp_dir.child("foo-1.0.0.tar.gz"));
+    context.assert_path_missing("foo-1.0.0.tar.gz");
     Ok(())
 }
 
@@ -52,7 +52,7 @@ fn sdist_requires_module_in_source_directory() -> Result<()> {
     ----- stderr -----
     error: Expected a Python module at: src/foo/__init__.py
     ");
-    assert_path_missing(context.temp_dir.child("foo-1.0.0.tar.gz"));
+    context.assert_path_missing("foo-1.0.0.tar.gz");
     Ok(())
 }
 
@@ -87,7 +87,7 @@ fn wheel_requires_explicit_module() -> Result<()> {
     ----- stderr -----
     error: Expected a Python module at: src/Django_plugin/__init__.py
     ");
-    assert_path_missing(context.temp_dir.child(EXPLICIT_MODULE_WHEEL));
+    context.assert_path_missing(EXPLICIT_MODULE_WHEEL);
     Ok(())
 }
 
@@ -105,7 +105,7 @@ fn wheel_requires_explicit_module_initializer() -> Result<()> {
     ----- stderr -----
     error: Expected a Python module at: src/Django_plugin/__init__.py
     ");
-    assert_path_missing(context.temp_dir.child(EXPLICIT_MODULE_WHEEL));
+    context.assert_path_missing(EXPLICIT_MODULE_WHEEL);
     Ok(())
 }
 

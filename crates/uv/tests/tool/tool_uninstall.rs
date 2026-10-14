@@ -30,7 +30,7 @@ fn tool_uninstall() -> Result<()> {
     Uninstalled 2 executables: formatter, formatterd
     ");
 
-    assert_path_missing(context.temp_dir.child("tools/formatter"));
+    context.assert_path_missing("tools/formatter");
     for launcher in &launchers {
         assert_path_missing(launcher);
     }

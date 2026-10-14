@@ -8,7 +8,7 @@ use assert_fs::prelude::*;
 use fs_err::{metadata, set_permissions};
 use indoc::indoc;
 use uv_static::EnvVars;
-use uv_test::{assert_path_missing, copy_dir_ignore, uv_snapshot, venv_bin_path};
+use uv_test::{copy_dir_ignore, uv_snapshot, venv_bin_path};
 
 #[test]
 fn tool_run_args() {
@@ -2209,7 +2209,7 @@ fn run_with_env_file() -> anyhow::Result<()> {
     Resolved [N] packages in [TIME]
     ");
 
-    assert_path_missing(context.temp_dir.child("queried.txt"));
+    context.assert_path_missing("queried.txt");
 
     Ok(())
 }

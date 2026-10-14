@@ -7,7 +7,7 @@ use indoc::indoc;
 use insta::assert_snapshot;
 
 use uv_static::EnvVars;
-use uv_test::{apply_filters, assert_path_missing, uv_snapshot};
+use uv_test::{apply_filters, uv_snapshot};
 
 const VERSION_QUERY_PROJECT: &str = indoc! {r#"
     [project]
@@ -31,8 +31,8 @@ fn version_get() -> Result<()> {
     ");
 
     assert_eq!(context.read(&pyproject_toml), VERSION_QUERY_PROJECT);
-    assert_path_missing(context.temp_dir.child("uv.lock"));
-    assert_path_missing(&context.venv);
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(&context.venv);
     Ok(())
 }
 
@@ -201,8 +201,8 @@ requires-python = ">=3.12"
     ");
 
     assert_eq!(context.read(&pyproject_toml), original);
-    assert_path_missing(context.temp_dir.child("uv.lock"));
-    assert_path_missing(&context.venv);
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(&context.venv);
     Ok(())
 }
 
@@ -229,8 +229,8 @@ requires-python = ">=3.12"
     ");
 
     assert_eq!(context.read(&pyproject_toml), original);
-    assert_path_missing(context.temp_dir.child("uv.lock"));
-    assert_path_missing(&context.venv);
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(&context.venv);
     Ok(())
 }
 

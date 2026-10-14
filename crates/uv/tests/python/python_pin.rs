@@ -309,7 +309,7 @@ fn python_pin_global_if_no_local() -> Result<()> {
     ----- stdout -----
     3.11
     ");
-    assert_path_missing(context.temp_dir.child(PYTHON_VERSION_FILENAME));
+    context.assert_path_missing(PYTHON_VERSION_FILENAME);
 
     Ok(())
 }
@@ -378,7 +378,7 @@ fn python_pin_global_creates_parent_dirs() {
         context.read(uv_global_config_dir.child(PYTHON_VERSION_FILENAME)),
         "3.12\n"
     );
-    assert_path_missing(context.temp_dir.child(PYTHON_VERSION_FILENAME));
+    context.assert_path_missing(PYTHON_VERSION_FILENAME);
 }
 
 /// We do not need a Python interpreter to pin without `--resolved`.
@@ -593,7 +593,7 @@ fn python_pin_resolve_no_python() {
 
     hint: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
     ");
-    assert_path_missing(context.temp_dir.child(PYTHON_VERSION_FILENAME));
+    context.assert_path_missing(PYTHON_VERSION_FILENAME);
 }
 
 #[test]
