@@ -496,10 +496,13 @@ impl ValidatedLock {
         matches!(self, Self::Satisfies(_))
     }
 
-    /// Return whether the existing lock can provide version preferences.
+    /// Return the existing lock if it can provide version preferences.
     #[must_use]
-    pub fn is_usable(&self) -> bool {
-        !matches!(self, Self::Unusable(_))
+    pub fn usable_lock(&self) -> Option<&Lock> {
+        match self {
+            Self::Unusable(_) => None,
+            Self::Versions(lock) | Self::Preferable(lock) | Self::Satisfies(lock) => Some(lock),
+        }
     }
 
     /// Convert the [`ValidatedLock`] into a [`Lock`].
