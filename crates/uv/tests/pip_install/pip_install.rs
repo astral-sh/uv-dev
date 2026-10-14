@@ -2429,6 +2429,7 @@ fn install_editable_and_registry() {
     Checked 1 package in [TIME]
     "
     );
+    assert_editable_packages(&context, "black==0.1.0\n");
 
     let context = context.with_filtered_counts();
     // Re-install Black at a specific version. This should replace the editable version.
@@ -2444,6 +2445,8 @@ fn install_editable_and_registry() {
      + black==23.10.0
     "
     );
+    assert_editable_packages(&context, "");
+    context.assert_installed("black", "23.10.0");
 }
 
 #[test]
