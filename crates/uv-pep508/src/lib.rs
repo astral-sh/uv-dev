@@ -172,9 +172,7 @@ fn fmt_requirement<T: Pep508Url + Display>(
     display_credentials: bool,
 ) -> std::fmt::Result {
     write!(f, "{}", requirement.name)?;
-    if !requirement.extras.is_empty() {
-        write!(f, "[{}]", requirement.extras.iter().format(","))?;
-    }
+    fmt_extras(&requirement.extras, f)?;
     if let Some(version_or_url) = &requirement.version_or_url {
         match version_or_url {
             VersionOrUrl::VersionSpecifier(version_specifier) => {
@@ -194,6 +192,14 @@ fn fmt_requirement<T: Pep508Url + Display>(
         write!(f, " ; {marker}")?;
     }
     Ok(())
+}
+
+fn fmt_extras(extras: &[ExtraName], f: &mut Formatter<'_>) -> std::fmt::Result {
+    if extras.is_empty() {
+        Ok(())
+    } else {
+        write!(f, "[{}]", extras.iter().format(","))
+    }
 }
 
 /// A Serde visitor that parses a string without allocating a temporary copy.
