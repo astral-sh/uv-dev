@@ -294,34 +294,22 @@ async fn python_pin_downloads_metadata_once_for_multiple_pins() -> Result<()> {
     Ok(())
 }
 
-// If there is no project-level `.python-version` file, respect the global pin.
+/// A global pin is readable without a local pin or an installed interpreter.
 #[test]
-#[cfg(feature = "test-python")]
 fn python_pin_global_if_no_local() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
-    let uv = context.user_config_dir.child("uv");
-    uv.create_dir_all()?;
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .user_config_dir
+        .child("uv")
+        .child(PYTHON_VERSION_FILENAME)
+        .write_str("3.11\n")?;
 
-    // Without arguments, we attempt to read the current pin (which does not exist yet)
-    uv_snapshot!(context.filters(), context.python_pin(), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No Python version file found; specify a version to create one
-    ");
-
-    // Given an argument, we globally pin to that version
-    uv_snapshot!(context.filters(), context.python_pin().arg("3.11").arg("--global"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Pinned `[UV_USER_CONFIG_DIR]/.python-version` to `3.11`
-    ");
-
-    // If no local pin, use global.
     uv_snapshot!(context.filters(), context.python_pin(), @"
     exit_code: 0 (success)
     ----- stdout -----
     3.11
     ");
+    assert_path_missing(context.temp_dir.child(PYTHON_VERSION_FILENAME));
 
     Ok(())
 }
@@ -340,13 +328,6 @@ fn python_pin_global_use_local_if_available() -> Result<()> {
     exit_code: 0 (success)
     ----- stdout -----
     Pinned `[UV_USER_CONFIG_DIR]/.python-version` to `3.12`
-    ");
-
-    // With no local, we get the global pin
-    uv_snapshot!(context.filters(), context.python_pin(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    3.12
     ");
 
     let global_version_file = uv.child(PYTHON_VERSION_FILENAME);
