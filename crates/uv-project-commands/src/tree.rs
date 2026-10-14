@@ -361,7 +361,7 @@ pub async fn tree(
                 };
                 reporter.on_fetch_version(package.name(), &version);
                 if package.version().is_some_and(|package| version > *package) {
-                    map.insert(package.clone(), version);
+                    map.insert(package, version);
                 }
             }
             reporter.on_fetch_complete();
