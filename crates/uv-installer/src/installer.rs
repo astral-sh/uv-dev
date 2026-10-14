@@ -111,11 +111,9 @@ impl<'a> Installer<'a> {
     /// Install a set of wheels into a Python virtual environment.
     #[instrument(skip_all, fields(num_wheels = %wheels.len()))]
     pub async fn install(self, wheels: Vec<CachedDist>) -> Result<Vec<CachedDist>, InstallError> {
-        let context = self.into_context()?;
+        let context = self.prepare_install()?;
         let (tx, rx) = oneshot::channel();
 
-        // Initialize the threadpool with the user settings.
-        initialize_rayon_once();
         rayon::spawn(move || {
             let result = context.install(wheels);
 
@@ -132,15 +130,16 @@ impl<'a> Installer<'a> {
         self,
         wheels: Vec<CachedDist>,
     ) -> Result<Vec<CachedDist>, InstallError> {
-        self.into_context()?.install(wheels)
+        self.prepare_install()?.install(wheels)
     }
 
-    fn into_context(self) -> Result<InstallContext, InstallError> {
+    /// Prepare owned installation settings and initialize the worker pool.
+    fn prepare_install(self) -> Result<InstallContext, InstallError> {
         if self.cache.is_some_and(Cache::is_temporary) && self.link_mode.is_symlink() {
             return Err(InstallError::SymlinkWithoutCache);
         }
 
-        Ok(InstallContext {
+        let context = InstallContext {
             layout: self.venv.interpreter().layout(),
             relocatable: self.venv.relocatable(),
             link_mode: self.link_mode,
@@ -148,7 +147,9 @@ impl<'a> Installer<'a> {
             name: self.name,
             metadata: self.metadata,
             preview: self.preview,
-        })
+        };
+        initialize_rayon_once();
+        Ok(context)
     }
 }
 
@@ -156,8 +157,6 @@ impl InstallContext {
     /// Install a set of wheels into a Python virtual environment synchronously.
     #[instrument(skip_all, fields(num_wheels = %wheels.len()))]
     fn install(&self, wheels: Vec<CachedDist>) -> Result<Vec<CachedDist>, InstallError> {
-        // Initialize the threadpool with the user settings.
-        initialize_rayon_once();
         let state = uv_install_wheel::InstallState::new(self.preview);
         wheels.par_iter().try_for_each(|wheel| {
             uv_install_wheel::install_wheel(
