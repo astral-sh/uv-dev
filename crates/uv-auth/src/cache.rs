@@ -248,14 +248,15 @@ impl<T> UrlTrie<T> {
         self.states[state].value = Some(value);
     }
 
-    /// Return the realm and nonempty path segments that form a URL's cache key.
+    /// Return the realm and path segments that form a URL's cache key.
     fn components(url: &Url) -> Option<impl Iterator<Item = Cow<'_, str>>> {
-        let segments = url.path_segments()?;
+        let mut segments = url.path_segments()?;
+        // A trailing slash does not change the scope, but interior empty segments do.
+        if url.path().ends_with('/') {
+            segments.next_back();
+        }
         let realm = Cow::Owned(Realm::from(url).to_string());
-        let path = segments
-            .filter(|segment| !segment.is_empty())
-            .map(Cow::Borrowed);
-        Some(std::iter::once(realm).chain(path))
+        Some(std::iter::once(realm).chain(segments.map(Cow::Borrowed)))
     }
 
     fn alloc(&mut self) -> usize {
