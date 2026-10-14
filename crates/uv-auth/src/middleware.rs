@@ -30,6 +30,12 @@ use crate::{Index, TextCredentialStore};
 static IS_DEPENDABOT: LazyLock<bool> =
     LazyLock::new(|| std::env::var(EnvVars::DEPENDABOT).is_ok_and(|value| value == "true"));
 
+enum CloudProvider {
+    S3,
+    Gcs,
+    Azure,
+}
+
 impl From<AuthenticationError> for Error {
     fn from(err: AuthenticationError) -> Self {
         Self::middleware(err)
@@ -595,35 +601,51 @@ impl AuthMiddleware {
                 .map(str::to_owned),
         );
 
-        // Fetches can be expensive, so we will only run them _once_ per realm or index URL and username combination
-        // All other requests for the same realm or index URL will wait until the first one completes
         let key = if let Some(index) = index {
             (FetchUrl::Index(index.url.clone()), username)
         } else {
             (FetchUrl::Realm(Realm::from(&**url)), username)
         };
-        if let Some(credentials) = self.cache().fetches.register_or_wait(&key).await {
-            if credentials.is_some() {
-                trace!("Using credentials from previous fetch for {}", key.0);
-            } else {
-                trace!(
-                    "Skipping fetch of credentials for {}, previous attempt failed",
-                    key.0
-                );
-            }
+        let cloud_provider = if is_s3_endpoint {
+            Some(CloudProvider::S3)
+        } else if is_gcs_endpoint {
+            Some(CloudProvider::Gcs)
+        } else if is_azure_endpoint {
+            Some(CloudProvider::Azure)
+        } else {
+            None
+        };
+        Ok(self
+            .cache()
+            .get_or_fetch(
+                key,
+                self.fetch_credentials_uncached(
+                    credentials,
+                    url,
+                    index,
+                    auth_policy,
+                    cloud_provider,
+                ),
+            )
+            .await)
+    }
 
-            return Ok(credentials);
-        }
-
+    async fn fetch_credentials_uncached(
+        &self,
+        credentials: Option<&Authentication>,
+        url: &DisplaySafeUrl,
+        index: Option<&Index>,
+        auth_policy: AuthPolicy,
+        cloud_provider: Option<CloudProvider>,
+    ) -> Option<Arc<Authentication>> {
         // Support for known providers, like Hugging Face and S3.
         if let Some(credentials) = HuggingFaceProvider::authentication_for(url) {
             debug!("Found Hugging Face credentials for `{url}`");
-            self.cache().fetches.done(key, Some(credentials.clone()));
-            return Ok(Some(credentials));
+            return Some(credentials);
         }
 
-        let cloud_credentials = if is_s3_endpoint {
-            Some((
+        let cloud_credentials = match cloud_provider {
+            Some(CloudProvider::S3) => Some((
                 "S3",
                 self.s3_credentials
                     .get_or_init(|| async {
@@ -631,9 +653,8 @@ impl AuthMiddleware {
                         Arc::new(Authentication::from(S3EndpointProvider::create_signer()))
                     })
                     .await,
-            ))
-        } else if is_gcs_endpoint {
-            Some((
+            )),
+            Some(CloudProvider::Gcs) => Some((
                 "GCS",
                 self.gcs_credentials
                     .get_or_init(|| async {
@@ -641,9 +662,8 @@ impl AuthMiddleware {
                         Arc::new(Authentication::from(GcsEndpointProvider::create_signer()))
                     })
                     .await,
-            ))
-        } else if is_azure_endpoint {
-            Some((
+            )),
+            Some(CloudProvider::Azure) => Some((
                 "Azure",
                 self.azure_credentials
                     .get_or_init(|| async {
@@ -651,16 +671,12 @@ impl AuthMiddleware {
                         Arc::new(Authentication::from(AzureEndpointProvider::create_signer()))
                     })
                     .await,
-            ))
-        } else {
-            None
+            )),
+            None => None,
         };
         if let Some((provider, credentials)) = cloud_credentials {
             debug!("Found {provider} credentials for `{url}`");
-            self.cache()
-                .fetches
-                .done(key, Some(Arc::clone(credentials)));
-            return Ok(Some(Arc::clone(credentials)));
+            return Some(Arc::clone(credentials));
         }
 
         let username = credentials.and_then(Authentication::username);
@@ -767,12 +783,7 @@ impl AuthMiddleware {
             None
         };
 
-        let credentials = credentials.map(Authentication::from).map(Arc::new);
-
-        // Register the fetch for this key
-        self.cache().fetches.done(key, credentials.clone());
-
-        Ok(credentials)
+        credentials.map(Authentication::from).map(Arc::new)
     }
 }
 
@@ -833,6 +844,35 @@ mod tests {
                 .build()
                 .expect("Reqwest client should build"),
         )
+    }
+
+    #[test(tokio::test)]
+    async fn cancelled_credential_fetch_can_be_retried() -> Result<(), Error> {
+        let middleware = AuthMiddleware::new(Arc::default()).with_netrc(None);
+        let TextStoreMode::Automatic(store) = &middleware.text_store else {
+            unreachable!("the default text store is automatic");
+        };
+        let url = DisplaySafeUrl::parse("https://example.com/simple")?;
+
+        // Poll the store initializer, then the fetch, before cancelling both.
+        tokio::select! {
+            biased;
+            _ = store.get_or_init(std::future::pending) => panic!("store initializer completed"),
+            _ = middleware.fetch_credentials(None, &url, None, AuthPolicy::Auto) => {
+                panic!("credential fetch completed while the store was blocked");
+            }
+            () = std::future::ready(()) => {}
+        }
+        store.set(None).unwrap();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            middleware.fetch_credentials(None, &url, None, AuthPolicy::Auto),
+        )
+        .await
+        .expect("cancelled credential fetch blocked subsequent requests")?;
+        assert!(result.is_none());
+        Ok(())
     }
 
     #[test(tokio::test)]

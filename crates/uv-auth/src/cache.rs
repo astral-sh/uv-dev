@@ -1,10 +1,8 @@
 use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
-use std::hash::BuildHasherDefault;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::{FxBuildHasher, FxHashMap};
 use tracing::trace;
 use url::Url;
 
@@ -14,7 +12,7 @@ use uv_redacted::DisplaySafeUrl;
 use crate::credentials::{Authentication, CredentialsFromUrlError, Username};
 use crate::{Credentials, Realm, RealmRef};
 
-type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
+type CredentialFetches = OnceMap<(FetchUrl, Username), Option<Arc<Authentication>>, FxBuildHasher>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum FetchUrl {
@@ -38,7 +36,7 @@ pub struct CredentialsCache {
     /// A cache per realm and username
     realms: RwLock<FxHashMap<(Realm, Username), Arc<Authentication>>>,
     /// A cache tracking the result of realm or index URL fetches from external services
-    pub(crate) fetches: FxOnceMap<(FetchUrl, Username), Option<Arc<Authentication>>>,
+    fetches: CredentialFetches,
     /// A cache per URL, uses a trie for efficient prefix queries.
     urls: RwLock<UrlTrie<Arc<Authentication>>>,
 }
@@ -53,10 +51,36 @@ impl CredentialsCache {
     /// Create a new cache.
     pub fn new() -> Self {
         Self {
-            fetches: FxOnceMap::default(),
+            fetches: CredentialFetches::default(),
             realms: RwLock::new(FxHashMap::default()),
             urls: RwLock::new(UrlTrie::new()),
         }
+    }
+
+    /// Share a credential fetch among requests for the same URL and username, retrying if the
+    /// fetch is cancelled.
+    pub(crate) async fn get_or_fetch(
+        &self,
+        key: (FetchUrl, Username),
+        fetch: impl Future<Output = Option<Arc<Authentication>>>,
+    ) -> Option<Arc<Authentication>> {
+        let url = key.0.clone();
+        let mut reused = true;
+        let credentials = self
+            .fetches
+            .get_or_init(key, async {
+                reused = false;
+                fetch.await
+            })
+            .await;
+        if reused {
+            if credentials.is_some() {
+                trace!("Using credentials from previous fetch for {url}");
+            } else {
+                trace!("Skipping fetch of credentials for {url}, previous attempt failed");
+            }
+        }
+        credentials
     }
 
     /// Populate the global authentication store with credentials on a URL, if there are any.
