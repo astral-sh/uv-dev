@@ -438,6 +438,10 @@ fn coalesce(mut requirements: Vec<Requirement>) -> Vec<Requirement> {
 /// For example, `>=1rc1,>=1` keeps both clauses because the first opts into prereleases.
 /// Likewise, `==1,>=0` keeps both clauses because a standalone pin would permit yanked versions.
 fn simplify_specifiers(specifiers: VersionSpecifiers) -> VersionSpecifiers {
+    if specifiers.is_empty() {
+        return specifiers;
+    }
+
     let mut specifiers = specifiers
         .into_iter()
         .map(normalize_specifier)
