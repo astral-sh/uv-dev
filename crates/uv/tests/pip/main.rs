@@ -41,6 +41,9 @@ mod pip_sync_markers;
 mod pip_sync_reinstall;
 
 #[cfg(feature = "test-python")]
+mod pip_sync_sources;
+
+#[cfg(feature = "test-python")]
 mod pip_sync_target;
 
 #[cfg(feature = "test-python")]
