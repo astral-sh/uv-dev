@@ -181,6 +181,12 @@ fn prune_stale_revision_content_addressed_cache() -> Result<()> {
     Installed 1 package in [TIME]
      + project==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    let stale_revision = sole_project_revision(&context)?;
+    let archive_files = context.cache_files(CacheBucket::Archive)?;
+    assert!(
+        !archive_files.is_empty(),
+        "expected a cached project archive"
+    );
 
     uv_snapshot!(context.filters(), context
         .pip_install()
@@ -195,6 +201,11 @@ fn prune_stale_revision_content_addressed_cache() -> Result<()> {
     Installed 1 package in [TIME]
      ~ project==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    assert!(
+        stale_revision.is_dir(),
+        "first revision disappeared before pruning: {}",
+        stale_revision.display()
+    );
 
     // Pruning should remove the unused revision but retain the shared archive.
     uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
@@ -209,6 +220,9 @@ fn prune_stale_revision_content_addressed_cache() -> Result<()> {
     DEBUG Removing dangling source revision: [CACHE_DIR]/sdists-v10/[ENTRY]
     Removed [N] files ([SIZE])
     ");
+    assert_ne!(sole_project_revision(&context)?, stale_revision);
+    assert_path_missing(stale_revision);
+    assert_eq!(context.cache_files(CacheBucket::Archive)?, archive_files);
 
     // Uninstall and reinstall the package. We should use the cached version.
     uv_snapshot!(context.filters(), context
