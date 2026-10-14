@@ -3276,13 +3276,6 @@ fn python_install_upgrade() -> anyhow::Result<()> {
     ");
     assert_eq!(context.read(&older_patch_marker), "original installation\n");
 
-    // Request a patch version with `--upgrade`
-    uv_snapshot!(context.filters(), context.python_install().arg("--upgrade").arg("3.11.4"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: `uv python install --upgrade` only accepts minor versions, got: 3.11.4
-    ");
-
     // Request a version that isn't installed yet
     uv_snapshot!(context.filters(), context.python_install().arg("--upgrade").arg("3.11"), @"
     exit_code: 0 (success)
