@@ -403,25 +403,30 @@ impl GitRemote {
             fetch(&mut db.repo, &self.url, reference, settings)
                 .with_context(|| format!("failed to fetch into: {}", into.user_display()))?;
 
-            // An opened database can back existing worktrees, so resolution errors must not replace it.
-            let rev = db.repo.resolve(reference)?;
-            if with_lfs {
-                let lfs_ready = fetch_lfs(
-                    &db.repo,
-                    &self.url,
-                    &rev,
-                    settings.disable_ssl,
-                    settings.offline,
-                    None,
-                )
-                .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
-                db = db.with_lfs_ready(Some(lfs_ready));
+            // Worktree databases must remain intact when revision resolution fails.
+            let rev = match settings.checkout {
+                GitCheckoutStrategy::Clone => db.repo.resolve(reference).ok(),
+                GitCheckoutStrategy::Worktree => Some(db.repo.resolve(reference)?),
+            };
+            if let Some(rev) = rev {
+                if with_lfs {
+                    let lfs_ready = fetch_lfs(
+                        &db.repo,
+                        &self.url,
+                        &rev,
+                        settings.disable_ssl,
+                        settings.offline,
+                        None,
+                    )
+                    .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
+                    db = db.with_lfs_ready(Some(lfs_ready));
+                }
+                db.remote = self;
+                return Ok((db, rev));
             }
-            db.remote = self;
-            return Ok((db, rev));
         }
 
-        // Start from scratch when no usable database could be opened, then resolve the clone.
+        // Recreate the database and retry revision resolution.
         match fs_err::remove_dir_all(into) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
