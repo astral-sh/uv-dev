@@ -222,17 +222,22 @@ impl GitRepository {
 
     /// Parses the object ID of the given `refname`.
     fn rev_parse(&self, refname: &str) -> Result<GitOid> {
-        let result = GIT
+        Ok(self.rev_parse_output(&[refname])?.parse()?)
+    }
+
+    /// Run `git rev-parse` and return its trimmed output.
+    fn rev_parse_output(&self, args: &[&str]) -> Result<String> {
+        let output = GIT
             .as_ref()
             .cloned()?
             .arg("rev-parse")
-            .arg(refname)
+            .args(args)
             .cwd(&self.path)
             .exec_with_output()?;
 
-        let mut result = String::from_utf8(result.stdout)?;
+        let mut result = String::from_utf8(output.stdout)?;
         result.truncate(result.trim_end().len());
-        Ok(result.parse()?)
+        Ok(result)
     }
 
     /// Verifies LFS artifacts have been initialized for a given `refname`.
@@ -405,18 +410,7 @@ impl GitDatabase {
 
     /// Get a short OID for a `revision`, usually 7 chars or more if ambiguous.
     pub(crate) fn to_short_id(&self, revision: GitOid) -> Result<String> {
-        let output = GIT
-            .as_ref()
-            .cloned()?
-            .arg("rev-parse")
-            .arg("--short")
-            .arg(revision.as_str())
-            .cwd(&self.repo.path)
-            .exec_with_output()?;
-
-        let mut result = String::from_utf8(output.stdout)?;
-        result.truncate(result.trim_end().len());
-        Ok(result)
+        self.repo.rev_parse_output(&["--short", revision.as_str()])
     }
 
     /// Checks if `oid` resolves to a commit in this database.
