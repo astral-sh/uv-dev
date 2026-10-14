@@ -1330,7 +1330,9 @@ fn create_venv_warns_user_on_requires_python_discovery_error() -> Result<()> {
 
 #[test]
 fn create_venv_explicit_request_takes_priority_over_python_version_file() {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    // Both default discovery and the version file select 3.12, so only the explicit request can
+    // select 3.11.
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
     context
         .temp_dir
