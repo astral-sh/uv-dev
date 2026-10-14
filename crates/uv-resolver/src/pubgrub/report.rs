@@ -21,7 +21,7 @@ use uv_pep508::{MarkerEnvironment, MarkerExpression, MarkerTree, MarkerValueVers
 use uv_platform_tags::{AbiTag, IncompatibleTag, LanguageTag, PlatformTag, Tags};
 
 use crate::candidate_selector::CandidateSelector;
-use crate::error::{ErrorTree, PrefixMatch};
+use crate::error::{ErrorTree, PrefixMatch, derivation_tree_externals};
 use crate::fork_indexes::ForkIndexes;
 use crate::fork_urls::ForkUrls;
 use crate::prerelease::PrereleaseSelection;
@@ -983,30 +983,23 @@ impl PubGrubReportFormatter<'_> {
         derivation_tree: &ErrorTree,
     ) -> FxHashMap<PackageName, Range<Version>> {
         let mut exclude_newer_ranges: FxHashMap<PackageName, Range<Version>> = FxHashMap::default();
-        let mut trees = vec![derivation_tree];
-        while let Some(derivation_tree) = trees.pop() {
-            match derivation_tree {
-                DerivationTree::External(External::Custom(package, versions, reason)) => {
-                    if matches!(
-                        reason,
-                        UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
-                            IncompatibleDist::Wheel(IncompatibleWheel::ExcludeNewer(_))
-                                | IncompatibleDist::Source(IncompatibleSource::ExcludeNewer(_))
-                        ))
-                    ) {
-                        if let Some(name) = package.name() {
-                            exclude_newer_ranges
-                                .entry(name.clone())
-                                .and_modify(|set| *set = set.union(versions))
-                                .or_insert_with(|| versions.clone());
-                        }
-                    }
-                }
-                DerivationTree::External(_) => {}
-                DerivationTree::Derived(derived) => {
-                    trees.push(&derived.cause2);
-                    trees.push(&derived.cause1);
-                }
+        for external in derivation_tree_externals(derivation_tree) {
+            let External::Custom(
+                package,
+                versions,
+                UnavailableReason::Version(UnavailableVersion::IncompatibleDist(
+                    IncompatibleDist::Wheel(IncompatibleWheel::ExcludeNewer(_))
+                    | IncompatibleDist::Source(IncompatibleSource::ExcludeNewer(_)),
+                )),
+            ) = external
+            else {
+                continue;
+            };
+            if let Some(name) = package.name() {
+                exclude_newer_ranges
+                    .entry(name.clone())
+                    .and_modify(|set| *set = set.union(versions))
+                    .or_insert_with(|| versions.clone());
             }
         }
         exclude_newer_ranges
