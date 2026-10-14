@@ -1,11 +1,11 @@
-use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
-use std::{env, io, panic};
+use std::{env, io};
 
-use async_channel::{Receiver, SendError};
-use tempfile::tempdir_in;
+use async_channel::{Receiver, SendError, Sender};
+use tempfile::{TempDir, tempdir_in};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
@@ -22,8 +22,31 @@ const COMPILEALL_SCRIPT: &str = include_str!("pip_compileall.py");
 /// This is longer than any compilation should ever take.
 const DEFAULT_COMPILE_TIMEOUT: Duration = Duration::from_mins(1);
 
-type WorkerOutcome = std::thread::Result<Result<(), CompileError>>;
-type WorkerHandle = oneshot::Receiver<WorkerOutcome>;
+type WorkerHandle = oneshot::Receiver<Result<(), CompileError>>;
+
+/// Bytecode workers and the resources needed until they exit.
+struct BytecodeWorkers {
+    handles: Vec<WorkerHandle>,
+    _script_directory: TempDir,
+    sender: Sender<PathBuf>,
+    source_files: usize,
+}
+
+/// Immutable settings shared by all bytecode compilation workers.
+struct BytecodeWorkerContext {
+    directory: PathBuf,
+    interpreter: PathBuf,
+    script: PathBuf,
+    timeout: Option<Duration>,
+}
+
+/// A ready Python bytecode compiler and its communication streams.
+struct BytecodeCompiler {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    stderr: ChildStderr,
+}
 
 #[derive(Debug, Error)]
 pub enum CompileError {
@@ -66,18 +89,13 @@ pub enum CompileError {
 
 fn compile_timeout() -> Result<Option<Duration>, CompileError> {
     let timeout = match env::var(EnvVars::UV_COMPILE_BYTECODE_TIMEOUT) {
-        Ok(value) => match value.as_str() {
-            "0" => None,
-            _ => match value.parse::<u64>().map(Duration::from_secs) {
-                Ok(duration) => Some(duration),
-                Err(_) => {
-                    return Err(CompileError::EnvironmentError {
-                        var: EnvVars::UV_COMPILE_BYTECODE_TIMEOUT,
-                        message: format!("Expected an integer number of seconds, got \"{value}\""),
-                    });
-                }
-            },
-        },
+        Ok(value) if value == "0" => None,
+        Ok(value) => Some(value.parse::<u64>().map(Duration::from_secs).map_err(|_| {
+            CompileError::EnvironmentError {
+                var: EnvVars::UV_COMPILE_BYTECODE_TIMEOUT,
+                message: format!("Expected an integer number of seconds, got \"{value}\""),
+            }
+        })?),
         Err(_) => Some(DEFAULT_COMPILE_TIMEOUT),
     };
     if let Some(duration) = timeout {
@@ -94,37 +112,35 @@ fn compile_timeout() -> Result<Option<Duration>, CompileError> {
 fn spawn_workers(
     dir: &Path,
     python_executable: &Path,
-    pip_compileall_py: &Path,
-    receiver: &Receiver<PathBuf>,
+    cache: &Path,
     worker_count: usize,
-    timeout: Option<Duration>,
-) -> Vec<WorkerHandle> {
+) -> Result<BytecodeWorkers, CompileError> {
+    // A larger buffer is significantly faster than just 1 or the worker count.
+    let (sender, receiver) = async_channel::bounded::<PathBuf>(worker_count * 10);
+
+    // Running Python with an actual file will produce better error messages.
+    let script_directory = tempdir_in(cache).map_err(CompileError::TempFile)?;
+    let script = script_directory.path().join("pip_compileall.py");
+    let timeout = compile_timeout()?;
+    let context = Arc::new(BytecodeWorkerContext {
+        directory: dir.to_path_buf(),
+        interpreter: python_executable.to_path_buf(),
+        script,
+        timeout,
+    });
     debug!("Starting {} bytecode compilation workers", worker_count);
     let mut worker_handles = Vec::with_capacity(worker_count);
     for _ in 0..worker_count {
         let (tx, rx) = oneshot::channel();
 
-        let worker = worker(
-            dir.to_path_buf(),
-            python_executable.to_path_buf(),
-            pip_compileall_py.to_path_buf(),
-            receiver.clone(),
-            timeout,
-        );
+        let context = Arc::clone(&context);
+        let receiver = receiver.clone();
 
         // Spawn each worker on a dedicated thread.
         std::thread::Builder::new()
             .name("uv-compile".to_owned())
             .spawn(move || {
-                // Report panics back to the main thread.
-                let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .expect("Failed to build runtime")
-                        .block_on(worker)
-                }));
-
+                let result = run_worker(context, receiver);
                 // This may fail if the main thread returned early due to an error.
                 let _ = tx.send(result);
             })
@@ -132,30 +148,64 @@ fn spawn_workers(
 
         worker_handles.push(rx);
     }
-    worker_handles
+    // Make sure the channel gets closed when all workers exit.
+    drop(receiver);
+    Ok(BytecodeWorkers {
+        handles: worker_handles,
+        _script_directory: script_directory,
+        sender,
+        source_files: 0,
+    })
 }
 
-/// Wait for all workers to exit so worker failures are not hidden by channel send errors.
-async fn wait_for_workers(
-    worker_handles: Vec<WorkerHandle>,
-    send_error: Option<SendError<PathBuf>>,
-) -> Result<(), CompileError> {
-    for result in futures::future::join_all(worker_handles).await {
-        match result {
-            // A worker thread panicked or exited without reporting its result.
-            Err(_) | Ok(Err(_)) => return Err(CompileError::Join),
-            Ok(Ok(Err(compile_error))) => return Err(compile_error),
-            Ok(Ok(Ok(()))) => {}
+impl BytecodeWorkers {
+    /// Submit a source file to a worker.
+    async fn submit(&mut self, file: PathBuf) -> Result<(), CompileError> {
+        self.sender
+            .send(file)
+            .await
+            .map_err(CompileError::WorkerDisappeared)?;
+        self.source_files += 1;
+        Ok(())
+    }
+
+    /// Submit discovered source files to workers in order.
+    async fn submit_files(
+        &mut self,
+        files: impl IntoIterator<Item = anyhow::Result<PathBuf>>,
+    ) -> Result<(), CompileError> {
+        for file in files {
+            let file = file.map_err(CompileError::SourceFiles)?;
+            debug_assert!(
+                file.is_absolute(),
+                "compileall doesn't work with relative paths: `{}`",
+                file.display()
+            );
+            self.submit(file).await?;
         }
+        Ok(())
     }
 
-    if let Some(send_error) = send_error {
-        // This is suspicious: Why did the channel stop working, but all workers exited
-        // successfully?
-        return Err(CompileError::WorkerDisappeared(send_error));
-    }
+    /// Wait for all workers to exit, prioritizing worker failures over producer failures.
+    async fn finish(
+        self,
+        producer_result: Result<(), CompileError>,
+    ) -> Result<usize, CompileError> {
+        let Self {
+            handles,
+            _script_directory,
+            sender,
+            source_files,
+        } = self;
+        // Closing the channel lets workers exit after consuming the remaining queued files.
+        drop(sender);
+        for result in futures::future::join_all(handles).await {
+            // A disconnected worker panicked or exited without reporting its result.
+            result.unwrap_or(Err(CompileError::Join))?;
+        }
 
-    Ok(())
+        producer_result.map(|()| source_files)
+    }
 }
 
 /// Bytecode compile all file in `dir` using a pool of Python interpreters running a Python script
@@ -181,29 +231,10 @@ pub async fn compile_tree(
         "compileall doesn't work with relative paths: `{}`",
         dir.display()
     );
-    let worker_count = concurrency.installs;
-
-    // A larger buffer is significantly faster than just 1 or the worker count.
-    let (sender, receiver) = async_channel::bounded::<PathBuf>(worker_count * 10);
-
-    // Running Python with an actual file will produce better error messages.
-    let tempdir = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let pip_compileall_py = tempdir.path().join("pip_compileall.py");
-    let timeout = compile_timeout()?;
-    let worker_handles = spawn_workers(
-        dir,
-        python_executable,
-        &pip_compileall_py,
-        &receiver,
-        worker_count,
-        timeout,
-    );
-    // Make sure the channel gets closed when all workers exit.
-    drop(receiver);
+    let mut workers = spawn_workers(dir, python_executable, cache, concurrency.installs)?;
 
     // Start the producer, sending all `.py` files to workers.
-    let mut source_files = 0;
-    let mut send_error = None;
+    let mut producer_result = Ok(());
     let walker = WalkDir::new(dir)
         .into_iter()
         // Otherwise we stumble over temporary files from `compileall`.
@@ -224,25 +255,18 @@ pub async fn compile_tree(
         };
         // https://github.com/pypa/pip/blob/3820b0e52c7fed2b2c43ba731b718f316e6816d1/src/pip/_internal/operations/install/wheel.py#L593-L604
         if entry.file_type().is_file() && entry.path().extension().is_some_and(|ext| ext == "py") {
-            source_files += 1;
-            if let Err(err) = sender.send(entry.path().to_owned()).await {
+            if let Err(err) = workers.submit(entry.into_path()).await {
                 // The workers exited.
                 // If e.g. something with the Python interpreter is wrong, the workers have exited
                 // with an error. We try to report this informative error and only if that fails,
                 // report the send error.
-                send_error = Some(err);
+                producer_result = Err(err);
                 break;
             }
         }
     }
 
-    // All workers will receive an error after the last item. Note that there are still
-    // up to worker_count * 10 items in the queue.
-    drop(sender);
-
-    wait_for_workers(worker_handles, send_error).await?;
-
-    Ok(source_files)
+    workers.finish(producer_result).await
 }
 
 /// Bytecode compile the given Python source files using a pool of Python interpreters.
@@ -257,71 +281,40 @@ pub async fn compile_files(
     cache: &Path,
 ) -> Result<usize, CompileError> {
     let mut files = files.into_iter();
-    let mut initial_files = Vec::with_capacity(concurrency.installs);
-    for file in files.by_ref().take(concurrency.installs) {
-        initial_files.push(file.map_err(CompileError::SourceFiles)?);
-    }
+    let initial_files = files
+        .by_ref()
+        .take(concurrency.installs)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(CompileError::SourceFiles)?;
     if initial_files.is_empty() {
         return Ok(0);
     }
 
-    let worker_count = initial_files.len();
-    let (sender, receiver) = async_channel::bounded::<PathBuf>(worker_count * 10);
+    let mut workers = spawn_workers(cache, python_executable, cache, initial_files.len())?;
 
-    // Running Python with an actual file will produce better error messages.
-    let tempdir = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let pip_compileall_py = tempdir.path().join("pip_compileall.py");
-    let timeout = compile_timeout()?;
-    let worker_handles = spawn_workers(
-        cache,
-        python_executable,
-        &pip_compileall_py,
-        &receiver,
-        worker_count,
-        timeout,
-    );
-    drop(receiver);
+    let producer_result = workers
+        .submit_files(initial_files.into_iter().map(Ok).chain(files))
+        .await;
+    workers.finish(producer_result).await
+}
 
-    let mut send_error = None;
-    let mut source_error = None;
-    let mut source_files = 0;
-    for file in initial_files.into_iter().map(Ok).chain(files) {
-        let file = match file {
-            Ok(file) => file,
-            Err(err) => {
-                source_error = Some(err);
-                break;
-            }
-        };
-        debug_assert!(
-            file.is_absolute(),
-            "compileall doesn't work with relative paths: `{}`",
-            file.display()
-        );
-        source_files += 1;
-        if let Err(err) = sender.send(file).await {
-            send_error = Some(err);
-            break;
-        }
-    }
-    drop(sender);
-
-    wait_for_workers(worker_handles, send_error).await?;
-    if let Some(source_error) = source_error {
-        return Err(CompileError::SourceFiles(source_error));
-    }
-
-    Ok(source_files)
+/// Run a worker to completion on its dedicated thread.
+fn run_worker(
+    context: Arc<BytecodeWorkerContext>,
+    receiver: Receiver<PathBuf>,
+) -> Result<(), CompileError> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build runtime")
+        .block_on(worker(context, receiver))
 }
 
 async fn worker(
-    dir: PathBuf,
-    interpreter: PathBuf,
-    pip_compileall_py: PathBuf,
+    context: Arc<BytecodeWorkerContext>,
     receiver: Receiver<PathBuf>,
-    timeout: Option<Duration>,
 ) -> Result<(), CompileError> {
-    fs_err::tokio::write(&pip_compileall_py, COMPILEALL_SCRIPT)
+    fs_err::tokio::write(&context.script, COMPILEALL_SCRIPT)
         .await
         .map_err(CompileError::TempFile)?;
 
@@ -333,7 +326,8 @@ async fn worker(
         loop {
             // If the interpreter started successful, return it, else retry.
             if let Some(child) =
-                launch_bytecode_compiler(&dir, &interpreter, &pip_compileall_py).await?
+                launch_bytecode_compiler(&context.directory, &context.interpreter, &context.script)
+                    .await?
             {
                 break Ok::<_, CompileError>(child);
             }
@@ -342,26 +336,28 @@ async fn worker(
 
     // Handle a broken `python` by using a timeout, one that's higher than any compilation
     // should ever take.
-    let (mut bytecode_compiler, child_stdin, mut child_stdout, mut child_stderr) =
-        if let Some(duration) = timeout {
-            tokio::time::timeout(duration, wait_until_ready)
-                .await
-                .map_err(|_| CompileError::StartupTimeout(timeout.unwrap()))??
-        } else {
-            wait_until_ready.await?
-        };
+    let BytecodeCompiler {
+        mut child,
+        stdin,
+        mut stdout,
+        mut stderr,
+    } = if let Some(duration) = context.timeout {
+        tokio::time::timeout(duration, wait_until_ready)
+            .await
+            .map_err(|_| CompileError::StartupTimeout(duration))??
+    } else {
+        wait_until_ready.await?
+    };
 
     let stderr_reader = tokio::task::spawn(async move {
         let mut child_stderr_collected: Vec<u8> = Vec::new();
-        child_stderr
-            .read_to_end(&mut child_stderr_collected)
-            .await?;
+        stderr.read_to_end(&mut child_stderr_collected).await?;
         Ok(child_stderr_collected)
     });
 
-    let result = worker_main_loop(receiver, child_stdin, &mut child_stdout, timeout).await;
+    let result = worker_main_loop(receiver, stdin, &mut stdout, context.timeout).await;
     // Reap the process to avoid zombies.
-    let _ = bytecode_compiler.kill().await;
+    let _ = child.kill().await;
 
     // If there was something printed to stderr (which shouldn't happen, we muted all errors), tell
     // the user, otherwise only forward the result.
@@ -380,7 +376,7 @@ async fn worker(
             Ok(()) => {
                 debug!(
                     "Bytecode compilation `python` at `{}` stderr:\n{}\n---",
-                    interpreter.user_display(),
+                    context.interpreter.user_display(),
                     stderr
                 );
                 Ok(())
@@ -397,22 +393,14 @@ async fn worker(
     result
 }
 
-/// Returns the child and stdin/stdout/stderr on a successful launch or `None` for a broken interpreter state.
+/// Return a ready compiler, or `None` for a broken interpreter state.
 async fn launch_bytecode_compiler(
     dir: &Path,
     interpreter: &Path,
     pip_compileall_py: &Path,
-) -> Result<
-    Option<(
-        Child,
-        ChildStdin,
-        BufReader<ChildStdout>,
-        BufReader<ChildStderr>,
-    )>,
-    CompileError,
-> {
+) -> Result<Option<BytecodeCompiler>, CompileError> {
     // We input the paths through stdin and get the successful paths returned through stdout.
-    let mut bytecode_compiler = Command::new(interpreter)
+    let mut child = Command::new(interpreter)
         .arg(pip_compileall_py)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -425,26 +413,13 @@ async fn launch_bytecode_compiler(
 
     // https://stackoverflow.com/questions/49218599/write-to-child-process-stdin-in-rust/49597789#comment120223107_49597789
     // Unbuffered, we need to write immediately or the python process will get stuck waiting
-    let child_stdin = bytecode_compiler
-        .stdin
-        .take()
-        .expect("Child must have stdin");
-    let mut child_stdout = BufReader::new(
-        bytecode_compiler
-            .stdout
-            .take()
-            .expect("Child must have stdout"),
-    );
-    let child_stderr = BufReader::new(
-        bytecode_compiler
-            .stderr
-            .take()
-            .expect("Child must have stderr"),
-    );
+    let stdin = child.stdin.take().expect("Child must have stdin");
+    let mut stdout = BufReader::new(child.stdout.take().expect("Child must have stdout"));
+    let stderr = child.stderr.take().expect("Child must have stderr");
 
     // Check if the launch was successful.
     let mut out_line = String::new();
-    child_stdout
+    stdout
         .read_line(&mut out_line)
         .await
         .map_err(|err| CompileError::ChildStdio {
@@ -453,18 +428,16 @@ async fn launch_bytecode_compiler(
         })?;
 
     if out_line.trim_end() == "Ready" {
-        // Success
-        Ok(Some((
-            bytecode_compiler,
-            child_stdin,
-            child_stdout,
-            child_stderr,
-        )))
+        Ok(Some(BytecodeCompiler {
+            child,
+            stdin,
+            stdout,
+            stderr,
+        }))
     } else if out_line.is_empty() {
         // Failed to launch, try again
         Ok(None)
     } else {
-        // Not observed yet
         Err(CompileError::WrongPath("Ready".to_string(), out_line))
     }
 }
@@ -478,19 +451,22 @@ async fn worker_main_loop(
     child_stdout: &mut BufReader<ChildStdout>,
     timeout: Option<Duration>,
 ) -> Result<(), CompileError> {
+    let mut input_line = String::new();
     let mut out_line = String::new();
     while let Ok(source_file) = receiver.recv().await {
-        let source_file = source_file.display().to_string();
+        let source_file = source_file.to_string_lossy();
         if source_file.contains(['\r', '\n']) {
             warn_user!("Path contains newline, skipping: {source_file:?}");
             continue;
         }
         // Luckily, LF alone works on windows too
-        let bytes = format!("{source_file}\n").into_bytes();
+        input_line.clear();
+        input_line.push_str(&source_file);
+        input_line.push('\n');
 
         let python_handle = async {
             child_stdin
-                .write_all(&bytes)
+                .write_all(input_line.as_bytes())
                 .await
                 .map_err(|err| CompileError::ChildStdio {
                     device: "stdin",
@@ -510,12 +486,13 @@ async fn worker_main_loop(
         // Handle a broken `python` by using a timeout, one that's higher than any compilation
         // should ever take.
         if let Some(duration) = timeout {
-            tokio::time::timeout(duration, python_handle)
-                .await
-                .map_err(|_| CompileError::CompileTimeout {
+            let Ok(result) = tokio::time::timeout(duration, python_handle).await else {
+                return Err(CompileError::CompileTimeout {
                     elapsed: duration,
-                    source_file: source_file.clone(),
-                })??;
+                    source_file: source_file.into_owned(),
+                });
+            };
+            result?;
         } else {
             python_handle.await?;
         }
@@ -523,8 +500,11 @@ async fn worker_main_loop(
         // This is a sanity check, if we don't get the path back something has gone wrong, e.g.
         // we're not actually running a python interpreter.
         let actual = out_line.trim_end_matches(['\n', '\r']);
-        if actual != source_file {
-            return Err(CompileError::WrongPath(source_file, actual.to_string()));
+        if actual != source_file.as_ref() {
+            return Err(CompileError::WrongPath(
+                source_file.into_owned(),
+                actual.to_string(),
+            ));
         }
     }
     Ok(())
