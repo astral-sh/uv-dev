@@ -46,6 +46,7 @@ fn check_incompatible_packages_quiet() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn check_compatible_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -242,6 +243,7 @@ fn check_versionless_egg_info_file() -> Result<()> {
 // requests 2.31.0 requires idna (<4,>=2.5)
 // this test force-installs idna 2.4 to trigger a failure.
 #[test]
+#[cfg(feature = "test-pypi")]
 fn check_incompatible_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -302,6 +304,7 @@ fn check_incompatible_packages() -> Result<()> {
 // this test force-installs idna 2.4 and urllib3 1.20 to trigger a failure
 // with multiple incompatible packages.
 #[test]
+#[cfg(feature = "test-pypi")]
 fn check_multiple_incompatible_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -366,6 +369,7 @@ fn check_multiple_incompatible_packages() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn check_python_version() {
     let context = uv_test::test_context!("3.12");
 
