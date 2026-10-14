@@ -5,6 +5,9 @@ use uv_static::EnvVars;
 
 use uv_test::uv_snapshot;
 
+#[cfg(feature = "native-auth")]
+use crate::native_auth_fixture::NativeAuthFixture;
+
 #[cfg(feature = "test-python")]
 #[tokio::test]
 async fn invalid_s3_endpoint_url() {
@@ -1631,101 +1634,39 @@ fn logout_text_store_multiple_usernames() {
 
 #[test]
 #[cfg(feature = "native-auth")]
-fn native_auth_prefix_match() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+fn native_auth_path_login_matches_child_path() -> Result<()> {
+    let fixture = NativeAuthFixture::new("https://example.invalid/api", "testpass")?;
 
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg("https://example.com/api")
-        .arg("--username")
-        .arg("testuser")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-
-    // Login with credentials for a path
-    uv_snapshot!(context.auth_login()
-        .arg("https://example.com/api")
-        .arg("--username")
-        .arg("testuser")
-        .arg("--password")
-        .arg("testpass")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for testuser@https://example.com/api
-    "
-    );
-
-    // A request for a child path does not match, the native store does not yet implement prefix
-    // matching
-    uv_snapshot!(context.auth_token()
-        .arg("https://example.com/api/v1")
-        .arg("--username")
-        .arg("testuser")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    uv_snapshot!(fixture.token("https://example.invalid/api/v1"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     testpass
     "
     );
 
-    Ok(())
+    fixture.finish()
 }
 
 #[test]
 #[cfg(feature = "native-auth")]
 fn native_auth_host_fallback() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+    let fixture = NativeAuthFixture::new("https://example.invalid/", "hostpass")?;
 
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg("example.com")
-        .arg("--username")
-        .arg("testuser")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-
-    // Login with credentials for the host
-    uv_snapshot!(context.auth_login()
-        .arg("example.com")
-        .arg("--username")
-        .arg("testuser")
-        .arg("--password")
-        .arg("hostpass")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for testuser@https://example.com/
-    "
-    );
-
-    // Should fallback to host-level matching
-    uv_snapshot!(context.auth_token()
-        .arg("https://example.com/any/path")
-        .arg("--username")
-        .arg("testuser")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    uv_snapshot!(fixture.token("https://example.invalid/any/path"), @r"
     exit_code: 0 (success)
     ----- stdout -----
     hostpass
     "
     );
 
-    // A request to another host should not work
-    uv_snapshot!(context.auth_token()
-        .arg("https://another-example.com/any/path")
-        .arg("--username")
-        .arg("testuser")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+    uv_snapshot!(fixture.filters(), fixture.token("https://other.invalid/any/path"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Failed to fetch credentials for `testuser@https://another-example.com/any/path`
+    error: Failed to fetch credentials for `[USERNAME]@https://other.invalid/any/path`
     "
     );
 
-    Ok(())
+    fixture.finish()
 }
 
 /// Test credential helper with basic auth credentials
