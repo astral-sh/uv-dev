@@ -1845,9 +1845,7 @@ async fn check_uses_exact_ty_version_from_selected_included_group() -> Result<()
 #[test]
 #[cfg(feature = "test-pypi")]
 fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filter((r"sha256:[0-9a-f]{64}", "sha256:[HASH]"))
-        .with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
     context
         .temp_dir
@@ -1871,24 +1869,33 @@ fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
         .assert()
         .success();
 
-    let mut lock = context.read("uv.lock");
-    let hash_indices = lock
-        .match_indices("sha256:")
-        .map(|(index, _)| index + "sha256:".len())
+    // Corrupt every platform's candidate, while retaining its real digest for the diagnostic.
+    let lock = context.read("uv.lock");
+    let hashes = regex::Regex::new(r"sha256:[0-9a-f]{64}")?;
+    let original_hashes = hashes
+        .find_iter(&lock)
+        .map(|hash| hash.as_str())
         .collect::<Vec<_>>();
-    assert!(!hash_indices.is_empty());
-    for index in hash_indices.into_iter().rev() {
-        let replacement = if lock.as_bytes()[index] == b'0' {
-            "1"
-        } else {
-            "0"
-        };
-        lock.replace_range(index..=index, replacement);
-    }
-    context.temp_dir.child("uv.lock").write_str(&lock)?;
+    assert!(
+        !original_hashes.is_empty(),
+        "ty has no locked artifact hashes"
+    );
+    const INVALID_HASH: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    assert!(!original_hashes.contains(&INVALID_HASH));
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&hashes.replace_all(&lock, INVALID_HASH))?;
+    let mut filters = context.filters();
+    filters.extend(
+        original_hashes
+            .into_iter()
+            .map(|hash| (hash, "sha256:[COMPUTED_HASH]")),
+    );
 
     uv_snapshot!(
-        context.filters(),
+        filters,
         context.check().arg("--no-sync").arg("--frozen"),
         @"
     exit_code: 1 (failure)
@@ -1898,10 +1905,10 @@ fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
       cause: Hash mismatch for `ty==0.0.17`
 
              Expected:
-               sha256:[HASH]
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
 
              Computed:
-               sha256:[HASH]
+               sha256:[COMPUTED_HASH]
     "
     );
 
