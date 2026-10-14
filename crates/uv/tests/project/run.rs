@@ -7652,26 +7652,41 @@ fn run_project_precedes_target_workspace_discovery() -> Result<()> {
 
 /// Using `--project` with a non-existent directory should error.
 #[test]
-fn run_project_not_found() {
-    let context = uv_test::test_context!("3.12");
+fn run_project_not_found() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let working_directory = context.temp_dir.child("working-directory");
+    working_directory.create_dir_all()?;
+    let missing_project = context.temp_dir.child("missing-project");
 
-    uv_snapshot!(context.filters(), context.run().arg("--project").arg("/tmp/does-not-exist-uv-test").arg("python").arg("-c").arg("print('hello')"), @"
+    uv_snapshot!(context.filters(), context.run().current_dir(&working_directory)
+        .arg("--project").arg(missing_project.path())
+        .args(["python", "-c", "print('hello')"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Project directory `/tmp/does-not-exist-uv-test` does not exist
+    error: Project directory `[TEMP_DIR]/missing-project` does not exist
     ");
+
+    Ok(())
 }
 
 /// Using `--project` with a non-existent directory should error with `UV_PREVIEW=1`.
 #[test]
-fn run_project_not_found_uv_preview_env() {
-    let context = uv_test::test_context!("3.12");
+fn run_project_not_found_uv_preview_env() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let working_directory = context.temp_dir.child("working-directory");
+    working_directory.create_dir_all()?;
+    let missing_project = context.temp_dir.child("missing-project");
 
-    uv_snapshot!(context.filters(), context.run().env("UV_PREVIEW", "1").arg("--project").arg("/tmp/does-not-exist-uv-test").arg("python").arg("-c").arg("print('hello')"), @"
+    uv_snapshot!(context.filters(), context.run().current_dir(&working_directory)
+        .env(EnvVars::UV_PREVIEW, "1")
+        .arg("--project").arg(missing_project.path())
+        .args(["python", "-c", "print('hello')"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Project directory `/tmp/does-not-exist-uv-test` does not exist
+    error: Project directory `[TEMP_DIR]/missing-project` does not exist
     ");
+
+    Ok(())
 }
 
 /// When `--project` points to a `pyproject.toml` file, resolve to its parent directory without
