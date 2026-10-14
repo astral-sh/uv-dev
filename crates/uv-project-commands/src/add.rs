@@ -1,4 +1,3 @@
-use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::Path;
@@ -1049,12 +1048,7 @@ fn edits(
             for edit in &mut edits {
                 if edit.dependency_type == dependency_type {
                     match &mut edit.edit {
-                        ArrayEdit::Add(existing) => {
-                            if *existing >= *index {
-                                *existing += 1;
-                            }
-                        }
-                        ArrayEdit::Update(existing) => {
+                        ArrayEdit::Add(existing) | ArrayEdit::Update(existing) => {
                             if *existing >= *index {
                                 *existing += 1;
                             }
@@ -1158,16 +1152,10 @@ async fn lock_and_sync(
             let Some(version) = dist.version() else {
                 continue;
             };
-            match minimum_version.entry(name) {
-                Entry::Vacant(entry) => {
-                    entry.insert(version);
-                }
-                Entry::Occupied(mut entry) => {
-                    if version < *entry.get() {
-                        entry.insert(version);
-                    }
-                }
-            }
+            minimum_version
+                .entry(name)
+                .and_modify(|minimum| *minimum = std::cmp::min(*minimum, version))
+                .or_insert(version);
         }
 
         // If any of the requirements were added without version specifiers, add a lower bound.
