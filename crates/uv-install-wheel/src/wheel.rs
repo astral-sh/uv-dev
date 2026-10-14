@@ -526,19 +526,27 @@ fn move_folder_recorded(
         } else {
             validate_data_script_destination(&target, scripts)?;
             rename_or_copy.rename_or_copy(src, &target)?;
-            let entry = record
-                .iter_mut()
-                .find(|entry| Path::new(&entry.path) == relative_to_site_packages)
-                .ok_or_else(|| Error::RecordFile {
-                    relative: relative_to_site_packages.to_path_buf(),
-                    absolute: src.to_path_buf(),
-                })?;
+            let entry = find_record_entry(record, relative_to_site_packages, src)?;
             entry.path = relative_to(&target, site_packages)?
                 .portable_display()
                 .to_string();
         }
     }
     Ok(())
+}
+
+fn find_record_entry<'record>(
+    record: &'record mut [RecordEntry],
+    relative: &Path,
+    absolute: &Path,
+) -> Result<&'record mut RecordEntry, Error> {
+    record
+        .iter_mut()
+        .find(|entry| Path::new(&entry.path) == relative)
+        .ok_or_else(|| Error::RecordFile {
+            relative: relative.to_path_buf(),
+            absolute: absolute.to_path_buf(),
+        })
 }
 
 /// Installs a single script (not an entrypoint).
@@ -744,16 +752,7 @@ fn install_script(
     let relative_to_site_packages = path
         .strip_prefix(site_packages)
         .expect("Prefix must no change");
-    let entry = record
-        .iter_mut()
-        .find(|entry| Path::new(&entry.path) == relative_to_site_packages)
-        .ok_or_else(|| {
-            // It should not be possible to error at this point, but filesystems and such.
-            Error::RecordFile {
-                relative: relative_to_site_packages.to_path_buf(),
-                absolute: path.clone(),
-            }
-        })?;
+    let entry = find_record_entry(record, relative_to_site_packages, &path)?;
 
     // Update the entry in the `RECORD`.
     entry.path = script_relative.portable_display().to_string();
