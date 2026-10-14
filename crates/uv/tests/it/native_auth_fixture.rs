@@ -10,9 +10,9 @@ use uv_test::TestContext;
 
 pub(super) struct NativeAuthFixture {
     context: TestContext,
-    service: &'static str,
-    username: String,
-    password: &'static str,
+    service: String,
+    username: Option<String>,
+    secret: &'static str,
     armed: bool,
 }
 
@@ -26,41 +26,58 @@ impl NativeAuthFixture {
             context.root.file_name().unwrap().to_string_lossy()
         );
         let context = context.with_filter((regex::escape(&username), "[USERNAME]"));
+        Self::login(context, service.to_owned(), Some(username), password)
+    }
+
+    pub(super) fn new_token(token: &'static str) -> Result<Self> {
+        let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+        // Token credentials use the same implicit account, so isolate them by service.
+        let service = format!(
+            "https://uv-test-{}.invalid/basic-auth",
+            hex::encode(context.root.file_name().unwrap().as_encoded_bytes())
+        );
+        let context = context.with_filter((regex::escape(&service), "[SERVICE]"));
+        Self::login(context, service, None, token)
+    }
+
+    fn login(
+        context: TestContext,
+        service: String,
+        username: Option<String>,
+        secret: &'static str,
+    ) -> Result<Self> {
         let mut fixture = Self {
             context,
             service,
             username,
-            password,
+            secret,
             armed: false,
         };
 
         let status = fixture
-            .token(service)
+            .own_token()
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()?;
         ensure!(
             status.code() == Some(2),
-            "refusing to overwrite a native credential for {}@{service}",
-            fixture.username
+            "refusing to overwrite a native credential for {}",
+            fixture.label()
         );
         fixture.armed = true;
-        fixture
-            .context
-            .auth_login()
-            .arg(service)
-            .arg("--username")
-            .arg(&fixture.username)
-            .arg("--password")
-            .arg(password)
+        let mut login = fixture.context.auth_login();
+        login.arg(&fixture.service);
+        if let Some(username) = &fixture.username {
+            login.args(["--username", username, "--password", secret]);
+        } else {
+            login.args(["--token", secret]);
+        }
+        login
             .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
             .assert()
             .success()
             .stdout("")
-            .stderr(format!(
-                "Stored credentials for {}@{service}\n",
-                fixture.username
-            ));
+            .stderr(format!("Stored credentials for {}\n", fixture.label()));
         Ok(fixture)
     }
 
@@ -68,9 +85,25 @@ impl NativeAuthFixture {
         let mut command = self.context.auth_token();
         command
             .arg(service)
-            .arg("--username")
-            .arg(&self.username)
             .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth");
+        if let Some(username) = &self.username {
+            command.args(["--username", username]);
+        }
+        command
+    }
+
+    pub(super) fn own_token(&self) -> Command {
+        self.token(&self.service)
+    }
+
+    pub(super) fn logout(&self) -> Command {
+        let mut command = self.context.auth_logout();
+        command
+            .arg(&self.service)
+            .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth");
+        if let Some(username) = &self.username {
+            command.args(["--username", username]);
+        }
         command
     }
 
@@ -84,21 +117,37 @@ impl NativeAuthFixture {
         result
     }
 
-    fn remove_owned_credential(&self) -> Result<()> {
-        let output = self.token(self.service).output()?;
+    pub(super) fn finish_after_logout(mut self) -> Result<()> {
+        let status = self
+            .own_token()
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
         ensure!(
-            output.status.success() && output.stdout.trim_ascii_end() == self.password.as_bytes(),
-            "refusing to remove an unverified native credential for {}@{}",
-            self.username,
-            self.service
+            status.code() == Some(2),
+            "native credential remained after logout for {}",
+            self.label()
+        );
+        self.armed = false;
+        Ok(())
+    }
+
+    fn label(&self) -> String {
+        self.username.as_ref().map_or_else(
+            || self.service.clone(),
+            |username| format!("{username}@{}", self.service),
+        )
+    }
+
+    fn remove_owned_credential(&self) -> Result<()> {
+        let output = self.own_token().output()?;
+        ensure!(
+            output.status.success() && output.stdout.trim_ascii_end() == self.secret.as_bytes(),
+            "refusing to remove an unverified native credential for {}",
+            self.label()
         );
         let status = self
-            .context
-            .auth_logout()
-            .arg(self.service)
-            .arg("--username")
-            .arg(&self.username)
-            .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+            .logout()
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()?;
