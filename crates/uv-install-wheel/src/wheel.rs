@@ -969,12 +969,7 @@ pub fn read_record(record: impl Read) -> Result<Vec<RecordEntry>, Error> {
     read_record_into_iter(record).collect()
 }
 
-pub(crate) fn write_record(
-    site_packages: &Path,
-    dist_info_prefix: &str,
-    mut record: Vec<RecordEntry>,
-) -> Result<(), Error> {
-    let record_file = dist_info_file(site_packages, dist_info_prefix, "RECORD");
+pub(crate) fn write_record(record_file: &Path, mut record: Vec<RecordEntry>) -> Result<(), Error> {
     let mut record_writer = csv::WriterBuilder::new()
         .has_headers(false)
         .escape(b'"')
@@ -1006,8 +1001,9 @@ pub fn validate_and_heal_record<'a>(
 
     // In the record: The files we expect in the wheel.
     let dist_info_prefix = find_dist_info(wheel_dir)?;
-    let dist_info_dir = format!("{dist_info_prefix}.dist-info");
-    let record_path = wheel_dir.join(&dist_info_dir).join("RECORD");
+    let relative_record_path =
+        PathBuf::from(format!("{dist_info_prefix}.dist-info")).join("RECORD");
+    let record_path = wheel_dir.join(&relative_record_path);
     let mut record_file = File::open(&record_path)?;
     let mut record = read_record(&mut record_file)?;
 
@@ -1026,8 +1022,8 @@ pub fn validate_and_heal_record<'a>(
 
     if !files.is_empty() {
         // Deprecated, but not listed in RECORD if used.
-        files.remove(Path::new(&dist_info_dir).join("RECORD.jws").as_path());
-        files.remove(Path::new(&dist_info_dir).join("RECORD.p7s").as_path());
+        files.remove(relative_record_path.with_file_name("RECORD.jws").as_path());
+        files.remove(relative_record_path.with_file_name("RECORD.p7s").as_path());
     }
 
     if extra_record_entries.is_empty() && files.is_empty() {
@@ -1066,8 +1062,8 @@ pub fn validate_and_heal_record<'a>(
         });
     }
 
-    write_record(wheel_dir, &dist_info_prefix, record)?;
-    Ok(Some(PathBuf::from(dist_info_dir).join("RECORD")))
+    write_record(&record_path, record)?;
+    Ok(Some(relative_record_path))
 }
 
 /// Parse metadata in email message format, such as WHEEL and METADATA.
@@ -1310,14 +1306,15 @@ mod test {
         let wheel = assert_fs::TempDir::new()?;
         let dist_info = wheel.child("demo-1.0.dist-info");
         dist_info.create_dir_all()?;
-        symlink("/dev/full", dist_info.child("RECORD").path())?;
+        let record = dist_info.child("RECORD");
+        symlink("/dev/full", record.path())?;
 
         let entry = RecordEntry {
             path: "demo.py".to_owned(),
             hash: None,
             size: None,
         };
-        let err = super::write_record(wheel.path(), "demo-1.0", vec![entry]).unwrap_err();
+        let err = super::write_record(record.path(), vec![entry]).unwrap_err();
         assert_matches!(err, Error::Io(err) if err.kind() == ErrorKind::StorageFull);
         Ok(())
     }
