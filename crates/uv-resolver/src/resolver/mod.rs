@@ -10,6 +10,7 @@ use std::time::Instant;
 use std::{mem, thread};
 
 use futures::{FutureExt, StreamExt};
+use hashbrown::hash_map::EntryRef;
 use itertools::Itertools;
 use papaya::{HashMap, ResizeMode};
 use pubgrub::{Id, IncompId, Incompatibility, Kind, Ranges, State, Term};
@@ -86,7 +87,10 @@ use crate::resolver::system::SystemDependency;
 pub(crate) use crate::resolver::urls::Urls;
 use crate::universal_marker::UniversalMarker;
 use crate::yanks::AllowedYanks;
-use crate::{DependencyMode, Exclusions, FlatIndex, Options, ResolutionMode, VersionMap, marker};
+use crate::{
+    DependencyMode, Exclusions, FlatIndex, FxHashbrownMap, Options, ResolutionMode, VersionMap,
+    marker,
+};
 pub(crate) use provider::MetadataUnavailable;
 pub(crate) use resolution::{
     Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionPackage, ResolvedFork,
@@ -2360,7 +2364,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         mut err: pubgrub::NoSolutionError<UvDependencyProvider>,
         fork_urls: ForkUrls,
         fork_indexes: ForkIndexes,
-        known_versions: &FxHashMap<PackageName, Arc<[Version]>>,
+        known_versions: &FxHashbrownMap<PackageName, Arc<[Version]>>,
         env: ResolverEnvironment,
         current_environment: MarkerEnvironment,
         visited: &FxHashSet<PackageName>,
@@ -2535,7 +2539,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 /// All known versions for each package, from the version maps and the installed packages,
 /// used to keep the version sets in the partial solution minimal.
 #[derive(Clone, Default)]
-struct KnownVersions(FxHashMap<PackageName, Arc<[Version]>>);
+struct KnownVersions(FxHashbrownMap<PackageName, Arc<[Version]>>);
 
 impl KnownVersions {
     /// Returns the sorted, deduplicated candidate universe used to widen version sets.
@@ -2562,26 +2566,29 @@ impl KnownVersions {
         let PackageSource::Registry(index_metadata) = source else {
             return None;
         };
-        if !self.0.contains_key(name) {
-            let response = index.get_versions(name, index_metadata)?;
-            let VersionsResponse::Found(ref version_maps) = *response else {
-                return None;
-            };
-            let mut versions: Vec<Version> = version_maps
-                .iter()
-                .flat_map(|version_map| version_map.included_versions().cloned())
-                .chain(
-                    installed_packages
-                        .get_packages(name)
-                        .iter()
-                        .map(|dist| dist.version().clone()),
-                )
-                .collect();
-            versions.sort_unstable();
-            versions.dedup();
-            self.0.insert(name.clone(), versions.into());
-        }
-        Some(&self.0[name][..])
+        let versions = match self.0.entry_ref(name) {
+            EntryRef::Occupied(entry) => entry.into_mut(),
+            EntryRef::Vacant(entry) => {
+                let response = index.get_versions(name, index_metadata)?;
+                let VersionsResponse::Found(ref version_maps) = *response else {
+                    return None;
+                };
+                let mut versions: Vec<Version> = version_maps
+                    .iter()
+                    .flat_map(|version_map| version_map.included_versions().cloned())
+                    .chain(
+                        installed_packages
+                            .get_packages(name)
+                            .iter()
+                            .map(|dist| dist.version().clone()),
+                    )
+                    .collect();
+                versions.sort_unstable();
+                versions.dedup();
+                entry.insert(versions.into())
+            }
+        };
+        Some(versions)
     }
 }
 
