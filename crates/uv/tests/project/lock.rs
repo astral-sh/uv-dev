@@ -1031,11 +1031,14 @@ fn legacy_metadata_free_lockfile() -> Result<()> {
     let lock = Lock::from_canonical_toml(legacy)?;
     assert_eq!(lock.to_toml()?, legacy);
     context.temp_dir.child("uv.lock").write_str(legacy)?;
-    context
-        .lock()
-        .args(["--offline", "--locked"])
-        .assert()
-        .failure();
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
     context
         .lock()
         .args([
@@ -1262,11 +1265,15 @@ fn unordered_default_groups_in_lockfile() -> Result<()> {
         dev = []
         docs = []
     "#})?;
-    context
-        .lock()
-        .args(["--offline", "--check"])
-        .assert()
-        .failure();
+    uv_snapshot!(context.filters(), context.lock().args(["--offline", "--check"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), noncanonical);
     let explicit_dev = indoc! {r#"
         version = 1
         revision = 5
