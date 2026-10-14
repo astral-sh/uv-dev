@@ -229,6 +229,11 @@ impl DnfCollector {
 /// Note: This function has quadratic time complexity. However, it is not applied on every marker
 /// operation, only to user facing output, which are typically very simple.
 fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
+    // A redundant term or clause requires another clause to imply it.
+    if dnf.len() < 2 {
+        return;
+    }
+
     for i in 0..dnf.len() {
         let clause = &dnf[i];
 
