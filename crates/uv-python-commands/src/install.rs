@@ -128,13 +128,9 @@ struct Changelog {
 
 impl Changelog {
     fn events(&self) -> impl Iterator<Item = ChangeEvent> {
-        let reinstalled = self
-            .uninstalled
-            .intersection(&self.installed)
-            .cloned()
-            .collect::<FxHashSet<_>>();
-        let uninstalled = self.uninstalled.difference(&reinstalled).cloned();
-        let installed = self.installed.difference(&reinstalled).cloned();
+        let uninstalled = self.uninstalled.difference(&self.installed);
+        let installed = self.installed.difference(&self.uninstalled);
+        let reinstalled = self.uninstalled.intersection(&self.installed);
 
         uninstalled
             .map(|key| ChangeEvent {
@@ -145,7 +141,7 @@ impl Changelog {
                 key: key.clone(),
                 kind: ChangeEventKind::Added,
             }))
-            .chain(reinstalled.iter().map(|key| ChangeEvent {
+            .chain(reinstalled.map(|key| ChangeEvent {
                 key: key.clone(),
                 kind: ChangeEventKind::Reinstalled,
             }))
@@ -789,7 +785,7 @@ async fn perform_install(
         return Ok(ExitStatus::Success);
     }
 
-    if !changelog.installed.is_empty() {
+    if let Some(first_installed) = changelog.installed.iter().next() {
         for install_key in &changelog.installed {
             // Make a note if the selected python is non-native for the architecture, if none of the
             // matching user requests were explicit.
@@ -830,61 +826,35 @@ async fn perform_install(
                 }
             }
         }
-        if changelog.installed.len() == 1 {
-            let installed = changelog.installed.iter().next().unwrap();
-            // Ex) "Installed Python 3.9.7 in 1.68s"
-            writeln!(
-                printer.stderr(),
-                "{}",
-                format!(
-                    "Installed {} {}",
-                    format!("Python {}", installed.version()).bold(),
-                    format!("in {}", elapsed(start.elapsed())).dimmed()
-                )
-                .dimmed()
-            )?;
+        let summary = if changelog.installed.len() == 1 {
+            format!("Python {}", first_installed.version())
         } else {
-            // Ex) "Installed 2 versions in 1.68s"
-            writeln!(
-                printer.stderr(),
-                "{}",
-                format!(
-                    "Installed {} {}",
-                    format!("{} versions", changelog.installed.len()).bold(),
-                    format!("in {}", elapsed(start.elapsed())).dimmed()
-                )
-                .dimmed()
-            )?;
-        }
+            format!("{} versions", changelog.installed.len())
+        };
+        writeln!(
+            printer.stderr(),
+            "{}",
+            format!(
+                "Installed {} {}",
+                summary.bold(),
+                format!("in {}", elapsed(start.elapsed())).dimmed()
+            )
+            .dimmed()
+        )?;
 
         for event in changelog.events() {
-            let executables = format_executables(&event, &changelog.installed_executables);
-            match event.kind {
-                ChangeEventKind::Added => {
-                    writeln!(
-                        printer.stderr(),
-                        " {} {}{executables}",
-                        "+".green(),
-                        event.key.bold()
-                    )?;
-                }
-                ChangeEventKind::Removed => {
-                    writeln!(
-                        printer.stderr(),
-                        " {} {}{executables}",
-                        "-".red(),
-                        event.key.bold()
-                    )?;
-                }
-                ChangeEventKind::Reinstalled => {
-                    writeln!(
-                        printer.stderr(),
-                        " {} {}{executables}",
-                        "~".yellow(),
-                        event.key.bold(),
-                    )?;
-                }
-            }
+            let executables = format_executables(&event.key, &changelog.installed_executables);
+            let (symbol, color) = match event.kind {
+                ChangeEventKind::Added => ("+", AnsiColors::Green),
+                ChangeEventKind::Removed => ("-", AnsiColors::Red),
+                ChangeEventKind::Reinstalled => ("~", AnsiColors::Yellow),
+            };
+            writeln!(
+                printer.stderr(),
+                " {} {}{executables}",
+                symbol.color(color),
+                event.key.bold()
+            )?;
         }
 
         if let Some(bin_dir) = bin_dir.as_ref() {
@@ -1001,14 +971,11 @@ fn create_bin_links(
         if upgrade && !target.try_exists().unwrap_or_default() {
             continue;
         }
-        let executable = if upgradeable {
-            if let Some(minor_version_link) =
+        let executable = if upgradeable
+            && let Some(minor_version_link) =
                 PythonMinorVersionLink::from_installation(installation)
-            {
-                minor_version_link.symlink_executable.clone()
-            } else {
-                installation.executable(false)
-            }
+        {
+            minor_version_link.symlink_executable
         } else {
             installation.executable(false)
         };
@@ -1020,12 +987,6 @@ fn create_bin_links(
                     target.simplified_display(),
                     installation.key(),
                 );
-                changelog.installed.insert(installation.key().clone());
-                changelog
-                    .installed_executables
-                    .entry(installation.key().clone())
-                    .or_default()
-                    .insert(target.clone());
             }
             Err(uv_python_managed::Error::LinkExecutable(err))
                 if err.kind() == ErrorKind::AlreadyExists =>
@@ -1073,7 +1034,7 @@ fn create_bin_links(
                                     );
                                 } else {
                                     // Defer reporting to allow grouping.
-                                    existing_unmanaged.push(target.clone());
+                                    existing_unmanaged.push(target);
                                 }
                                 continue;
                             }
@@ -1115,29 +1076,27 @@ fn create_bin_links(
                                 target.simplified_display(),
                                 installation.key(),
                             );
+                        } else if installation.is_upgrade_of(existing) {
+                            debug!(
+                                "Replacing existing executable for `{}` at `{}` with executable for `{}` since it is an upgrade",
+                                existing.key(),
+                                target.simplified_display(),
+                                installation.key(),
+                            );
+                        } else if default {
+                            debug!(
+                                "Replacing existing executable for `{}` at `{}` with executable for `{}` since `--default` was requested`",
+                                existing.key(),
+                                target.simplified_display(),
+                                installation.key(),
+                            );
                         } else {
-                            if installation.is_upgrade_of(existing) {
-                                debug!(
-                                    "Replacing existing executable for `{}` at `{}` with executable for `{}` since it is an upgrade",
-                                    existing.key(),
-                                    target.simplified_display(),
-                                    installation.key(),
-                                );
-                            } else if default {
-                                debug!(
-                                    "Replacing existing executable for `{}` at `{}` with executable for `{}` since `--default` was requested`",
-                                    existing.key(),
-                                    target.simplified_display(),
-                                    installation.key(),
-                                );
-                            } else {
-                                debug!(
-                                    "Executable already exists for `{}` at `{}`. Use `--force` to replace it",
-                                    existing.key(),
-                                    target.simplified_display()
-                                );
-                                continue;
-                            }
+                            debug!(
+                                "Executable already exists for `{}` at `{}`. Use `--force` to replace it",
+                                existing.key(),
+                                target.simplified_display()
+                            );
+                            continue;
                         }
                     }
                 }
@@ -1184,12 +1143,6 @@ fn create_bin_links(
                     target.simplified_display(),
                     installation.key(),
                 );
-                changelog.installed.insert(installation.key().clone());
-                changelog
-                    .installed_executables
-                    .entry(installation.key().clone())
-                    .or_default()
-                    .insert(target.clone());
             }
             Err(err) => {
                 errors.push((
@@ -1197,8 +1150,15 @@ fn create_bin_links(
                     installation.key().clone(),
                     Error::new(err),
                 ));
+                continue;
             }
         }
+        changelog.installed.insert(installation.key().clone());
+        changelog
+            .installed_executables
+            .entry(installation.key().clone())
+            .or_default()
+            .insert(target);
     }
 
     match existing_unmanaged.as_slice() {
@@ -1277,16 +1237,15 @@ async fn compile_stdlib_bytecode(
 }
 
 pub(crate) fn format_executables(
-    event: &ChangeEvent,
+    key: &PythonInstallationKey,
     executables: &FxHashMap<PythonInstallationKey, FxHashSet<PathBuf>>,
 ) -> String {
-    let Some(installed) = executables.get(&event.key) else {
+    let Some(installed) = executables
+        .get(key)
+        .filter(|installed| !installed.is_empty())
+    else {
         return String::new();
     };
-
-    if installed.is_empty() {
-        return String::new();
-    }
 
     let names = installed
         .iter()
