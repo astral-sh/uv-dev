@@ -560,25 +560,26 @@ fn install_script(
     const PLACEHOLDER_PYTHON: &[u8; 8] = b"#!python";
 
     let file_type = file.file_type()?;
+    let path = file.path();
 
     if file_type.is_dir() {
         return Err(Error::InvalidWheel(format!(
             "Wheel contains an invalid entry (directory) in the `scripts` directory: {}",
-            file.path().simplified_display()
+            path.simplified_display()
         )));
     }
 
     if file_type.is_symlink() {
-        let Ok(target) = file.path().canonicalize() else {
+        let Ok(target) = path.canonicalize() else {
             return Err(Error::InvalidWheel(format!(
                 "Wheel contains an invalid entry (broken symlink) in the `scripts` directory: {}",
-                file.path().simplified_display(),
+                path.simplified_display(),
             )));
         };
         if target.is_dir() {
             return Err(Error::InvalidWheel(format!(
                 "Wheel contains an invalid entry (directory symlink) in the `scripts` directory: {} ({})",
-                file.path().simplified_display(),
+                path.simplified_display(),
                 target.simplified_display()
             )));
         }
@@ -588,7 +589,6 @@ fn install_script(
     validate_data_script_destination(&script_absolute, &layout.scheme.scripts)?;
     let script_relative = relative_install_path(&script_absolute, site_packages)?;
 
-    let path = file.path();
     let mut script = BufReader::new(File::open(&path)?);
 
     // https://sphinx-locales.github.io/peps/pep-0427/#recommended-installer-features
