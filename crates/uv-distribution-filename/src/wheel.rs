@@ -139,16 +139,19 @@ impl WheelFilename {
             return full;
         }
 
+        // Canonical PEP 440 versions contain no dashes, so the first dash separates the tags.
+        let (version, tags) = full
+            .split_once('-')
+            .expect("cache key includes a separator");
+
         // Create a digest of the tag string (and variant if it exists) to retain
         // compatibility across platforms, Rust versions, etc.
-        let digest = cache_digest(&format!("{}", self.tags));
+        let digest = cache_digest(&tags);
 
         // Truncate the version, but avoid trailing dots, plus signs, etc. to avoid ambiguity.
         let version_width = CACHE_KEY_MAX_LEN - 1 /* dash */ - 16 /* digest */;
-        let mut version = self.version.to_string();
-
         // PANIC SAFETY: version strings can only contain ASCII characters.
-        version.truncate(version_width);
+        let version = &version[..version.len().min(version_width)];
         let version = version.trim_end_matches(['.', '+']);
 
         format!("{version}-{digest}")
