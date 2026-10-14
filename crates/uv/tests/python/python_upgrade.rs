@@ -1,15 +1,14 @@
-use std::path::Path;
 use std::process::Command;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::prelude::PathChild;
-use indoc::indoc;
 use insta::assert_snapshot;
 use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 
 use crate::build_upgrade::OutdatedPythonBuild;
+use crate::managed_venv::{create_stdlib_venv, venv_version};
 
 #[test]
 fn python_upgrade() {
@@ -410,12 +409,7 @@ fn python_upgrade_transparent_from_venv_module() {
      + cpython-3.12.9-[PLATFORM] (python3.12)
     ");
 
-    // CPython records the interpreter's directory as the environment's home, so create it
-    // through the managed minor-version interpreter instead of the user-bin launcher.
-    uv_snapshot!(context.filters(), context.run()
-        .args(["--python", "3.12", "python", "-m", "venv"])
-        .arg(context.venv.as_os_str())
-        .arg("--without-pip"), @"
+    uv_snapshot!(context.filters(), create_stdlib_venv(&context, "3.12"), @"
     exit_code: 0 (success)
     ");
 
@@ -863,20 +857,4 @@ print(sys.executable)
 
     let probe = venv_version(&context, python);
     Ok((context, probe))
-}
-
-/// Run the interpreter to verify it initializes as a virtual environment and print its version.
-fn venv_version(context: &TestContext, interpreter: impl AsRef<Path>) -> Command {
-    let mut command = context.external_command(interpreter);
-    command.args([
-        "-I",
-        "-c",
-        indoc! {"
-            import sys
-            if sys.prefix == sys.base_prefix:
-                raise RuntimeError('the interpreter is not in a virtual environment')
-            print('Python ' + sys.version.split()[0])
-        "},
-    ]);
-    command
 }
