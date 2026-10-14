@@ -1,19 +1,17 @@
-use rustc_hash::FxHashMap;
-
 use uv_distribution_types::{Requirement, RequirementSource};
 use uv_normalize::PackageName;
 use uv_pep508::MarkerTree;
 use uv_pypi_types::{ConflictItem, ConflictItemRef, ConflictKind};
 
-use crate::ResolverEnvironment;
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
+use crate::{FxHashbrownMap, ResolverEnvironment};
 
 /// A set of package names associated with a given fork.
 pub(crate) type ForkSet = ForkMap<()>;
 
 /// A map from package names to their values for a given fork.
 #[derive(Debug, Clone)]
-pub(crate) struct ForkMap<T>(FxHashMap<PackageName, Vec<Entry<T>>>);
+pub(crate) struct ForkMap<T>(FxHashbrownMap<PackageName, Vec<Entry<T>>>);
 
 /// An entry in a [`ForkMap`].
 #[derive(Debug, Clone)]
@@ -76,7 +74,7 @@ impl ForkScope {
 
 impl<T> Default for ForkMap<T> {
     fn default() -> Self {
-        Self(FxHashMap::default())
+        Self(FxHashbrownMap::default())
     }
 }
 
@@ -84,7 +82,7 @@ impl<T> ForkMap<T> {
     /// Associate a value with the [`Requirement`] in a given fork.
     pub(crate) fn add(&mut self, requirement: &Requirement, value: T) {
         self.0
-            .entry(requirement.name.clone())
+            .entry_ref(&requirement.name)
             .or_default()
             .push(Entry {
                 value,
