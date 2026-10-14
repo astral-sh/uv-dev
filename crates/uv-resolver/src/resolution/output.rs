@@ -79,38 +79,31 @@ pub(crate) fn from_state(
         }
     }
 
+    let multiple_forks = resolutions.len() > 1;
+    let mut fork_markers = if multiple_forks {
+        Vec::with_capacity(resolutions.len())
+    } else {
+        Vec::new()
+    };
     let mut seen = FxHashSet::default();
     for resolution in &resolutions {
         let marker = resolution.env.try_universal_markers().unwrap_or_default();
+        // A single unconditional environment does not represent a fork.
+        if multiple_forks || !marker.is_true() {
+            fork_markers.push(marker);
+        }
 
         // Add every edge to the graph, propagating the marker for the current fork, if
         // necessary.
         for edge in &resolution.edges {
             if !seen.insert((edge, marker)) {
-                // Insert each node only once.
+                // Insert each edge only once.
                 continue;
             }
 
             add_edge(&mut graph, &inverse, root_index, edge, marker);
         }
     }
-
-    let fork_markers: Vec<UniversalMarker> = if let [resolution] = resolutions.as_slice() {
-        // In the case of a singleton marker, we only include it if it's not
-        // always true. Otherwise, we keep our `fork_markers` empty as there
-        // are no forks.
-        resolution
-            .env
-            .try_universal_markers()
-            .into_iter()
-            .filter(|marker| !marker.is_true())
-            .collect()
-    } else {
-        resolutions
-            .iter()
-            .map(|resolution| resolution.env.try_universal_markers().unwrap_or_default())
-            .collect()
-    };
 
     // Compute and apply the marker reachability.
     let mut reachability = marker_reachability(&graph, &fork_markers);
