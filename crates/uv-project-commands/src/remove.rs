@@ -24,7 +24,6 @@ use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
-use uv_project_edit::{DependencyTarget, PyProjectTomlMut};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
@@ -114,15 +113,7 @@ pub async fn remove(
         EditTarget::Project(project)
     };
 
-    let mut toml = match &target {
-        EditTarget::Script(script) => {
-            PyProjectTomlMut::from_toml(&script.metadata.raw, DependencyTarget::Script)
-        }
-        EditTarget::Project(project) => PyProjectTomlMut::from_toml(
-            project.pyproject_toml().raw.as_ref(),
-            DependencyTarget::PyProjectToml,
-        ),
-    }?;
+    let mut toml = target.editable_toml()?;
 
     for package in packages {
         let missing = match &dependency_type {
