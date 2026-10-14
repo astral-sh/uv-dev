@@ -799,6 +799,7 @@ fn python_pin_with_comments_and_whitespace() -> Result<()> {
 #[test]
 #[cfg(feature = "test-python-managed")]
 fn python_pin_install() {
+    use assert_cmd::assert::OutputAssertExt;
     use uv_static::EnvVars;
 
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
@@ -818,6 +819,13 @@ fn python_pin_install() {
     ----- stdout -----
     Pinned `.python-version` to `3.12`
     ");
+
+    // Pinning can succeed after a download error, so verify the interpreter was installed.
+    context
+        .python_find()
+        .args(["3.12", "--managed-python"])
+        .assert()
+        .success();
 }
 
 #[test]
