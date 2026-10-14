@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use uv_auth::Service;
 use uv_distribution_types::IndexUrl;
@@ -27,5 +27,16 @@ fn display_service(service: &Service, username: &str) -> String {
         url.to_string()
     } else {
         format!("{username}@{url}")
+    }
+}
+
+/// Resolve a username supplied on the command line or embedded in the service URL.
+fn resolve_username(cli: Option<String>, url: Option<&str>) -> Result<Option<String>> {
+    match (cli, url) {
+        (Some(cli), Some(url)) => bail!(
+            "Cannot specify a username both via the URL and CLI; found `--username {cli}` and `{url}`"
+        ),
+        (Some(username), None) => Ok(Some(username)),
+        (None, username) => Ok(username.map(str::to_owned)),
     }
 }
