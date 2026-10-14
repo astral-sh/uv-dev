@@ -1343,7 +1343,7 @@ fn check_no_sync_creates_lock_without_sync() -> Result<()> {
         requires-dist = [{ name = "a", specifier = "==1.0.0" }]
         "#);
     });
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
 
     Ok(())
 }
@@ -1526,7 +1526,7 @@ fn check_no_sync_updates_stale_lock_without_sync() -> Result<()> {
         +requires-dist = [{ name = "a", specifier = "==2.0.0" }]
         "#);
     });
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
 
     Ok(())
 }
@@ -1579,7 +1579,7 @@ fn check_no_sync_locked_rejects_stale_lock_without_update() -> Result<()> {
     );
 
     assert_eq!(stale_lock, context.read("uv.lock"));
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
 
     Ok(())
 }
@@ -1666,7 +1666,7 @@ fn check_no_sync_frozen_uses_existing_lock_without_update() -> Result<()> {
     );
 
     assert_eq!(stale_lock, context.read("uv.lock"));
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
 
     Ok(())
 }
@@ -1739,7 +1739,7 @@ fn check_no_sync_isolated_does_not_write_lock_or_sync() -> Result<()> {
     );
 
     assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
 
     Ok(())
 }
@@ -3154,7 +3154,7 @@ fn check_with_declared_dependency() -> Result<()> {
             "from importlib.metadata import distribution; assert distribution('a').read_text('INSTALLER') == 'uv'",
         )
         .success();
-    assert!(!context.site_packages().join("b").exists());
+    context.assert_not_installed("b");
 
     Ok(())
 }
@@ -3213,7 +3213,7 @@ fn check_no_install_project() -> Result<()> {
     "
     );
 
-    assert!(context.site_packages().join("a").exists());
+    context.assert_installed("a", "1.0.0");
     assert!(
         !context
             .site_packages()
@@ -3243,7 +3243,7 @@ fn check_no_install_project() -> Result<()> {
     "
     );
 
-    assert!(context.site_packages().join("a").exists());
+    context.assert_installed("a", "1.0.0");
     assert!(
         !context
             .site_packages()
@@ -3379,7 +3379,7 @@ fn check_isolated() -> Result<()> {
     );
 
     assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
     assert!(environment_sentinel.exists());
 
     // An existing lockfile should not be updated.
@@ -3412,8 +3412,8 @@ fn check_isolated() -> Result<()> {
         .assert()
         .success();
     assert_eq!(existing_lock, context.read("uv.lock"));
-    assert!(!context.site_packages().join("a").exists());
-    assert!(!context.site_packages().join("b").exists());
+    context.assert_not_installed("a");
+    context.assert_not_installed("b");
     assert!(environment_sentinel.exists());
 
     Ok(())
