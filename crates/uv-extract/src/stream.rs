@@ -519,33 +519,12 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                     continue;
                 }
 
-                if let Some(local_header) = local_header {
-                    if let Some(digest) = local_header.digest {
-                        hashed_files.push(HashedFile::new(
-                            relpath.clone(),
-                            local_header.uncompressed_size,
-                            digest,
-                            entry
-                                .unix_permissions()
-                                .is_some_and(|mode| mode & 0o111 != 0),
-                        ));
-                    } else {
-                        files.push(UnhashedFile::new(
-                            relpath.to_path_buf(),
-                            local_header.uncompressed_size,
-                        ));
-                    }
-                }
-
+                let unix_permissions = entry.unix_permissions();
                 // On Unix, we need to set file permissions, which are stored in the central directory, at the
                 // end of the archive. The `ZipFileReader` reads until it sees a central directory signature,
                 // which indicates the first entry in the central directory. So we continue reading from there.
                 #[cfg(unix)]
-                {
-                    let Some(mode) = entry.unix_permissions() else {
-                        continue;
-                    };
-
+                if let Some(mode) = unix_permissions {
                     // If the file is included multiple times, ensure that the mode is consistent.
                     match modes.entry(relpath.clone()) {
                         std::collections::hash_map::Entry::Vacant(entry) => {
@@ -562,6 +541,22 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
 
                     if mode & 0o111 != 0 {
                         crate::set_executable_bits(&target.join(relpath.as_path()))?;
+                    }
+                }
+
+                if let Some(local_header) = local_header {
+                    if let Some(digest) = local_header.digest {
+                        hashed_files.push(HashedFile::new(
+                            relpath,
+                            local_header.uncompressed_size,
+                            digest,
+                            unix_permissions.is_some_and(|mode| mode & 0o111 != 0),
+                        ));
+                    } else {
+                        files.push(UnhashedFile::new(
+                            relpath.into_path_buf(),
+                            local_header.uncompressed_size,
+                        ));
                     }
                 }
             }
