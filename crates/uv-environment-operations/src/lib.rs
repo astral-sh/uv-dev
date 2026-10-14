@@ -2079,7 +2079,7 @@ fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: 
 
     if !no_build.is_none() && settings.build_options.no_build() != no_build {
         warn_user_once!(
-            "Ignoring `--no-binary` setting from requirements file. Instead, use the `--no-build` command-line argument, or set `no-build` in a `uv.toml` or `pyproject.toml` file."
+            "Ignoring `--only-binary` setting from requirements file. Instead, use the `--no-build` command-line argument, or set `no-build` in a `uv.toml` or `pyproject.toml` file."
         );
     }
 }
