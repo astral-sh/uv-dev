@@ -30,7 +30,7 @@ fn tool_run_reports_missing_python_patch() {
     uv_snapshot!(context.filters(), context.tool_run().arg("python@3.12.99"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: No interpreter found for Python 3.12.[X] in [PYTHON SOURCES]
+    error: No interpreter found for Python 3.12.99 in [PYTHON SOURCES]
     ");
 }
 
