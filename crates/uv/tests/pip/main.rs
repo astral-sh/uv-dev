@@ -15,7 +15,10 @@ mod pip_freeze;
 
 mod pip_install_scenarios;
 
+#[cfg(feature = "test-python")]
 mod pip_list;
+
+mod pip_list_input;
 
 mod pip_show;
 

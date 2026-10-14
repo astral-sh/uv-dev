@@ -7,7 +7,6 @@ use assert_fs::fixture::PathChild;
 use assert_fs::prelude::*;
 
 use uv_static::EnvVars;
-#[cfg(feature = "test-python")]
 use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::uv_snapshot;
 
@@ -214,7 +213,6 @@ fn list_single_no_editable() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-python")]
 fn list_outdated_formats() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let scenario = toml::from_str::<Scenario>(indoc::indoc! {r#"
@@ -324,22 +322,8 @@ fn list_outdated_find_links() -> Result<()> {
 }
 
 #[test]
-fn list_outdated_freeze() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_list().arg("--outdated").arg("--format").arg("freeze"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `--outdated` cannot be used with `--format freeze`
-    "
-    );
-}
-
-#[test]
 #[cfg(all(feature = "test-git", feature = "test-pypi"))]
 fn list_outdated_git() -> Result<()> {
-    use uv_test::packse::{PackseServer, scenario::Scenario};
-
     let context = uv_test::test_context!("3.12");
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -400,7 +384,6 @@ fn list_outdated_git() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-python")]
 fn list_outdated_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     // The configured index has `a==3.0.0` and `b`; the explicit index has only `a<=2.0.0`.
@@ -523,24 +506,6 @@ fn list_editable_filters() {
     idna 3.6
     sniffio 1.3.1
     ");
-}
-
-#[test]
-fn list_conflicting_editable_filters() {
-    let context = uv_test::test_context_with_versions!(&[]);
-
-    uv_snapshot!(context.filters(), context.pip_list()
-        .arg("--editable")
-        .arg("--exclude-editable"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: the argument '--editable' cannot be used with '--exclude-editable'
-
-    Usage: uv pip list --cache-dir [CACHE_DIR] --editable --exclude-newer <EXCLUDE_NEWER>
-
-    For more information, try '--help'.
-    "
-    );
 }
 
 #[test]
