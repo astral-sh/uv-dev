@@ -48,21 +48,7 @@ impl From<&Url> for Realm {
 
 impl Display for Realm {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if let Some(port) = self.port {
-            write!(
-                f,
-                "{}://{}:{port}",
-                self.scheme,
-                self.host.as_deref().unwrap_or_default()
-            )
-        } else {
-            write!(
-                f,
-                "{}://{}",
-                self.scheme,
-                self.host.as_deref().unwrap_or_default()
-            )
-        }
+        Display::fmt(&RealmRef::from(self), f)
     }
 }
 
@@ -80,12 +66,23 @@ impl Hash for Realm {
     }
 }
 
-/// A reference to a [`Realm`] that can be used for zero-allocation comparisons.
+/// A borrowed representation of a [`Realm`] for comparisons and formatting.
 #[derive(Debug, Copy, Clone)]
 pub struct RealmRef<'a> {
     scheme: &'a str,
     host: Option<&'a str>,
     port: Option<u16>,
+}
+
+impl Display for RealmRef<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let host = self.host.unwrap_or_default();
+        if let Some(port) = self.port {
+            write!(f, "{}://{host}:{port}", self.scheme)
+        } else {
+            write!(f, "{}://{host}", self.scheme)
+        }
+    }
 }
 
 impl RealmRef<'_> {
