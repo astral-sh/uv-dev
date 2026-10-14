@@ -1009,14 +1009,11 @@ impl ProjectEnvironment {
                 if replace_environment {
                     // Remove centralized references directly to preserve their cached targets.
                     let removed = if centralized_environment_reference {
-                        match uv_fs::remove_virtualenv(&root) {
-                            Ok(()) => true,
-                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-                            Err(err) => return Err(uv_virtualenv::Error::from(err).into()),
-                        }
+                        uv_fs::remove_virtualenv_if_exists(&root)
                     } else {
-                        uv_fs::clear_virtualenv(&root).map_err(uv_virtualenv::Error::from)?
-                    };
+                        uv_fs::clear_virtualenv(&root)
+                    }
+                    .map_err(uv_virtualenv::Error::from)?;
                     if removed {
                         let removed_entry = if centralized_environment_reference {
                             "link to project environment"
@@ -1212,17 +1209,14 @@ impl ScriptEnvironment {
                 }
 
                 // Remove the existing virtual environment.
-                let replaced = match uv_fs::remove_virtualenv(&root) {
-                    Ok(()) => {
-                        debug!(
-                            "Removed virtual environment at: {}",
-                            root.user_display().cyan()
-                        );
-                        true
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-                    Err(err) => return Err(uv_virtualenv::Error::from(err).into()),
-                };
+                let replaced = uv_fs::remove_virtualenv_if_exists(&root)
+                    .map_err(uv_virtualenv::Error::from)?;
+                if replaced {
+                    debug!(
+                        "Removed virtual environment at: {}",
+                        root.user_display().cyan()
+                    );
+                }
 
                 debug!(
                     "Creating script environment at: {}",
