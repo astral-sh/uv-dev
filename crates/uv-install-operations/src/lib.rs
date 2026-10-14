@@ -639,7 +639,6 @@ async fn execute_plan(
         let start = std::time::Instant::now();
 
         let preparer = Preparer::new(
-            cache,
             tags,
             hasher,
             build_options,
