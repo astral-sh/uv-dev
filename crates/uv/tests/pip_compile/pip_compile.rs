@@ -14118,62 +14118,84 @@ requires-python = ">3.8"
     Ok(())
 }
 
-/// Install a package via `--extra-index-url`.
-///
-/// If the package exists on the "extra" index, but at an incompatible version, the resolution
-/// should fail by default (even though a compatible version exists on the "primary" index).
+fn index_with_a_versions(versions: &[&str]) -> Result<PackseServer> {
+    let versions = versions
+        .iter()
+        .map(|version| {
+            Ok((
+                Version::from_str(version)?,
+                PackageMetadata {
+                    wheel: Some(ArtifactMetadata::default()),
+                    ..PackageMetadata::default()
+                },
+            ))
+        })
+        .collect::<Result<_>>()?;
+    let mut scenario = Scenario::empty();
+    scenario
+        .packages
+        .insert(PackageName::from_str("a")?, Package { versions });
+    Ok(PackseServer::from_scenario(&scenario))
+}
+
+/// A package on the extra index shadows compatible versions on the default index.
 #[test]
 fn compile_index_url_first_match_base() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
+    let default_index = index_with_a_versions(&["1.0.0", "2.0.0"])?;
+    let extra_index = index_with_a_versions(&["1.0.0"])?;
+    let context = uv_test::test_context!("3.12")
+        .with_filter((regex::escape(&default_index.index_url()), "[DEFAULT_INDEX]"))
+        .with_filter((regex::escape(&extra_index.index_url()), "[EXTRA_INDEX]"));
 
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("jinja2==3.1.0")?;
+    requirements_in.write_str("a==2.0.0")?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("--index-url")
-        .arg("https://pypi.org/simple")
+        .arg(default_index.index_url())
         .arg("--extra-index-url")
-        .arg("https://astral-sh.github.io/pytorch-mirror/whl/cpu")
+        .arg(extra_index.index_url())
         .arg("requirements.in")
         .arg("--no-deps"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because there is no version of jinja2==3.1.0 and you require jinja2==3.1.0, we can conclude that your requirements are unsatisfiable.
+      cause: Because there is no version of a==2.0.0 and you require a==2.0.0, we can conclude that your requirements are unsatisfiable.
 
-    hint: `jinja2` was found on https://astral-sh.github.io/pytorch-mirror/whl/cpu, but not at the requested version (jinja2==3.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
+    hint: `a` was found on [EXTRA_INDEX], but not at the requested version (a==2.0.0). A compatible version may be available on a subsequent index (e.g., [DEFAULT_INDEX]). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
     "
     );
 
     Ok(())
 }
 
-/// Install a package via `--extra-index-url`.
-///
-/// If the package exists on the "extra" index, but at an incompatible version, the resolution
-/// should fail by default (even though a compatible version exists on the "primary" index).
+/// Universal resolution also rejects a shadowed package inside a marker partition.
 #[cfg(feature = "test-universal")]
 #[test]
 fn compile_index_url_first_match_marker() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
+    let default_index = index_with_a_versions(&["1.0.0", "2.0.0"])?;
+    let extra_index = index_with_a_versions(&["1.0.0"])?;
+    let context = uv_test::test_context!("3.12")
+        .with_filter((regex::escape(&default_index.index_url()), "[DEFAULT_INDEX]"))
+        .with_filter((regex::escape(&extra_index.index_url()), "[EXTRA_INDEX]"));
 
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("jinja2==3.1.0 ; sys_platform == 'linux'")?;
+    requirements_in.write_str("a==2.0.0 ; sys_platform == 'linux'")?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("--universal")
         .arg("--index-url")
-        .arg("https://pypi.org/simple")
+        .arg(default_index.index_url())
         .arg("--extra-index-url")
-        .arg("https://astral-sh.github.io/pytorch-mirror/whl/cpu")
+        .arg(extra_index.index_url())
         .arg("requirements.in")
         .arg("--no-deps"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because there is no version of jinja2{sys_platform == 'linux'}==3.1.0 and you require jinja2{sys_platform == 'linux'}==3.1.0, we can conclude that your requirements are unsatisfiable.
+      cause: Because there is no version of a{sys_platform == 'linux'}==2.0.0 and you require a{sys_platform == 'linux'}==2.0.0, we can conclude that your requirements are unsatisfiable.
 
-    hint: `jinja2` was found on https://astral-sh.github.io/pytorch-mirror/whl/cpu, but not at the requested version (jinja2==3.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
+    hint: `a` was found on [EXTRA_INDEX], but not at the requested version (a==2.0.0). A compatible version may be available on a subsequent index (e.g., [DEFAULT_INDEX]). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
     "
     );
 
