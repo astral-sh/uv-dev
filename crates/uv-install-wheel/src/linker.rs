@@ -219,12 +219,8 @@ impl InstallState {
     /// the same length, so we use this heuristic in this performance critical path to avoid
     /// reading potentially large files.
     fn warn_file_conflict(file: &Path, file_wheels: &BTreeSet<(&WheelFilename, u64)>) -> bool {
-        let mut lengths = file_wheels.iter().map(|(_, length)| length);
-        let Some(length) = lengths.next() else {
-            debug_assert!(false, "Always at least one element");
-            return false;
-        };
-        if lengths.all(|other| other == length) {
+        debug_assert!(!file_wheels.is_empty(), "Always at least one element");
+        if file_wheels.iter().map(|(_, length)| length).all_equal() {
             return false;
         }
 
