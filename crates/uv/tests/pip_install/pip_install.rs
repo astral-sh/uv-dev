@@ -1994,13 +1994,12 @@ fn install_editable_incompatible_constraint_url() -> Result<()> {
 #[test]
 fn install_editable_pep_508_requirements_txt() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let source = context.workspace_root.join("test/packages/black_editable");
+    let url = Url::from_directory_path(&source).unwrap();
+    let requirement = format!("black[d] @ {}", url.as_str().trim_end_matches('/'));
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(&indoc::formatdoc! {r"
-        -e black[d] @ file://{workspace_root}/test/packages/black_editable
-        ",
-        workspace_root = context.workspace_root.simplified_display(),
-    })?;
+    requirements_txt.write_str(&format!("-e {requirement}\n"))?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
@@ -2020,13 +2019,9 @@ fn install_editable_pep_508_requirements_txt() -> Result<()> {
      + yarl==1.9.4
     "
     );
+    assert_editable_packages(&context, "black==0.1.0\n");
 
-    requirements_txt.write_str(&indoc::formatdoc! {r"
-        --editable black[d] @ file://{workspace_root}/test/packages/black_editable
-        ",
-        workspace_root = context.workspace_root.simplified_display(),
-    })?;
-
+    requirements_txt.write_str(&format!("--editable {requirement}\n"))?;
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-r")
         .arg("requirements.txt"), @"
@@ -2036,35 +2031,17 @@ fn install_editable_pep_508_requirements_txt() -> Result<()> {
     "
     );
 
-    requirements_txt.write_str(&indoc::formatdoc! {r"
-        --editable=black[d] @ file://{workspace_root}/test/packages/black_editable
-        ",
-        workspace_root = context.workspace_root.simplified_display(),
-    })?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    requirements_txt.write_str(&indoc::formatdoc! {r"
-        --editable= black[d] @ file://{workspace_root}/test/packages/black_editable
-        ",
-        workspace_root = context.workspace_root.simplified_display(),
-    })?;
-
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
+    // Reinstall so a pre-existing editable distribution cannot mask a misparsed option.
+    for prefix in ["--editable ", "--editable=", "--editable= "] {
+        requirements_txt.write_str(&format!("{prefix}{requirement}\n"))?;
+        context
+            .pip_install()
+            .args(["-r", "requirements.txt", "--reinstall-package", "black"])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(" ~ black==0.1.0"));
+        assert_editable_packages(&context, "black==0.1.0\n");
+    }
 
     Ok(())
 }
