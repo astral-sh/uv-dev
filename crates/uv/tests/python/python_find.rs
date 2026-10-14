@@ -238,12 +238,17 @@ fn python_find() {
 }
 
 #[test]
-fn python_find_skips_download_metadata_when_python_is_found() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+fn python_find_stable_managed_skips_download_metadata() {
+    // Managed prereleases may need the download list to check for a stable release; a stable
+    // managed interpreter should be usable without loading that list.
+    let context =
+        uv_test::test_context_with_versions!(&["3.12"]).with_versions_as_managed(&["3.12"]);
     let missing_downloads = context.temp_dir.child("missing-downloads.json");
 
     uv_snapshot!(context.filters(), context
         .python_find()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("--managed-python")
         .arg("--python-downloads-json-url")
         .arg(missing_downloads.path()), @"
     exit_code: 0 (success)
