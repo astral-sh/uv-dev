@@ -17,3 +17,5 @@ mod marker_expression;
 mod output_streams;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_compile;
+#[cfg(feature = "test-python")]
+mod source_url_hashes;
