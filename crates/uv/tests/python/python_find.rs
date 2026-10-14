@@ -838,10 +838,9 @@ fn python_find_venv_executable_precedence() -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 #[test]
 fn python_find_unsupported_version() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
 
     // Request a low version
     uv_snapshot!(context.filters(), context.python_find().arg("3.5"), @"
@@ -875,14 +874,14 @@ fn python_find_unsupported_version() {
     uv_snapshot!(context.filters(), context.python_find().arg("4.2"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: No interpreter found for Python 4.2 in virtual environments, managed installations, or search path
+    error: No interpreter found for Python 4.2 in [PYTHON SOURCES]
     ");
 
     // Request a low version with a range
     uv_snapshot!(context.filters(), context.python_find().arg("<3.0"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: No interpreter found for Python <3.0 in virtual environments, managed installations, or search path
+    error: No interpreter found for Python <3.0 in [PYTHON SOURCES]
     ");
 
     // Request free-threaded Python on unsupported version

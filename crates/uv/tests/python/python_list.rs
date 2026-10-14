@@ -357,7 +357,6 @@ fn python_list_venv() {
     ");
 }
 
-#[cfg(unix)]
 #[test]
 fn python_list_unsupported_version() {
     let context = uv_test::test_context_with_versions!(&["3.12"])
