@@ -2,7 +2,7 @@ use anyhow::Result;
 use assert_fs::fixture::{FileWriteBin, FileWriteStr, PathChild};
 
 use uv_static::EnvVars;
-use uv_test::uv_snapshot;
+use uv_test::{assert_path_missing, uv_snapshot};
 
 #[test]
 fn tool_upgrade_empty() {
@@ -76,11 +76,5 @@ fn tool_upgrade_non_existing_package() {
       cause: `black` is not installed; run `uv tool install black` to install
     ");
 
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("--all")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Nothing to upgrade
-    ");
+    assert_path_missing(context.temp_dir.child("tools/black"));
 }
