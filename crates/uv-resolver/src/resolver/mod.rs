@@ -3445,60 +3445,31 @@ impl ForkedDependencies {
 
         let mut forks = vec![Fork::new(env.clone())];
         let mut diverging_packages = BTreeSet::new();
-        for (name, mut deps) in name_to_deps {
-            assert!(!deps.is_empty(), "every name has at least one dependency");
-            // We never fork if there's only one dependency
-            // specification for a given package name. This particular
-            // strategy results in a "conservative" approach to forking
-            // that gives up correctness in some cases in exchange for
-            // more limited forking. More limited forking results in
-            // simpler-and-easier-to-understand lock files and faster
-            // resolving. The correctness we give up manifests when
-            // two transitive non-sibling dependencies conflict. In
-            // that case, we don't detect the fork ahead of time (at
-            // present).
-            if let [dep] = deps.as_slice() {
-                // There's one exception: if the requirement increases the minimum-supported Python
-                // version, we also fork in order to respect that minimum in the subsequent
-                // resolution.
-                //
-                // For example, given `requires-python = ">=3.7"` and `uv ; python_version >= "3.8"`,
-                // where uv itself only supports Python 3.8 and later, we need to fork to ensure
-                // that the resolution can find a solution.
-                if marker::requires_python(dep.package.marker())
+        for (name, deps) in name_to_deps {
+            let (first, rest) = deps
+                .split_first()
+                .expect("every name has at least one dependency");
+            let marker = first.package.marker();
+            // Avoid forking when every dependency specification for a package has the same marker,
+            // including when there is only one specification. This conservative approach keeps
+            // resolution faster and lockfiles simpler, but does not detect conflicts between
+            // transitive non-sibling dependencies ahead of time.
+            //
+            // A marker that raises the minimum supported Python version still requires a fork. For
+            // example, given `requires-python = ">=3.7"` and `uv ; python_version >= "3.8"`, we
+            // need a fork to resolve uv with the higher minimum.
+            if rest.iter().all(|dep| dep.package.marker() == marker)
+                && marker::requires_python(marker)
                     .is_none_or(|bound| !python_requirement.raises(&bound))
-                {
-                    let dep = deps.pop().unwrap();
-                    let marker = dep.package.marker();
+            {
+                for dep in deps {
                     for fork in &mut forks {
                         if fork.env.included_by_marker(marker) {
                             fork.add_dependency(dep.clone());
                         }
                     }
-                    continue;
                 }
-            } else {
-                // If all dependencies have the same markers, we should also avoid forking.
-                if let Some(dep) = deps.first() {
-                    let marker = dep.package.marker();
-                    if deps.iter().all(|dep| marker == dep.package.marker()) {
-                        // Unless that "same marker" is a Python requirement that is stricter than
-                        // the current Python requirement. In that case, we need to fork to respect
-                        // the stricter requirement.
-                        if marker::requires_python(marker)
-                            .is_none_or(|bound| !python_requirement.raises(&bound))
-                        {
-                            for dep in deps {
-                                for fork in &mut forks {
-                                    if fork.env.included_by_marker(marker) {
-                                        fork.add_dependency(dep.clone());
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-                    }
-                }
+                continue;
             }
             for dep in deps {
                 let mut forker = match ForkingPossibility::new(env, &dep) {
