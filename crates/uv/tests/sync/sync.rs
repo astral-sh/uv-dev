@@ -13888,8 +13888,14 @@ fn sync_script() -> Result<()> {
      + sniffio==1.3.1
     ");
 
-    // If a lockfile didn't exist already, `uv sync --script` shouldn't create one.
-    assert!(!context.temp_dir.child("uv.lock").exists());
+    context
+        .temp_dir
+        .child("script.py.lock")
+        .assert(predicates::path::missing());
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicates::path::missing());
 
     // Modify the script's dependencies.
     script.write_str(indoc! { r#"
