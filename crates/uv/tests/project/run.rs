@@ -2670,8 +2670,13 @@ fn run_frozen() -> Result<()> {
     ----- stderr -----
     error: Unable to find lockfile at `uv.lock`, but `--frozen` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
     ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
 
     context.lock().assert().success();
+    let existing_lockfile = context.read("uv.lock");
 
     // Update the requirements.
     pyproject_toml.write_str(
@@ -2702,6 +2707,7 @@ fn run_frozen() -> Result<()> {
      + project==0.1.0 (from file://[TEMP_DIR]/)
      + sniffio==1.3.1
     ");
+    assert_eq!(context.read("uv.lock"), existing_lockfile);
 
     Ok(())
 }
