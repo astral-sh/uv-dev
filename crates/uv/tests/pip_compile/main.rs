@@ -5,6 +5,8 @@ use uv_test::pypi_proxy;
 
 #[cfg(feature = "test-python")]
 mod editable;
+#[cfg(all(feature = "test-python", feature = "test-git"))]
+mod git_checkout;
 #[cfg(feature = "test-python")]
 mod hash_preservation;
 #[cfg(feature = "test-python")]
