@@ -868,7 +868,7 @@ fn pyproject_project(
         description = if no_description {
             String::new()
         } else {
-            format!("\ndescription = \"{description}\"", description = description.unwrap_or("Add your description here"))
+            format!("\ndescription = {}", Value::from(description.unwrap_or("Add your description here")))
         },
         authors = author.map_or_else(String::new, |author| format!("\nauthors = [\n    {}\n]", author.to_toml_string())),
         requires_python = requires_python.specifiers(),
