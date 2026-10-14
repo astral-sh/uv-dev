@@ -62,7 +62,6 @@ fn executable_hardlink() -> Result<()> {
 /// Requires `UV_INTERNAL__TEST_COW_FS`.
 /// See <https://github.com/astral-sh/uv/issues/18181>.
 #[test]
-#[cfg(unix)]
 fn executable_clone_on_cow_filesystem() -> Result<()> {
     let Some(context) = uv_test::test_context!("3.12").with_cache_on_cow_fs()? else {
         return Ok(());
