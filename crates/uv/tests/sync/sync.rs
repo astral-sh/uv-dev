@@ -9679,41 +9679,20 @@ fn sync_update_project() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let project = |version: &str| {
+        formatdoc! {r#"
         [project]
         name = "my-project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.sync(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
-
-    // Bump the project version.
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "my-project"
-        version = "0.2.0"
+        version = "{version}"
         requires-python = ">=3.12"
         dependencies = ["iniconfig"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-        "#,
-    )?;
+        "#}
+    };
+    pyproject_toml.write_str(&project("0.1.0"))?;
     context
         .temp_dir
         .child("src")
@@ -9724,11 +9703,39 @@ fn sync_update_project() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + iniconfig==2.0.0
+     + my-project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+
+    // Bump the project version.
+    pyproject_toml.write_str(&project("0.2.0"))?;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
+     - my-project==0.1.0 (from file://[TEMP_DIR]/)
      + my-project==0.2.0 (from file://[TEMP_DIR]/)
     ");
+
+    context
+        .python_command()
+        .args([
+            "-I",
+            "-c",
+            "from importlib.metadata import version; print(version('my-project'), end='')",
+        ])
+        .assert()
+        .success()
+        .stdout("0.2.0");
 
     Ok(())
 }
