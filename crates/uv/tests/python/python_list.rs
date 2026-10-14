@@ -475,30 +475,30 @@ fn python_list_duplicate_path_entries() {
 
 #[test]
 fn python_list_downloads() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_python_keys()
-        .with_filtered_latest_python_versions();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_latest_python_versions();
 
-    // We do not test showing all interpreters — as it differs per platform
-    // Instead, we choose a Python version where our available distributions are stable
-
-    // Test the default display, which requires reverting the test context disabling Python downloads
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    // These implementations are available on Windows x86-64 even when the host platform differs.
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("any-3.10-windows-x86_64-none")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM]    <download available>
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
+    cpython-3.10.[LATEST]-windows-x86_64-none    <download available>
+    pypy-3.10.16-windows-x86_64-none       <download available>
+    graalpy-3.10.0-windows-x86_64-none     <download available>
     ");
 
     // Bound the request so newly released patches do not change the expected historical list.
-    uv_snapshot!(context.filters(), context.python_list().arg(">=3.10.16,<=3.10.18").arg("--all-versions").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("any->=3.10.16,<=3.10.18-windows-x86_64-none")
+        .arg("--all-versions")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.18-[PLATFORM]    <download available>
-    cpython-3.10.17-[PLATFORM]    <download available>
-    cpython-3.10.16-[PLATFORM]    <download available>
-    pypy-3.10.16-[PLATFORM]       <download available>
+    cpython-3.10.18-windows-x86_64-none    <download available>
+    cpython-3.10.17-windows-x86_64-none    <download available>
+    cpython-3.10.16-windows-x86_64-none    <download available>
+    pypy-3.10.16-windows-x86_64-none       <download available>
     ");
 }
 
