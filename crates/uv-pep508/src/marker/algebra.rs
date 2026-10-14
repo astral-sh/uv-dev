@@ -1323,31 +1323,27 @@ impl NodeId {
 /// ranges in-between.
 type SmallVec<T> = smallvec::SmallVec<[T; 5]>;
 
+/// A decision-node edge covering one interval.
+type RangeEdge<T> = (Ranges<T>, NodeId);
+
 /// The edges of a decision node.
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub(crate) enum Edges {
     // The edges of a version variable, representing a disjoint set of ranges that cover
     // the output space.
     //
-    // Invariant: All ranges are simple, meaning they can be represented by a bounded
-    // interval without gaps. Additionally, there are at least two edges in the set.
-    Version {
-        edges: SmallVec<(Ranges<Version>, NodeId)>,
-    },
+    // Invariant: Each range is a nonempty interval, the ranges are ordered, and there are at least
+    // two edges in the set.
+    Version { edges: SmallVec<RangeEdge<Version>> },
     // The edges of a string variable, representing a disjoint set of ranges that cover
     // the output space.
     //
-    // Invariant: All ranges are simple, meaning they can be represented by a bounded
-    // interval without gaps. Additionally, there are at least two edges in the set.
-    String {
-        edges: SmallVec<(Ranges<ArcStr>, NodeId)>,
-    },
+    // Invariant: Each range is a nonempty interval, the ranges are ordered, and there are at least
+    // two edges in the set.
+    String { edges: SmallVec<RangeEdge<ArcStr>> },
     // The edges of a boolean variable, representing the values `true` (the `high` child)
     // and `false` (the `low` child).
-    Boolean {
-        high: NodeId,
-        low: NodeId,
-    },
+    Boolean { high: NodeId, low: NodeId },
 }
 
 impl Edges {
@@ -1470,7 +1466,7 @@ impl Edges {
     }
 
     /// Returns an [`Edges`] where values in the given range are `true`.
-    fn from_range<T>(range: &Ranges<T>) -> SmallVec<(Ranges<T>, NodeId)>
+    fn from_range<T>(range: &Ranges<T>) -> SmallVec<RangeEdge<T>>
     where
         T: Ord + Clone,
     {
@@ -1562,44 +1558,34 @@ impl Edges {
     /// In that case, we drop any ranges that do not exist in the domain of both edges. Note that
     /// this should not occur in practice because `requires-python` bounds are global.
     fn apply_ranges<T>(
-        left_edges: &SmallVec<(Ranges<T>, NodeId)>,
+        left_edges: &SmallVec<RangeEdge<T>>,
         left_parent: NodeId,
-        right_edges: &SmallVec<(Ranges<T>, NodeId)>,
+        right_edges: &SmallVec<RangeEdge<T>>,
         right_parent: NodeId,
         mut apply: impl FnMut(NodeId, NodeId) -> NodeId,
-    ) -> SmallVec<(Ranges<T>, NodeId)>
+    ) -> SmallVec<RangeEdge<T>>
     where
         T: Clone + Ord,
     {
         let mut combined = SmallVec::new();
-        for (left_range, left_child) in left_edges {
-            // Split the two maps into a set of disjoint and overlapping ranges, merging the
-            // intersections.
-            //
-            // Note that restrict ranges (see `restrict_versions`) makes finding intersections
-            // a bit more complicated despite the ranges being sorted. We cannot simply zip both
-            // sets, as they may contain arbitrary gaps. Instead, we use a quadratic search for
-            // simplicity as the set of ranges for a given variable is typically very small.
-            for (right_range, right_child) in right_edges {
-                let intersection = right_range.intersection(left_range);
-                if intersection.is_empty() {
-                    // TODO(ibraheem): take advantage of the sorted ranges to `break` early
-                    continue;
-                }
+        for ((left_range, left_child), (right_range, right_child)) in
+            ordered_range_pairs(left_edges, right_edges)
+        {
+            let intersection = right_range.intersection(left_range);
+            if intersection.is_empty() {
+                continue;
+            }
 
-                // Merge the intersection.
-                let node = apply(
-                    left_child.negate(left_parent),
-                    right_child.negate(right_parent),
-                );
+            let node = apply(
+                left_child.negate(left_parent),
+                right_child.negate(right_parent),
+            );
 
-                match combined.last_mut() {
-                    // Combine ranges if possible.
-                    Some((range, prev)) if *prev == node && can_conjoin(range, &intersection) => {
-                        *range = range.union(&intersection);
-                    }
-                    _ => combined.push((intersection, node)),
+            match combined.last_mut() {
+                Some((range, prev)) if *prev == node && can_conjoin(range, &intersection) => {
+                    *range = range.union(&intersection);
                 }
+                _ => combined.push((intersection, node)),
             }
         }
 
@@ -1651,26 +1637,26 @@ impl Edges {
     }
 
     fn find_intersecting_ranges<T>(
-        left_edges: &SmallVec<(Ranges<T>, NodeId)>,
+        left_edges: &SmallVec<RangeEdge<T>>,
         left_parent: NodeId,
-        right_edges: &SmallVec<(Ranges<T>, NodeId)>,
+        right_edges: &SmallVec<RangeEdge<T>>,
         right_parent: NodeId,
         mut predicate: impl FnMut(NodeId, NodeId) -> bool,
     ) -> Option<(NodeId, NodeId)>
     where
         T: Clone + Ord,
     {
-        for (left_range, left_child) in left_edges {
-            for (right_range, right_child) in right_edges {
-                if right_range.is_disjoint(left_range) {
-                    continue;
-                }
+        for ((left_range, left_child), (right_range, right_child)) in
+            ordered_range_pairs(left_edges, right_edges)
+        {
+            if right_range.is_disjoint(left_range) {
+                continue;
+            }
 
-                let left = left_child.negate(left_parent);
-                let right = right_child.negate(right_parent);
-                if predicate(left, right) {
-                    return Some((left, right));
-                }
+            let left = left_child.negate(left_parent);
+            let right = right_child.negate(right_parent);
+            if predicate(left, right) {
+                return Some((left, right));
             }
         }
 
@@ -1731,6 +1717,45 @@ impl Edges {
             }
         }
         self
+    }
+}
+
+/// Visit every potentially overlapping pair of ordered, disjoint, nonempty range edges.
+/// Advancing the edge that ends first handles gaps in either input while preserving overlap order.
+fn ordered_range_pairs<'a, T: Ord>(
+    mut left_edges: &'a [RangeEdge<T>],
+    mut right_edges: &'a [RangeEdge<T>],
+) -> impl Iterator<Item = (&'a RangeEdge<T>, &'a RangeEdge<T>)> {
+    std::iter::from_fn(move || {
+        let (left, left_rest) = left_edges.split_first()?;
+        let (right, right_rest) = right_edges.split_first()?;
+        let (_, left_end) = left
+            .0
+            .bounding_range()
+            .expect("marker edge range is nonempty");
+        let (_, right_end) = right
+            .0
+            .bounding_range()
+            .expect("marker edge range is nonempty");
+        if upper_bound_le(left_end, right_end) {
+            left_edges = left_rest;
+        } else {
+            right_edges = right_rest;
+        }
+        Some((left, right))
+    })
+}
+
+/// Compare interval ends, where excluding an endpoint ends before including it.
+fn upper_bound_le<T: Ord>(left: Bound<&T>, right: Bound<&T>) -> bool {
+    match (left, right) {
+        (_, Bound::Unbounded) => true,
+        (Bound::Unbounded, _) => false,
+        (Bound::Included(left), Bound::Excluded(right)) => left < right,
+        (
+            Bound::Included(left) | Bound::Excluded(left),
+            Bound::Included(right) | Bound::Excluded(right),
+        ) => left <= right,
     }
 }
 
