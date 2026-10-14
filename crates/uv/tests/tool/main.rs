@@ -40,6 +40,8 @@ mod tool_list_installed;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tool_run;
 
+mod tool_run_validation;
+
 #[cfg(feature = "test-python")]
 mod tool_uninstall;
 
