@@ -485,12 +485,13 @@ async fn worker_main_loop(
         // Handle a broken `python` by using a timeout, one that's higher than any compilation
         // should ever take.
         if let Some(duration) = timeout {
-            tokio::time::timeout(duration, python_handle)
-                .await
-                .map_err(|_| CompileError::CompileTimeout {
+            let Ok(result) = tokio::time::timeout(duration, python_handle).await else {
+                return Err(CompileError::CompileTimeout {
                     elapsed: duration,
-                    source_file: source_file.clone(),
-                })??;
+                    source_file,
+                });
+            };
+            result?;
         } else {
             python_handle.await?;
         }
