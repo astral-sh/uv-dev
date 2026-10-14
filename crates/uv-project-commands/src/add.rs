@@ -900,7 +900,7 @@ fn edits(
         ex.dedup();
         requirement.extras = ex.into_boxed_slice();
 
-        let (requirement, source) = match target {
+        let (requirement, mut source) = match target {
             EditTarget::Script(_) | EditTarget::Project(_) if raw => {
                 (uv_pep508::Requirement::from(requirement), None)
             }
@@ -954,42 +954,15 @@ fn edits(
         // we store the credentials in a global store, and reuse them during resolution. The
         // expectation is that subsequent resolutions steps will succeed by reading from (e.g.) the
         // user's credentials store, rather than by reading from the `pyproject.toml` file.
-        let source = match source {
-            Some(Source::Git {
-                mut git,
-                subdirectory,
-                path,
-                rev,
-                tag,
-                branch,
-                lfs,
-                marker,
-                extra,
-                group,
-            }) => {
-                let credentials = uv_auth::Credentials::from_url(&git)?;
-                if let Some(credentials) = credentials {
-                    debug!("Caching credentials for: {git}");
-                    store_credentials(RepositoryUrl::new(git.clone()), credentials);
+        if let Some(Source::Git { git, .. }) = &mut source
+            && let Some(credentials) = uv_auth::Credentials::from_url(git)?
+        {
+            debug!("Caching credentials for: {git}");
+            store_credentials(RepositoryUrl::new(git.clone()), credentials);
 
-                    // Redact the credentials.
-                    git.remove_credentials();
-                }
-                Some(Source::Git {
-                    git,
-                    subdirectory,
-                    path,
-                    rev,
-                    tag,
-                    branch,
-                    lfs,
-                    marker,
-                    extra,
-                    group,
-                })
-            }
-            _ => source,
-        };
+            // Redact the credentials.
+            git.remove_credentials();
+        }
 
         // Determine the dependency type.
         let dependency_type = match dependency_type {
