@@ -48,6 +48,12 @@ pub struct SitePackages {
     by_url: FxHashMap<DisplaySafeUrl, Vec<usize>>,
 }
 
+enum DistributionLookup<'a> {
+    Missing,
+    Unique(&'a InstalledDist),
+    Multiple,
+}
+
 impl SitePackages {
     /// Build an index of installed packages from the given Python environment.
     pub fn from_environment(environment: &PythonEnvironment) -> Result<Self> {
@@ -165,15 +171,31 @@ impl SitePackages {
         self.distributions.iter().flatten()
     }
 
+    fn indexed_distributions<'a>(
+        &'a self,
+        indexes: Option<&'a Vec<usize>>,
+    ) -> impl Iterator<Item = &'a InstalledDist> {
+        indexes
+            .into_iter()
+            .flatten()
+            .filter_map(|&index| self.distributions[index].as_ref())
+    }
+
+    fn lookup<'a>(&'a self, indexes: Option<&'a Vec<usize>>) -> DistributionLookup<'a> {
+        let mut distributions = self.indexed_distributions(indexes);
+        let Some(distribution) = distributions.next() else {
+            return DistributionLookup::Missing;
+        };
+        if distributions.next().is_some() {
+            DistributionLookup::Multiple
+        } else {
+            DistributionLookup::Unique(distribution)
+        }
+    }
+
     /// Returns the installed distributions for a given package.
     pub fn get_packages(&self, name: &PackageName) -> Vec<&InstalledDist> {
-        let Some(indexes) = self.by_name.get(name) else {
-            return Vec::new();
-        };
-        indexes
-            .iter()
-            .flat_map(|&index| &self.distributions[index])
-            .collect()
+        self.indexed_distributions(self.by_name.get(name)).collect()
     }
 
     /// Remove the given packages from the index, returning all installed versions, if any.
@@ -189,13 +211,7 @@ impl SitePackages {
 
     /// Returns the distributions installed from the given URL, if any.
     pub fn get_urls(&self, url: &DisplaySafeUrl) -> Vec<&InstalledDist> {
-        let Some(indexes) = self.by_url.get(url) else {
-            return Vec::new();
-        };
-        indexes
-            .iter()
-            .flat_map(|&index| &self.distributions[index])
-            .collect()
+        self.indexed_distributions(self.by_url.get(url)).collect()
     }
 
     /// Returns `true` if there are any installed packages.
@@ -215,7 +231,7 @@ impl SitePackages {
             RequiresPython::greater_than_equal_version(markers.python_full_version());
 
         for (package, indexes) in &self.by_name {
-            let mut distributions = indexes.iter().flat_map(|index| &self.distributions[*index]);
+            let mut distributions = self.indexed_distributions(Some(indexes));
 
             // Find the installed distribution for the given package.
             let Some(distribution) = distributions.next() else {
@@ -287,16 +303,14 @@ impl SitePackages {
                     continue;
                 }
 
-                let installed = self.get_packages(&dependency.name);
-                match installed.as_slice() {
-                    [] => {
-                        // No version installed.
+                match self.lookup(self.by_name.get(&dependency.name)) {
+                    DistributionLookup::Missing => {
                         diagnostics.push(SitePackagesDiagnostic::MissingDependency {
                             package: package.clone(),
                             requirement: dependency.clone(),
                         });
                     }
-                    [installed] => {
+                    DistributionLookup::Unique(installed) => {
                         match &dependency.version_or_url {
                             None | Some(VersionOrUrl::Url(_)) => {
                                 // Nothing to do (accept any installed version).
@@ -315,8 +329,8 @@ impl SitePackages {
                             }
                         }
                     }
-                    _ => {
-                        // There are multiple installed distributions for the same package.
+                    DistributionLookup::Multiple => {
+                        // Duplicate installations are reported separately.
                     }
                 }
             }
@@ -335,8 +349,9 @@ impl SitePackages {
             let requirement = match &specification.requirement {
                 UnresolvedRequirement::Named(requirement) => Cow::Borrowed(requirement),
                 UnresolvedRequirement::Unnamed(requirement) => {
-                    let distributions = self.get_urls(requirement.url.verbatim.raw());
-                    let [distribution] = distributions.as_slice() else {
+                    let DistributionLookup::Unique(distribution) =
+                        self.lookup(self.by_url.get(requirement.url.verbatim.raw()))
+                    else {
                         return Err(&specification.requirement);
                     };
                     let requirement = uv_pep508::Requirement {
@@ -471,13 +486,8 @@ impl SitePackages {
         // Verify that all non-editable requirements are met.
         while let Some(requirement) = stack.pop() {
             let name = &requirement.name;
-            let installed = self.get_packages(name);
-            match installed.as_slice() {
-                [] => {
-                    // The package isn't installed.
-                    return Ok(SatisfiesResult::Unsatisfied(requirement));
-                }
-                [distribution] => {
+            match self.lookup(self.by_name.get(name)) {
+                DistributionLookup::Unique(distribution) => {
                     // Requirements were filtered with the parent extras before entering the stack.
                     match RequirementSatisfaction::check(
                         name,
@@ -555,8 +565,7 @@ impl SitePackages {
                         }
                     }
                 }
-                _ => {
-                    // There are multiple installed distributions for the same package.
+                DistributionLookup::Missing | DistributionLookup::Multiple => {
                     return Ok(SatisfiesResult::Unsatisfied(requirement));
                 }
             }
