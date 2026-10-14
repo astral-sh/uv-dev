@@ -7,7 +7,7 @@ use flate2::bufread::GzDecoder;
 use fs_err::File;
 use futures::io::AllowStdIo;
 use indoc::{formatdoc, indoc};
-use insta::{allow_duplicates, assert_json_snapshot, assert_snapshot};
+use insta::{assert_json_snapshot, assert_snapshot};
 use std::io::BufReader;
 use std::path::Path;
 use std::process::Command;
@@ -20,22 +20,33 @@ use uv_test::copy_dir_ignore;
 use uv_test::{uv_snapshot, venv_bin_path};
 
 #[test]
-fn get_requires_for_build_returns_error() {
-    let context = uv_test::test_context!("3.12");
+fn get_requires_for_build_sdist_returns_error() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    uv_snapshot!(context.build_backend().arg("get-requires-for-build-sdist"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: uv does not support extra requires
+    ");
+}
 
-    allow_duplicates! {
-        for command in [
-            "get-requires-for-build-sdist",
-            "get-requires-for-build-wheel",
-            "get-requires-for-build-editable",
-        ] {
-            uv_snapshot!(context.build_backend().arg(command), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: uv does not support extra requires
-            ");
-        }
-    }
+#[test]
+fn get_requires_for_build_wheel_returns_error() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    uv_snapshot!(context.build_backend().arg("get-requires-for-build-wheel"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: uv does not support extra requires
+    ");
+}
+
+#[test]
+fn get_requires_for_build_editable_returns_error() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    uv_snapshot!(context.build_backend().arg("get-requires-for-build-editable"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: uv does not support extra requires
+    ");
 }
 
 const BUILT_BY_UV_TEST_SCRIPT: &str = indoc! {r#"
