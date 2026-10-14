@@ -557,8 +557,8 @@ fn virtual_empty() {
     [PYTHON-3.11]
     ");
 
-    // Ask for the python (--no-project)
-    uv_snapshot!(context.filters(), context.python_find(), @"
+    // The version pin is still respected with project discovery disabled.
+    uv_snapshot!(context.filters(), context.python_find().arg("--no-project"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [PYTHON-3.12]
@@ -625,8 +625,8 @@ fn virtual_dependency_group() {
     [PYTHON-3.11]
     ");
 
-    // Ask for the python (--no-project)
-    uv_snapshot!(context.filters(), context.python_find(), @"
+    // The version pin is still respected with project discovery disabled.
+    uv_snapshot!(context.filters(), context.python_find().arg("--no-project"), @"
     exit_code: 0 (success)
     ----- stdout -----
     [PYTHON-3.12]
