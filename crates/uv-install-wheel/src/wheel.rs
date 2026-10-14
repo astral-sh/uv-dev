@@ -336,14 +336,6 @@ impl<'script> ValidatedScript<'script> {
 
         Ok(Self { path, script })
     }
-
-    fn as_path(&self) -> &Path {
-        &self.path
-    }
-
-    fn inner(&self) -> &Script {
-        self.script
-    }
 }
 
 /// Return a lexical path between locations in the installation scheme.
@@ -394,22 +386,22 @@ impl<'script> ValidatedEntryPoints<'script> {
 
     /// Create wrapper scripts in the environment's scripts directory.
     pub(crate) fn write(
-        &self,
+        self,
         layout: &Layout,
         relocatable: bool,
         site_packages: &Path,
         record: &mut Vec<RecordEntry>,
     ) -> Result<(), Error> {
-        for (scripts, is_gui) in [(&self.console_scripts, false), (&self.gui_scripts, true)] {
-            for script in scripts {
-                let entrypoint_relative = relative_install_path(script.as_path(), site_packages)?;
+        for (scripts, is_gui) in [(self.console_scripts, false), (self.gui_scripts, true)] {
+            for ValidatedScript { path, script } in scripts {
+                let entrypoint_relative = relative_install_path(&path, site_packages)?;
 
                 // Generate the launcher script.
                 let launcher_executable = get_script_executable(&layout.sys_executable, is_gui);
                 let launcher_executable =
                     get_relocatable_executable(launcher_executable, layout, relocatable)?;
                 let launcher_python_script = get_script_launcher(
-                    script.inner(),
+                    script,
                     &format_shebang(&launcher_executable, &layout.os_name, relocatable),
                 );
 
@@ -422,7 +414,7 @@ impl<'script> ValidatedEntryPoints<'script> {
                 write_file_recorded(site_packages, &entrypoint_relative, launcher, record)?;
 
                 #[cfg(unix)]
-                make_executable(script.as_path())?;
+                make_executable(&path)?;
             }
         }
         Ok(())
