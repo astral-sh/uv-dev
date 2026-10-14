@@ -152,7 +152,7 @@ fn show_package_lookup_results() -> Result<()> {
     ");
 
     install("pip==21.3.1");
-    uv_snapshot!(context.filters(), context.pip_show().args(["markupsafe", "pip"]), @"
+    uv_snapshot!(context.filters(), context.pip_show().args(["pip", "MarkupSafe", "markupsafe"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     Name: markupsafe
