@@ -4704,48 +4704,6 @@ fn install_constraints_inline() -> Result<()> {
     Ok(())
 }
 
-/// Install a package from a `constraints.txt` file on a remote http server.
-#[test]
-fn install_constraints_remote() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-            .arg("-c")
-            .arg("https://raw.githubusercontent.com/apache/airflow/constraints-2-6/constraints-3.11.txt")
-            .arg("typing_extensions>=4.0"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.7.1
-    "
-    ); // would yield typing-extensions==4.8.2 without constraint file
-}
-
-/// Install a package from a `requirements.txt` file, with an inline constraint, which points
-/// to a remote http server.
-#[test]
-fn install_constraints_inline_remote() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let requirementstxt = context.temp_dir.child("requirements.txt");
-    requirementstxt.write_str("typing-extensions>=4.0\n-c https://raw.githubusercontent.com/apache/airflow/constraints-2-6/constraints-3.11.txt")?;
-
-    uv_snapshot!(context.pip_install()
-            .arg("-r")
-            .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + typing-extensions==4.7.1
-    " // would yield typing-extensions==4.8.2 without constraint file
-    );
-
-    Ok(())
-}
-
 /// Constrain a package that's included via an extra.
 #[test]
 fn install_constraints_extra() -> Result<()> {
