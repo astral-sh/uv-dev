@@ -1009,14 +1009,19 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     let target = fs_err::read_link(context.temp_dir.child(".venv").path())?;
+    let target = uv_fs::verbatim_path(&target);
+    let assert_environment_root = |metadata: &serde_json::Value| {
+        let root = metadata["environment"]["root"]
+            .as_str()
+            .expect("metadata should contain an environment root");
+        assert_eq!(uv_fs::verbatim_path(Path::new(root)), target);
+    };
 
-    assert_eq!(
-        metadata["environment"]["root"].as_str().map(Path::new),
-        Some(target.as_path())
-    );
+    assert_environment_root(&metadata);
+    let cache = context.cache_dir.child("environments-v2");
     assert_eq!(
         target.parent(),
-        Some(context.cache_dir.child("environments-v2").path())
+        Some(uv_fs::verbatim_path(cache.path()).as_ref())
     );
 
     let assert = context
@@ -1027,10 +1032,7 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
 
-    assert_eq!(
-        metadata["environment"]["root"].as_str().map(Path::new),
-        Some(target.as_path())
-    );
+    assert_environment_root(&metadata);
 
     // Remove the manifest to discover the workspace and its environment from the lockfile.
     fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
@@ -1043,12 +1045,7 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
         .assert()
         .success();
     let lockfile_metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    assert_eq!(
-        lockfile_metadata["environment"]["root"]
-            .as_str()
-            .map(Path::new),
-        Some(target.as_path())
-    );
+    assert_environment_root(&lockfile_metadata);
     let mut filters = context.filters();
     filters.push((
         r#"(\[CACHE_DIR\]/environments-v2/)[^/" ]+"#,
