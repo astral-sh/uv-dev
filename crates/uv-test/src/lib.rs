@@ -2053,10 +2053,13 @@ impl TestContext {
         diff_snapshot(&old_lock, &new_lock, 10)
     }
 
-    /// Read a file in the temporary directory
+    /// Read a UTF-8 file, resolving relative paths against the temporary directory.
+    #[track_caller]
     pub fn read(&self, file: impl AsRef<Path>) -> String {
-        fs_err::read_to_string(self.temp_dir.join(&file))
-            .unwrap_or_else(|_| panic!("Missing file: `{}`", file.user_display()))
+        match fs_err::read_to_string(self.temp_dir.join(&file)) {
+            Ok(contents) => contents,
+            Err(error) => panic!("Failed to read `{}`: {error}", file.user_display()),
+        }
     }
 
     /// Read a file as bytes, resolving relative paths against the temporary directory.
@@ -2386,6 +2389,19 @@ mod file_read_tests {
         assert_eq!(context.read_bytes("binary"), bytes);
 
         Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "did not contain valid UTF-8")]
+    fn reports_invalid_utf8() {
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
+        context
+            .temp_dir
+            .child("text")
+            .write_binary(&[0xff])
+            .expect("write invalid text fixture");
+
+        context.read("text");
     }
 
     #[test]
