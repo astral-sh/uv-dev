@@ -387,11 +387,11 @@ fn workspace_metadata_lockfile() -> Result<()> {
 
     pyproject_toml.write_str(&context.read("pyproject.toml").replace("0.1.0", "0.2.0"))?;
     let assert = context.workspace_metadata().assert().success();
-    let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    let member_id = metadata["members"][0]["id"]
+    let live_metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
+    let live_member_id = live_metadata["members"][0]["id"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("missing workspace member ID"))?;
-    insta::assert_json_snapshot!(metadata["resolution"][member_id]["version"], @r#""0.2.0""#);
+    insta::assert_json_snapshot!(live_metadata["resolution"][live_member_id]["version"], @r#""0.2.0""#);
     assert_eq!(lockfile, context.read("uv.lock"));
 
     // Synchronization must respect an explicit request not to update the lockfile.
@@ -419,12 +419,27 @@ fn workspace_metadata_lockfile() -> Result<()> {
     insta::assert_json_snapshot!(metadata["resolution"][member_id]["version"], @r#""0.1.0""#);
     assert_eq!(lockfile, context.read("uv.lock"));
 
-    context
+    let synced = context
         .workspace_metadata()
         .arg("--sync")
         .assert()
         .success();
-    assert_ne!(lockfile, context.read("uv.lock"));
+    let synced_metadata: serde_json::Value = serde_json::from_slice(&synced.get_output().stdout)?;
+    let synced_lock = uv_lock::Lock::from_canonical_toml(&context.read("uv.lock"))?;
+    let project = synced_lock
+        .packages()
+        .iter()
+        .find(|package| package.name().as_str() == "project")
+        .context("missing synced project package")?;
+    let synced_version = project
+        .version()
+        .context("missing synced project version")?
+        .to_string();
+    assert_eq!(synced_version, "0.2.0");
+    assert_eq!(
+        synced_metadata["resolution"][live_member_id]["version"].as_str(),
+        Some(synced_version.as_str())
+    );
     context
         .workspace_metadata()
         .arg("--locked")
