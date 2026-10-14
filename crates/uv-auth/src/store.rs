@@ -348,7 +348,9 @@ impl TextCredentialStore {
         // Perform an exact lookup first
         // TODO(zanieb): Consider adding `DisplaySafeUrlRef` so we can avoid this clone
         // TODO(zanieb): We could also return early here if we can't normalize to a `Service`
-        if let Ok(url_service) = Service::try_from(url.clone())
+        let mut service_url = url.clone();
+        service_url.remove_credentials();
+        if let Ok(url_service) = Service::try_from(service_url)
             && let Some(credential) = self
                 .credentials
                 .get(&(url_service, Username::from(username.map(str::to_string))))
@@ -533,6 +535,30 @@ mod tests {
         );
         let url = DisplaySafeUrl::parse("https://example.com/").unwrap();
         assert!(store.get_credentials(&url, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn credential_store_exact_lookup_normalizes_url_credentials() {
+        let mut store = TextCredentialStore::default();
+        for (tenant, password) in [("a", "first"), ("b", "second")] {
+            let service = Service::from_str(&format!(
+                "https://user:ignored@example.com/repository?tenant={tenant}"
+            ))
+            .unwrap();
+            store.insert(
+                service,
+                Credentials::basic(Some("user".to_owned()), Some(password.to_owned())),
+            );
+        }
+
+        for (tenant, password) in [("a", "first"), ("b", "second")] {
+            let url = DisplaySafeUrl::parse(&format!(
+                "https://user:ignored@example.com/repository?tenant={tenant}"
+            ))
+            .unwrap();
+            let credentials = store.get_credentials(&url, Some("user")).unwrap().unwrap();
+            assert_eq!(credentials.password(), Some(password));
+        }
     }
 
     #[test]
