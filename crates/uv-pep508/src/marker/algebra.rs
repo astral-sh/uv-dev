@@ -129,24 +129,20 @@ pub(crate) struct InternerGuard<'a> {
 impl InternerGuard<'_> {
     /// Creates a decision node with the given variable and children.
     fn create_node(&mut self, var: Variable, children: Edges) -> NodeId {
-        let mut node = Node { var, children };
-        let mut first = node.children.nodes().next().unwrap();
+        let first = children.nodes().next().unwrap();
+
+        // Reduction: If all children refer to the same node, we eliminate the parent node
+        // and just return the child.
+        if children.nodes().all(|node| node == first) {
+            return first;
+        }
 
         // With a complemented edge representation, there are two ways to represent the same node:
         // complementing the root and all children edges results in the same node. To ensure markers
         // are canonical, the first child edge is never complemented.
-        let mut flipped = false;
-        if first.is_complement() {
-            node = node.not();
-            first = first.not();
-            flipped = true;
-        }
-
-        // Reduction: If all children refer to the same node, we eliminate the parent node
-        // and just return the child.
-        if node.children.nodes().all(|node| node == first) {
-            return if flipped { first.not() } else { first };
-        }
+        let flipped = first.is_complement();
+        let node = Node { var, children };
+        let node = if flipped { node.not() } else { node };
 
         // Insert the node.
         // Probing before inserting keeps the clone off the common path where an isomorphic node
