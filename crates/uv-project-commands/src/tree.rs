@@ -231,7 +231,7 @@ pub async fn tree(
                 LockMode::Write(interpreter.as_ref().unwrap())
             };
             let state = UniversalState::default();
-            resolved_lock = match Box::pin(
+            resolved_lock = Box::pin(
                 LockOperation::new(
                     mode,
                     &settings,
@@ -247,10 +247,8 @@ pub async fn tree(
                 .execute(target),
             )
             .await
-            {
-                Ok(result) => result.into_lock(),
-                Err(err) => return Err(UvError::from(err).into()),
-            };
+            .map_err(UvError::from)?
+            .into_lock();
             &resolved_lock
         }
     };
@@ -361,7 +359,7 @@ pub async fn tree(
                 };
                 reporter.on_fetch_version(package.name(), &version);
                 if package.version().is_some_and(|package| version > *package) {
-                    map.insert(package.clone(), version);
+                    map.insert(package, version);
                 }
             }
             reporter.on_fetch_complete();

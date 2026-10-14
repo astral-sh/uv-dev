@@ -760,7 +760,7 @@ pub async fn run(
                     LockMode::from_settings(venv.interpreter(), lock_check, isolated)
                 };
 
-                let result = match Box::pin(
+                let result = Box::pin(
                     LockOperation::new(
                         mode,
                         &settings.resolver,
@@ -780,10 +780,7 @@ pub async fn run(
                     .execute(project.workspace().into()),
                 )
                 .await
-                {
-                    Ok(result) => result,
-                    Err(err) => return Err(UvError::from(err).into()),
-                };
+                .map_err(UvError::from)?;
 
                 // Identify the installation target.
                 let target = InstallTarget::from_project(
