@@ -606,10 +606,7 @@ async fn do_lock(
 
     for index in target.indexes() {
         if let Some(credentials) = index.credentials()? {
-            if let Some(root_url) = index.root_url() {
-                client_builder.store_credentials(&root_url, credentials.clone());
-            }
-            client_builder.store_credentials(index.raw_url(), credentials);
+            client_builder.store_index_credentials(index, credentials);
         }
     }
 
