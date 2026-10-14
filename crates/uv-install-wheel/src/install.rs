@@ -13,7 +13,7 @@ use uv_pypi_types::{DirectUrl, Metadata10};
 
 use crate::linker::{InstallState, LinkMode, link_wheel_files};
 use crate::wheel::{
-    LibKind, ValidatedWheel, WheelFile, dist_info_metadata, find_dist_info, install_data,
+    LibKind, ValidatedWheel, WheelFile, dist_info_file, find_dist_info, install_data,
     parse_scripts, read_record, write_installer_metadata, write_record, write_script_entrypoints,
 };
 use crate::{Error, Layout};
@@ -33,7 +33,7 @@ fn wheel_destination<'layout>(
     wheel: &Path,
 ) -> Result<(String, &'layout Path), Error> {
     let dist_info_prefix = find_dist_info(wheel)?;
-    let wheel_file_path = wheel.join(format!("{dist_info_prefix}.dist-info/WHEEL"));
+    let wheel_file_path = dist_info_file(wheel, &dist_info_prefix, "WHEEL");
     let wheel_text = fs_err::read_to_string(wheel_file_path)?;
     let site_packages = match WheelFile::parse(&wheel_text)?.lib_kind() {
         LibKind::Pure => &layout.scheme.purelib,
@@ -65,7 +65,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
 ) -> Result<(), Error> {
     let wheel = wheel.as_ref();
     let (dist_info_prefix, site_packages) = wheel_destination(layout, wheel)?;
-    let metadata = dist_info_metadata(&dist_info_prefix, wheel)?;
+    let metadata = fs_err::read(dist_info_file(wheel, &dist_info_prefix, "METADATA"))?;
     let Metadata10 { name, version } = Metadata10::parse_pkg_info(&metadata)
         .map_err(|err| Error::InvalidWheel(err.to_string()))?;
 
@@ -94,7 +94,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     trace!(?name, "Extracted wheel files");
 
     // Read the RECORD file.
-    let mut record_file = File::open(wheel.join(format!("{dist_info_prefix}.dist-info/RECORD")))?;
+    let mut record_file = File::open(dist_info_file(wheel, &dist_info_prefix, "RECORD"))?;
     let mut record = read_record(&mut record_file)?;
 
     let (console_scripts, gui_scripts) =
