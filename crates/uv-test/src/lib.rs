@@ -2205,13 +2205,13 @@ fn python_installations_for_versions(
     python_versions: &[&str],
     download_list: Option<&ManagedPythonDownloadList>,
 ) -> anyhow::Result<Vec<PathBuf>> {
+    let Some(download_list) = download_list else {
+        return Ok(Vec::new());
+    };
     let cache = Cache::from_path(temp_dir.child("cache").to_path_buf())
         .init_no_wait()?
         .expect("No cache contention when setting up Python in tests");
     let _preview = uv_preview::test::with_features(&[]);
-    let Some(download_list) = download_list else {
-        return Ok(Vec::new());
-    };
     let selected_pythons = python_versions
         .iter()
         .map(|python_version| {
@@ -2395,6 +2395,20 @@ mod file_read_tests {
         let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
 
         context.read_bytes("missing.bin");
+    }
+}
+
+#[cfg(test)]
+mod python_discovery_tests {
+    use std::path::PathBuf;
+
+    use super::{TestContext, assert_path_missing};
+
+    #[test]
+    fn does_not_initialize_discovery_cache_without_python() {
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
+
+        assert_path_missing(context.temp_dir.join("cache"));
     }
 }
 
