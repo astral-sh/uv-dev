@@ -14,7 +14,7 @@ use uv_configuration::{
 };
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{ExtraBuildRequires, Index, Requirement, RequirementSource};
+use uv_distribution_types::{ExtraBuildRequires, Requirement, RequirementSource};
 use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
@@ -309,17 +309,15 @@ async fn upgrade_tool(
         receipt.indexes.index_url.as_ref(),
         filesystem.indexes.index_url.as_ref(),
     ) {
-        let stored = Index::from(stored.clone());
-        let configured = Index::from(configured.clone());
+        let stored_url = stored.as_ref().raw_url();
+        let configured_url = configured.as_ref().raw_url();
 
-        if stored.raw_url().username().is_empty()
-            && stored.raw_url().password().is_none()
-            && (!configured.raw_url().username().is_empty()
-                || configured.raw_url().password().is_some())
-            && CanonicalUrl::new(stored.raw_url().clone())
-                == CanonicalUrl::new(configured.raw_url().clone())
+        if stored_url.username().is_empty()
+            && stored_url.password().is_none()
+            && (!configured_url.username().is_empty() || configured_url.password().is_some())
+            && CanonicalUrl::new(stored_url.clone()) == CanonicalUrl::new(configured_url.clone())
         {
-            receipt.indexes.index_url = Some(configured.into());
+            receipt.indexes.index_url = Some(configured.clone());
         }
     }
 
