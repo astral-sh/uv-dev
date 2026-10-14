@@ -720,8 +720,8 @@ impl<'a> ParsedRawExtra<'a> {
     }
 }
 
-/// Resolve the conflict markers in a [`MarkerTree`] based on the conditions under which each
-/// conflict item is known to be true.
+/// Resolve unencoded package extras and conflict-encoded project, extra, and group markers in a
+/// [`MarkerTree`] based on the conditions under which each item is known to be true.
 ///
 /// For example, if the `cpu` extra is known to be enabled when `sys_platform == 'darwin'`, then
 /// given the combined marker `python_version >= '3.8' and extra == 'extra-7-project-cpu'`, this
@@ -729,12 +729,10 @@ impl<'a> ParsedRawExtra<'a> {
 ///
 /// If a conflict item isn't present in the map of known conflicts, it's assumed to be false in all
 /// environments.
-/// Resolve unencoded package extra markers and conflict-encoded extra markers in a
-/// [`MarkerTree`] based on the conditions under which each item is known to be true.
 ///
 /// When `scope_package` is set, unencoded package extras like `extra == 'cpu'` are interpreted
-/// relative to that package. Conflict-encoded extras and groups are resolved independent of
-/// `scope_package`.
+/// relative to that package. Conflict-encoded markers are resolved independently of this scope
+/// and take precedence over unencoded extras.
 pub fn resolve_activated_extras(
     marker: MarkerTree,
     scope_package: Option<&PackageName>,
@@ -747,124 +745,42 @@ pub fn resolve_activated_extras(
     let mut transformed = MarkerTree::FALSE;
 
     // Convert the marker to DNF, then re-build it.
-    for dnf in marker.to_dnf() {
-        let mut or = MarkerTree::TRUE;
+    for term in marker.to_dnf() {
+        let mut conjunction = MarkerTree::TRUE;
 
-        for marker in dnf {
+        for marker in term {
             let MarkerExpression::Extra {
                 ref operator,
                 ref name,
             } = marker
             else {
-                or = or.and(MarkerTree::expression(marker));
+                conjunction = conjunction.and(MarkerTree::expression(marker));
                 continue;
             };
 
             let Some(name) = name.as_extra() else {
-                or = or.and(MarkerTree::expression(marker));
+                conjunction = conjunction.and(MarkerTree::expression(marker));
                 continue;
             };
 
-            // Given an extra marker (like `extra == 'extra-7-project-cpu'`), search for the
-            // corresponding conflict; once found, inline the marker of conditions under which the
-            // conflict is known to be true.
-            let mut found = false;
-            for (conflict_item, conflict_marker) in known_conflicts {
-                // Search for the conflict item as an extra.
-                if let Some(extra) = conflict_item.extra() {
-                    let package = conflict_item.package();
-                    let encoded = encode_package_extra(package, extra);
-                    if encoded == *name {
-                        match operator {
-                            ExtraOperator::Equal => {
-                                or = or.and(*conflict_marker);
-                                found = true;
-                                break;
-                            }
-                            ExtraOperator::NotEqual => {
-                                or = or.and(conflict_marker.negate());
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Search for the conflict item as a group.
-                if let Some(group) = conflict_item.group() {
-                    let package = conflict_item.package();
-                    let encoded = encode_package_group(package, group);
-                    if encoded == *name {
-                        match operator {
-                            ExtraOperator::Equal => {
-                                or = or.and(*conflict_marker);
-                                found = true;
-                                break;
-                            }
-                            ExtraOperator::NotEqual => {
-                                or = or.and(conflict_marker.negate());
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Search for the conflict item as a project.
-                if conflict_item.extra().is_none() && conflict_item.group().is_none() {
-                    let package = conflict_item.package();
-                    let encoded = encode_project(package);
-                    if encoded == *name {
-                        match operator {
-                            ExtraOperator::Equal => {
-                                or = or.and(*conflict_marker);
-                                found = true;
-                                break;
-                            }
-                            ExtraOperator::NotEqual => {
-                                or = or.and(conflict_marker.negate());
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Search for an unencoded package extra in the current package scope.
-            if !found {
-                if let Some(package) = scope_package {
-                    let conflict_item = ConflictItem::from((package.clone(), name.clone()));
-                    if let Some(conflict_marker) = known_conflicts.get(&conflict_item) {
-                        match operator {
-                            ExtraOperator::Equal => {
-                                or = or.and(*conflict_marker);
-                                found = true;
-                            }
-                            ExtraOperator::NotEqual => {
-                                or = or.and(conflict_marker.negate());
-                                found = true;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // If we didn't find the marker in the list of known conflicts, assume it's always
-            // false.
-            if !found {
-                match operator {
-                    ExtraOperator::Equal => {
-                        or = or.and(MarkerTree::FALSE);
-                    }
-                    ExtraOperator::NotEqual => {
-                        or = or.and(MarkerTree::TRUE);
-                    }
-                }
-            }
+            let conflict_marker = known_conflicts
+                .iter()
+                .find_map(|(item, marker)| (encode_conflict_item(item) == *name).then_some(*marker))
+                .or_else(|| {
+                    let package = scope_package?;
+                    known_conflicts
+                        .get(&ConflictItem::from((package.clone(), name.clone())))
+                        .copied()
+                })
+                .unwrap_or(MarkerTree::FALSE);
+            let resolved = match operator {
+                ExtraOperator::Equal => conflict_marker,
+                ExtraOperator::NotEqual => conflict_marker.negate(),
+            };
+            conjunction = conjunction.and(resolved);
         }
 
-        transformed = transformed.or(or);
+        transformed = transformed.or(conjunction);
     }
 
     transformed
