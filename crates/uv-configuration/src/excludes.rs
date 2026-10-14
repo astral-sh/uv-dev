@@ -148,12 +148,13 @@ impl Excludes {
             .map(ExcludeDependency::Dependency)
             .collect::<Vec<_>>();
         for (name, packages) in self.scoped {
-            for package in packages {
+            // Move the package name into the final scope.
+            for (name, package) in std::iter::repeat_n(name, packages.len()).zip(packages) {
                 let mut dependencies = package.excludes.into_iter().collect::<Vec<_>>();
                 dependencies.sort();
                 entries.push(ExcludeDependency::Package(PackageExclusion {
                     package: PackageExclusionTarget {
-                        name: name.clone(),
+                        name,
                         version: package.version,
                     },
                     dependencies: dependencies.into_boxed_slice(),
