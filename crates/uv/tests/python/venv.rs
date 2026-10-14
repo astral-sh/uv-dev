@@ -834,6 +834,7 @@ fn create_centralized_project_environment_with_seed_packages() -> Result<()> {
 
     let target = fs_err::read_link(context.temp_dir.child(".venv").path())?;
     assert!(target.join("pyvenv.cfg").is_file());
+    assert_seed_packages(&context, &["pip"]);
 
     // Seed the existing environment without clearing its contents.
     let marker = target.join("marker");
@@ -849,6 +850,7 @@ fn create_centralized_project_environment_with_seed_packages() -> Result<()> {
 
     assert_link_target(context.temp_dir.child(".venv"), &target);
     assert!(marker.is_file());
+    assert_seed_packages(&context, &["pip"]);
     Ok(())
 }
 
