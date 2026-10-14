@@ -13,6 +13,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use uv_fs::Simplified;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+use uv_test::archive::generate_source_archive;
 use uv_test::find_links::FindLinksServer;
 use uv_test::packse::PackseServer;
 use uv_test::{copy_dir_ignore, download_to_disk, site_packages_path, uv_snapshot, venv_bin_path};
@@ -4721,8 +4722,26 @@ fn require_hashes_at_least_one() -> Result<()> {
 #[test]
 fn require_hashes_find_links_no_hash() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-    let server = FindLinksServer::new(&context.workspace_root.join("test/links"));
-    let index = PackseServer::empty();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let wheel = "basic_package-0.1.0-py3-none-any.whl";
+    fs::copy(
+        context.workspace_root.join("test/links").join(wheel),
+        links.child(wheel),
+    )?;
+    let source_built = context.temp_dir.child("source-built");
+    let source = generate_source_archive(
+        &"basic-package".parse()?,
+        &"0.1.0".parse()?,
+        "",
+        Some(source_built.path()),
+    )?;
+    let source_hash = hex::encode(Sha256::digest(&source));
+    links
+        .child("basic_package-0.1.0.tar.gz")
+        .write_binary(&source)?;
+    let server = FindLinksServer::new(links.path());
+    let context = context.with_filter((source_hash.clone(), "[SOURCE_SHA256]"));
 
     // First, use the correct hash.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -4734,8 +4753,7 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
         .arg("requirements.txt")
         .arg("--reinstall")
         .arg("--require-hashes")
-        .arg("--index-url")
-        .arg(index.index_url())
+        .arg("--no-index")
         .arg("--find-links")
         .arg(server.url()), @"
     exit_code: 0 (success)
@@ -4757,8 +4775,7 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
         .arg("requirements.txt")
         .arg("--reinstall")
         .arg("--require-hashes")
-        .arg("--index-url")
-        .arg(index.index_url())
+        .arg("--no-index")
         .arg("--find-links")
         .arg(server.url()), @"
     exit_code: 1 (failure)
@@ -4777,17 +4794,13 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
 
     // Third, use the hash from the source distribution. This will actually fail, when it _could_
     // succeed, but pip has the same behavior.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "basic-package==0.1.0 --hash=sha256:af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4",
-    )?;
+    requirements_txt.write_str(&format!("basic-package==0.1.0 --hash=sha256:{source_hash}"))?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--reinstall")
         .arg("--require-hashes")
-        .arg("--index-url")
-        .arg(index.index_url())
+        .arg("--no-index")
         .arg("--find-links")
         .arg(server.url()), @"
     exit_code: 1 (failure)
@@ -4797,18 +4810,15 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
       cause: Hash mismatch for `basic-package==0.1.0`
 
              Expected:
-               sha256:af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4
+               sha256:[SOURCE_SHA256]
 
              Computed:
                sha256:7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82
     "
     );
 
-    // Fourth, use the hash from the source distribution, and disable wheels. This should succeed.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "basic-package==0.1.0 --hash=sha256:af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4",
-    )?;
+    // Disabling wheels makes the same source hash usable.
+    source_built.assert(predicates::path::missing());
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
@@ -4816,19 +4826,19 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
         .arg(":all:")
         .arg("--reinstall")
         .arg("--require-hashes")
-        .arg("--index-url")
-        .arg(index.index_url())
+        .arg("--no-index")
         .arg("--find-links")
         .arg(server.url()), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    error: Failed to download and build `basic-package==0.1.0`
-      cause: Failed to resolve requirements from `build-system.requires`
-      cause: No solution found when resolving: `uv-build>=0.8.3, <0.9.0`
-      cause: Because uv-build was not found in the package registry and you require uv-build>=0.8.3,<0.9.0, we can conclude that your requirements are unsatisfiable.
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ basic-package==0.1.0
     "
     );
+    source_built.assert(predicates::path::exists());
 
     Ok(())
 }
