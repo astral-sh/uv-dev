@@ -2178,89 +2178,33 @@ impl std::fmt::Display for PubGrubHint {
                 version,
                 tags,
                 best,
-            } => {
-                if let Some(best) = best {
-                    let s = if tags.len() == 1 { "" } else { "s" };
-                    let best = if let Some(pretty) = best.pretty() {
-                        format!("{} (`{}`)", pretty.cyan(), best.cyan())
-                    } else {
-                        format!("{}", best.cyan())
-                    };
-                    write!(
-                        f,
-                        "You require {}, but we only found wheels for `{}` ({}) with the following Python implementation tag{s}: {}",
-                        best,
-                        package.cyan(),
-                        format!("v{version}").cyan(),
-                        tags.iter()
-                            .map(|tag| format!("`{}`", tag.cyan()))
-                            .join(", "),
-                    )
-                } else {
-                    let s = if tags.len() == 1 { "" } else { "s" };
-                    write!(
-                        f,
-                        "Wheels are available for `{}` ({}) with the following Python implementation tag{s}: {}",
-                        package.cyan(),
-                        format!("v{version}").cyan(),
-                        tags.iter()
-                            .map(|tag| format!("`{}`", tag.cyan()))
-                            .join(", "),
-                    )
-                }
-            }
+            } => write_wheel_tag_hint(
+                f,
+                package,
+                version,
+                tags,
+                best.as_ref()
+                    .map(|best| (best, best.pretty().map(Cow::Owned))),
+                "with the following Python implementation tag",
+            ),
             Self::AbiTags {
                 package,
                 version,
                 tags,
                 best,
-            } => {
-                if let Some(best) = best {
-                    let s = if tags.len() == 1 { "" } else { "s" };
-                    let best = if let Some(pretty) = best.pretty() {
-                        format!("{} (`{}`)", pretty.cyan(), best.cyan())
-                    } else {
-                        format!("{}", best.cyan())
-                    };
-                    write!(
-                        f,
-                        "You require {}, but we only found wheels for `{}` ({}) with the following Python ABI tag{s}: {}",
-                        best,
-                        package.cyan(),
-                        format!("v{version}").cyan(),
-                        tags.iter()
-                            .map(|tag| format!("`{}`", tag.cyan()))
-                            .join(", "),
-                    )
-                } else {
-                    let s = if tags.len() == 1 { "" } else { "s" };
-                    write!(
-                        f,
-                        "Wheels are available for `{}` ({}) with the following Python ABI tag{s}: {}",
-                        package.cyan(),
-                        format!("v{version}").cyan(),
-                        tags.iter()
-                            .map(|tag| format!("`{}`", tag.cyan()))
-                            .join(", "),
-                    )
-                }
-            }
+            } => write_wheel_tag_hint(
+                f,
+                package,
+                version,
+                tags,
+                best.as_ref().map(|best| (best, best.pretty())),
+                "with the following Python ABI tag",
+            ),
             Self::PlatformTags {
                 package,
                 version,
                 tags,
-            } => {
-                let s = if tags.len() == 1 { "" } else { "s" };
-                write!(
-                    f,
-                    "Wheels are available for `{}` ({}) on the following platform{s}: {}",
-                    package.cyan(),
-                    format!("v{version}").cyan(),
-                    tags.iter()
-                        .map(|tag| format!("`{}`", tag.cyan()))
-                        .join(", "),
-                )
-            }
+            } => write_wheel_tag_hint(f, package, version, tags, None, "on the following platform"),
             Self::ExcludeNewer {
                 package,
                 source,
@@ -2350,6 +2294,37 @@ impl std::fmt::Display for PubGrubHint {
             }
         }
     }
+}
+
+/// Render the available wheel tags and, when known, the required tag.
+fn write_wheel_tag_hint<T: std::fmt::Display>(
+    f: &mut std::fmt::Formatter<'_>,
+    package: &PackageName,
+    version: &Version,
+    tags: &BTreeSet<T>,
+    best: Option<(&T, Option<Cow<'_, str>>)>,
+    description: &str,
+) -> std::fmt::Result {
+    if let Some((best, pretty)) = best {
+        f.write_str("You require ")?;
+        if let Some(pretty) = pretty {
+            write!(f, "{} (`{}`)", pretty.cyan(), best.cyan())?;
+        } else {
+            write!(f, "{}", best.cyan())?;
+        }
+        f.write_str(", but we only found wheels for ")?;
+    } else {
+        f.write_str("Wheels are available for ")?;
+    }
+    let plural = if tags.len() == 1 { "" } else { "s" };
+    write!(
+        f,
+        "`{}` ({}) {description}{plural}: {}",
+        package.cyan(),
+        format!("v{version}").cyan(),
+        tags.iter()
+            .format_with(", ", |tag, f| f(&format_args!("`{}`", tag.cyan()))),
+    )
 }
 
 /// A [`Term`] and [`PubGrubPackage`] combination for display.
