@@ -193,6 +193,11 @@ fn build_server_index(scenario: &Scenario) -> ServerIndex {
 
         let wheel_filename =
             WheelFilename::from_str(artifact.filename).expect("invalid vendor wheel filename");
+        // Scenario packages define their complete set of available releases. Vendor artifacts
+        // are fallback build dependencies, so they must not add or replace scenario releases.
+        if scenario.packages.contains_key(&wheel_filename.name) {
+            continue;
+        }
 
         files.insert(artifact.filename.to_string(), FileData::Vendor(artifact));
         packages
@@ -403,7 +408,7 @@ mod tests {
 
     use super::{
         PackseServer, Scenario, build_server_index, extract_package_name,
-        mount_mismatched_distribution,
+        mount_mismatched_distribution, sha256_hex,
     };
 
     #[test]
@@ -428,6 +433,37 @@ mod tests {
                 .iter()
                 .all(|artifact| !artifact.is_loaded())
         );
+    }
+
+    #[tokio::test]
+    async fn scenario_packages_shadow_vendor_artifacts() -> Result<()> {
+        let scenario = toml::from_str::<Scenario>(
+            r#"
+name = "vendor-package-overlap"
+[root]
+[expected]
+satisfiable = true
+[packages.packaging.versions."23.2"]
+sdist = false
+"#,
+        )?;
+        let server = PackseServer::from_scenario(&scenario);
+        let index: serde_json::Value = reqwest::get(format!("{}packaging/", server.index_url()))
+            .await?
+            .json()
+            .await?;
+
+        assert_eq!(index["files"].as_array().map(Vec::len), Some(1));
+        let filename = "packaging-23.2-py3-none-any.whl";
+        assert_eq!(index["files"][0]["filename"], filename);
+        let bytes = reqwest::get(server.file_url(filename))
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        assert_eq!(index["files"][0]["hashes"]["sha256"], sha256_hex(&bytes));
+
+        Ok(())
     }
 
     #[tokio::test]
