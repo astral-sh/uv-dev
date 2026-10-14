@@ -4405,6 +4405,8 @@ fn tool_install_preserve_environment() {
      + platformdirs==4.2.0
     Installed 2 executables: black, blackd
     ");
+    let receipt = context.temp_dir.child("tools/black/uv-receipt.toml");
+    let original_receipt = context.read_bytes(&receipt);
 
     // Install `black`, but with an incompatible requirement.
     uv_snapshot!(context.filters(), context.tool_install()
@@ -4418,6 +4420,15 @@ fn tool_install_preserve_environment() {
       cause: Because black==24.1.1 depends on packaging>=22.0 and you require black==24.1.1, we can conclude that you require packaging>=22.0.
              And because you require packaging==0.0.1, we can conclude that your requirements are unsatisfiable.
     ");
+
+    assert_eq!(context.read_bytes(&receipt), original_receipt);
+    context
+        .external_command(bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX)))
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("black, 24.1.1 ("))
+        .stderr("");
 
     // Install `black`. The tool should already be installed, since we didn't remove the environment.
     uv_snapshot!(context.filters(), context.tool_install()
