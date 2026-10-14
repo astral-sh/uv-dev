@@ -1,6 +1,7 @@
 use std::{io::Write, process::Stdio};
 use tokio::process::Command;
 use tracing::{debug, instrument, trace, warn};
+use url::Position;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::{warn_user_once, warn_user_once_with_chain};
 
@@ -154,22 +155,21 @@ impl KeyringProvider {
 
     /// Return the credential-free service name used to store and remove keyring entries.
     fn service_name(url: &DisplaySafeUrl) -> String {
-        let url = url.without_credentials();
-        if let Some(host) = url.host_str().filter(|_| !url.path().is_empty()) {
-            let mut service = String::new();
-            if url.scheme() != "https" {
-                service.push_str(url.scheme());
-                service.push_str("://");
+        if let Some(host) = Self::host_and_port(url).filter(|_| !url.path().is_empty()) {
+            if url.scheme() == "https" {
+                host.to_owned()
+            } else {
+                format!("{}://{host}", url.scheme())
             }
-            service.push_str(host);
-            if let Some(port) = url.port() {
-                service.push(':');
-                service.push_str(&port.to_string());
-            }
-            service
         } else {
-            url.to_string()
+            url.without_credentials().to_string()
         }
+    }
+
+    /// Return the serialized host and optional port without any user information.
+    fn host_and_port(url: &DisplaySafeUrl) -> Option<&str> {
+        url.has_host()
+            .then(|| &url[Position::BeforeHost..Position::AfterPort])
     }
 
     /// Fetch credentials for the given [`Url`] from the keyring.
@@ -198,13 +198,9 @@ impl KeyringProvider {
         let mut credentials = self.fetch_service(url.as_str(), username).await;
         // And fallback to a check for the host
         if credentials.is_none() {
-            let host = if let Some(port) = url.port() {
-                format!("{}:{}", url.host_str()?, port)
-            } else {
-                url.host_str()?.to_string()
-            };
+            let host = Self::host_and_port(url)?;
             trace!("Checking keyring for host {host}");
-            credentials = self.fetch_service(&host, username).await;
+            credentials = self.fetch_service(host, username).await;
 
             // For non-HTTPS URLs, `store` includes the scheme in the service name
             // (e.g., `http://host:port`) to avoid leaking credentials across schemes.
@@ -407,6 +403,7 @@ mod tests {
         for (url, expected) in [
             ("https://user:secret@example.com/simple", "example.com"),
             ("http://example.com:8080/simple", "http://example.com:8080"),
+            ("https://user:secret@[::1]:8443/simple", "[::1]:8443"),
             ("mailto:user@example.com", "mailto:user@example.com"),
         ] {
             let url = DisplaySafeUrl::parse(url).unwrap();
