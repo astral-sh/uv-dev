@@ -967,12 +967,12 @@ pub fn read_record_into_iter(
         .from_reader(record)
         .into_deserialize()
         .map(|entry| {
-            let entry: RecordEntry = entry?;
-            Ok(RecordEntry {
-                // selenium uses absolute paths for some reason
-                path: entry.path.trim_start_matches('/').to_string(),
-                ..entry
-            })
+            let mut entry: RecordEntry = entry?;
+            // Some wheels contain absolute paths in `RECORD`.
+            if entry.path.starts_with('/') {
+                entry.path = entry.path.trim_start_matches('/').to_string();
+            }
+            Ok(entry)
         })
 }
 
