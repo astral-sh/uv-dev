@@ -311,7 +311,7 @@ fn test_albatross_root_workspace_bird_feeder() {
 
 #[test]
 #[cfg(feature = "test-pypi")]
-fn test_albatross_root_workspace_albatross() {
+fn test_albatross_root_workspace_albatross_from_member() {
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
 
@@ -322,19 +322,18 @@ fn test_albatross_root_workspace_albatross() {
     )
     .expect("workspace fixture should be copied");
 
-    let current_dir = workspace
-        .join("albatross-root-workspace")
-        .join("packages")
-        .join("bird-feeder");
+    let root = workspace.join(fixture);
+    let current_dir = root.join("packages").join("bird-feeder");
 
-    uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--package", "albatross"]).current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: [TEMP_DIR]/workspace/albatross-root-workspace/.venv
     Resolved 5 packages in [TIME]
-    Prepared 4 packages in [TIME]
-    Installed 4 packages in [TIME]
+    Prepared 5 packages in [TIME]
+    Installed 5 packages in [TIME]
+     + albatross==0.1.0 (from file://[TEMP_DIR]/workspace/albatross-root-workspace)
      + bird-feeder==1.0.0 (from file://[TEMP_DIR]/workspace/albatross-root-workspace/packages/bird-feeder)
      + idna==3.6
      + iniconfig==2.0.0
@@ -342,16 +341,17 @@ fn test_albatross_root_workspace_albatross() {
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
-    uv_snapshot!(context.filters(), context.sync().current_dir(&current_dir), @"
+    let check_script = root.join("check_installed_albatross.py");
+    assert_workspace_installation(&root, &check_script);
+    uv_snapshot!(context.filters(), context.sync().args(["--package", "albatross"]).current_dir(&current_dir), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
-    Checked 4 packages in [TIME]
+    Checked 5 packages in [TIME]
     "
     );
 
-    context.assert_file(current_dir.join("check_installed_albatross.py"));
+    assert_workspace_installation(&root, &check_script);
 }
 
 #[test]
