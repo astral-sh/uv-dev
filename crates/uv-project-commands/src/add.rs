@@ -7,7 +7,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
-use rustc_hash::{FxBuildHasher, FxHashMap};
 use tracing::{debug, warn};
 
 use uv_cache::Cache;
@@ -1085,20 +1084,6 @@ async fn lock_and_sync(
 
     // Avoid modifying the user request further if `--raw-sources` is set.
     if !raw {
-        // Extract the minimum-supported version for each dependency.
-        let mut minimum_version =
-            FxHashMap::with_capacity_and_hasher(lock.packages().len(), FxBuildHasher);
-        for dist in lock.packages() {
-            let name = dist.name();
-            let Some(version) = dist.version() else {
-                continue;
-            };
-            minimum_version
-                .entry(name)
-                .and_modify(|minimum| *minimum = std::cmp::min(*minimum, version))
-                .or_insert(version);
-        }
-
         // If any of the requirements were added without version specifiers, add a lower bound.
         let mut modified = false;
         for edit in edits {
@@ -1136,13 +1121,18 @@ async fn lock_and_sync(
             }
 
             // Set the minimum version.
-            let Some(minimum) = minimum_version.get(&edit.requirement.name) else {
+            let Some(minimum) = lock
+                .packages_for_name(&edit.requirement.name)
+                .iter()
+                .filter_map(|package| package.version())
+                .min()
+            else {
                 continue;
             };
 
             // Drop the local version identifier, which isn't permitted in `>=` constraints.
             // For example, convert `1.2.3+local` to `1.2.3`.
-            let minimum = (*minimum).clone().without_local();
+            let minimum = minimum.clone().without_local();
 
             toml.set_dependency_bound(
                 &edit.dependency_type,
