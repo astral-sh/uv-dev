@@ -2745,15 +2745,19 @@ fn run_no_sync() -> Result<()> {
     ----- stdout -----
     Python 3.12.[X]
     ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
 
     context.lock().assert().success();
+    let existing_lockfile = context.read("uv.lock");
 
     // Running with `--no-sync` should not install any requirements.
-    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("--").arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("--").arg("python").arg("-c").arg("import importlib.util; assert importlib.util.find_spec('anyio') is None"), @"
     exit_code: 0 (success)
-    ----- stdout -----
-    Python 3.12.[X]
     ");
+    assert_eq!(context.read("uv.lock"), existing_lockfile);
 
     context.sync().assert().success();
 
