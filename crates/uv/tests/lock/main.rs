@@ -7,8 +7,6 @@
 ))]
 use uv_test::pypi_proxy;
 
-mod index_configuration;
-
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod lock;
 
@@ -21,10 +19,10 @@ mod marker_normalization;
 #[cfg(all(feature = "test-python", feature = "test-universal"))]
 mod minimum_libc;
 
-mod no_project;
-
 #[cfg(feature = "test-python")]
 mod source_validation;
+
+mod validation;
 
 #[cfg(all(
     feature = "test-python",
