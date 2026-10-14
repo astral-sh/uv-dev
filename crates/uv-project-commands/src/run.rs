@@ -1921,29 +1921,29 @@ async fn resolve_gist_url(
 
 /// Returns `true` if the target is a ZIP archive containing a `__main__.py` file.
 fn is_python_zipapp(target: &Path) -> bool {
-    if let Ok(file) = fs_err::File::open(target) {
-        let reader = std::io::BufReader::new(file);
-        return futures::executor::block_on(async {
-            let archive = async_zip::base::read::seek::ZipFileReader::new(
-                futures::io::AllowStdIo::new(reader),
-            )
-            .await
-            .ok()?;
-            archive
-                .file()
-                .entries()
-                .iter()
-                .find(|entry| {
-                    entry
-                        .filename()
-                        .as_str()
-                        .is_ok_and(|name| name == "__main__.py")
-                })
-                .map(|entry| entry.dir().is_ok_and(|is_dir| !is_dir))
-        })
-        .unwrap_or(false);
-    }
-    false
+    let Ok(file) = fs_err::File::open(target) else {
+        return false;
+    };
+    let reader = std::io::BufReader::new(file);
+    futures::executor::block_on(async {
+        let Ok(archive) =
+            async_zip::base::read::seek::ZipFileReader::new(futures::io::AllowStdIo::new(reader))
+                .await
+        else {
+            return false;
+        };
+        archive
+            .file()
+            .entries()
+            .iter()
+            .find(|entry| {
+                entry
+                    .filename()
+                    .as_str()
+                    .is_ok_and(|name| name == "__main__.py")
+            })
+            .is_some_and(|entry| entry.dir().is_ok_and(|is_dir| !is_dir))
+    })
 }
 
 /// Read and parse recursion depth from the environment.
