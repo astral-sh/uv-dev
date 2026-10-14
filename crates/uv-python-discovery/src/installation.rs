@@ -222,43 +222,26 @@ impl PythonInstallation {
             && python_downloads.is_automatic()
             && client_builder.connectivity.is_online();
 
-        let download = download_request
-            .clone()
-            .with_default_arch(arch.map(PythonArchitecture::into_inner))
-            .fill()
-            .map_err(uv_python_managed::downloads::Error::from)
-            .map(|request| download_list.find(&request));
-
         // Regardless of whether downloads are enabled, we want to determine if the download is
         // available to power error messages. However, if downloads aren't enabled, we don't want to
         // report any errors related to them.
-        let download = match download {
-            Ok(Ok(download)) => Some(download),
+        let download = match download_request
+            .with_default_arch(arch.map(PythonArchitecture::into_inner))
+            .fill()
+            .map_err(uv_python_managed::downloads::Error::from)
+            .and_then(|request| download_list.find(&request))
+        {
+            Ok(download) => download,
+            Err(_) if !downloads_enabled => return Err(err),
             // If the download cannot be found, return the _original_ discovery error
-            Ok(Err(uv_python_managed::downloads::Error::NoDownloadFound(_))) => {
-                if downloads_enabled {
-                    debug!("No downloads are available for {request}");
-                    if matches!(request, PythonRequest::Default | PythonRequest::Any) {
-                        return Err(err);
-                    }
-                    return Err(err.with_hint(MissingPythonHint::RequiresUpdate));
+            Err(uv_python_managed::downloads::Error::NoDownloadFound(_)) => {
+                debug!("No downloads are available for {request}");
+                if matches!(request, PythonRequest::Default | PythonRequest::Any) {
+                    return Err(err);
                 }
-                None
+                return Err(err.with_hint(MissingPythonHint::RequiresUpdate));
             }
-            Err(err) | Ok(Err(err)) => {
-                if downloads_enabled {
-                    // We failed to determine the platform information
-                    return Err(err.into());
-                }
-                None
-            }
-        };
-
-        let Some(download) = download else {
-            // N.B. We should only be in this case when downloads are disabled; when downloads are
-            // enabled, we should fail eagerly when something goes wrong with the download.
-            debug_assert!(!downloads_enabled);
-            return Err(err);
+            Err(error) => return Err(error.into()),
         };
 
         // If the download is available, but not usable, we attach a hint to the original error.
