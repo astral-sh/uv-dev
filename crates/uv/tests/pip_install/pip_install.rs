@@ -10717,37 +10717,6 @@ fn unmanaged() -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
-#[test]
-fn install_script_with_symlinked_lib() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let lib = context.venv.join("lib");
-    let usr = context.venv.join("usr");
-    fs::create_dir_all(&usr)?;
-    fs::rename(&lib, usr.join("lib"))?;
-    symlink("usr/lib", &lib)?;
-    fs::create_dir_all(usr.join("bin"))?;
-
-    // Installing should write the launcher to `bin`; instead, it is misplaced and the install
-    // fails because the relative path from `site-packages` follows the symlink. See
-    // astral-sh/uv#21255.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(context.workspace_root.join("test/packages/black_editable")), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: black-0.1.0-py3-none-any.whl (black==0.1.0 (from file://[WORKSPACE]/test/packages/black_editable))
-      cause: failed to query metadata of file `[VENV]/bin/black`: No such file or directory (os error 2)
-    ");
-
-    assert!(!context.venv.join("bin/black").exists());
-    assert!(context.venv.join("usr/bin/black").exists());
-
-    Ok(())
-}
-
 /// Install requesting Python 3.12 when the virtual environment uses 3.11
 #[test]
 fn install_incompatible_python_version() {

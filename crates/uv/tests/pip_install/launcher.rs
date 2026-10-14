@@ -4,10 +4,14 @@ use std::process::Command;
 use assert_cmd::prelude::*;
 use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 
-fn install_launcher(context: &TestContext) -> PathBuf {
-    let wheel = context
+fn launcher_wheel(context: &TestContext) -> PathBuf {
+    context
         .workspace_root
-        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl")
+}
+
+fn install_launcher(context: &TestContext) -> PathBuf {
+    let wheel = launcher_wheel(context);
     context
         .pip_install()
         .arg(format!("simple_launcher@{}", wheel.display()))
@@ -90,5 +94,44 @@ fn relocated() -> anyhow::Result<()> {
         Hi from the simple launcher!
         ");
     }
+    Ok(())
+}
+
+/// A symlinked `lib` directory currently causes the launcher to be installed outside `bin`.
+/// See astral-sh/uv#21255.
+#[cfg(unix)]
+#[test]
+fn symlinked_lib() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let lib = context.venv.join("lib");
+    let usr = context.venv.join("usr");
+    fs_err::create_dir_all(&usr)?;
+    fs_err::rename(&lib, usr.join("lib"))?;
+    fs_err::os::unix::fs::symlink("usr/lib", &lib)?;
+    fs_err::create_dir_all(usr.join("bin"))?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg(launcher_wheel(&context))
+        .arg("--no-index"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: simple_launcher-0.1.0-py3-none-any.whl (simple-launcher==0.1.0 (from file://[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl))
+      cause: failed to query metadata of file `[VENV]/bin/simple_launcher`: No such file or directory (os error 2)
+    ");
+
+    let expected = context.venv.join("bin/simple_launcher");
+    let misplaced = usr.join("bin/simple_launcher");
+    assert!(
+        !expected.exists(),
+        "unexpected launcher at {}",
+        expected.display()
+    );
+    assert!(
+        misplaced.is_file(),
+        "expected misplaced launcher at {}",
+        misplaced.display()
+    );
     Ok(())
 }
