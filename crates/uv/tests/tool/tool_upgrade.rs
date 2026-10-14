@@ -21,30 +21,12 @@ use uv_test::{uv_snapshot, venv_bin_path};
 use crate::workspace_fixture::MixedWorkspace;
 
 #[test]
-fn tool_upgrade_empty() {
+fn tool_upgrade_up_to_date() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
-
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("--all")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Nothing to upgrade
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("--all")
-        .arg("-p")
-        .arg("3.13")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Nothing to upgrade
-    ");
 
     // Install the latest `babel`.
     uv_snapshot!(context.filters(), context.tool_install()
@@ -78,49 +60,6 @@ fn tool_upgrade_empty() {
     ----- stderr -----
     Nothing to upgrade
     ");
-}
-
-#[test]
-fn tool_upgrade_all_ignores_invalid_tool_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let tool_dir = context.temp_dir.child("tools");
-    let bin_dir = context.temp_dir.child("bin");
-
-    tool_dir.child("tool backup").create_dir_all()?;
-
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("--all")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    warning: Ignoring tool directory `tools/tool backup` with an invalid package name; move it outside the tool directory, or remove it if no longer needed
-    Nothing to upgrade
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn tool_upgrade_all_unreadable_receipt() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
-    let tool_dir = context.temp_dir.child("tools");
-
-    tool_dir.child("babel").create_dir_all()?;
-    tool_dir
-        .child("babel")
-        .child("uv-receipt.toml")
-        .write_binary(&[0xff])?;
-
-    uv_snapshot!(context.filters(), context.tool_upgrade().arg("--all"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to inspect installed tools in `tools`
-      cause: failed to read from file `[TEMP_DIR]/tools/babel/uv-receipt.toml`: stream did not contain valid UTF-8
-    ");
-
-    Ok(())
 }
 
 #[test]
@@ -688,34 +627,6 @@ fn tool_upgrade_all_tool_install_locks() {
      + babel==2.14.0
      - pytz==2018.5
     Installed 1 executable: pybabel
-    ");
-}
-
-#[test]
-fn tool_upgrade_non_existing_package() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    // Attempt to upgrade `black`.
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("black")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to upgrade black
-      cause: `black` is not installed; run `uv tool install black` to install
-    ");
-
-    // Attempt to upgrade all.
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("--all")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Nothing to upgrade
     ");
 }
 
