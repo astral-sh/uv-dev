@@ -15,7 +15,7 @@ use uv_configuration::{
 };
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
+use uv_distribution_types::{ExtraBuildRequires, Index, Requirement, RequirementSource};
 use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
@@ -484,13 +484,9 @@ async fn upgrade_tool(
                 &tags,
             )?;
             let plan_is_empty = plan.is_empty();
-            let changes_tool = plan.cached.iter().any(|dist| dist.name() == name)
-                || plan.remote.iter().any(|dist| dist.name() == name)
-                || plan.reinstalls.iter().any(|dist| dist.name() == name)
-                || plan.extraneous.iter().any(|dist| dist.name() == name);
             let outcome = if plan_is_empty {
                 UpgradeOutcome::NoOp
-            } else if changes_tool {
+            } else if plan.contains_package(name) {
                 UpgradeOutcome::UpgradeTool
             } else {
                 UpgradeOutcome::UpgradeDependencies
