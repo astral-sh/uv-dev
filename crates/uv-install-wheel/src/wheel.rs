@@ -794,7 +794,8 @@ pub(crate) fn install_data(
 
                     // Couldn't find any docs for this, took it directly from
                     // https://github.com/pypa/pip/blob/b5457dfee47dd9e9f6ec45159d9d410ba44e5ea1/src/pip/_internal/operations/install/wheel.py#L565-L583
-                    let name = file.file_name().to_string_lossy().to_string();
+                    let name = file.file_name();
+                    let name = name.to_string_lossy();
                     let match_name = name
                         .strip_suffix(".exe")
                         .or_else(|| name.strip_suffix("-script.py"))
