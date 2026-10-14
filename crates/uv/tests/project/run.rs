@@ -4561,9 +4561,11 @@ fn run_active_script_environment() -> Result<()> {
         # ]
         # ///
 
+        import sys
+
         import iniconfig
 
-        print("Hello, world!")
+        print(f"Python {sys.version_info.major}.{sys.version_info.minor}")
        "#
     })?;
 
@@ -4574,7 +4576,7 @@ fn run_active_script_environment() -> Result<()> {
         .env(EnvVars::VIRTUAL_ENV, "foo"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Hello, world!
+    Python 3.11
 
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -4591,7 +4593,7 @@ fn run_active_script_environment() -> Result<()> {
         .env(EnvVars::VIRTUAL_ENV, "foo"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Hello, world!
+    Python 3.11
     ");
 
     context
@@ -4608,7 +4610,7 @@ fn run_active_script_environment() -> Result<()> {
         .env(EnvVars::VIRTUAL_ENV, "foo"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Hello, world!
+    Python 3.11
 
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -4631,7 +4633,7 @@ fn run_active_script_environment() -> Result<()> {
         .env(EnvVars::VIRTUAL_ENV, "foo"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Hello, world!
+    Python 3.12
 
     ----- stderr -----
     Resolved 1 package in [TIME]
