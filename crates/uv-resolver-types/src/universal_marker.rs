@@ -510,24 +510,24 @@ impl ConflictMarker {
     pub fn filter_rules(
         self,
     ) -> Result<(Vec<ConflictItem>, Vec<ConflictItem>), ConflictMarkerError> {
-        let (mut raw_include, mut raw_exclude) = (vec![], vec![]);
+        let (mut include, mut exclude) = (Ok(Vec::new()), Ok(Vec::new()));
         self.marker.visit_extras(|op, extra| {
-            match op {
-                MarkerOperator::Equal => raw_include.push(extra.to_owned()),
-                MarkerOperator::NotEqual => raw_exclude.push(extra.to_owned()),
+            let result = match op {
+                MarkerOperator::Equal => &mut include,
+                MarkerOperator::NotEqual => &mut exclude,
                 // OK by the contract of `MarkerTree::visit_extras`.
                 _ => unreachable!(),
+            };
+            let Ok(items) = result else {
+                return;
+            };
+            match ParsedRawExtra::parse(extra).and_then(|parsed| parsed.to_conflict_item()) {
+                Ok(item) => items.push(item),
+                Err(err) => *result = Err(err),
             }
         });
-        let include = raw_include
-            .into_iter()
-            .map(|extra| ParsedRawExtra::parse(&extra).and_then(|parsed| parsed.to_conflict_item()))
-            .collect::<Result<Vec<_>, _>>()?;
-        let exclude = raw_exclude
-            .into_iter()
-            .map(|extra| ParsedRawExtra::parse(&extra).and_then(|parsed| parsed.to_conflict_item()))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok((include, exclude))
+        // Report inclusion errors before exclusion errors, regardless of traversal order.
+        Ok((include?, exclude?))
     }
 }
 
