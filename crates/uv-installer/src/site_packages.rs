@@ -488,43 +488,32 @@ impl SitePackages {
             let name = &requirement.name;
             match self.lookup(self.by_name.get(name)) {
                 DistributionLookup::Unique(distribution) => {
-                    // Requirements were filtered with the parent extras before entering the stack.
-                    match RequirementSatisfaction::check(
+                    let satisfies_source = |source| match RequirementSatisfaction::check(
                         name,
                         distribution,
-                        &requirement.source,
+                        source,
                         None,
                         installation,
                         tags,
                         build_settings,
                     ) {
+                        RequirementSatisfaction::Satisfied => true,
                         RequirementSatisfaction::Mismatch
                         | RequirementSatisfaction::OutOfDate
-                        | RequirementSatisfaction::CacheInvalid => {
-                            return Ok(SatisfiesResult::Unsatisfied(requirement));
-                        }
-                        RequirementSatisfaction::Satisfied => {}
+                        | RequirementSatisfaction::CacheInvalid => false,
+                    };
+
+                    // Requirements were filtered with the parent extras before entering the stack.
+                    if !satisfies_source(&requirement.source) {
+                        return Ok(SatisfiesResult::Unsatisfied(requirement));
                     }
 
                     // Validate that the installed version satisfies the constraints.
                     for constraint in constraints.get(name).into_iter().flatten() {
-                        if constraint.evaluate_markers(Some(markers), &[]) {
-                            match RequirementSatisfaction::check(
-                                name,
-                                distribution,
-                                &constraint.source,
-                                None,
-                                installation,
-                                tags,
-                                build_settings,
-                            ) {
-                                RequirementSatisfaction::Mismatch
-                                | RequirementSatisfaction::OutOfDate
-                                | RequirementSatisfaction::CacheInvalid => {
-                                    return Ok(SatisfiesResult::Unsatisfied((*constraint).clone()));
-                                }
-                                RequirementSatisfaction::Satisfied => {}
-                            }
+                        if constraint.evaluate_markers(Some(markers), &[])
+                            && !satisfies_source(&constraint.source)
+                        {
+                            return Ok(SatisfiesResult::Unsatisfied((*constraint).clone()));
                         }
                     }
 
