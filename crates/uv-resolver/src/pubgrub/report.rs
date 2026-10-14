@@ -339,32 +339,7 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
                 }
             }
             External::FromDependencyOf(package, package_set, dependency, dependency_set) => {
-                if package.name_no_root() == dependency.name_no_root() {
-                    if let Some(member) = self.format_workspace_member(package) {
-                        return format!(
-                            "{member} depends on itself at an incompatible version ({})",
-                            PackageRange::dependency(dependency, dependency_set, None)
-                        );
-                    }
-                }
-
-                if dependency_set.is_empty()
-                    && let Some(root) = self.format_root(package)
-                {
-                    return format!("{root} for {dependency} cannot be satisfied");
-                }
-
-                if let Some(root) = self.format_root_requires(package) {
-                    return format!(
-                        "{root} {}",
-                        self.dependency_range(dependency, dependency_set)
-                    );
-                }
-                format!(
-                    "{}",
-                    self.compatible_range(package, package_set)
-                        .depends_on(dependency, dependency_set),
-                )
+                self.format_dependency(package, package_set, dependency, dependency_set)
             }
         }
     }
@@ -395,12 +370,14 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
             {
                 format!("{} must be used", self.compatible_range(package, range))
             }
-            [(p1, Term::Positive(r1)), (p2, Term::Negative(r2))] => self.format_external(
-                &External::FromDependencyOf((*p1).clone(), r1.clone(), (*p2).clone(), r2.clone()),
-            ),
-            [(p1, Term::Negative(r1)), (p2, Term::Positive(r2))] => self.format_external(
-                &External::FromDependencyOf((*p2).clone(), r2.clone(), (*p1).clone(), r1.clone()),
-            ),
+            [
+                (package, Term::Positive(package_set)),
+                (dependency, Term::Negative(dependency_set)),
+            ]
+            | [
+                (dependency, Term::Negative(dependency_set)),
+                (package, Term::Positive(package_set)),
+            ] => self.format_dependency(package, package_set, dependency, dependency_set),
             slice => {
                 let separator = if slice.len() == 2 { " and " } else { ", " };
                 let terms = slice
@@ -537,6 +514,42 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
 }
 
 impl PubGrubReportFormatter<'_> {
+    /// Format an incompatibility caused by a package's dependency.
+    fn format_dependency(
+        &self,
+        package: &PubGrubPackage,
+        package_set: &Range<Version>,
+        dependency: &PubGrubPackage,
+        dependency_set: &Range<Version>,
+    ) -> String {
+        if package.name_no_root() == dependency.name_no_root()
+            && let Some(member) = self.format_workspace_member(package)
+        {
+            return format!(
+                "{member} depends on itself at an incompatible version ({})",
+                PackageRange::dependency(dependency, dependency_set, None)
+            );
+        }
+
+        if dependency_set.is_empty()
+            && let Some(root) = self.format_root(package)
+        {
+            return format!("{root} for {dependency} cannot be satisfied");
+        }
+
+        if let Some(root) = self.format_root_requires(package) {
+            return format!(
+                "{root} {}",
+                self.dependency_range(dependency, dependency_set)
+            );
+        }
+        format!(
+            "{}",
+            self.compatible_range(package, package_set)
+                .depends_on(dependency, dependency_set),
+        )
+    }
+
     /// Return the formatting for "the root package requires", if the given
     /// package is the root package.
     ///
