@@ -64,6 +64,31 @@ impl InstallOptions {
         project_name: Option<&PackageName>,
         members: &BTreeSet<PackageName>,
     ) -> bool {
+        self.include_package_with_membership(target, project_name, || members.contains(target.name))
+    }
+
+    /// Returns `true` if a local workspace member passes the install filters.
+    pub fn include_workspace_member(
+        &self,
+        name: &PackageName,
+        project_name: Option<&PackageName>,
+    ) -> bool {
+        self.include_package_with_membership(
+            InstallTarget {
+                name,
+                is_local: true,
+            },
+            project_name,
+            || true,
+        )
+    }
+
+    fn include_package_with_membership(
+        &self,
+        target: InstallTarget<'_>,
+        project_name: Option<&PackageName>,
+        is_workspace_member: impl FnOnce() -> bool,
+    ) -> bool {
         let package_name = target.name;
 
         // If `--only-install-package` is set, only include specified packages.
@@ -94,7 +119,7 @@ impl InstallOptions {
             }
 
             // Check if it's a workspace member
-            if members.contains(package_name) {
+            if is_workspace_member() {
                 return true;
             }
 
@@ -136,7 +161,7 @@ impl InstallOptions {
                 return false;
             }
 
-            if members.contains(package_name) {
+            if is_workspace_member() {
                 debug!("Omitting `{package_name}` from resolution due to `--no-install-workspace`");
                 return false;
             }
