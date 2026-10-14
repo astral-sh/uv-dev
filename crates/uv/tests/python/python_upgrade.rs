@@ -92,7 +92,7 @@ fn python_upgrade() -> Result<()> {
 }
 
 #[test]
-fn python_upgrade_without_version() {
+fn python_upgrade_without_version() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -124,6 +124,13 @@ fn python_upgrade_without_version() {
      + cpython-3.13.[LATEST]-[PLATFORM] (python3.13)
     ");
 
+    let current_installation_marker = context
+        .temp_dir
+        .join("managed")
+        .join(format!("cpython-3.13-{}", platform_key_from_env()?))
+        .join("untouched-by-bulk-upgrade");
+    fs_err::write(&current_installation_marker, "current installation\n")?;
+
     // Providing no minor version to `uv python upgrade` should upgrade the rest
     // of the patch versions
     uv_snapshot!(context.filters(), context.python_upgrade(), @"
@@ -133,6 +140,11 @@ fn python_upgrade_without_version() {
      + cpython-3.11.[LATEST]-[PLATFORM] (python3.11)
      + cpython-3.12.[LATEST]-[PLATFORM] (python3.12)
     ");
+    assert_eq!(
+        context.read(&current_installation_marker),
+        "current installation\n",
+        "the already-current installation must survive the bulk upgrade"
+    );
 
     // Should be a no-op when every version is already upgraded
     uv_snapshot!(context.filters(), context.python_upgrade(), @"
@@ -140,7 +152,6 @@ fn python_upgrade_without_version() {
     ----- stderr -----
     All versions already on latest supported patch release
     ");
-
     // Install an earlier free-threaded patch version alongside the upgraded standard version
     uv_snapshot!(context.filters(), context.python_install().arg("3.13.1t"), @"
     exit_code: 0 (success)
@@ -156,6 +167,7 @@ fn python_upgrade_without_version() {
     Installed Python 3.13.[LATEST] in [TIME]
      + cpython-3.13.[LATEST]+freethreaded-[PLATFORM] (python3.13t)
     ");
+    Ok(())
 }
 
 #[test]
