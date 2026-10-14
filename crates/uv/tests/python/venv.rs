@@ -6,7 +6,7 @@ use assert_fs::prelude::*;
 use indoc::indoc;
 use predicates::prelude::*;
 use uv_cache_key::cache_digest;
-use uv_fs::{LockedFile, LockedFileMode};
+use uv_fs::{LockedFile, LockedFileMode, verbatim_path};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 use uv_static::EnvVars;
 
@@ -525,9 +525,10 @@ fn create_centralized_project_environment() -> Result<()> {
     "#);
 
     let target = fs_err::read_link(context.temp_dir.child(".venv").path())?;
+    let cache_root = context.cache_dir.child("environments-v2");
     assert_eq!(
-        target.parent(),
-        Some(context.cache_dir.child("environments-v2").path())
+        target.parent().map(verbatim_path),
+        Some(verbatim_path(cache_root.path()))
     );
     assert!(target.join("pyvenv.cfg").is_file());
     assert!(external.child("marker").is_file());
