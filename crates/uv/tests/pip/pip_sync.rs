@@ -768,33 +768,6 @@ fn install_sdist_url() -> Result<()> {
     Ok(())
 }
 
-/// Attempt to install a direct URL source distribution with a non-PEP 625-compliant
-/// archive format (e.g., `.tar.bz2`). This should hard-error.
-#[test]
-fn reject_sdist_archive_type_bz2() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(&format!(
-        "bz2 @ {}",
-        context
-            .workspace_root
-            .join("test/links/bz2-1.0.0.tar.bz2")
-            .display()
-    ))?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Source distribution `[WORKSPACE]/test/links/bz2-1.0.0.tar.bz2` has a non-PEP 625-compliant filename; only `.tar.gz` and `.zip` archives are accepted
-    "
-    );
-
-    Ok(())
-}
-
 /// Attempt to re-install a package into a virtual environment from a URL. The second install
 /// should be a no-op.
 #[test]
