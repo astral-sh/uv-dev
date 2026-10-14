@@ -136,29 +136,25 @@ impl Error {
     /// operating system, or an error with the archive. Both get wrapped into an I/O error through
     /// e.g., `io::copy`. This method extracts ZIP errors to distinguish them from invalid archives.
     pub(crate) fn io_or_zip(err: std::io::Error) -> Self {
-        if err.kind() != std::io::ErrorKind::Other {
-            return Self::Io(err);
-        }
-
-        let err = match err.downcast::<async_zip::error::ZipError>() {
-            Ok(zip_err) => return Self::from(zip_err),
-            Err(err) => err,
-        };
-        Self::Io(err)
+        Self::io_or_archive::<async_zip::error::ZipError>(err)
     }
 
     /// When reading a tar archive, the error can either be an I/O error from the underlying
     /// reader or an error with the archive. Both get wrapped into an I/O error through operations
     /// such as `io::copy`. This method extracts tar errors to distinguish them from I/O errors.
     pub(crate) fn io_or_tar(err: std::io::Error) -> Self {
+        Self::io_or_archive::<tokio_tar::TarError>(err)
+    }
+
+    /// Recover a format-specific archive error wrapped by an I/O operation.
+    fn io_or_archive<E>(err: std::io::Error) -> Self
+    where
+        E: std::error::Error + Send + Sync + Into<Self> + 'static,
+    {
         if err.kind() != std::io::ErrorKind::Other {
             return Self::Io(err);
         }
-
-        match err.downcast::<tokio_tar::TarError>() {
-            Ok(tar_err) => Self::Tar(tar_err),
-            Err(err) => Self::Io(err),
-        }
+        err.downcast::<E>().map_or_else(Self::Io, Into::into)
     }
 
     /// Returns `true` if the error is due to the server not supporting HTTP streaming. Most
