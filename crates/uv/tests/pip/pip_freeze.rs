@@ -454,17 +454,28 @@ fn freeze_multiple_paths() -> Result<()> {
     Ok(())
 }
 
-/// Match pip by ignoring nonexistent paths without creating them.
+/// A nonexistent search path does not prevent distributions in another path from being listed.
 #[test]
-fn freeze_nonexistent_path() {
+fn freeze_nonexistent_path() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let nonexistent_dir = context.temp_dir.child("nonexistent");
+    let existing_dir = context.temp_dir.child("existing");
+    existing_dir
+        .child("example-1.0.0.dist-info/METADATA")
+        .write_str("Metadata-Version: 2.1\nName: example\nVersion: 1.0.0\n")?;
+    nonexistent_dir.assert(predicates::path::missing());
+
     uv_snapshot!(context.filters(), context.pip_freeze()
         .arg("--path")
-        .arg(nonexistent_dir.path()), @"
+        .arg(nonexistent_dir.path())
+        .arg("--path")
+        .arg(existing_dir.path()), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
     ");
-    nonexistent_dir.assert(predicates::path::missing());
+
+    Ok(())
 }
 
 #[test]
