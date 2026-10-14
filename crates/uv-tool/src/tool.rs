@@ -1,7 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use toml_edit::{Array, Item, Table, Value, value};
 
 use uv_configuration::ExcludeDependency;
@@ -169,6 +169,29 @@ fn each_element_on_its_line_array(elements: impl Iterator<Item = impl Into<Value
     array
 }
 
+/// Insert a nonempty dependency list, keeping a single entry on one line.
+fn insert_dependency_array(
+    table: &mut Table,
+    key: &str,
+    dependencies: &[impl Serialize],
+) -> Result<(), toml_edit::ser::Error> {
+    if dependencies.is_empty() {
+        return Ok(());
+    }
+
+    let elements = dependencies
+        .iter()
+        .map(|dependency| dependency.serialize(toml_edit::ser::ValueSerializer::new()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let array = if elements.len() == 1 {
+        Array::from_iter(elements)
+    } else {
+        each_element_on_its_line_array(elements.into_iter())
+    };
+    table.insert(key, value(array));
+    Ok(())
+}
+
 impl Tool {
     /// Create a new `Tool`.
     pub fn new(
@@ -205,115 +228,15 @@ impl Tool {
     pub(crate) fn to_toml(&self) -> Result<Table, toml_edit::ser::Error> {
         let mut table = Table::new();
 
-        if !self.requirements.is_empty() {
-            table.insert("requirements", {
-                let requirements = self
-                    .requirements
-                    .iter()
-                    .map(|requirement| {
-                        serde::Serialize::serialize(
-                            &requirement,
-                            toml_edit::ser::ValueSerializer::new(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let requirements = match requirements.as_slice() {
-                    [] => Array::new(),
-                    [requirement] => Array::from_iter([requirement]),
-                    requirements => each_element_on_its_line_array(requirements.iter()),
-                };
-                value(requirements)
-            });
-        }
-
-        if !self.constraints.is_empty() {
-            table.insert("constraints", {
-                let constraints = self
-                    .constraints
-                    .iter()
-                    .map(|constraint| {
-                        serde::Serialize::serialize(
-                            &constraint,
-                            toml_edit::ser::ValueSerializer::new(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let constraints = match constraints.as_slice() {
-                    [] => Array::new(),
-                    [constraint] => Array::from_iter([constraint]),
-                    constraints => each_element_on_its_line_array(constraints.iter()),
-                };
-                value(constraints)
-            });
-        }
-
-        if !self.overrides.is_empty() {
-            table.insert("overrides", {
-                let overrides = self
-                    .overrides
-                    .iter()
-                    .map(|r#override| {
-                        serde::Serialize::serialize(
-                            &r#override,
-                            toml_edit::ser::ValueSerializer::new(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let overrides = match overrides.as_slice() {
-                    [] => Array::new(),
-                    [r#override] => Array::from_iter([r#override]),
-                    overrides => each_element_on_its_line_array(overrides.iter()),
-                };
-                value(overrides)
-            });
-        }
-
-        if !self.excludes.is_empty() {
-            table.insert("excludes", {
-                let excludes = self
-                    .excludes
-                    .iter()
-                    .map(|r#exclude| {
-                        serde::Serialize::serialize(
-                            &r#exclude,
-                            toml_edit::ser::ValueSerializer::new(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let excludes = match excludes.as_slice() {
-                    [] => Array::new(),
-                    [r#exclude] => Array::from_iter([r#exclude]),
-                    excludes => each_element_on_its_line_array(excludes.iter()),
-                };
-                value(excludes)
-            });
-        }
-
-        if !self.build_constraints.is_empty() {
-            table.insert("build-constraint-dependencies", {
-                let build_constraints = self
-                    .build_constraints
-                    .iter()
-                    .map(|r#build_constraint| {
-                        serde::Serialize::serialize(
-                            &r#build_constraint,
-                            toml_edit::ser::ValueSerializer::new(),
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let build_constraints = match build_constraints.as_slice() {
-                    [] => Array::new(),
-                    [r#build_constraint] => Array::from_iter([r#build_constraint]),
-                    build_constraints => each_element_on_its_line_array(build_constraints.iter()),
-                };
-                value(build_constraints)
-            });
-        }
+        insert_dependency_array(&mut table, "requirements", &self.requirements)?;
+        insert_dependency_array(&mut table, "constraints", &self.constraints)?;
+        insert_dependency_array(&mut table, "overrides", &self.overrides)?;
+        insert_dependency_array(&mut table, "excludes", &self.excludes)?;
+        insert_dependency_array(
+            &mut table,
+            "build-constraint-dependencies",
+            &self.build_constraints,
+        )?;
 
         if let Some(ref python) = self.python {
             table.insert(
