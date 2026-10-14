@@ -306,11 +306,10 @@ impl<'script> ValidatedScript<'script> {
             )));
         };
 
-        let name = relative_to(&path, &layout.scheme.scripts)?
-            .to_string_lossy()
-            .into_owned();
+        let relative = relative_to(&path, &layout.scheme.scripts)?;
+        let name = relative.to_string_lossy();
 
-        if RESERVED_SCRIPT_NAMES_WARN.contains(&name.as_str()) || name.starts_with("activate.") {
+        if RESERVED_SCRIPT_NAMES_WARN.contains(&name.as_ref()) || name.starts_with("activate.") {
             warn_user_once!(
                 "The script name `{}` is reserved for virtual environment activation scripts.",
                 name
@@ -330,12 +329,12 @@ impl<'script> ValidatedScript<'script> {
         let path = if cfg!(windows) {
             // On Windows we actually build an `.exe` wrapper.
             // FIXME: What are the in-reality rules here for name normalization?
-            let normalized_name = name.strip_suffix(".py").unwrap_or(name.as_str());
-            let name = normalized_name.to_string() + std::env::consts::EXE_SUFFIX;
+            let normalized_name = name.strip_suffix(".py").unwrap_or(&name);
+            let name = format!("{normalized_name}{}", std::env::consts::EXE_SUFFIX);
 
             layout.scheme.scripts.join(name)
         } else {
-            layout.scheme.scripts.join(name)
+            layout.scheme.scripts.join(name.as_ref())
         };
 
         Ok(Self { path, script })
