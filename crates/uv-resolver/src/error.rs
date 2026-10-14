@@ -59,7 +59,6 @@ pub enum ResolveError {
         ConflictEnvironment(env),
         urls.iter()
             .map(|url| format!("{}{}", DisplaySafeUrl::from(url.clone()), if url.is_editable() { " (editable)" } else { "" }))
-            .collect::<Vec<_>>()
             .join("\n- ")
     )]
     ConflictingUrls {
@@ -71,10 +70,7 @@ pub enum ResolveError {
     #[error(
         "Requirements contain conflicting indexes for package `{package_name}`{}:\n- {}",
         ConflictEnvironment(env),
-        indexes.iter()
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("\n- ")
+        indexes.iter().join("\n- ")
     )]
     ConflictingIndexesForEnvironment {
         package_name: PackageName,
