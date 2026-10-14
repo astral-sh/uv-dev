@@ -155,23 +155,22 @@ async fn io_error_server() -> (MockServer, String) {
     (server, mock_server_uri)
 }
 
-/// Answers with a retryable HTTP status 500 for 2 times, then with a retryable connection reset
-/// IO error.
-///
-/// Tests different errors paths inside uv, which retries 3 times by default, for a total for 4
-/// requests.
+/// Return two connection resets followed by two HTTP 500 responses across the initial request
+/// and three retries.
 async fn mixed_error_server() -> (MockServer, String) {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
         .respond_with_err(connection_reset)
         .up_to_n_times(2)
+        .expect(2)
         .mount(&server)
         .await;
 
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(StatusCode::INTERNAL_SERVER_ERROR))
         .up_to_n_times(2)
+        .expect(2)
         .mount(&server)
         .await;
 
