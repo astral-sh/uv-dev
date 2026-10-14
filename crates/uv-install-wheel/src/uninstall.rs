@@ -320,9 +320,9 @@ pub fn uninstall_legacy_editable(egg_link: &Path) -> Result<Uninstall, Error> {
         Err(err) => return Err(err.into()),
     }
 
-    let site_package = egg_link.parent().ok_or(Error::BrokenVenv(
-        "`.egg-link` file is not in a directory".to_string(),
-    ))?;
+    let site_package = egg_link
+        .parent()
+        .ok_or_else(|| Error::BrokenVenv("`.egg-link` file is not in a directory".to_string()))?;
     let easy_install = site_package.join("easy-install.pth");
 
     // Since uv has an environment lock, it's enough to add a mutex here to ensure we never
