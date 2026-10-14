@@ -405,9 +405,8 @@ impl SitePackages {
                 .cloned()
                 .chain(
                     overrides
-                        .iter()
-                        .map(Cow::as_ref)
-                        .cloned()
+                        .into_iter()
+                        .map(Cow::into_owned)
                         .map(Override::Requirement),
                 )
                 .collect(),
