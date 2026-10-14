@@ -74,6 +74,11 @@ pub fn uninstall_wheel(
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err.into()),
         };
+        #[cfg(unix)]
+        if is_symlink && is_installation_scheme_link(&path, layout)? {
+            warn_for_installation_directory(&distribution, &entry.path);
+            continue;
+        }
         match fs_err::remove_file(&path) {
             Ok(()) => {
                 if is_symlink {
@@ -85,15 +90,7 @@ pub fn uninstall_wheel(
             Err(err) => {
                 match contains_installation_scheme(&path, layout) {
                     Ok(true) => {
-                        if should_warn_for_distribution(
-                            &WARNED_FOR_RECORD_ENTRY_PACKAGE,
-                            &distribution,
-                        ) {
-                            warn_user!(
-                                "Invalid `RECORD` entry in `{distribution}` that would remove an installation directory, skipping: {}",
-                                entry.path
-                            );
-                        }
+                        warn_for_installation_directory(&distribution, &entry.path);
                         continue;
                     }
                     Ok(false) => {}
@@ -156,6 +153,14 @@ pub fn uninstall_wheel(
 
 static WARNED_FOR_RECORD_ENTRY_PACKAGE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static WARNED_FOR_EGG_TOP_LEVEL_PACKAGE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn warn_for_installation_directory(distribution: &impl Display, path: &str) {
+    if should_warn_for_distribution(&WARNED_FOR_RECORD_ENTRY_PACKAGE, distribution) {
+        warn_user!(
+            "Invalid `RECORD` entry in `{distribution}` that would remove an installation directory, skipping: {path}"
+        );
+    }
+}
 
 fn should_warn_for_distribution(
     warned: &OnceLock<Mutex<HashSet<String>>>,
@@ -302,6 +307,25 @@ fn contains_installation_scheme(path: &Path, layout: &Layout) -> std::io::Result
         for ancestor in root.ancestors() {
             match fs_err::canonicalize(ancestor) {
                 Ok(ancestor) if ancestor.starts_with(&target) => return Ok(true),
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Check the link itself against scheme paths, allowing unrelated links to the same directory.
+#[cfg(unix)]
+fn is_installation_scheme_link(path: &Path, layout: &Layout) -> std::io::Result<bool> {
+    for root in installation_scheme_paths(layout) {
+        for ancestor in root.ancestors() {
+            let Some((parent, name)) = ancestor.parent().zip(ancestor.file_name()) else {
+                continue;
+            };
+            match canonicalize_directory(parent) {
+                Ok(parent) if parent.join(name) == path => return Ok(true),
                 Ok(_) => {}
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                 Err(err) => return Err(err),
@@ -738,6 +762,56 @@ mod tests {
 
         assert!(!alias.exists());
         assert!(sentinel.exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_uninstall_preserves_symlinks_used_by_the_installation_scheme() -> anyhow::Result<()> {
+        let temp = assert_fs::TempDir::new()?;
+        let venv = temp.child("venv");
+        let site_packages = venv.child("lib/python3.12/site-packages");
+        site_packages.create_dir_all()?;
+        let scripts = temp.child("actual-bin");
+        let executable = scripts.child("python");
+        executable.touch()?;
+        symlink(scripts.path(), venv.child("bin").path())?;
+        let include = temp.child("actual-include");
+        let header = include.child("python3.12/Python.h");
+        header.touch()?;
+        symlink(include.path(), venv.child("include").path())?;
+        let package_link = site_packages.child("package-link");
+        symlink(".", package_link.path())?;
+        let sentinel = site_packages.child("sentinel.txt");
+        sentinel.touch()?;
+        let dist_info = site_packages.child("example-1.0.dist-info");
+        dist_info.child("RECORD").write_str(concat!(
+            "../../../bin,,\n",
+            "../../../include,,\n",
+            "package-link,,\n",
+            "example-1.0.dist-info/RECORD,,\n",
+        ))?;
+        let layout = Layout {
+            sys_executable: venv.path().join("bin/python"),
+            python_version: (3, 12),
+            os_name: "posix".to_string(),
+            scheme: Scheme {
+                purelib: site_packages.to_path_buf(),
+                platlib: site_packages.to_path_buf(),
+                scripts: venv.path().join("bin"),
+                data: venv.path().to_path_buf(),
+                include: venv.path().join("include/python3.12"),
+            },
+        };
+
+        uninstall_wheel(dist_info.path(), "example 1.0", &layout)?;
+
+        assert!(venv.child("bin").exists());
+        assert!(venv.child("include").exists());
+        assert!(executable.exists());
+        assert!(header.exists());
+        assert!(sentinel.exists());
+        assert!(!package_link.exists());
         Ok(())
     }
 
