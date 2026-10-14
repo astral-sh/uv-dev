@@ -28,6 +28,10 @@ pub async fn download_to_disk(url: &str, path: &Path) {
 
 async fn download_to_disk_async(url: &str, path: &Path) -> Result<()> {
     let client = fixture_client()?;
+    download_to_disk_with_client(&client, url, path).await
+}
+
+async fn download_to_disk_with_client(client: &BaseClient, url: &str, path: &Path) -> Result<()> {
     let url = url.parse()?;
     let response = client
         .for_host(&url)
@@ -61,21 +65,36 @@ pub(crate) fn fixture_client() -> Result<BaseClient> {
 #[cfg(test)]
 mod tests {
     use reqwest::StatusCode;
-    use wiremock::MockServer;
+    use uv_client::BaseClientBuilder;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::assert_path_missing;
 
-    use super::download_to_disk_async;
+    use super::download_to_disk_with_client;
 
     #[tokio::test]
     async fn rejects_http_error_before_creating_fixture() -> anyhow::Result<()> {
         let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/missing.whl"))
+            .respond_with(ResponseTemplate::new(StatusCode::NOT_FOUND))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = BaseClientBuilder::default()
+            .custom_client(reqwest::Client::builder().no_proxy().build()?)
+            .build()?;
         let directory = tempfile::tempdir()?;
         let destination = directory.path().join("fixture.whl");
 
-        let error = download_to_disk_async(&format!("{}/missing.whl", server.uri()), &destination)
-            .await
-            .expect_err("an unsuccessful response should not become a fixture");
+        let error = download_to_disk_with_client(
+            &client,
+            &format!("{}/missing.whl", server.uri()),
+            &destination,
+        )
+        .await
+        .expect_err("an unsuccessful response should not become a fixture");
 
         assert_eq!(
             error
