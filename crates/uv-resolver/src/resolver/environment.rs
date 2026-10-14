@@ -311,29 +311,29 @@ impl ResolverEnvironment {
                 ref include,
                 ref exclude,
             } => {
-                let mut include: crate::FxHashbrownSet<_> = (**include).clone();
-                let mut exclude: crate::FxHashbrownSet<_> = (**exclude).clone();
+                let mut include = Arc::clone(include);
+                let mut exclude = Arc::clone(exclude);
                 for rule in rules {
                     match rule {
                         Ok(item) => {
                             if exclude.contains(&item) {
                                 return None;
                             }
-                            include.insert(item);
+                            Arc::make_mut(&mut include).insert(item);
                         }
                         Err(item) => {
                             if include.contains(&item) {
                                 return None;
                             }
-                            exclude.insert(item);
+                            Arc::make_mut(&mut exclude).insert(item);
                         }
                     }
                 }
                 let kind = Kind::Universal {
                     initial_forks: Arc::clone(initial_forks),
                     markers: *markers,
-                    include: Arc::new(include),
-                    exclude: Arc::new(exclude),
+                    include,
+                    exclude,
                 };
                 Some(Self { kind })
             }
