@@ -386,6 +386,24 @@ pub struct DiscoveryOptions {
     pub members: MemberDiscovery,
 }
 
+impl DiscoveryOptions {
+    /// Walk the ancestors of `path`, including the discovery boundary.
+    fn ancestors<'a>(&self, path: &'a Path) -> impl Iterator<Item = &'a Path> {
+        let stop_before = self.stop_discovery_at.as_deref().and_then(Path::parent);
+        path.ancestors()
+            .take_while(move |ancestor| stop_before != Some(*ancestor))
+    }
+
+    fn find_project_root<'a>(&self, path: &'a Path) -> Result<&'a Path, WorkspaceError> {
+        let project_root = self
+            .ancestors(path)
+            .find(|path| path.join("pyproject.toml").is_file())
+            .ok_or(WorkspaceErrorKind::MissingPyprojectToml)?;
+        debug!("Found project root: {}", project_root.simplified_display());
+        Ok(project_root)
+    }
+}
+
 /// The declaration contributing a workspace Python requirement.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum RequiresPythonDeclaration {
@@ -1564,20 +1582,7 @@ impl ProjectWorkspace {
             path.is_absolute(),
             "project workspace discovery with relative path"
         );
-        let project_root = path
-            .ancestors()
-            .take_while(|path| {
-                // Only walk up the given directory, if any.
-                options
-                    .stop_discovery_at
-                    .as_deref()
-                    .and_then(Path::parent)
-                    .is_none_or(|stop_discovery_at| stop_discovery_at != *path)
-            })
-            .find(|path| path.join("pyproject.toml").is_file())
-            .ok_or_else(|| WorkspaceErrorKind::MissingPyprojectToml)?;
-
-        debug!("Found project root: {}", project_root.simplified_display());
+        let project_root = options.find_project_root(path)?;
 
         Self::from_project_root(project_root, options, cache, workspace_cache).await
     }
@@ -1844,18 +1849,7 @@ async fn find_workspace(
     }
 
     // Skip 1 to ignore the current project itself.
-    for workspace_root in project_root
-        .ancestors()
-        .take_while(|path| {
-            // Only walk up the given directory, if any.
-            options
-                .stop_discovery_at
-                .as_deref()
-                .and_then(Path::parent)
-                .is_none_or(|stop_discovery_at| stop_discovery_at != *path)
-        })
-        .skip(1)
-    {
+    for workspace_root in options.ancestors(project_root).skip(1) {
         let pyproject_path = workspace_root.join("pyproject.toml");
         if !pyproject_path.is_file() {
             continue;
@@ -2103,20 +2097,7 @@ impl VirtualProject {
             path.is_absolute(),
             "virtual project discovery with relative path"
         );
-        let project_root = path
-            .ancestors()
-            .take_while(|path| {
-                // Only walk up the given directory, if any.
-                options
-                    .stop_discovery_at
-                    .as_deref()
-                    .and_then(Path::parent)
-                    .is_none_or(|stop_discovery_at| stop_discovery_at != *path)
-            })
-            .find(|path| path.join("pyproject.toml").is_file())
-            .ok_or(WorkspaceErrorKind::MissingPyprojectToml)?;
-
-        debug!("Found project root: {}", project_root.simplified_display());
+        let project_root = options.find_project_root(path)?;
 
         // Fast path: The workspace is already cached.
         if let Some(workspace) = workspace_cache.get(project_root, &options.members) {
