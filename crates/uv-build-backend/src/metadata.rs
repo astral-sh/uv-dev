@@ -1,6 +1,6 @@
 use indexmap::IndexMap;
 use itertools::Itertools;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, Bound};
 use std::ffi::OsStr;
@@ -1092,13 +1092,7 @@ impl License {
 ///
 /// The entry is derived from the email format of `John Doe <john.doe@example.net>`. You need to
 /// provide at least name or email.
-#[derive(Deserialize, Debug, Clone)]
-// deny_unknown_fields prevents using the name field when the email is not a string.
-#[serde(
-    untagged,
-    deny_unknown_fields,
-    expecting = "a table with 'name' and/or 'email' keys"
-)]
+#[derive(Debug, Clone)]
 pub(crate) enum Contact {
     /// TODO(konsti): RFC 822 validation.
     NameEmail { name: String, email: String },
@@ -1106,6 +1100,28 @@ pub(crate) enum Contact {
     Name { name: String },
     /// TODO(konsti): RFC 822 validation.
     Email { email: String },
+}
+
+impl<'de> Deserialize<'de> for Contact {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        const EXPECTED: &str = "a table with 'name' and/or 'email' keys";
+        let mut fields = BTreeMap::<String, String>::deserialize(deserializer)
+            .map_err(|_| de::Error::custom(EXPECTED))?;
+        let name = fields.remove("name");
+        let email = fields.remove("email");
+        if !fields.is_empty() {
+            return Err(de::Error::custom(EXPECTED));
+        }
+        match (name, email) {
+            (Some(name), Some(email)) => Ok(Self::NameEmail { name, email }),
+            (Some(name), None) => Ok(Self::Name { name }),
+            (None, Some(email)) => Ok(Self::Email { email }),
+            (None, None) => Err(de::Error::custom(EXPECTED)),
+        }
+    }
 }
 
 /// A trove classifier as originally specified in PEP 301.
@@ -1433,6 +1449,37 @@ mod tests {
         [bar_group]
         foo-bar = foo:bar
         ");
+    }
+
+    /// Contacts must be tables, even when an array has the same number of values as the fields.
+    #[test]
+    fn contact_rejects_array() {
+        let contents = extend_project(indoc! {r#"
+            authors = [["Alice", "alice@example.com"]]
+        "#});
+        let error = toml::from_str::<PyProjectToml>(&contents).unwrap_err();
+        assert_snapshot!(format_err(error), @r#"
+        TOML parse error at line 4, column 11
+          |
+        4 | authors = [["Alice", "alice@example.com"]]
+          |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        a table with 'name' and/or 'email' keys
+        "#);
+    }
+
+    #[test]
+    fn contact_rejects_unknown_field() {
+        let contents = extend_project(indoc! {r#"
+            authors = [{ name = "Alice", address = "alice@example.com" }]
+        "#});
+        let error = toml::from_str::<PyProjectToml>(&contents).unwrap_err();
+        assert_snapshot!(format_err(error), @r#"
+        TOML parse error at line 4, column 11
+          |
+        4 | authors = [{ name = "Alice", address = "alice@example.com" }]
+          |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        a table with 'name' and/or 'email' keys
+        "#);
     }
 
     #[test]
