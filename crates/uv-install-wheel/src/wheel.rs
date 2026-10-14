@@ -13,7 +13,7 @@ use fs_err::{DirEntry, File};
 use itertools::Itertools;
 use regex_automata::dfa::{Automaton, dense};
 use regex_automata::{Input, util::syntax};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use sha2::{Digest, Sha256};
 use tracing::{debug, instrument, trace, warn};
 use walkdir::WalkDir;
@@ -822,9 +822,14 @@ fn install_data_scripts(
     entrypoints: &EntryPoints,
     record: &mut [RecordEntry],
 ) -> Result<(), Error> {
+    let files = fs::read_dir(source)?;
+    let entrypoint_names = entrypoints
+        .scripts()
+        .map(|script| script.name.as_str())
+        .collect::<FxHashSet<_>>();
     let mut rename_or_copy = RenameOrCopy::default();
     let mut destination_ready = false;
-    for file in fs::read_dir(source)? {
+    for file in files {
         let file = file?;
 
         // Recognize the wrapper filename variants used by pip.
@@ -836,10 +841,7 @@ fn install_data_scripts(
             .or_else(|| name.strip_suffix("-script.py"))
             .or_else(|| name.strip_suffix(".pya"))
             .unwrap_or(&name);
-        if entrypoints
-            .scripts()
-            .any(|script| script.name == match_name)
-        {
+        if entrypoint_names.contains(match_name) {
             continue;
         }
 
