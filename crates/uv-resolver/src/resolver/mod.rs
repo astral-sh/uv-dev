@@ -797,11 +797,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                     &requires_python,
                                     next_package,
                                     version,
-                                    forks
-                                        .iter()
-                                        .map(ToString::to_string)
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
+                                    forks.iter().join(", ")
                                 );
 
                                 // Revisit the version in each fork so its dependencies are added
@@ -1339,11 +1335,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             requires_python,
                             name,
                             candidate.version(),
-                            forks
-                                .iter()
-                                .map(ToString::to_string)
-                                .collect::<Vec<_>>()
-                                .join(", ")
+                            forks.iter().join(", ")
                         );
                         let forks = forks
                             .into_iter()
@@ -1485,15 +1477,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     };
 
                     debug!(
-                        "Forking on required platform `{}` for {}=={} ({})",
+                        "Forking on required platform `{}` for {}=={} ({left}, {right})",
                         marker.try_to_string().unwrap_or_else(|| "true".to_string()),
                         name,
-                        candidate.version(),
-                        [&left, &right]
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        candidate.version()
                     );
                     let forks = vec![
                         VersionFork {
@@ -1618,14 +1605,9 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         };
 
         debug!(
-            "Forking platform for {}=={} ({})",
+            "Forking platform for {}=={} ({base_env}, {local_env})",
             name,
-            candidate.version(),
-            [&base_env, &local_env]
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
+            candidate.version()
         );
         self.visit_candidate(candidate, dist, package, name, pins, requests)?;
         self.visit_candidate(&base_candidate, base_dist, package, name, pins, requests)?;
