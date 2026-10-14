@@ -70,6 +70,16 @@ fn write_wheel_with_metadata(
     Ok(())
 }
 
+#[track_caller]
+fn assert_metadata_field_absent(metadata: &serde_json::Value, field: &str) {
+    assert!(
+        metadata
+            .as_object()
+            .is_some_and(|fields| !fields.contains_key(field)),
+        "expected a workspace metadata object without `{field}`, got:\n{metadata:#}"
+    );
+}
+
 /// Test basic metadata output for a simple workspace with one member.
 #[test]
 fn workspace_metadata_simple() {
@@ -172,6 +182,7 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
         .success();
     let empty_metadata: serde_json::Value =
         serde_json::from_slice(&empty_output.get_output().stdout)?;
+    assert_metadata_field_absent(&empty_metadata, "environment");
 
     environment
         .child("pyvenv.cfg")
@@ -184,16 +195,7 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
         .success();
     let broken_metadata: serde_json::Value =
         serde_json::from_slice(&broken_output.get_output().stdout)?;
-
-    insta::assert_json_snapshot!(serde_json::json!({
-        "broken_environment": broken_metadata.get("environment"),
-        "empty_environment": empty_metadata.get("environment"),
-    }), @r#"
-    {
-      "broken_environment": null,
-      "empty_environment": null
-    }
-    "#);
+    assert_metadata_field_absent(&broken_metadata, "environment");
 
     // Remove the manifest to check environment discovery from the lockfile alone.
     fs_err::remove_file(workspace.child("pyproject.toml"))?;
@@ -204,7 +206,7 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
         .assert()
         .success();
     let broken: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
-    insta::assert_json_snapshot!(broken.get("environment"), @"null");
+    assert_metadata_field_absent(&broken, "environment");
 
     let output = context
         .workspace_metadata()
@@ -214,7 +216,7 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
         .assert()
         .success();
     let missing: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
-    insta::assert_json_snapshot!(missing.get("environment"), @"null");
+    assert_metadata_field_absent(&missing, "environment");
     assert!(!workspace.child("missing-env").exists());
 
     Ok(())
@@ -1448,8 +1450,8 @@ dependencies = [
           "root": "[TEMP_DIR]/override-env"
         }
         "#);
-        insta::assert_json_snapshot!(metadata.get("modules"), @"null");
     });
+    assert_metadata_field_absent(&metadata, "modules");
 
     Ok(())
 }
