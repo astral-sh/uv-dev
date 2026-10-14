@@ -10033,11 +10033,28 @@ fn recursive_extra_transitive_url() -> Result<()> {
 #[test]
 fn prefer_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let source = context.workspace_root.join("test/packages/black_editable");
+    let assert_editable = |context: &TestContext| {
+        assert_editable_packages(context, "black==0.1.0\n");
+        context
+            .python_command()
+            .args(["-I", "-c"])
+            .arg(indoc! {r#"
+                import black
+                from pathlib import Path
+                import sys
+
+                assert Path(black.__file__).samefile(sys.argv[1]), black.__file__
+            "#})
+            .arg(source.join("black/__init__.py"))
+            .assert()
+            .success();
+    };
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-e")
-        .arg(context.workspace_root.join("test/packages/black_editable"))
-        .arg(context.workspace_root.join("test/packages/black_editable")), @"
+        .arg(&source)
+        .arg(&source), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -10047,9 +10064,7 @@ fn prefer_editable() -> Result<()> {
     "
     );
 
-    // Validate that `black.pth` was created.
-    let path = context.site_packages().join("black.pth");
-    assert!(path.is_file());
+    assert_editable(&context);
 
     let context = uv_test::test_context!("3.12");
 
@@ -10061,7 +10076,7 @@ fn prefer_editable() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("-e")
-        .arg(context.workspace_root.join("test/packages/black_editable"))
+        .arg(&source)
         .arg("-r")
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
@@ -10073,9 +10088,7 @@ fn prefer_editable() -> Result<()> {
     "
     );
 
-    // Validate that `black.pth` was created.
-    let path = context.site_packages().join("black.pth");
-    assert!(path.is_file());
+    assert_editable(&context);
 
     Ok(())
 }
