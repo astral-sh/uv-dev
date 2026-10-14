@@ -740,6 +740,8 @@ fn scan_url<T: Pep508Url>(
     cursor: &mut Cursor,
     mut at_top_level: impl FnMut(char) -> bool,
 ) -> Result<(usize, usize), Pep508Error<T>> {
+    const DELIMITERS: [char; 2] = [';', '#'];
+
     // wsp*
     cursor.eat_whitespace();
     // <URI_reference>
@@ -755,9 +757,8 @@ fn scan_url<T: Pep508Url>(
         // If we see top-level whitespace, check if it's followed by a semicolon or hash. If so,
         // end the URL at the last non-whitespace character.
         if top_level && c.is_whitespace() {
-            let mut cursor = cursor.clone();
-            cursor.eat_whitespace();
-            if matches!(cursor.peek_char(), None | Some(';' | '#')) {
+            let remaining = cursor.remaining().trim_start();
+            if remaining.is_empty() || remaining.starts_with(DELIMITERS) {
                 break;
             }
         }
@@ -765,12 +766,13 @@ fn scan_url<T: Pep508Url>(
         len += c.len_utf8();
 
         // If we see a top-level semicolon or hash followed by whitespace, we're done.
-        if top_level && cursor.peek_char().is_some_and(|c| matches!(c, ';' | '#')) {
-            let mut cursor = cursor.clone();
-            cursor.next();
-            if cursor.peek_char().is_some_and(char::is_whitespace) {
-                break;
-            }
+        if top_level
+            && cursor
+                .remaining()
+                .strip_prefix(DELIMITERS)
+                .is_some_and(|remaining| remaining.starts_with(char::is_whitespace))
+        {
+            break;
         }
     }
 

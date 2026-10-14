@@ -35,6 +35,11 @@ impl<'a> Cursor<'a> {
         self.pos
     }
 
+    /// Returns the unconsumed input.
+    pub(crate) fn remaining(&self) -> &'a str {
+        self.chars.as_str()
+    }
+
     /// Returns a slice over the input string.
     pub(crate) fn slice(&self, start: usize, len: usize) -> &str {
         &self.input[start..start + len]
@@ -80,7 +85,7 @@ impl<'a> Cursor<'a> {
         keyword: &str,
         is_delimiter: impl FnOnce(char) -> bool,
     ) -> bool {
-        let Some(remaining) = self.chars.as_str().strip_prefix(keyword) else {
+        let Some(remaining) = self.remaining().strip_prefix(keyword) else {
             return false;
         };
         if remaining.chars().next().is_some_and(|c| !is_delimiter(c)) {
