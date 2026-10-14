@@ -667,20 +667,10 @@ pub(super) async fn refine_interpreter(
         Bound::Excluded(version) => VersionSpecifier::greater_than_version(version.clone()),
         Bound::Unbounded => unreachable!("`requires-python` should never be unbounded"),
     };
-
-    let upper_bound = match requires_python.as_ref() {
-        Bound::Included(version) => {
-            let major = version.release().first().copied().unwrap_or(0);
-            let minor = version.release().get(1).copied().unwrap_or(0);
-            VersionSpecifier::less_than_version(Version::new([major, minor + 1]))
-        }
-        Bound::Excluded(version) => {
-            let major = version.release().first().copied().unwrap_or(0);
-            let minor = version.release().get(1).copied().unwrap_or(0);
-            VersionSpecifier::less_than_version(Version::new([major, minor + 1]))
-        }
-        Bound::Unbounded => unreachable!("`requires-python` should never be unbounded"),
-    };
+    let release = lower_bound.version().release();
+    let major = release.first().copied().unwrap_or(0);
+    let minor = release.get(1).copied().unwrap_or(0);
+    let upper_bound = VersionSpecifier::less_than_version(Version::new([major, minor + 1]));
 
     let requires_python_request = PythonRequest::Version(VersionRequest::from_specifiers(
         VersionSpecifiers::from_iter([lower_bound, upper_bound]),
