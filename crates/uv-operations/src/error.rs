@@ -78,6 +78,13 @@ pub enum Error {
     #[error("The dependency group '{name}' was not found in the project: {}", path.user_display())]
     MissingGroup { name: GroupName, path: PathBuf },
 
+    #[error("Failed to read dependency groups from: {}", path.display())]
+    DependencyGroups {
+        path: PathBuf,
+        #[source]
+        source: Box<uv_distribution::MetadataError>,
+    },
+
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 
@@ -107,6 +114,7 @@ impl Error {
             | Self::ExtrasWithoutSource { .. }
             | Self::MissingExtras(_)
             | Self::MissingGroup { .. }
+            | Self::DependencyGroups { .. }
             | Self::Anyhow(_)
             | Self::OutdatedEnvironment(_) => None,
         }
@@ -132,6 +140,7 @@ impl Error {
             | Self::ExtrasWithoutSource { .. }
             | Self::MissingExtras(_)
             | Self::MissingGroup { .. }
+            | Self::DependencyGroups { .. }
             | Self::Anyhow(_) => None,
         }
     }
@@ -162,6 +171,7 @@ impl Error {
             | Self::ExtrasWithoutSource { .. }
             | Self::MissingExtras(_)
             | Self::MissingGroup { .. }
+            | Self::DependencyGroups { .. }
             | Self::Anyhow(_)
             | Self::OutdatedEnvironment(_)) => error,
         }
@@ -191,6 +201,7 @@ impl Error {
             | Self::ExtrasWithoutSource { .. }
             | Self::MissingExtras(_)
             | Self::MissingGroup { .. }
+            | Self::DependencyGroups { .. }
             | Self::Anyhow(_)
             | Self::OutdatedEnvironment(_)) => error,
         }
@@ -216,6 +227,7 @@ impl Error {
             | Self::ExtrasWithoutSource { .. }
             | Self::MissingExtras(_)
             | Self::MissingGroup { .. }
+            | Self::DependencyGroups { .. }
             | Self::Anyhow(_) => false,
         }
     }
@@ -266,6 +278,7 @@ impl uv_errors::Hinted for Error {
             | Self::RequirementsWithContext { .. }
             | Self::MissingExtras(_)
             | Self::MissingGroup { .. }
+            | Self::DependencyGroups { .. }
             | Self::OutdatedEnvironment(_) => uv_errors::Hints::none(),
         }
     }
