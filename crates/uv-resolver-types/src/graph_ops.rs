@@ -113,15 +113,8 @@ pub fn simplify_conflict_markers(
     let mut queue = root_nodes(graph);
 
     while let Some(parent_index) = queue.pop() {
-        let extra = graph[parent_index]
-            .package_extra_names()
-            .map(ConflictItemRef::from);
-        let group = graph[parent_index]
-            .package_group_names()
-            .map(ConflictItemRef::from);
-        for item in extra
-            .into_iter()
-            .chain(group)
+        if let Some(item) = graph[parent_index]
+            .activated_conflict_item()
             .filter(|item| relevant.contains(item))
         {
             for set in activated
