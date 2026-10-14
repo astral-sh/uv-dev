@@ -783,22 +783,13 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
 
-    insta::assert_json_snapshot!(serde_json::json!({
-        "extraneous_installed": context
-            .pip_show()
-            .arg("metadata-extra")
-            .output()?
-            .status
-            .success(),
-        "installed_packages": metadata["environment"]["packages"],
-        "module_owners": metadata.get("module_owners"),
-    }), @r#"
-    {
-      "extraneous_installed": false,
-      "installed_packages": {},
-      "module_owners": null
-    }
-    "#);
+    insta::assert_json_snapshot!(metadata["environment"]["packages"], @"{}");
+    assert!(metadata["module_owners"].is_null());
+    uv_snapshot!(context.filters(), context.pip_show().arg("metadata-extra"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Package(s) not found for: metadata-extra
+    ");
 
     Ok(())
 }
@@ -1244,40 +1235,26 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
         .assert()
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    let extraneous_installed = context
-        .pip_show()
-        .arg("metadata-extra")
-        .output()?
-        .status
-        .success();
-    let required_installed = context
+    context.pip_show().arg("metadata-extra").assert().success();
+    context
         .pip_show()
         .arg("metadata-required")
-        .output()?
-        .status
+        .assert()
         .success();
-
+    let module_owners = metadata["module_owners"].clone();
     insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(serde_json::json!({
-            "extraneous_installed": extraneous_installed,
-            "module_owners": metadata["module_owners"],
-            "required_installed": required_installed,
-        }), @r#"
+        insta::assert_json_snapshot!(module_owners, @r#"
         {
-          "extraneous_installed": true,
-          "module_owners": {
-            "extra_module": [
-              {
-                "package_id": "metadata-extra==0.1.0@unmanaged+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
-              }
-            ],
-            "required_module": [
-              {
-                "package_id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
-              }
-            ]
-          },
-          "required_installed": true
+          "extra_module": [
+            {
+              "package_id": "metadata-extra==0.1.0@unmanaged+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
+            }
+          ],
+          "required_module": [
+            {
+              "package_id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
+            }
+          ]
         }
         "#);
     });
@@ -1289,38 +1266,17 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
         .assert()
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    let extraneous_installed = context
-        .pip_show()
-        .arg("metadata-extra")
-        .output()?
-        .status
-        .success();
-    let required_installed = context
+    assert_eq!(metadata["module_owners"], module_owners);
+    uv_snapshot!(context.filters(), context.pip_show().arg("metadata-extra"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Package(s) not found for: metadata-extra
+    ");
+    context
         .pip_show()
         .arg("metadata-required")
-        .output()?
-        .status
+        .assert()
         .success();
-
-    insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(serde_json::json!({
-            "extraneous_installed": extraneous_installed,
-            "module_owners": metadata["module_owners"],
-            "required_installed": required_installed,
-        }), @r#"
-        {
-          "extraneous_installed": false,
-          "module_owners": {
-            "required_module": [
-              {
-                "package_id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
-              }
-            ]
-          },
-          "required_installed": true
-        }
-        "#);
-    });
 
     // Remove the manifest and required distribution to exercise installation from the lockfile.
     fs_err::remove_file(context.temp_dir.child("pyproject.toml"))?;
