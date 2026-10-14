@@ -15025,67 +15025,74 @@ fn sync_workspace_member_build_constraints() -> Result<()> {
     Ok(())
 }
 
-/// Recreate an environment when either supported `pyvenv.cfg` version key is incompatible with
-/// its interpreter.
-#[test]
-fn sync_when_virtual_environment_incompatible_with_interpreter() -> Result<()> {
+fn incompatible_virtual_environment(version_key: &str) -> Result<TestContext> {
     let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.11"
         dependencies = []
-        "#,
+    "#})?;
+
+    let contents = context.read(".venv/pyvenv.cfg");
+    let version_line = contents
+        .lines()
+        .find(|line| line.starts_with("version_info = "))
+        .ok_or_else(|| anyhow!("missing version_info in pyvenv.cfg:\n{contents}"))?;
+    fs_err::write(
+        context.venv.child("pyvenv.cfg"),
+        contents.replacen(version_line, &format!("{version_key} = 3.11.0"), 1),
     )?;
+    Ok(context)
+}
 
-    // Create a virtual environment at `.venv`.
-    context
-        .venv()
-        .arg(context.venv.as_os_str())
-        .arg("--clear")
-        .arg("--python")
-        .arg("3.12")
-        .assert()
-        .success();
-
-    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
-    // stdlib `venv` writes `version`; uv and virtualenv write `version_info`.
-    for version_key in ["version", "version_info"] {
-        let contents = context.read(".venv/pyvenv.cfg");
-        let version_line = contents
+fn assert_recreated_virtual_environment(context: &TestContext) {
+    let contents = context.read(".venv/pyvenv.cfg");
+    assert!(
+        contents
             .lines()
-            .find(|line| line.starts_with("version_info = "))
-            .ok_or_else(|| anyhow!("missing version_info in pyvenv.cfg:\n{contents}"))?;
-        fs_err::write(
-            &pyvenv_cfg,
-            contents.replacen(version_line, &format!("{version_key} = 3.11.0"), 1),
-        )?;
+            .any(|line| line.starts_with("version_info = 3.12.")),
+        "expected Python 3.12 in the recreated environment:\n{contents}"
+    );
+}
 
-        insta::allow_duplicates! {
-            uv_snapshot!(context.filters(), context.sync(), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-            Removed virtual environment at: .venv
-            Creating virtual environment at: .venv
-            Resolved 1 package in [TIME]
-            Checked in [TIME]
-            ");
-        }
+/// Recreate an environment whose stdlib `venv` version key disagrees with its interpreter.
+#[test]
+fn sync_recreates_environment_with_incompatible_version() -> Result<()> {
+    let context = incompatible_virtual_environment("version")?;
 
-        let contents = context.read(".venv/pyvenv.cfg");
-        assert!(
-            contents
-                .lines()
-                .any(|line| line.starts_with("version_info = 3.12.")),
-            "expected Python 3.12 after recreating an environment with incompatible {version_key}:\n{contents}"
-        );
-    }
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_recreated_virtual_environment(&context);
+    Ok(())
+}
 
+/// Recreate an environment whose uv or virtualenv version key disagrees with its interpreter.
+#[test]
+fn sync_recreates_environment_with_incompatible_version_info() -> Result<()> {
+    let context = incompatible_virtual_environment("version_info")?;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    ");
+    assert_recreated_virtual_environment(&context);
     Ok(())
 }
 
