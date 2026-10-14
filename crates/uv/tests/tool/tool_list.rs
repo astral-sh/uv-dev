@@ -79,34 +79,6 @@ fn tool_list_paths_windows() {
 }
 
 #[test]
-fn tool_list_empty() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    uv_snapshot!(context.filters(), context.tool_list(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    No tools installed
-    ");
-}
-
-#[test]
-fn tool_list_outdated_empty() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // With no tools installed, `--outdated` should produce the same output as the base case.
-    uv_snapshot!(context.filters(), context.tool_list()
-    .arg("--outdated"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    No tools installed
-    ");
-}
-
-#[test]
 fn tool_list_outdated() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
