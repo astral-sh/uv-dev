@@ -572,12 +572,8 @@ pub async fn check(
 
         let mode = if let Some(frozen_source) = frozen {
             LockMode::Frozen(frozen_source.into())
-        } else if let LockCheck::Enabled(lock_check) = lock_check {
-            LockMode::Locked(lock_interpreter, lock_check)
-        } else if isolated {
-            LockMode::DryRun(lock_interpreter)
         } else {
-            LockMode::Write(lock_interpreter)
+            crate::lock::resolve_lock_mode(lock_interpreter, lock_check, isolated)
         };
 
         let selection = PackageSelection::from_args(all_packages, &package, project.project_name());

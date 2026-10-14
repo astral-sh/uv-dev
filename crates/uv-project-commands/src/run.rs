@@ -754,12 +754,8 @@ pub async fn run(
                 // Determine the lock mode.
                 let mode = if let Some(frozen_source) = frozen {
                     LockMode::Frozen(frozen_source.into())
-                } else if let LockCheck::Enabled(lock_check) = lock_check {
-                    LockMode::Locked(venv.interpreter(), lock_check)
-                } else if isolated {
-                    LockMode::DryRun(venv.interpreter())
                 } else {
-                    LockMode::Write(venv.interpreter())
+                    crate::lock::resolve_lock_mode(venv.interpreter(), lock_check, isolated)
                 };
 
                 let result = match Box::pin(
