@@ -959,7 +959,7 @@ fn python_install_preview_no_bin() {
 }
 
 #[test]
-fn python_install_preview_upgrade() {
+fn python_install_preview_upgrade() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -968,6 +968,23 @@ fn python_install_preview_upgrade() {
     let bin_python = context
         .bin_dir
         .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX));
+    let platform = platform_key_from_env()?;
+    let target = |patch| {
+        context
+            .temp_dir
+            .join("managed")
+            .join(format!("cpython-3.12.{patch}-{platform}"))
+            .join(if cfg!(unix) {
+                "bin/python3.12"
+            } else {
+                "python.exe"
+            })
+    };
+    let canonical_target = |patch| -> anyhow::Result<String> {
+        Ok(dunce::canonicalize(target(patch))?
+            .simplified_display()
+            .to_string())
+    };
 
     // Install 3.12.5
     uv_snapshot!(context.filters(), context.python_install().arg("--preview").arg("3.12.5"), @"
@@ -978,23 +995,10 @@ fn python_install_preview_upgrade() {
     ");
 
     // Installing with a patch version should cause the link to be to the patch installation.
-    if cfg!(unix) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                read_link(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.5-[PLATFORM]/bin/python3.12"
-            );
-        });
-    } else if cfg!(windows) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                read_link(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.5-[PLATFORM]/python"
-            );
-        });
-    }
+    assert_eq!(
+        read_link(&bin_python),
+        target(5).simplified_display().to_string()
+    );
 
     // Installing 3.12.4 should not replace the executable, but also shouldn't fail
     uv_snapshot!(context.filters(), context.python_install().arg("--preview").arg("3.12.4"), @"
@@ -1004,23 +1008,7 @@ fn python_install_preview_upgrade() {
      + cpython-3.12.4-[PLATFORM]
     ");
 
-    if cfg!(unix) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.5-[PLATFORM]/bin/python3.12"
-            );
-        });
-    } else if cfg!(windows) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.5-[PLATFORM]/python"
-            );
-        });
-    }
+    assert_eq!(canonicalize_link_path(&bin_python), canonical_target(5)?);
 
     // Using `--reinstall` is not sufficient to replace it either
     uv_snapshot!(context.filters(), context.python_install().arg("--preview").arg("3.12.4").arg("--reinstall"), @"
@@ -1030,23 +1018,7 @@ fn python_install_preview_upgrade() {
      ~ cpython-3.12.4-[PLATFORM]
     ");
 
-    if cfg!(unix) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.5-[PLATFORM]/bin/python3.12"
-            );
-        });
-    } else if cfg!(windows) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.5-[PLATFORM]/python"
-            );
-        });
-    }
+    assert_eq!(canonicalize_link_path(&bin_python), canonical_target(5)?);
 
     // But `--force` is
     uv_snapshot!(context.filters(), context.python_install().arg("--preview").arg("3.12.4").arg("--force"), @"
@@ -1056,23 +1028,7 @@ fn python_install_preview_upgrade() {
      + cpython-3.12.4-[PLATFORM] (python3.12)
     ");
 
-    if cfg!(unix) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.4-[PLATFORM]/bin/python3.12"
-            );
-        });
-    } else if cfg!(windows) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.4-[PLATFORM]/python"
-            );
-        });
-    }
+    assert_eq!(canonicalize_link_path(&bin_python), canonical_target(4)?);
 
     // But installing 3.12.6 should upgrade automatically
     uv_snapshot!(context.filters(), context.python_install().arg("--preview").arg("3.12.6"), @"
@@ -1082,23 +1038,8 @@ fn python_install_preview_upgrade() {
      + cpython-3.12.6-[PLATFORM] (python3.12)
     ");
 
-    if cfg!(unix) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.6-[PLATFORM]/bin/python3.12"
-            );
-        });
-    } else if cfg!(windows) {
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            insta::assert_snapshot!(
-                canonicalize_link_path(&bin_python), @"[TEMP_DIR]/managed/cpython-3.12.6-[PLATFORM]/python"
-            );
-        });
-    }
+    assert_eq!(canonicalize_link_path(&bin_python), canonical_target(6)?);
+    Ok(())
 }
 
 #[test]
