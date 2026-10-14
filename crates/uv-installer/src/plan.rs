@@ -117,129 +117,94 @@ impl fmt::Display for IncompatibleWheelHint {
             Self::Python {
                 wheel_tags,
                 current,
-            } => {
-                if let Some(current) = current {
-                    write!(
-                        f,
-                        "The wheel is compatible with {}, but you're using {}",
-                        format_language_tags(wheel_tags),
-                        format_language_tag(*current),
-                    )
-                } else {
-                    write!(f, "The wheel requires {}", format_language_tags(wheel_tags))
-                }
-            }
+            } => write_compatibility_hint(f, wheel_tags, current.as_ref(), "using", |tag| {
+                tag.pretty()
+            }),
             Self::Abi {
                 wheel_tags,
                 current,
-            } => {
-                if let Some(current) = current {
-                    write!(
-                        f,
-                        "The wheel is compatible with {}, but you're using {}",
-                        format_abi_tags(wheel_tags),
-                        format_abi_tag(*current),
-                    )
-                } else {
-                    write!(f, "The wheel requires {}", format_abi_tags(wheel_tags))
-                }
-            }
+            } => write_compatibility_hint(f, wheel_tags, current.as_ref(), "using", |tag| {
+                tag.pretty()
+            }),
             Self::FreethreadedAbi {
                 wheel_tags,
                 current,
             } => {
-                let current_display = if let Some(current) = current {
-                    format_abi_tag(*current)
+                f.write_str("You're using ")?;
+                if let Some(current) = current {
+                    write_pretty_tag(f, current, current.pretty())?;
                 } else {
-                    "free-threaded Python".to_string()
-                };
-                let wheel_display = wheel_tags
-                    .iter()
-                    .map(|tag| match tag {
-                        AbiTag::Abi3 => format!("the stable ABI (`{}`)", tag.cyan()),
-                        _ => {
-                            if let Some(pretty) = tag.pretty() {
-                                format!("the {} ABI (`{}`)", pretty.cyan(), tag.cyan())
-                            } else {
-                                format!("`{}`", tag.cyan())
-                            }
+                    f.write_str("free-threaded Python")?;
+                }
+                f.write_str(", but the wheel was built for ")?;
+                write_tag_list(f, wheel_tags, |f, tag| match tag {
+                    AbiTag::Abi3 => write!(f, "the stable ABI (`{}`)", tag.cyan()),
+                    _ => {
+                        if let Some(pretty) = tag.pretty() {
+                            write!(f, "the {} ABI (`{}`)", pretty.cyan(), tag.cyan())
+                        } else {
+                            write!(f, "`{}`", tag.cyan())
                         }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(
-                    f,
-                    "You're using {current_display}, but the wheel was built for {wheel_display}, which requires a GIL-enabled interpreter"
-                )
+                    }
+                })?;
+                f.write_str(", which requires a GIL-enabled interpreter")
             }
             Self::Platform {
                 wheel_tags,
                 current,
             } => {
-                if let Some(current) = current {
-                    write!(
-                        f,
-                        "The wheel is compatible with {}, but you're on {}",
-                        format_platform_tags(wheel_tags),
-                        format_platform_tag(current),
-                    )
-                } else {
-                    write!(f, "The wheel requires {}", format_platform_tags(wheel_tags))
-                }
+                write_compatibility_hint(f, wheel_tags, current.as_ref(), "on", |tag| tag.pretty())
             }
         }
     }
 }
 
-/// Format a single language tag with optional pretty name and cyan coloring.
-fn format_language_tag(tag: LanguageTag) -> String {
-    if let Some(pretty) = tag.pretty() {
-        format!("{} (`{}`)", pretty.cyan(), tag.cyan())
+fn write_compatibility_hint<T: fmt::Display, P: fmt::Display>(
+    f: &mut fmt::Formatter<'_>,
+    wheel_tags: &[T],
+    current: Option<&T>,
+    current_phrase: &str,
+    pretty: impl Fn(&T) -> Option<P>,
+) -> fmt::Result {
+    f.write_str(if current.is_some() {
+        "The wheel is compatible with "
     } else {
-        format!("`{}`", tag.cyan())
+        "The wheel requires "
+    })?;
+    write_tag_list(f, wheel_tags, |f, tag| {
+        write_pretty_tag(f, tag, pretty(tag))
+    })?;
+    if let Some(current) = current {
+        write!(f, ", but you're {current_phrase} ")?;
+        write_pretty_tag(f, current, pretty(current))?;
     }
+    Ok(())
 }
 
-/// Format a list of language tags as a comma-separated string.
-fn format_language_tags(tags: &[LanguageTag]) -> String {
-    tags.iter()
-        .map(|tag| format_language_tag(*tag))
-        .collect::<Vec<_>>()
-        .join(", ")
+fn write_tag_list<T>(
+    f: &mut fmt::Formatter<'_>,
+    tags: &[T],
+    format_tag: impl Fn(&mut fmt::Formatter<'_>, &T) -> fmt::Result,
+) -> fmt::Result {
+    for (index, tag) in tags.iter().enumerate() {
+        if index > 0 {
+            f.write_str(", ")?;
+        }
+        format_tag(f, tag)?;
+    }
+    Ok(())
 }
 
-/// Format a single ABI tag with optional pretty name and cyan coloring.
-fn format_abi_tag(tag: AbiTag) -> String {
-    if let Some(pretty) = tag.pretty() {
-        format!("{} (`{}`)", pretty.cyan(), tag.cyan())
+fn write_pretty_tag(
+    f: &mut fmt::Formatter<'_>,
+    tag: impl fmt::Display,
+    pretty: Option<impl fmt::Display>,
+) -> fmt::Result {
+    if let Some(pretty) = pretty {
+        write!(f, "{} (`{}`)", pretty.cyan(), tag.cyan())
     } else {
-        format!("`{}`", tag.cyan())
+        write!(f, "`{}`", tag.cyan())
     }
-}
-
-/// Format a list of ABI tags as a comma-separated string.
-fn format_abi_tags(tags: &[AbiTag]) -> String {
-    tags.iter()
-        .map(|tag| format_abi_tag(*tag))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Format a single platform tag with optional pretty name and cyan coloring.
-fn format_platform_tag(tag: &PlatformTag) -> String {
-    if let Some(pretty) = tag.pretty() {
-        format!("{} (`{}`)", pretty.cyan(), tag.cyan())
-    } else {
-        format!("`{}`", tag.cyan())
-    }
-}
-
-/// Format a list of platform tags as a comma-separated string.
-fn format_platform_tags(tags: &[PlatformTag]) -> String {
-    tags.iter()
-        .map(format_platform_tag)
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 impl fmt::Display for IncompatibleWheelError {
