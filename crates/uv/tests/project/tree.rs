@@ -4120,7 +4120,18 @@ fn non_project() -> Result<()> {
     "#,
     )?;
 
-    assert_non_project_async_group_tree(&context)
+    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--group").arg("async"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    anyio v4.3.0 (group: async)
+    ├── idna v3.6
+    └── sniffio v1.3.1
+
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    Resolved 3 packages in [TIME]
+    ");
+    assert_non_project_async_group_lock(&context)
 }
 
 /// A pyproject.toml with only `[dependency-groups]` (no `[project]`, no `[tool.uv.workspace]`)
@@ -4138,25 +4149,22 @@ fn dependency_groups_only() -> Result<()> {
     "#,
     )?;
 
-    assert_non_project_async_group_tree(&context)
+    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--group").arg("async"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    anyio v4.3.0 (group: async)
+    ├── idna v3.6
+    └── sniffio v1.3.1
+
+    ----- stderr -----
+    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+    Resolved 3 packages in [TIME]
+    ");
+    assert_non_project_async_group_lock(&context)
 }
 
 #[cfg(feature = "test-universal")]
-fn assert_non_project_async_group_tree(context: &TestContext) -> Result<()> {
-    insta::allow_duplicates! {
-        uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--group").arg("async"), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        anyio v4.3.0 (group: async)
-        ├── idna v3.6
-        └── sniffio v1.3.1
-
-        ----- stderr -----
-        warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
-        Resolved 3 packages in [TIME]
-        ");
-    }
-
+fn assert_non_project_async_group_lock(context: &TestContext) -> Result<()> {
     let lock = uv_lock::Lock::from_canonical_toml(&context.read("uv.lock"))?;
     let group = lock
         .dependency_groups()
