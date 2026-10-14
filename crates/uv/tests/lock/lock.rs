@@ -27130,30 +27130,36 @@ fn lock_explicit_index() -> Result<()> {
     Ok(())
 }
 
+/// An explicit default index is available only to packages bound to it by name.
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_explicit_default_index() -> Result<()> {
+#[tokio::test]
+async fn lock_explicit_default_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let package = "ok".parse()?;
+    let index = PackageServer::new(&package).await;
+    let filename = "ok-1.0.0-py3-none-any.whl";
+    let wheel = fs_err::read(context.workspace_root.join("test/links").join(filename))?;
+    let digest = hex::encode(Sha256::digest(&wheel));
+    index.serve(filename, &wheel, Some(&digest)).await;
 
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let unbound_project = formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig==2.0.0"]
-
-        [tool.uv.sources]
-        iniconfig = { index = "test" }
+        dependencies = ["ok"]
 
         [[tool.uv.index]]
         name = "test"
-        url = "https://test.pypi.org/simple"
+        url = "{}"
         explicit = true
         default = true
-        "#,
-    )?;
+        "#, index.index_url()
+    };
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(&format!(
+        "{unbound_project}\n[tool.uv.sources]\nok = {{ index = \"test\" }}\n"
+    ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -27162,12 +27168,8 @@ fn lock_explicit_default_index() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -27176,12 +27178,11 @@ fn lock_explicit_default_index() -> Result<()> {
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://test.pypi.org/simple" }
-        sdist = { url = "https://test-files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:16.826Z" }
+        name = "ok"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple" }
         wheels = [
-            { url = "https://test-files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:14.843Z" },
+            { url = "http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl", hash = "sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f", upload-time = "2024-01-01T00:00:00Z" },
         ]
 
         [[package]]
@@ -27189,101 +27190,31 @@ fn lock_explicit_default_index() -> Result<()> {
         version = "0.1.0"
         source = { virtual = "." }
         dependencies = [
-            { name = "iniconfig" },
+            { name = "ok" },
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "iniconfig", specifier = "==2.0.0", index = "https://test.pypi.org/simple" }]
-        "#
-        );
+        requires-dist = [{ name = "ok", index = "http://[LOCALHOST]/simple" }]
+        "#);
     });
 
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["anyio"]
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .with_priority(1)
+        .expect(0)
+        .named("unbound explicit default index")
+        .mount(index.mock_server())
+        .await;
+    pyproject_toml.write_str(&unbound_project)?;
 
-        [[tool.uv.index]]
-        name = "test"
-        url = "https://test.pypi.org/simple"
-        explicit = true
-        default = true
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock().arg("--verbose"), @r#"
+    // Resolve again without reusing the locked package or cached index response.
+    uv_snapshot!(context.filters(), context.lock().arg("--upgrade").arg("--no-cache"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    DEBUG Found workspace root: [TEMP_DIR]/
-    DEBUG Adding root workspace member: [TEMP_DIR]/
-    DEBUG Found workspace configuration at `[TEMP_DIR]/pyproject.toml`
-    DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
-    DEBUG uv [VERSION] ([COMMIT] DATE)
-    DEBUG Found project root: [TEMP_DIR]/
-    DEBUG No Python version file found in workspace: [TEMP_DIR]/
-    DEBUG Using Python request `>=3.12` from `requires-python` metadata
-    DEBUG Checking for Python environment at: .venv
-    DEBUG The project environment's Python version satisfies the request: `Python >=3.12`
-    DEBUG Using request connect timeout of [TIME] and read timeout of [TIME]
-    DEBUG Found static `requires-dist` for: [TEMP_DIR]/
-    DEBUG Resolving despite existing lockfile due to mismatched requirements for: `project==0.1.0`
-      Requested: {Requirement { name: PackageName("anyio"), extras: [], groups: [], marker: true, source: Registry { specifier: VersionSpecifiers([]), index: None, conflict: None }, scope: Global, origin: None }}
-      Existing: {Requirement { name: PackageName("iniconfig"), extras: [], groups: [], marker: true, source: Registry { specifier: VersionSpecifiers([VersionSpecifier { operator: Equal, version: "2" }]), index: Some(IndexMetadata { url: Url(VerbatimUrl { url: SafeUrl { scheme: "https", cannot_be_a_base: false, username: "", password: None, host: Some(Domain("test.pypi.org")), port: None, path: "/simple", query: None, fragment: None }, given: None, expanded: false, force_relative: false }), format: Simple }), conflict: None }, scope: Global, origin: None }}
-    DEBUG Found static `pyproject.toml` for: project @ file://[TEMP_DIR]/
-    DEBUG Solving with installed Python version: 3.12.[X]
-    DEBUG Solving with target Python version: >=3.12
-    DEBUG Solving with exclude-newer: global: 2024-03-25T00:00:00Z
-    DEBUG Adding direct dependency: project*
-    DEBUG Searching for a compatible version of project @ `file://[TEMP_DIR]/` (*)
-    DEBUG Adding direct dependency: anyio*
-    DEBUG Searching for a compatible version of anyio (*)
-    DEBUG No compatible version found for: anyio
-    DEBUG Recording unit propagation conflict of anyio from incompatibility of (project)
-    DEBUG Searching for a compatible version of project @ `file://[TEMP_DIR]/` (<0.1.0 | >0.1.0)
-    DEBUG No compatible version found for: project
     error: No solution found when resolving dependencies
-      cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
-    "#);
-
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://test.pypi.org/simple" }
-        sdist = { url = "https://test-files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:16.826Z" }
-        wheels = [
-            { url = "https://test-files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:14.843Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "iniconfig" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "iniconfig", specifier = "==2.0.0", index = "https://test.pypi.org/simple" }]
-        "#
-        );
-    });
+      cause: Because ok was not found in the package registry and your project depends on ok, we can conclude that your project's requirements are unsatisfiable.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
