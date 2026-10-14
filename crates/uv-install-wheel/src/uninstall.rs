@@ -138,6 +138,17 @@ pub fn uninstall_wheel(
 static WARNED_FOR_RECORD_ENTRY_PACKAGE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static WARNED_FOR_EGG_TOP_LEVEL_PACKAGE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
+fn should_warn_for_distribution(
+    warned: &OnceLock<Mutex<HashSet<String>>>,
+    distribution: &impl Display,
+) -> bool {
+    warned
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .expect("The mutex is broken, did some other thread panic?")
+        .insert(distribution.to_string())
+}
+
 /// Resolve a `RECORD` entry to a path inside the installation scheme, warning otherwise.
 ///
 /// Reject entries that escape site-packages via path traversal (e.g., `../../../etc/passwd`). A
@@ -171,12 +182,7 @@ fn record_path_in_scheme(
     } else {
         // A package that does this is malformed to the point of being a risk to the user, be
         // annoying about it, but only once per package.
-        if WARNED_FOR_RECORD_ENTRY_PACKAGE
-            .get_or_init(|| Mutex::new(HashSet::new()))
-            .lock()
-            .expect("The mutex is broken, did some other thread panic?")
-            .insert(distribution.to_string())
-        {
+        if should_warn_for_distribution(&WARNED_FOR_RECORD_ENTRY_PACKAGE, &distribution) {
             warn_user!(
                 "Invalid `RECORD` entry in `{}` that escapes the Python environment, skipping: {}",
                 distribution,
@@ -196,12 +202,7 @@ fn is_valid_top_level_entry(entry: &str, distribution: impl Display) -> bool {
     if entry.parse::<Identifier>().is_ok() {
         true
     } else {
-        if WARNED_FOR_EGG_TOP_LEVEL_PACKAGE
-            .get_or_init(|| Mutex::new(HashSet::new()))
-            .lock()
-            .expect("The mutex is broken, did some other thread panic?")
-            .insert(distribution.to_string())
-        {
+        if should_warn_for_distribution(&WARNED_FOR_EGG_TOP_LEVEL_PACKAGE, &distribution) {
             warn_user!(
                 "Invalid `top_level.txt` entry in {} that is not a top-level module or package, skipping: {}",
                 distribution,
