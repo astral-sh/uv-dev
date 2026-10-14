@@ -1612,41 +1612,39 @@ fn python_find_equal() {
 fn python_find_search_path() {
     let context =
         uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_filtered_python_sources();
+    let search_path = context.python_path();
+    let mut directories = std::env::split_paths(&search_path);
+    let python_3_11 = directories.next().expect("Python 3.11 search directory");
+    let python_3_12 = directories.next().expect("Python 3.12 search directory");
 
-    // When `UV_PYTHON_SEARCH_PATH` is empty, no interpreters are found
-    uv_snapshot!(context.filters(), context.python_find().env(EnvVars::UV_PYTHON_SEARCH_PATH, ""), @"
+    // An empty search path suppresses the interpreter on `PATH`.
+    uv_snapshot!(context.filters(), context.python_find()
+        .env(EnvVars::PATH, &python_3_11)
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, ""), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found in [PYTHON SOURCES]
     ");
 
-    // When `UV_PYTHON_SEARCH_PATH` is set, it is used instead of `PATH`
+    // The default search path follows the context's interpreter order.
     uv_snapshot!(context.filters(), context.python_find(), @"
     exit_code: 0 (success)
     ----- stdout -----
     [PYTHON-3.11]
     ");
 
-    // We can use `UV_PYTHON_SEARCH_PATH` to control which Python versions are visible
-    let python_path_3_12_only = std::env::join_paths(
-        std::env::split_paths(&context.python_path())
-            .filter(|p| p.to_string_lossy().contains("3.12")),
-    )
-    .unwrap();
-    uv_snapshot!(context.filters(), context.python_find().env(EnvVars::UV_PYTHON_SEARCH_PATH, python_path_3_12_only.as_os_str()), @"
+    // An explicit search path takes precedence over `PATH`.
+    uv_snapshot!(context.filters(), context.python_find()
+        .env(EnvVars::PATH, &python_3_11)
+        .env(EnvVars::UV_PYTHON_SEARCH_PATH, &python_3_12), @"
     exit_code: 0 (success)
     ----- stdout -----
     [PYTHON-3.12]
     ");
 
     // We can use `UV_PYTHON_SEARCH_PATH` to control the order of Python versions
-    let reversed_path = std::env::join_paths(
-        std::env::split_paths(&context.python_path())
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev(),
-    )
-    .unwrap();
+    let reversed_path =
+        std::env::join_paths([python_3_12, python_3_11]).expect("valid Python search path");
     uv_snapshot!(context.filters(), context.python_find().env(EnvVars::UV_PYTHON_SEARCH_PATH, reversed_path.as_os_str()), @"
     exit_code: 0 (success)
     ----- stdout -----
