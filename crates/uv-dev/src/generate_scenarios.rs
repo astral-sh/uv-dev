@@ -21,6 +21,8 @@ use crate::generate_all::Mode;
 
 const GENERATED_FROM: &str = "test/scenarios";
 const GENERATED_WITH: &str = "cargo dev generate-scenario-tests";
+// Keep aligned with the Tier 1 versions in docs/reference/policies/python.md.
+const MINIMUM_TIER_1_PYTHON: (u8, u8) = (3, 10);
 
 #[derive(clap::Args)]
 pub(crate) struct Args {
@@ -289,7 +291,7 @@ fn update_snapshots(template: TemplateKind) -> Result<()> {
             "insta",
             "test",
             "--features",
-            "test-python,test-pypi,test-python-patch",
+            "test-python,test-pypi,test-python-patch,test-python-eol",
             "--accept",
             "--test-runner",
             "nextest",
@@ -349,10 +351,7 @@ fn render_install(output: &mut String, cases: &[&ScenarioCase]) -> Result<()> {
 
 fn render_install_case(output: &mut String, case: &ScenarioCase) -> Result<()> {
     render_case_docs(output, &case.scenario)?;
-    if case.scenario.name.contains("patch") {
-        output.push_str("#[cfg(feature = \"test-python-patch\")]\n");
-    }
-    output.push_str("#[test]\n");
+    render_case_attributes(output, TemplateKind::Install, &case.scenario);
     writeln!(output, "fn {}() {{", module_name(&case.scenario.name)).unwrap();
     writeln!(
         output,
@@ -418,13 +417,7 @@ fn render_compile(output: &mut String, cases: &[&ScenarioCase]) -> Result<()> {
 
 fn render_compile_case(output: &mut String, case: &ScenarioCase) -> Result<()> {
     render_case_docs(output, &case.scenario)?;
-    if case.scenario.name.contains("patch") {
-        output.push_str("#[cfg(feature = \"test-python-patch\")]\n");
-    }
-    if case.scenario.resolver_options.universal {
-        output.push_str("#[cfg(feature = \"test-universal\")]\n");
-    }
-    output.push_str("#[test]\n");
+    render_case_attributes(output, TemplateKind::Compile, &case.scenario);
     writeln!(
         output,
         "fn {}() -> Result<()> {{",
@@ -503,7 +496,7 @@ fn render_lock(output: &mut String, cases: &[&ScenarioCase]) -> Result<()> {
 
 fn render_lock_case(output: &mut String, case: &ScenarioCase) -> Result<()> {
     render_case_docs(output, &case.scenario)?;
-    output.push_str("#[test]\n");
+    render_case_attributes(output, TemplateKind::Lock, &case.scenario);
     writeln!(
         output,
         "fn {}() -> Result<()> {{",
@@ -673,6 +666,26 @@ fn render_expected_explanation(output: &mut String, scenario: &Scenario, prefix:
 
 fn compile_requirements(requirements: &[Requirement]) -> String {
     requirements.iter().map(ToString::to_string).join("\n")
+}
+
+fn render_case_attributes(output: &mut String, template: TemplateKind, scenario: &Scenario) {
+    let additional_python = match template {
+        TemplateKind::Compile => scenario.environment.additional_python.as_slice(),
+        TemplateKind::Install | TemplateKind::Lock => &[],
+    };
+    if std::iter::once(&scenario.environment.python)
+        .chain(additional_python)
+        .any(|version| (version.major(), version.minor()) < MINIMUM_TIER_1_PYTHON)
+    {
+        output.push_str("#[cfg(feature = \"test-python-eol\")]\n");
+    }
+    if template != TemplateKind::Lock && scenario.name.contains("patch") {
+        output.push_str("#[cfg(feature = \"test-python-patch\")]\n");
+    }
+    if template == TemplateKind::Compile && scenario.resolver_options.universal {
+        output.push_str("#[cfg(feature = \"test-universal\")]\n");
+    }
+    output.push_str("#[test]\n");
 }
 
 fn render_case_docs(output: &mut String, scenario: &Scenario) -> Result<()> {
@@ -929,9 +942,11 @@ fn requirement_specifiers(requirement: &Requirement) -> Option<&uv_pep440::Versi
 
 #[cfg(test)]
 mod tests {
+    use uv_test::packse::scenario::Scenario;
+
     use super::{
         TemplateKind, check_generated_file, compile_requirements, load_scenarios,
-        load_scenarios_from, module_name, render, scenarios_for_template,
+        load_scenarios_from, module_name, render, render_case_attributes, scenarios_for_template,
     };
 
     #[test]
@@ -967,6 +982,26 @@ mod tests {
                 .expect("scenario suite should contain a feature gate");
             assert_eq!(gate, expected_gate);
         }
+    }
+
+    #[test]
+    fn scenario_gates_depend_on_provisioned_interpreters() {
+        let mut scenario = Scenario::empty();
+        scenario.environment.python = "3.10".parse().expect("valid Python version");
+        scenario.environment.additional_python = vec!["3.9.21".parse().expect("valid version")];
+
+        let mut compile = String::new();
+        render_case_attributes(&mut compile, TemplateKind::Compile, &scenario);
+        assert_eq!(compile, "#[cfg(feature = \"test-python-eol\")]\n#[test]\n");
+
+        let mut install = String::new();
+        render_case_attributes(&mut install, TemplateKind::Install, &scenario);
+        assert_eq!(install, "#[test]\n");
+
+        scenario.environment.python = "3.9".parse().expect("valid Python version");
+        let mut lock = String::new();
+        render_case_attributes(&mut lock, TemplateKind::Lock, &scenario);
+        assert_eq!(lock, "#[cfg(feature = \"test-python-eol\")]\n#[test]\n");
     }
 
     #[test]
