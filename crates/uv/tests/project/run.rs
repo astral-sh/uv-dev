@@ -1155,6 +1155,8 @@ fn run_pep723_script_lock() -> Result<()> {
     ----- stderr -----
     error: Unable to find lockfile for Python script, but `--locked` was provided. To create a lockfile, run `uv lock --script`.
     ");
+    let script_lock = context.temp_dir.child("main.py.lock");
+    script_lock.assert(predicate::path::missing());
 
     // Explicitly lock the script.
     uv_snapshot!(context.filters(), context.lock().arg("--script").arg("main.py"), @"
@@ -1163,7 +1165,7 @@ fn run_pep723_script_lock() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = context.read("main.py.lock");
+    let lock = fs_err::read_to_string(&script_lock)?;
 
     insta::with_settings!({
         filters => context.filters(),
@@ -1240,6 +1242,7 @@ fn run_pep723_script_lock() -> Result<()> {
 
     hint: To update the lockfile, run `uv lock`.
     ");
+    script_lock.assert(lock.as_str());
 
     // Re-running the script with `--frozen` should also error, but at runtime.
     uv_snapshot!(context.filters(), context.run().arg("--frozen").arg("main.py"), @r#"
@@ -1251,6 +1254,7 @@ fn run_pep723_script_lock() -> Result<()> {
         import anyio
     ModuleNotFoundError: No module named 'anyio'
     "#);
+    script_lock.assert(lock.as_str());
 
     // Re-running the script should update the lockfile.
     uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
@@ -1267,7 +1271,7 @@ fn run_pep723_script_lock() -> Result<()> {
      + sniffio==1.3.1
     ");
 
-    let lock = context.read("main.py.lock");
+    let lock = fs_err::read_to_string(&script_lock)?;
 
     insta::with_settings!({
         filters => context.filters(),
