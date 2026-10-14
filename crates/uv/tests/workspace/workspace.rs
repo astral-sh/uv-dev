@@ -10,6 +10,8 @@ use indoc::indoc;
 use insta::assert_json_snapshot;
 #[cfg(feature = "test-universal")]
 use insta::assert_snapshot;
+#[cfg(feature = "test-pypi")]
+use predicates::prelude::{PredicateStrExt, predicate};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "test-pypi")]
@@ -25,7 +27,7 @@ fn assert_workspace_installation(root: &std::path::Path, script: &std::path::Pat
         .arg(script)
         .assert()
         .success()
-        .stdout("Success\n");
+        .stdout(predicate::eq("Success").trim());
 }
 
 #[test]
