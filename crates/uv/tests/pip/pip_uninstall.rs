@@ -513,9 +513,12 @@ fn uninstall_record_path_traversal() -> Result<()> {
     };
     fs_err::write(record_file, &record)?;
 
-    let init_py = context.site_packages().join("evilpkg/__init__.py");
-    assert!(context.site_packages().join(&traversal_record).exists());
-    assert!(init_py.exists());
+    let site_packages = ChildPath::new(context.site_packages());
+    let init_py = site_packages.child("evilpkg/__init__.py");
+    site_packages
+        .child(&traversal_record)
+        .assert("I should not be deleted");
+    init_py.assert(predicates::path::is_file());
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
         .arg("evilpkg"), @"
@@ -526,9 +529,8 @@ fn uninstall_record_path_traversal() -> Result<()> {
      - evilpkg==0.1.0 (from file://[TEMP_DIR]/evilpkg)
     ");
 
-    // The regular package files have been removed, while the file outside the scheme still exists.
-    assert!(target_file.exists());
-    assert!(!init_py.exists());
+    target_file.assert("I should not be deleted");
+    init_py.assert(predicates::path::missing());
 
     Ok(())
 }
