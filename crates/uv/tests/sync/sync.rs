@@ -18712,20 +18712,9 @@ async fn sync_malware_check_network_error() {
 }
 
 /// Ensure that a malformed `UV_MALWARE_CHECK_URL` produces a clear error.
-#[tokio::test]
-async fn sync_malware_check_url_invalid() {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig==2.0.0"]
-    "#})
-        .unwrap();
+#[test]
+fn sync_malware_check_url_invalid() {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.filters(), context
         .sync()
