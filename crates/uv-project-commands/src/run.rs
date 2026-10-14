@@ -203,7 +203,7 @@ pub async fn run(
         }
 
         // If a lockfile already exists, lock the script.
-        if let Some(target) = script
+        if let Some(target @ LockTarget::Script(script_file)) = script
             .as_script()
             .map(LockTarget::from)
             .filter(|target| target.lock_path().is_file())
@@ -277,7 +277,7 @@ pub async fn run(
 
             // Sync the environment.
             let target = InstallTarget::Script {
-                script: script.as_script().unwrap(),
+                script: script_file,
                 lock: &lock,
             };
 
