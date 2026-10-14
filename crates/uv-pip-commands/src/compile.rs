@@ -493,18 +493,10 @@ pub async fn pip_compile(
     let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;
 
     // Determine whether to enable build isolation.
-    let environment;
-    let types_build_isolation = match build_isolation {
-        BuildIsolation::Isolate => uv_types::BuildIsolation::Isolated,
-        BuildIsolation::Shared => {
-            environment = PythonEnvironment::from_interpreter(interpreter.clone());
-            uv_types::BuildIsolation::Shared(&environment)
-        }
-        BuildIsolation::SharedPackage(ref packages) => {
-            environment = PythonEnvironment::from_interpreter(interpreter.clone());
-            uv_types::BuildIsolation::SharedPackage(&environment, packages)
-        }
-    };
+    let mut environment = None;
+    let types_build_isolation = uv_types::BuildIsolation::from_settings(&build_isolation, || {
+        environment.insert(PythonEnvironment::from_interpreter(interpreter.clone()))
+    });
 
     // Verify hashes on pinned build constraints, if any.
     let build_hashes = HashStrategy::from_constraints(

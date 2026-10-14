@@ -650,18 +650,10 @@ async fn build_package(
         .build()?;
 
     // Determine whether to enable build isolation.
-    let environment;
-    let types_build_isolation = match build_isolation {
-        BuildIsolation::Isolate => uv_types::BuildIsolation::Isolated,
-        BuildIsolation::Shared => {
-            environment = PythonEnvironment::from_interpreter(interpreter.clone());
-            uv_types::BuildIsolation::Shared(&environment)
-        }
-        BuildIsolation::SharedPackage(packages) => {
-            environment = PythonEnvironment::from_interpreter(interpreter.clone());
-            uv_types::BuildIsolation::SharedPackage(&environment, packages)
-        }
-    };
+    let mut environment = None;
+    let types_build_isolation = uv_types::BuildIsolation::from_settings(build_isolation, || {
+        environment.insert(PythonEnvironment::from_interpreter(interpreter.clone()))
+    });
 
     // Resolve the flat indexes from `--find-links`.
     let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
