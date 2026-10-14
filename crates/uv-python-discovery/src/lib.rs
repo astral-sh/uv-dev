@@ -109,54 +109,35 @@ pub enum MissingPythonHint {
     Offline(PythonRequest),
 }
 
-impl MissingPythonHint {
-    fn for_request(request: &PythonRequest) -> String {
-        match request {
-            PythonRequest::Default | PythonRequest::Any => String::new(),
-            _ => format!(" for {request}"),
-        }
-    }
-}
-
 impl std::fmt::Display for MissingPythonHint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
+        let (request, reason) = match self {
             Self::RequiresUpdate => {
-                write!(
-                    f,
-                    "uv embeds available Python downloads and may require an update to install new versions. Consider retrying on a newer version of uv."
-                )
+                return f.write_str(
+                    "uv embeds available Python downloads and may require an update to install new versions. Consider retrying on a newer version of uv.",
+                );
             }
-            Self::DownloadsManual(request) => {
-                write!(
-                    f,
-                    "A managed Python download is available{}, but Python downloads are set to 'manual', use `uv python install {}` to install the required version",
-                    Self::for_request(request),
-                    request.to_canonical_string(),
-                )
-            }
-            Self::DownloadsNever(request) => {
-                write!(
-                    f,
-                    "A managed Python download is available{}, but Python downloads are set to 'never'",
-                    Self::for_request(request),
-                )
-            }
+            Self::DownloadsManual(request) => (request, "Python downloads are set to 'manual'"),
+            Self::DownloadsNever(request) => (request, "Python downloads are set to 'never'"),
             Self::PreferenceOnlySystem(request) => {
-                write!(
-                    f,
-                    "A managed Python download is available{}, but the Python preference is set to 'only system'",
-                    Self::for_request(request),
-                )
+                (request, "the Python preference is set to 'only system'")
             }
-            Self::Offline(request) => {
-                write!(
-                    f,
-                    "A managed Python download is available{}, but uv is set to offline mode",
-                    Self::for_request(request),
-                )
-            }
+            Self::Offline(request) => (request, "uv is set to offline mode"),
+        };
+
+        f.write_str("A managed Python download is available")?;
+        if !matches!(request, PythonRequest::Default | PythonRequest::Any) {
+            write!(f, " for {request}")?;
         }
+        write!(f, ", but {reason}")?;
+        if matches!(self, Self::DownloadsManual(_)) {
+            write!(
+                f,
+                ", use `uv python install {}` to install the required version",
+                request.to_canonical_string()
+            )?;
+        }
+        Ok(())
     }
 }
 
