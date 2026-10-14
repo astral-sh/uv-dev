@@ -4308,6 +4308,22 @@ fn sync_extra_build_dependencies_setuptools() -> Result<()> {
     Ok(())
 }
 
+const LOCAL_ANYIO_BUILD_BACKEND: &str = indoc! {r#"
+    import sys
+
+    from hatchling.build import *
+
+    try:
+        import anyio
+    except ModuleNotFoundError:
+        print("Missing `anyio` module", file=sys.stderr)
+        sys.exit(1)
+
+    if not hasattr(anyio, 'LOCAL_ANYIO_MARKER'):
+        print("Found system anyio instead of local anyio", file=sys.stderr)
+        sys.exit(1)
+"#};
+
 #[test]
 fn sync_extra_build_dependencies_sources() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_counts();
@@ -4329,23 +4345,9 @@ fn sync_extra_build_dependencies_sources() -> Result<()> {
         backend-path = ["."]
         build-backend = "build_backend"
     "#})?;
-    let build_backend = child.child("build_backend.py");
-    build_backend.write_str(&formatdoc! {r#"
-        import sys
-
-        from hatchling.build import *
-
-        try:
-            import anyio
-        except ModuleNotFoundError:
-            print("Missing `anyio` module", file=sys.stderr)
-            sys.exit(1)
-
-        # Check that we got the local version of anyio by checking for the marker
-        if not hasattr(anyio, 'LOCAL_ANYIO_MARKER'):
-            print("Found system anyio instead of local anyio", file=sys.stderr)
-            sys.exit(1)
-    "#})?;
+    child
+        .child("build_backend.py")
+        .write_str(LOCAL_ANYIO_BUILD_BACKEND)?;
     child.child("src/child/__init__.py").touch()?;
 
     // A direct URL keeps the child available when `--no-sources` disables the build dependency override.
@@ -4556,23 +4558,9 @@ fn sync_extra_build_dependencies_sources_from_child() -> Result<()> {
         anyio = {{ path = "{}" }}
     "#, anyio_local.portable_display()
     })?;
-    let build_backend = child.child("build_backend.py");
-    build_backend.write_str(&formatdoc! {r#"
-        import sys
-
-        from hatchling.build import *
-
-        try:
-            import anyio
-        except ModuleNotFoundError:
-            print("Missing `anyio` module", file=sys.stderr)
-            sys.exit(1)
-
-        # Check that we got the local version of anyio by checking for the marker
-        if not hasattr(anyio, 'LOCAL_ANYIO_MARKER'):
-            print("Found system anyio instead of local anyio", file=sys.stderr)
-            sys.exit(1)
-    "#})?;
+    child
+        .child("build_backend.py")
+        .write_str(LOCAL_ANYIO_BUILD_BACKEND)?;
     child.child("src/child/__init__.py").touch()?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -4592,7 +4580,7 @@ fn sync_extra_build_dependencies_sources_from_child() -> Result<()> {
     })?;
 
     // Running `uv sync` should fail due to the unapplied source
-    uv_snapshot!(context.filters(), context.sync().arg("--reinstall").arg("--refresh"), @"
+    uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved [N] packages in [TIME]
