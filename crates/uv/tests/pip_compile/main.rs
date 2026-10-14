@@ -3,5 +3,7 @@
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 use uv_test::pypi_proxy;
 
+#[cfg(feature = "test-python")]
+mod hash_preservation;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_compile;
