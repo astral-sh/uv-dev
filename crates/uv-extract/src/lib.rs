@@ -18,6 +18,14 @@ mod vendor;
 /// Default buffer size for archive reads and file copies.
 pub(crate) const DEFAULT_BUF_SIZE: usize = 128 * 1024;
 
+/// Cap a ZIP entry's output buffer at 1 MiB, or defer to the writer's default if the entry size
+/// exceeds the platform's address space.
+pub(crate) fn zip_entry_buffer_capacity(uncompressed_size: u64) -> Option<usize> {
+    usize::try_from(uncompressed_size)
+        .ok()
+        .map(|size| size.min(1024 * 1024))
+}
+
 /// Track directories whose creation has been attempted during archive extraction.
 #[derive(Default)]
 pub(crate) struct ExtractionDirectories {
