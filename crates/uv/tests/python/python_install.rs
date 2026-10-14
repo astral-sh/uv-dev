@@ -997,6 +997,9 @@ fn python_install_freethreaded() {
 /// on Windows when registry discovery is enabled.
 ///
 /// Regression test for <https://github.com/astral-sh/uv/issues/18795>.
+///
+/// This test writes to the shared `HKCU` registry. The fixture serializes registry tests and
+/// attempts to remove owned entries during unwinding; cleanup errors are reported to stderr.
 #[cfg(all(windows, feature = "test-windows-registry"))]
 #[tokio::test]
 async fn python_install_freethreaded_and_gil_list() -> anyhow::Result<()> {

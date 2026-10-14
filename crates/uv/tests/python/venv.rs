@@ -923,6 +923,7 @@ fn create_venv_ignores_virtual_env_variable() -> Result<()> {
     active_venv.create_dir_all()?;
     active_venv.child("pyvenv.cfg").touch()?;
 
+    // The active environment in `VIRTUAL_ENV` is ignored when creating a new environment.
     uv_snapshot!(context.filters(), context.venv()
         .env(EnvVars::VIRTUAL_ENV, active_venv.path()), @"
     exit_code: 0 (success)
