@@ -186,17 +186,25 @@ impl UniversalMarker {
     /// If all inference sets reduce to the same marker, simplify the marker using that knowledge.
     pub(crate) fn unify_inference_sets(&mut self, conflict_sets: &[BTreeSet<Inference>]) {
         let initial_marker = self.marker;
-        let mut branch_markers = conflict_sets.iter().map(|conflict_set| {
-            conflict_set
-                .iter()
-                .fold(initial_marker, |marker, inference| {
-                    apply_conflict_assumption(marker, &inference.item, inference.included)
-                })
-        });
+        let mut branch_markers = conflict_sets
+            .iter()
+            .map(|conflict_set| conflict_set.iter().fold(initial_marker, apply_inference));
 
         if let Ok(marker) = branch_markers.all_equal_value() {
             *self = Self::from_combined(marker);
         }
+    }
+
+    /// Assume every inferred conflict item, projecting the resulting marker once.
+    pub(crate) fn assume_inferences<'a>(
+        &mut self,
+        mut inferences: impl Iterator<Item = &'a Inference>,
+    ) {
+        let Some(first) = inferences.next() else {
+            return;
+        };
+        let marker = apply_inference(self.marker, first);
+        *self = Self::from_combined(inferences.fold(marker, apply_inference));
     }
 
     /// Assumes that the given conflict item is activated.
@@ -536,6 +544,10 @@ impl std::fmt::Debug for ConflictMarker {
         // This is a little more succinct than the default.
         write!(f, "ConflictMarker({:?})", self.marker)
     }
+}
+
+fn apply_inference(marker: MarkerTree, inference: &Inference) -> MarkerTree {
+    apply_conflict_assumption(marker, &inference.item, inference.included)
 }
 
 /// Simplify a marker by assuming that one conflict item is active or inactive.
