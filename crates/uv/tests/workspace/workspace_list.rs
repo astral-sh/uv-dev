@@ -1,5 +1,4 @@
 use anyhow::Result;
-use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 use indoc::{formatdoc, indoc};
 
@@ -10,7 +9,7 @@ use uv_test::{copy_dir_ignore, uv_snapshot};
 /// unchanged, but not when constructing the resolved cache creates a new root.
 #[test]
 fn workspace_list_reuses_settings_discovery() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     context
         .temp_dir
         .child("pyproject.toml")
@@ -62,13 +61,18 @@ fn workspace_list_reuses_settings_discovery() -> Result<()> {
 
 /// Test basic list output for a simple workspace with one member.
 #[test]
-fn workspace_list_simple() {
-    let context = uv_test::test_context!("3.12");
-
-    // Initialize a workspace with one member
-    context.init().arg("foo").assert().success();
+fn workspace_list_simple() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let workspace = context.temp_dir.child("foo");
+    workspace.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "0.1.0"
+
+        [tool.uv.workspace]
+        members = []
+    "#})?;
 
     uv_snapshot!(context.filters(), context.workspace_list().current_dir(&workspace), @"
     exit_code: 0 (success)
@@ -83,12 +87,13 @@ fn workspace_list_simple() {
     [TEMP_DIR]/foo
     "
     );
+    Ok(())
 }
 
 /// Test list output for a root workspace (workspace with a root package).
 #[test]
 fn workspace_list_root_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -113,7 +118,7 @@ fn workspace_list_root_workspace() -> Result<()> {
 /// Test list output for a virtual workspace (no root package).
 #[test]
 fn workspace_list_virtual_workspace() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -138,7 +143,7 @@ fn workspace_list_virtual_workspace() -> Result<()> {
 /// Test list output when run from a workspace member directory.
 #[test]
 fn workspace_list_from_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -164,28 +169,26 @@ fn workspace_list_from_member() -> Result<()> {
 
 /// Test list output for a workspace with multiple packages.
 #[test]
-fn workspace_list_multiple_members() {
-    let context = uv_test::test_context!("3.12");
-
-    // Initialize workspace root
-    context.init().arg("pkg-a").assert().success();
+fn workspace_list_multiple_members() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let workspace_root = context.temp_dir.child("pkg-a");
+    workspace_root
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "pkg-a"
+            version = "0.1.0"
 
-    // Add more members
-    context
-        .init()
-        .arg("pkg-b")
-        .current_dir(&workspace_root)
-        .assert()
-        .success();
-
-    context
-        .init()
-        .arg("pkg-c")
-        .current_dir(&workspace_root)
-        .assert()
-        .success();
+            [tool.uv.workspace]
+            members = ["pkg-b", "pkg-c"]
+        "#})?;
+    workspace_root
+        .child("pkg-b/pyproject.toml")
+        .write_str("[project]\nname = \"pkg-b\"\nversion = \"0.1.0\"\n")?;
+    workspace_root
+        .child("pkg-c/pyproject.toml")
+        .write_str("[project]\nname = \"pkg-c\"\nversion = \"0.1.0\"\n")?;
 
     uv_snapshot!(context.filters(), context.workspace_list().current_dir(&workspace_root), @"
     exit_code: 0 (success)
@@ -204,16 +207,18 @@ fn workspace_list_multiple_members() {
     [TEMP_DIR]/pkg-a/pkg-c
     "
     );
+    Ok(())
 }
 
 /// Test list output for a single project (not a workspace).
 #[test]
-fn workspace_list_single_project() {
-    let context = uv_test::test_context!("3.12");
-
-    context.init().arg("my-project").assert().success();
+fn workspace_list_single_project() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     let project = context.temp_dir.child("my-project");
+    project
+        .child("pyproject.toml")
+        .write_str("[project]\nname = \"my-project\"\nversion = \"0.1.0\"\n")?;
 
     uv_snapshot!(context.filters(), context.workspace_list().current_dir(&project), @"
     exit_code: 0 (success)
@@ -221,12 +226,13 @@ fn workspace_list_single_project() {
     my-project
     "
     );
+    Ok(())
 }
 
 /// Test list output with excluded packages.
 #[test]
 fn workspace_list_with_excluded() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let workspace = context.temp_dir.child("workspace");
 
     copy_dir_ignore(
@@ -249,7 +255,7 @@ fn workspace_list_with_excluded() -> Result<()> {
 /// Test list error output when not in a project.
 #[test]
 fn workspace_list_no_project() {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.filters(), context.workspace_list(), @"
     exit_code: 2 (failure)
@@ -263,10 +269,12 @@ fn workspace_list_no_project() {
 /// boundaries.
 #[test]
 fn workspace_list_scripts() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
 
-    context.init().arg("project").assert().success();
     let project = context.temp_dir.child("project");
+    project
+        .child("pyproject.toml")
+        .write_str("[project]\nname = \"project\"\nversion = \"0.1.0\"\n")?;
 
     let script = r"# /// script
 # dependencies = []
@@ -378,7 +386,7 @@ fn workspace_list_scripts() -> Result<()> {
 /// Script discovery should warn about invalid metadata and continue listing valid scripts.
 #[test]
 fn workspace_list_scripts_invalid_metadata() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     context
         .temp_dir
         .child("pyproject.toml")
