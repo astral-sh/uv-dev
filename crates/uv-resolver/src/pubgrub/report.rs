@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::Write;
@@ -403,29 +402,17 @@ impl ReportFormatter<PubGrubPackage, Range<Version>, UnavailableReason>
                 &External::FromDependencyOf((*p2).clone(), r2.clone(), (*p1).clone(), r1.clone()),
             ),
             slice => {
-                let mut result = String::new();
-                let str_terms: Vec<_> = slice
+                let separator = if slice.len() == 2 { " and " } else { ", " };
+                let terms = slice
                     .iter()
-                    .map(|(p, t)| format!("{}", PackageTerm::new(p, t, self)))
-                    .collect();
-                for (index, term) in str_terms.iter().enumerate() {
-                    result.push_str(term);
-                    match str_terms.len().cmp(&2) {
-                        Ordering::Equal if index == 0 => {
-                            result.push_str(" and ");
-                        }
-                        Ordering::Greater if index + 1 < str_terms.len() => {
-                            result.push_str(", ");
-                        }
-                        _ => (),
-                    }
-                }
-                if slice.len() == 1 {
-                    result.push_str(" cannot be used");
+                    .map(|(package, term)| PackageTerm::new(package, term, self))
+                    .format(separator);
+                let suffix = if slice.len() == 1 {
+                    "cannot be used"
                 } else {
-                    result.push_str(" are incompatible");
-                }
-                result
+                    "are incompatible"
+                };
+                format!("{terms} {suffix}")
             }
         }
     }
