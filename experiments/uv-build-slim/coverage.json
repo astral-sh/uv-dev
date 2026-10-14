@@ -1,0 +1,53 @@
+{
+  "revision": "bd39416351244f273aeff89d495d4b0804b765a5",
+  "generated_function_count": 26,
+  "generated_functions": [
+    "normalize",
+    "is_normalized",
+    "validate_and_normalize_ref",
+    "InvalidNameError::fmt",
+    "PackageName::as_dist_info_name",
+    "Metadata23::core_metadata_format",
+    "Keywords::as_metadata",
+    "ProjectUrls::to_vec_str",
+    "PyProjectToml::to_entry_points",
+    "PyProjectToml::write_group",
+    "ImportEntry::empty",
+    "ImportEntry::fmt",
+    "parse_import_names",
+    "parse_import_namespaces",
+    "parse_import_entry",
+    "Classifier::from_str",
+    "Classifier::as_str",
+    "PyProjectToml::to_metadata",
+    "PyProjectToml::license_metadata",
+    "BuildBackendSettings::default",
+    "WheelInfo::new",
+    "WheelInfo::fmt",
+    "Identifier::new",
+    "Identifier::from_str",
+    "Identifier::fmt",
+    "Identifier::as_ref"
+  ],
+  "complete_dependency_closure": false,
+  "full_parity": false,
+  "untranslated_dependencies": [
+    "TOML and sdist rewriting",
+    "PEP 440 and PEP 508 parsing",
+    "SPDX expressions",
+    "Glob matching and directory traversal",
+    "Full archive and filesystem implementation"
+  ],
+  "public_backend": "restricted subset; see README.md",
+  "tests": {
+    "revision": "bd39416351244f273aeff89d495d4b0804b765a5",
+    "tests": 20,
+    "success": true,
+    "cases": {
+      "normalization": 1508,
+      "metadata": 260,
+      "unicode": 3958,
+      "wheels": 10
+    }
+  }
+}

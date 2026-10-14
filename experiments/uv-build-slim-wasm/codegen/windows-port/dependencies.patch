@@ -1,0 +1,151 @@
+--- a/getrandom-0.4.3/src/backends/windows.rs
++++ b/getrandom-0.4.3/src/backends/windows.rs
+@@ -27,18 +27,7 @@
+ 
+ // Binding to the Windows.Win32.Security.Cryptography.ProcessPrng API. As
+ // bcryptprimitives.dll lacks an import library, we use "raw-dylib".
+-#[cfg_attr(
+-    target_arch = "x86",
+-    link(
+-        name = "bcryptprimitives",
+-        kind = "raw-dylib",
+-        import_name_type = "undecorated"
+-    )
+-)]
+-#[cfg_attr(
+-    not(target_arch = "x86"),
+-    link(name = "bcryptprimitives", kind = "raw-dylib")
+-)]
++#[link(wasm_import_module = "bcryptprimitives.dll")]
+ unsafe extern "system" {
+     fn ProcessPrng(pbdata: *mut u8, cbdata: usize) -> BOOL;
+ }
+--- a/self-replace-1.5.0/src/windows.rs
++++ b/self-replace-1.5.0/src/windows.rs
+@@ -112,7 +112,7 @@
+ /// in certain circumstances.  We pick `.CRT$XCV` here because that section is
+ /// currently used after rust is initialized.
+ #[used]
+-#[link_section = ".CRT$XCV"]
++#[cfg_attr(not(target_arch = "wasm64"), link_section = ".CRT$XCV")]
+ static INIT_TABLE_ENTRY: unsafe extern "C" fn() = self_delete_on_init;
+ 
+ /// This function is called in "life before main" which is not allowed by Rust rules.
+@@ -289,3 +289,10 @@
+     fs::rename(&temp_exe, &exe)?;
+     Ok(())
+ }
++
++#[cfg(target_arch = "wasm64")]
++#[no_mangle]
++pub extern "C" fn uv_build_slim_initialize_self_replace() {
++    // SAFETY: The generated host invokes this at the same pre-main boundary as the CRT initializer.
++    unsafe { self_delete_on_init() };
++}
+--- a/windows-link-0.1.3/src/lib.rs
++++ b/windows-link-0.1.3/src/lib.rs
+@@ -6,7 +6,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim", import_name_type = "undecorated")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+@@ -19,7 +19,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim")]
++        #[link(wasm_import_module = $library)]
+         extern "C" {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+--- a/windows-link-0.100.0/src/lib.rs
++++ b/windows-link-0.100.0/src/lib.rs
+@@ -12,7 +12,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $name:ident($($params:tt)*) $(-> $ret:ty)?) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim", import_name_type = "undecorated")]
++        #[link(wasm_import_module = $library)]
+         unsafe extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $name($($params)*) $(-> $ret)?;
+@@ -33,7 +33,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $name:ident($($params:tt)*) $(-> $ret:ty)?) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim")]
++        #[link(wasm_import_module = $library)]
+         unsafe extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $name($($params)*) $(-> $ret)?;
+--- a/windows-link-0.2.1/src/lib.rs
++++ b/windows-link-0.2.1/src/lib.rs
+@@ -6,7 +6,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim", import_name_type = "undecorated")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+@@ -19,7 +19,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+--- a/windows-targets-0.52.6/src/lib.rs
++++ b/windows-targets-0.52.6/src/lib.rs
+@@ -9,7 +9,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? $(#[$doc:meta])? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim", import_name_type = "undecorated")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+@@ -22,7 +22,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? $(#[$doc:meta])? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim")]
++        #[link(wasm_import_module = $library)]
+         extern "C" {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+@@ -35,7 +35,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? $(#[$doc:meta])? fn $($function:tt)*) => (
+-        #[link(name = "windows.0.52.0")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+--- a/windows-targets-0.53.5/src/lib.rs
++++ b/windows-targets-0.53.5/src/lib.rs
+@@ -9,7 +9,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $($function:tt)*) => (
+-        #[link(name = "windows.0.53.0")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+--- a/zlib-rs-0.6.3/src/lib.rs
++++ b/zlib-rs-0.6.3/src/lib.rs
+@@ -1,3 +1,4 @@
++#![cfg_attr(target_arch = "wasm64", feature(simd_wasm64))]
+ #![doc = core::include_str!("../README.md")]
+ #![cfg_attr(not(any(test, feature = "rust-allocator")), no_std)]
+ 

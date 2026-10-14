@@ -1,0 +1,14 @@
+{
+  "tar-codec": {
+    "repository": "https://github.com/astral-sh/tar-codec",
+    "revision": "42cfa8d5f0d258d2c21b3b0a7d433492c282abef",
+    "files": ["LICENSE-MIT", "LICENSE-APACHE"],
+    "reason": "The published archive-trait, tar-framing, and tar-codec crate archives omit the workspace license files."
+  },
+  "seahash": {
+    "repository": "https://github.com/redox-os/tfs",
+    "license_blob": "3903091a13728186595aa53ee9a3765bc95fb0c7",
+    "files": ["LICENSE"],
+    "reason": "The published crate declares MIT and omits a license file; this is the original SeaHash repository license."
+  }
+}

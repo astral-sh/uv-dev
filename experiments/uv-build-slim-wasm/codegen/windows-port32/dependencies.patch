@@ -1,0 +1,274 @@
+--- a/getrandom-0.4.3/src/backends/windows.rs
++++ b/getrandom-0.4.3/src/backends/windows.rs
+@@ -27,18 +27,7 @@
+ 
+ // Binding to the Windows.Win32.Security.Cryptography.ProcessPrng API. As
+ // bcryptprimitives.dll lacks an import library, we use "raw-dylib".
+-#[cfg_attr(
+-    target_arch = "x86",
+-    link(
+-        name = "bcryptprimitives",
+-        kind = "raw-dylib",
+-        import_name_type = "undecorated"
+-    )
+-)]
+-#[cfg_attr(
+-    not(target_arch = "x86"),
+-    link(name = "bcryptprimitives", kind = "raw-dylib")
+-)]
++#[link(wasm_import_module = "bcryptprimitives.dll")]
+ unsafe extern "system" {
+     fn ProcessPrng(pbdata: *mut u8, cbdata: usize) -> BOOL;
+ }
+--- a/self-replace-1.5.0/src/windows.rs
++++ b/self-replace-1.5.0/src/windows.rs
+@@ -112,7 +112,7 @@
+ /// in certain circumstances.  We pick `.CRT$XCV` here because that section is
+ /// currently used after rust is initialized.
+ #[used]
+-#[link_section = ".CRT$XCV"]
++#[cfg_attr(not(target_arch = "wasm32"), link_section = ".CRT$XCV")]
+ static INIT_TABLE_ENTRY: unsafe extern "C" fn() = self_delete_on_init;
+ 
+ /// This function is called in "life before main" which is not allowed by Rust rules.
+@@ -289,3 +289,10 @@
+     fs::rename(&temp_exe, &exe)?;
+     Ok(())
+ }
++
++#[cfg(target_arch = "wasm32")]
++#[no_mangle]
++pub extern "C" fn uv_build_slim_initialize_self_replace() {
++    // SAFETY: The generated host invokes this at the same pre-main boundary as the CRT initializer.
++    unsafe { self_delete_on_init() };
++}
+--- a/windows-link-0.1.3/src/lib.rs
++++ b/windows-link-0.1.3/src/lib.rs
+@@ -6,7 +6,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim", import_name_type = "undecorated")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+@@ -19,7 +19,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim")]
++        #[link(wasm_import_module = $library)]
+         extern "C" {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+--- a/windows-link-0.100.0/src/lib.rs
++++ b/windows-link-0.100.0/src/lib.rs
+@@ -12,7 +12,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $name:ident($($params:tt)*) $(-> $ret:ty)?) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim", import_name_type = "undecorated")]
++        #[link(wasm_import_module = $library)]
+         unsafe extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $name($($params)*) $(-> $ret)?;
+@@ -33,7 +33,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $name:ident($($params:tt)*) $(-> $ret:ty)?) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim")]
++        #[link(wasm_import_module = $library)]
+         unsafe extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $name($($params)*) $(-> $ret)?;
+--- a/windows-link-0.2.1/src/lib.rs
++++ b/windows-link-0.2.1/src/lib.rs
+@@ -6,7 +6,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim", import_name_type = "undecorated")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+@@ -19,7 +19,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+--- a/windows-targets-0.52.6/src/lib.rs
++++ b/windows-targets-0.52.6/src/lib.rs
+@@ -9,7 +9,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? $(#[$doc:meta])? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim", import_name_type = "undecorated")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+@@ -22,7 +22,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? $(#[$doc:meta])? fn $($function:tt)*) => (
+-        #[link(name = $library, kind = "raw-dylib", modifiers = "+verbatim")]
++        #[link(wasm_import_module = $library)]
+         extern "C" {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+@@ -35,7 +35,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? $(#[$doc:meta])? fn $($function:tt)*) => (
+-        #[link(name = "windows.0.52.0")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+--- a/windows-targets-0.53.5/src/lib.rs
++++ b/windows-targets-0.53.5/src/lib.rs
+@@ -9,7 +9,7 @@
+ #[macro_export]
+ macro_rules! link {
+     ($library:literal $abi:literal $($link_name:literal)? fn $($function:tt)*) => (
+-        #[link(name = "windows.0.53.0")]
++        #[link(wasm_import_module = $library)]
+         extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+--- a/backon-1.6.0/src/sleep.rs
++++ b/backon-1.6.0/src/sleep.rs
+@@ -40,7 +40,7 @@
+ /// The default implementation of `Sleeper` while feature `tokio-sleep` enabled.
+ ///
+ /// it uses `tokio::time::sleep`.
+-#[cfg(all(not(target_arch = "wasm32"), feature = "tokio-sleep"))]
++#[cfg(all(any(not(target_arch = "wasm32"), target_os = "windows"), feature = "tokio-sleep"))]
+ pub type DefaultSleeper = TokioSleeper;
+ /// The default implementation of `Sleeper` while feature `gloo-timers-sleep` enabled.
+ ///
+@@ -65,11 +65,11 @@
+ ///
+ /// It will adhere to [pausing/auto-advancing](https://docs.rs/tokio/latest/tokio/time/fn.pause.html)
+ /// in Tokio's Runtime semantics, if enabled.
+-#[cfg(all(not(target_arch = "wasm32"), feature = "tokio-sleep"))]
++#[cfg(all(any(not(target_arch = "wasm32"), target_os = "windows"), feature = "tokio-sleep"))]
+ #[derive(Clone, Copy, Debug, Default)]
+ pub struct TokioSleeper;
+ 
+-#[cfg(all(not(target_arch = "wasm32"), feature = "tokio-sleep"))]
++#[cfg(all(any(not(target_arch = "wasm32"), target_os = "windows"), feature = "tokio-sleep"))]
+ impl Sleeper for TokioSleeper {
+     type Sleep = tokio::time::Sleep;
+ 
+--- a/backon-1.6.0/Cargo.toml
++++ b/backon-1.6.0/Cargo.toml
+@@ -71,22 +71,22 @@
+ [dev-dependencies.spin]
+ version = "0.10.0"
+ 
+-[target.'cfg(not(target_arch = "wasm32"))'.dependencies.futures-timer]
++[target.'cfg(any(not(target_arch = "wasm32"), target_os = "windows"))'.dependencies.futures-timer]
+ version = "3.0.3"
+ optional = true
+ 
+-[target.'cfg(not(target_arch = "wasm32"))'.dependencies.tokio]
++[target.'cfg(any(not(target_arch = "wasm32"), target_os = "windows"))'.dependencies.tokio]
+ version = "1"
+ optional = true
+ 
+-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies.sqlx]
++[target.'cfg(any(not(target_arch = "wasm32"), target_os = "windows"))'.dev-dependencies.sqlx]
+ version = "0.8.0"
+ features = [
+     "runtime-tokio",
+     "sqlite",
+ ]
+ 
+-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies.tokio]
++[target.'cfg(any(not(target_arch = "wasm32"), target_os = "windows"))'.dev-dependencies.tokio]
+ version = "1"
+ features = [
+     "time",
+--- a/astral-tokio-tar-0.7.0/src/entry.rs
++++ b/astral-tokio-tar-0.7.0/src/entry.rs
+@@ -886,7 +886,7 @@
+             };
+             return Ok(Unpacked::Other);
+ 
+-            #[cfg(target_arch = "wasm32")]
++            #[cfg(all(target_arch = "wasm32", not(windows)))]
+             #[allow(unused_variables)]
+             async fn symlink(src: &Path, dst: &Path) -> io::Result<()> {
+                 Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
+@@ -1064,7 +1064,7 @@
+             }
+         }
+ 
+-        #[cfg(target_arch = "wasm32")]
++        #[cfg(all(target_arch = "wasm32", not(windows)))]
+         #[allow(unused_variables)]
+         async fn _set_perms(dst: &Path, f: Option<&mut fs::File>, mode: u32) -> io::Result<()> {
+             Err(io::Error::new(io::ErrorKind::Other, "Not implemented"))
+@@ -1113,7 +1113,7 @@
+         }
+         // Windows does not completely support posix xattrs
+         // https://en.wikipedia.org/wiki/Extended_file_attributes#Windows_NT
+-        #[cfg(any(windows, not(feature = "xattr"), target_arch = "wasm32"))]
++        #[cfg(any(windows, not(feature = "xattr"), all(target_arch = "wasm32", not(windows))))]
+         async fn set_xattrs<R: Read + Unpin>(_: &mut EntryFields<R>, _: &Path) -> io::Result<()> {
+             Ok(())
+         }
+--- a/astral-tokio-tar-0.7.0/src/header.rs
++++ b/astral-tokio-tar-0.7.0/src/header.rs
+@@ -773,7 +773,7 @@
+         }
+     }
+ 
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(all(target_arch = "wasm32", not(windows)))]
+     #[allow(unused_variables)]
+     fn fill_platform_from(&mut self, meta: &Metadata, mode: HeaderMode) {
+         unimplemented!();
+@@ -1596,7 +1596,7 @@
+     copy_path_into_inner(slot, path, is_link_name, true)
+ }
+ 
+-#[cfg(target_arch = "wasm32")]
++#[cfg(all(target_arch = "wasm32", not(windows)))]
+ fn ends_with_slash(p: &Path) -> bool {
+     p.to_string_lossy().ends_with('/')
+ }
+@@ -1612,7 +1612,7 @@
+     p.as_os_str().as_bytes().ends_with(b"/")
+ }
+ 
+-#[cfg(any(windows, target_arch = "wasm32"))]
++#[cfg(any(windows, all(target_arch = "wasm32", not(windows))))]
+ pub fn path2bytes(p: &Path) -> io::Result<Cow<'_, [u8]>> {
+     p.as_os_str()
+         .to_str()
+@@ -1674,7 +1674,7 @@
+     })
+ }
+ 
+-#[cfg(target_arch = "wasm32")]
++#[cfg(all(target_arch = "wasm32", not(windows)))]
+ pub fn bytes2path(bytes: Cow<[u8]>) -> io::Result<Cow<Path>> {
+     Ok(match bytes {
+         Cow::Borrowed(bytes) => {
+@@ -1686,7 +1686,7 @@
+     })
+ }
+ 
+-#[cfg(target_arch = "wasm32")]
++#[cfg(all(target_arch = "wasm32", not(windows)))]
+ fn invalid_utf8<T>(_: T) -> io::Error {
+     io::Error::new(io::ErrorKind::InvalidData, "Invalid utf-8")
+ }

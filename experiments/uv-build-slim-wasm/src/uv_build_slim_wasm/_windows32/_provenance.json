@@ -1,0 +1,36 @@
+{
+  "uv_revision": "bd39416351244f273aeff89d495d4b0804b765a5",
+  "pywasm_revision": "47abba6c94ecf74c3c173344684891f2ca29c2e3",
+  "rust_toolchain": "1.99.0",
+  "target": "wasm32-pc-windows-gnu",
+  "profile": "dev",
+  "optimization": "z",
+  "wasm_sha256": "f80be8612e826514e84f962b2bdcc2d816c857d02fe21fc5c7f87c26151566a4",
+  "cargo_lock_sha256": "e8c759493057729079f90c94136f0956ceb5847ca467471652aab9716ad90f10",
+  "registry_packages": {
+    "astral-tokio-tar-0.7.0": "6f2e989b33246fe9240d39accf4dd9a01e0b6c1f3ce9dd095e0a47fa02505523",
+    "backon-1.6.0": "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef",
+    "getrandom-0.4.3": "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099",
+    "self-replace-1.5.0": "03ec815b5eab420ab893f63393878d89c90fdd94c0bcc44c07abb8ad95552fb7",
+    "windows-0.61.3": "9babd3a767a4c1aef6900409f85f5d53ce2544ccdfaa86dad48c91782c6d6893",
+    "windows-link-0.1.3": "5e6ad25900d524eaabdbbb96d20b4311e1e7ae1699af4fb28c17ae66c80d798a",
+    "windows-link-0.100.0": "9b39de7c7fe78858b0144c50c3fc000bab3be17d5e9b85b1053871693c7f7415",
+    "windows-link-0.2.1": "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5",
+    "windows-sys-0.52.0": "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d",
+    "windows-sys-0.60.2": "f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb",
+    "windows-sys-0.61.2": "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc",
+    "windows-targets-0.52.6": "9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973",
+    "windows-targets-0.53.5": "4945f9f551b88e0d65f3db0bc25c33b8acea4d9e41163edf90dcd0b19f9069f3",
+    "zlib-rs-0.6.3": "3be3d40e40a133f9c916ee3f9f4fa2d9d63435b5fbe1bfc6d9dae0aa0ada1513"
+  },
+  "port_files": {
+    "dependencies.json": "b201999fdd64f42315305c18334f366bb79a6cddcba82e27f4b849b78f9fe535",
+    "dependencies.patch": "905b5711157e3b6347bebef134acbbe43388083201ce936f15d97de727f12d6f",
+    "sysroot.patch": "ce28f7052f62565768bb3c70ecdca8e2063b7fbadaa9bd7da38d4f475c1c85ef",
+    "target.json": "1215e5c34f3348bba6d4665c1f27ffddff15ccf5c97a4179ba0447f58c8abe86",
+    "uv.patch": "f6bd4047cade535c99abc3453b705581d47b52d2d6428933ee3c9732b7b86b57"
+  },
+  "generator_sha256": "8f9ea51bc46b4b13b624346d95f8967d4d3b352ab46132f166a9ce1e67e7955b",
+  "build_script_sha256": "820b065203a659c398be79dc7e9d97be11549c34c387d9bdc32fd0053f9d48ad",
+  "full_parity_established": false
+}

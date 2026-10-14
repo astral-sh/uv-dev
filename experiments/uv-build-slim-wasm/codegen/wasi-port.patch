@@ -1,0 +1,221 @@
+--- a/crates/uv-fs/src/lib.rs
++++ b/crates/uv-fs/src/lib.rs
+@@ -1,3 +1,4 @@
++#![cfg_attr(target_os = "wasi", feature(wasi_ext))]
+ use std::io::{self, Write};
+ use std::path::{Path, PathBuf};
+ use std::time::SystemTime;
+@@ -381,6 +382,19 @@
+     fs_err::os::unix::fs::symlink(src.as_ref(), dst.as_ref())
+ }
+ 
++#[cfg(target_os = "wasi")]
++pub fn create_symlink(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
++    let destination = dst.as_ref();
++    let parent = std::fs::File::open(destination.parent().unwrap_or(Path::new(".")))?;
++    let name = destination.file_name().ok_or_else(|| {
++        std::io::Error::new(
++            std::io::ErrorKind::InvalidInput,
++            "symlink destination has no filename",
++        )
++    })?;
++    std::os::wasi::fs::symlink(src.as_ref(), &parent, name)
++}
++
+ /// Remove a symbolic link at `path` without following its target.
+ pub fn remove_symlink(path: impl AsRef<Path>) -> io::Result<()> {
+     let path = path.as_ref();
+@@ -476,6 +490,9 @@
+         },
+         unix => {
+             fs_err::os::unix::fs::symlink(src.as_ref(), dst.as_ref())?;
++        },
++        target_os = "wasi" => {
++            create_symlink(src.as_ref(), dst.as_ref())?;
+         },
+     }
+ 
+@@ -1156,3 +1173,24 @@
+         Ok(())
+     }
+ }
++
++/// Read native permission bits through the generated-Python host adapter.
++#[cfg(target_os = "wasi")]
++#[expect(unsafe_code, reason = "WASI host import for filesystem metadata")]
++pub fn host_mode(path: &Path) -> std::io::Result<u32> {
++    #[link(wasm_import_module = "uv_build_slim")]
++    unsafe extern "C" {
++        fn file_mode(path: *const u8, length: usize) -> u32;
++    }
++    let bytes = path.as_os_str().as_encoded_bytes();
++    // SAFETY: The host reads exactly `length` bytes synchronously; the path stays
++    // borrowed and valid for the complete call, and the host does not retain it.
++    let mode = unsafe { file_mode(bytes.as_ptr(), bytes.len()) };
++    if mode & 0x8000_0000 != 0 {
++        Err(std::io::Error::from_raw_os_error(
++            (mode & 0x7fff_ffff) as i32,
++        ))
++    } else {
++        Ok(mode)
++    }
++}
+--- a/crates/uv-fs/src/link.rs
++++ b/crates/uv-fs/src/link.rs
+@@ -1,5 +1,8 @@
+ //! Utilities for linking a file or directory with various options and automated fallback (e.g., to
+ //! copying) when link methods are unsupported.
++
++#[cfg(target_os = "wasi")]
++use crate::create_symlink;
+ 
+ use std::io;
+ use std::path::{Path, PathBuf};
+--- a/crates/uv-fs/src/path.rs
++++ b/crates/uv-fs/src/path.rs
+@@ -138,12 +138,11 @@
+ ///
+ /// Note: Due to the fun quirks *nix paths, how python handles them, and expectations of things that
+ /// might consume those paths, this produces an expression wrapped in `__import__("os").fsdecode()`.
+-#[cfg(unix)]
++#[cfg(any(unix, target_os = "wasi"))]
+ fn escape_path_for_python<P: AsRef<Path>>(path: P) -> String {
+-    use std::os::unix::ffi::OsStrExt;
+     format!(
+         r#"__import__("os").fsdecode(b"{}")"#,
+-        path.as_ref().as_os_str().as_bytes().escape_ascii()
++        path.as_ref().as_os_str().as_encoded_bytes().escape_ascii()
+     )
+ }
+ 
+--- a/crates/uv-fs/src/which.rs
++++ b/crates/uv-fs/src/which.rs
+@@ -46,7 +46,7 @@
+         }
+     }
+ 
+-    #[cfg(not(target_os = "windows"))]
++    #[cfg(unix)]
+     {
+         use std::os::unix::fs::PermissionsExt;
+ 
+--- a/crates/uv-build-backend/src/wheel.rs
++++ b/crates/uv-build-backend/src/wheel.rs
+@@ -918,7 +918,9 @@
+             metadata.permissions().mode() & 0o111 != 0
+         };
+         // Windows has no executable bit
+-        #[cfg(not(unix))]
++        #[cfg(target_os = "wasi")]
++        let executable_bit = uv_fs::host_mode(file)? & 0o111 != 0;
++        #[cfg(not(any(unix, target_os = "wasi")))]
+         let executable_bit = false;
+         let mode = if executable_bit {
+             Self::EXECUTABLE_FILE_MODE
+--- a/crates/uv-build-backend/src/source_dist.rs
++++ b/crates/uv-build-backend/src/source_dist.rs
+@@ -500,7 +500,9 @@
+         #[cfg(unix)]
+         let executable_bit = metadata.permissions().mode() & 0o111 != 0;
+         // Windows has no executable bit
+-        #[cfg(not(unix))]
++        #[cfg(target_os = "wasi")]
++        let executable_bit = uv_fs::host_mode(file)? & 0o111 != 0;
++        #[cfg(not(any(unix, target_os = "wasi")))]
+         let executable_bit = false;
+ 
+         header.set_mode(if executable_bit { 0o755 } else { 0o644 });
+@@ -553,7 +555,9 @@
+         #[cfg(unix)]
+         let executable_bit = metadata.permissions().mode() & 0o111 != 0;
+         // Windows has no executable bit
+-        #[cfg(not(unix))]
++        #[cfg(target_os = "wasi")]
++        let executable_bit = uv_fs::host_mode(file)? & 0o111 != 0;
++        #[cfg(not(any(unix, target_os = "wasi")))]
+         let executable_bit = false;
+ 
+         let reader = BufReader::new(File::open(file)?);
+--- a/crates/uv-build/src/main.rs
++++ b/crates/uv-build/src/main.rs
+@@ -16,6 +16,16 @@
+ 
+ /// Entrypoint for the `uv-build` Python package.
+ fn main() -> Result<()> {
++    #[cfg(target_os = "wasi")]
++    if let Some(directory) = env::var_os("UV_BUILD_SLIM_CWD") {
++        env::set_current_dir(directory)?;
++    }
++
++    let backend_version =
++        env::var("UV_BUILD_SLIM_VERSION").unwrap_or_else(|_| uv_version::version().to_owned());
++    let source_tree = env::var_os("UV_BUILD_SLIM_SOURCE_TREE")
++        .map(PathBuf::from)
++        .map_or_else(env::current_dir, Ok)?;
+     // Support configuring the log level with `RUST_LOG` (shows only the error level by default) and
+     // color.
+     //
+@@ -72,9 +82,9 @@
+         "build-sdist" => {
+             let sdist_directory = PathBuf::from(args.next().context("Missing sdist directory")?);
+             let filename = uv_build_backend::build_source_dist(
+-                &env::current_dir()?,
++                &source_tree,
+                 &sdist_directory,
+-                uv_version::version(),
++                &backend_version,
+                 false,
+                 TarBackend::from_env(),
+             )?;
+@@ -85,10 +95,10 @@
+             let wheel_directory = PathBuf::from(args.next().context("Missing wheel directory")?);
+             let metadata_directory = args.next().map(PathBuf::from);
+             let filename = uv_build_backend::build_wheel(
+-                &env::current_dir()?,
++                &source_tree,
+                 &wheel_directory,
+                 metadata_directory.as_deref(),
+-                uv_version::version(),
++                &backend_version,
+                 false,
+             )?;
+             // Tell the build frontend about the name of the artifact we built
+@@ -98,10 +108,10 @@
+             let wheel_directory = PathBuf::from(args.next().context("Missing wheel directory")?);
+             let metadata_directory = args.next().map(PathBuf::from);
+             let filename = uv_build_backend::build_editable(
+-                &env::current_dir()?,
++                &source_tree,
+                 &wheel_directory,
+                 metadata_directory.as_deref(),
+-                uv_version::version(),
++                &backend_version,
+                 false,
+             )?;
+             // Tell the build frontend about the name of the artifact we built
+@@ -109,21 +119,15 @@
+         }
+         "prepare-metadata-for-build-wheel" => {
+             let wheel_directory = PathBuf::from(args.next().context("Missing wheel directory")?);
+-            let filename = uv_build_backend::metadata(
+-                &env::current_dir()?,
+-                &wheel_directory,
+-                uv_version::version(),
+-            )?;
++            let filename =
++                uv_build_backend::metadata(&source_tree, &wheel_directory, &backend_version)?;
+             // Tell the build frontend about the name of the artifact we built
+             writeln!(&mut std::io::stdout(), "{filename}").context("stdout is closed")?;
+         }
+         "prepare-metadata-for-build-editable" => {
+             let wheel_directory = PathBuf::from(args.next().context("Missing wheel directory")?);
+-            let filename = uv_build_backend::metadata(
+-                &env::current_dir()?,
+-                &wheel_directory,
+-                uv_version::version(),
+-            )?;
++            let filename =
++                uv_build_backend::metadata(&source_tree, &wheel_directory, &backend_version)?;
+             // Tell the build frontend about the name of the artifact we built
+             writeln!(&mut std::io::stdout(), "{filename}").context("stdout is closed")?;
+         }

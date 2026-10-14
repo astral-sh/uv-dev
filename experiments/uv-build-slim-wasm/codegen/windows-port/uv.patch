@@ -1,0 +1,11 @@
+--- a/crates/uv-windows/src/exception.rs
++++ b/crates/uv-windows/src/exception.rs
+@@ -149,7 +149,7 @@
+     Ok(())
+ }
+ 
+-#[cfg(target_arch = "x86_64")]
++#[cfg(any(target_arch = "x86_64", target_arch = "wasm64"))]
+ fn dump_regs(e: &mut ExceptionSafeStderr, c: &CONTEXT) -> std::fmt::Result {
+     let CONTEXT {
+         Rax,

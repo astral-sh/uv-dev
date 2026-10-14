@@ -1,0 +1,2 @@
+vendor/** linguist-vendored=true
+src/**/_generated.py -whitespace linguist-generated=true

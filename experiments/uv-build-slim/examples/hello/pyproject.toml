@@ -1,0 +1,9 @@
+[project]
+name = "hello-slim"
+version = "1.0.0"
+description = "A minimal package built with generated Python"
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["uv-build-slim==0.1.0"]
+build-backend = "uv_build_slim"

@@ -1,0 +1,28 @@
+[project]
+name = "uv-build-slim-wasm"
+version = "0.1.0"
+description = "Experimental Python backend generated from the complete uv-build Rust program"
+requires-python = ">=3.8"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE", "LICENSE-PYWASM", "LICENSES/**"]
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+backend-path = ["src"]
+
+[tool.uv.build-backend]
+module-name = ["uv_build", "uv_build_slim_wasm"]
+source-include = ["codegen/**", "tests/**", "tools/**", "rust-toolchain.toml", "*.json"]
+source-exclude = ["dist/**", "__pycache__/**"]
+
+[tool.ruff]
+target-version = "py38"
+extend-exclude = ["src/uv_build_slim_wasm/_wasi_impl.py"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["E402"]

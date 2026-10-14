@@ -1,0 +1,8 @@
+# Keep vendored notices byte-for-byte and mark generated payloads for review.
+LICENSES/** -text -whitespace linguist-vendored=true
+codegen/**/*.patch -whitespace
+codegen/*.patch -whitespace
+src/**/_code.bin binary linguist-generated=true
+src/**/_data.bin binary linguist-generated=true
+src/**/_program.json linguist-generated=true
+src/**/_wasi_impl.py linguist-generated=true

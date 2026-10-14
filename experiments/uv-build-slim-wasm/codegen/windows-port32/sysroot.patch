@@ -1,0 +1,267 @@
+--- a/backtrace/src/backtrace/mod.rs
++++ b/backtrace/src/backtrace/mod.rs
+@@ -186,7 +186,7 @@
+         mod libunwind;
+         use self::libunwind::trace as trace_imp;
+         pub(crate) use self::libunwind::Frame as FrameImp;
+-    } else if #[cfg(all(windows, not(target_vendor = "uwp")))] {
++    } else if #[cfg(all(windows, not(target_vendor = "uwp"), not(target_arch = "wasm32")))] {
+         cfg_if::cfg_if! {
+             if #[cfg(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "arm64ec"))] {
+                 mod win64;
+--- a/backtrace/src/windows_sys.rs
++++ b/backtrace/src/windows_sys.rs
+@@ -216,7 +216,7 @@
+     pub Xmm15: M128A,
+ }
+ #[repr(C)]
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ #[derive(Clone, Copy)]
+ pub struct CONTEXT {
+     pub ContextFlags: CONTEXT_FLAGS,
+@@ -291,7 +291,7 @@
+     pub Cr0NpxState: u32,
+ }
+ #[repr(C)]
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ #[derive(Clone, Copy)]
+ pub struct FLOATING_SAVE_AREA {
+     pub ControlWord: u32,
+@@ -460,7 +460,7 @@
+     pub R15: *mut u64,
+ }
+ #[repr(C)]
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ #[derive(Clone, Copy)]
+ pub struct KNONVOLATILE_CONTEXT_POINTERS {
+     pub Dummy: u32,
+@@ -643,7 +643,7 @@
+     pub Reserved4: [u8; 96],
+ }
+ #[repr(C)]
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ #[derive(Clone, Copy)]
+ pub struct XSAVE_FORMAT {
+     pub ControlWord: u16,
+--- a/compiler-builtins/compiler-builtins/src/float/cmp.rs
++++ b/compiler-builtins/compiler-builtins/src/float/cmp.rs
+@@ -13,7 +13,7 @@
+ // [1]: https://github.com/llvm/llvm-project/blob/0cf3c437c18ed27d9663d87804a9a15ff6874af2/compiler-rt/lib/builtins/fp_compare_impl.inc#L11-L27
+ // [2]: https://gcc.gnu.org/onlinedocs/gccint/Soft-float-library-routines.html#Comparison-functions-1
+ cfg_if! {
+-    if #[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", target_family = "wasm"))] {
++    if #[cfg(any(target_arch = "aarch64", target_arch = "arm64ec", any(target_family = "wasm", target_arch = "wasm32")))] {
+         // Aarch64 uses `int` rather than a pointer-sized value.
+         // `getCmpLibcallReturnType` for WASM is always set to i32.
+         pub type CmpResult = i32;
+--- a/std/src/sys/pal/windows/c/windows_sys.rs
++++ b/std/src/sys/pal/windows/c/windows_sys.rs
+@@ -242,7 +242,7 @@
+     pub dwControlKeyState: u32,
+ }
+ #[repr(C)]
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ #[derive(Clone, Copy)]
+ pub struct CONTEXT {
+     pub ContextFlags: CONTEXT_FLAGS,
+@@ -271,7 +271,7 @@
+     pub SegSs: u32,
+     pub ExtendedRegisters: [u8; 512],
+ }
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ impl Default for CONTEXT {
+     fn default() -> Self {
+         unsafe { core::mem::zeroed() }
+@@ -2661,7 +2661,7 @@
+ pub type FIND_FIRST_EX_FLAGS = u32;
+ pub const FIONBIO: i32 = -2147195266i32;
+ #[repr(C)]
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ #[derive(Clone, Copy)]
+ pub struct FLOATING_SAVE_AREA {
+     pub ControlWord: u32,
+@@ -2674,7 +2674,7 @@
+     pub RegisterArea: [u8; 80],
+     pub Spare0: u32,
+ }
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ impl Default for FLOATING_SAVE_AREA {
+     fn default() -> Self {
+         unsafe { core::mem::zeroed() }
+@@ -3456,7 +3456,7 @@
+     }
+ }
+ #[repr(C)]
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ #[derive(Clone, Copy)]
+ pub struct WSADATA {
+     pub wVersion: u16,
+@@ -3467,7 +3467,7 @@
+     pub iMaxUdpDg: u16,
+     pub lpVendorInfo: PSTR,
+ }
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ impl Default for WSADATA {
+     fn default() -> Self {
+         unsafe { core::mem::zeroed() }
+@@ -3634,7 +3634,7 @@
+ pub const WSA_WAIT_EVENT_0: WSA_ERROR = 0i32;
+ pub const WSA_WAIT_IO_COMPLETION: WSA_ERROR = 192i32;
+ #[repr(C)]
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ #[derive(Clone, Copy)]
+ pub struct XSAVE_FORMAT {
+     pub ControlWord: u16,
+@@ -3654,7 +3654,7 @@
+     pub XmmRegisters: [M128A; 8],
+     pub Reserved4: [u8; 224],
+ }
+-#[cfg(target_arch = "x86")]
++#[cfg(any(target_arch = "x86", target_arch = "wasm32"))]
+ impl Default for XSAVE_FORMAT {
+     fn default() -> Self {
+         unsafe { core::mem::zeroed() }
+--- a/std/src/sys/pal/windows/c.rs
++++ b/std/src/sys/pal/windows/c.rs
+@@ -100,11 +100,7 @@
+ 
+ // Use raw-dylib to import ProcessPrng as we can't rely on there being an import library.
+ #[cfg(not(target_vendor = "win7"))]
+-#[cfg_attr(
+-    target_arch = "x86",
+-    link(name = "bcryptprimitives", kind = "raw-dylib", import_name_type = "undecorated")
+-)]
+-#[cfg_attr(not(target_arch = "x86"), link(name = "bcryptprimitives", kind = "raw-dylib"))]
++#[link(wasm_import_module = "bcryptprimitives.dll")]
+ unsafe extern "system" {
+     pub fn ProcessPrng(pbdata: *mut u8, cbdata: usize) -> BOOL;
+ }
+@@ -159,18 +155,7 @@
+ 
+ #[cfg(not(target_vendor = "win7"))]
+ // Use raw-dylib to import synchronization functions to workaround issues with the older mingw import library.
+-#[cfg_attr(
+-    target_arch = "x86",
+-    link(
+-        name = "api-ms-win-core-synch-l1-2-0",
+-        kind = "raw-dylib",
+-        import_name_type = "undecorated"
+-    )
+-)]
+-#[cfg_attr(
+-    not(target_arch = "x86"),
+-    link(name = "api-ms-win-core-synch-l1-2-0", kind = "raw-dylib")
+-)]
++#[link(wasm_import_module = "api-ms-win-core-synch-l1-2-0.dll")]
+ unsafe extern "system" {
+     pub fn WaitOnAddress(
+         address: *const c_void,
+--- a/std/src/sys/personality/mod.rs
++++ b/std/src/sys/personality/mod.rs
+@@ -14,7 +14,7 @@
+ 
+ #[cfg(not(any(test, doctest)))]
+ cfg_select! {
+-    any(target_env = "msvc", target_family = "wasm") => {
++    any(target_env = "msvc", target_family = "wasm", target_arch = "wasm32") => {
+         // This is required by the compiler to exist (e.g., it's a lang item),
+         // but it's never actually called by the compiler because
+         // __CxxFrameHandler3 (msvc) / __gxx_wasm_personality_v0 (wasm) is the
+--- a/stdarch/crates/core_arch/src/mod.rs
++++ b/stdarch/crates/core_arch/src/mod.rs
+@@ -210,8 +210,8 @@
+     /// Platform-specific intrinsics for the `wasm64` platform.
+     ///
+     /// See the [module documentation](../index.html) for more details.
+-    #[cfg(any(target_arch = "wasm64", doc))]
+-    #[doc(cfg(target_arch = "wasm64"))]
++    #[cfg(any(target_arch = "wasm32", doc))]
++    #[doc(cfg(target_arch = "wasm32"))]
+     #[unstable(feature = "simd_wasm64", issue = "90599")]
+     pub mod wasm64 {
+         #[unstable(feature = "simd_wasm64", issue = "90599")]
+@@ -221,8 +221,8 @@
+     /// Platform-specific intrinsics for the `wasm` target family.
+     ///
+     /// See the [module documentation](../index.html) for more details.
+-    #[cfg(any(target_family = "wasm", doc))]
+-    #[doc(cfg(target_family = "wasm"))]
++    #[cfg(any(any(target_family = "wasm", target_arch = "wasm32"), doc))]
++    #[doc(cfg(any(target_family = "wasm", target_arch = "wasm32")))]
+     #[unstable(feature = "simd_wasm64", issue = "90599")]
+     pub mod wasm {
+         #[unstable(feature = "simd_wasm64", issue = "90599")]
+@@ -357,8 +357,8 @@
+ #[doc(cfg(any(target_arch = "riscv64")))]
+ mod riscv64;
+ 
+-#[cfg(any(target_family = "wasm", doc))]
+-#[doc(cfg(target_family = "wasm"))]
++#[cfg(any(any(target_family = "wasm", target_arch = "wasm32"), doc))]
++#[doc(cfg(any(target_family = "wasm", target_arch = "wasm32")))]
+ mod wasm32;
+ 
+ #[cfg(any(target_arch = "mips", target_arch = "mips64", doc))]
+--- a/unwind/src/types.rs
++++ b/unwind/src/types.rs
+@@ -36,7 +36,7 @@
+     target_arch = "s390x" => 2,
+     any(target_arch = "sparc", target_arch = "sparc64") => 2,
+     any(target_arch = "riscv64", target_arch = "riscv32") => 2,
+-    target_family = "wasm" => 2,
++    any(target_family = "wasm", target_arch = "wasm32") => 2,
+     target_arch = "hexagon" => 5,
+     any(target_arch = "loongarch32", target_arch = "loongarch64") => 2,
+ };
+--- a/windows_link/src/lib.rs
++++ b/windows_link/src/lib.rs
+@@ -9,8 +9,7 @@
+ 
+ pub macro link_raw_dylib {
+     ($library:literal $abi:literal $($link_name:literal)? $(#[$doc:meta])? fn $($function:tt)*) => (
+-        #[cfg_attr(not(target_arch = "x86"), link(name = $library, kind = "raw-dylib", modifiers = "+verbatim"))]
+-        #[cfg_attr(target_arch = "x86", link(name = $library, kind = "raw-dylib", modifiers = "+verbatim", import_name_type = "undecorated"))]
++        #[link(wasm_import_module = $library)]
+         unsafe extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+@@ -24,7 +23,7 @@
+         // have in this repo. So instead we always link kernel32.lib and add the rest of the import
+         // libraries below by using an empty extern block. This works because extern blocks are not
+         // connected to the library given in the #[link] attribute.
+-        #[link(name = "kernel32")]
++        #[link(wasm_import_module = $library)]
+         unsafe extern $abi {
+             $(#[link_name=$link_name])?
+             pub fn $($function)*;
+--- a/compiler-builtins/compiler-builtins/src/lib.rs
++++ b/compiler-builtins/compiler-builtins/src/lib.rs
+@@ -1,5 +1,5 @@
+ #![cfg_attr(feature = "compiler-builtins", compiler_builtins)]
+-#![cfg_attr(all(target_family = "wasm"), feature(wasm_numeric_instr))]
++#![cfg_attr(all(any(target_family = "wasm", target_arch = "wasm32")), feature(wasm_numeric_instr))]
+ #![feature(abi_custom)]
+ #![feature(abi_unadjusted)]
+ #![feature(asm_experimental_arch)]
+--- a/compiler-builtins/libm/src/lib.rs
++++ b/compiler-builtins/libm/src/lib.rs
+@@ -3,7 +3,7 @@
+ #![cfg_attr(intrinsics_enabled, allow(internal_features))]
+ #![cfg_attr(intrinsics_enabled, feature(core_intrinsics))]
+ #![cfg_attr(
+-    all(intrinsics_enabled, target_family = "wasm"),
++    all(intrinsics_enabled, any(target_family = "wasm", target_arch = "wasm32")),
+     feature(wasm_numeric_instr)
+ )]
+ #![cfg_attr(f128_enabled, feature(f128))]

@@ -1,0 +1,118 @@
+{
+  "repository": "https://github.com/astral-sh/uv",
+  "revision": "bd39416351244f273aeff89d495d4b0804b765a5",
+  "version": "0.13.0",
+  "files": [
+    {
+      "path": "normalize.rs",
+      "upstream_path": "crates/uv-normalize/src/lib.rs",
+      "sha256": "6fa285b459925406c0be3eab99d5b183502e78c2c469bb5a993a513a8389a762",
+      "functions": [
+        "normalize",
+        "is_normalized",
+        "validate_and_normalize_ref",
+        "InvalidNameError::fmt"
+      ],
+      "structs": [
+        "InvalidNameError"
+      ]
+    },
+    {
+      "path": "package_name.rs",
+      "upstream_path": "crates/uv-normalize/src/package_name.rs",
+      "sha256": "b8d6e89e21a9b8df3d97cbf8470d57fa3294964c27f58e34343e5e1023330932",
+      "functions": [
+        "PackageName::as_dist_info_name"
+      ],
+      "structs": []
+    },
+    {
+      "path": "metadata23.rs",
+      "upstream_path": "crates/uv-pypi-types/src/metadata/metadata23.rs",
+      "sha256": "1125be6384decd81af1335a07dac97ec78b8b51ef13b55173c59e0e62c24deb2",
+      "functions": [
+        "Metadata23::core_metadata_format",
+        "Keywords::as_metadata",
+        "ProjectUrls::to_vec_str"
+      ],
+      "structs": [
+        "Metadata23",
+        "Keywords",
+        "ProjectUrls"
+      ]
+    },
+    {
+      "path": "metadata.rs",
+      "upstream_path": "crates/uv-build-backend/src/metadata.rs",
+      "sha256": "d265a464dc485d8012fb895e1b723e0863fa2a9cdf5bfe760538c58fb809776d",
+      "functions": [
+        "PyProjectToml::to_entry_points",
+        "PyProjectToml::write_group",
+        "ImportEntry::empty",
+        "ImportEntry::fmt",
+        "parse_import_names",
+        "parse_import_namespaces",
+        "parse_import_entry",
+        "Classifier::from_str",
+        "Classifier::as_str",
+        "PyProjectToml::to_metadata",
+        "PyProjectToml::license_metadata"
+      ],
+      "structs": [
+        "ImportEntry",
+        "Classifier",
+        "Project",
+        "PyProjectToml",
+        "VerbatimPackageName",
+        "BuildSystem",
+        "Tool",
+        "ToolUv"
+      ]
+    },
+    {
+      "path": "settings.rs",
+      "upstream_path": "crates/uv-build-backend/src/settings.rs",
+      "sha256": "e608f3337099d88e00de1141b8401d32304a4ca48d1c97218fc9ca0fd2fa1854",
+      "functions": [
+        "BuildBackendSettings::default"
+      ],
+      "structs": [
+        "BuildBackendSettings",
+        "WheelDataIncludes"
+      ]
+    },
+    {
+      "path": "wheel.rs",
+      "upstream_path": "crates/uv-build-backend/src/wheel.rs",
+      "sha256": "ad2d569ba2edb66861f6d4fcacea2be8126fc43c7665e56135f4cc49b04d447f",
+      "functions": [
+        "WheelInfo::new",
+        "WheelInfo::fmt"
+      ],
+      "structs": [
+        "WheelInfo"
+      ]
+    },
+    {
+      "path": "identifier.rs",
+      "upstream_path": "crates/uv-pypi-types/src/identifier.rs",
+      "sha256": "e391f1e689439dae71bda91ab058ff6c945390be0548f0978f3e528560bb16b5",
+      "functions": [
+        "Identifier::new",
+        "Identifier::from_str",
+        "Identifier::fmt",
+        "Identifier::as_ref"
+      ],
+      "structs": [
+        "Identifier"
+      ]
+    },
+    {
+      "path": "backend.rs",
+      "upstream_path": "crates/uv-build-backend/src/lib.rs",
+      "sha256": "0d8502ea3e642b98a84dcbcd8e8cb41ea01a26b7a2c5dd6420122fb05f827e8c",
+      "functions": [],
+      "structs": []
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "reference": "v22.23.3",
+  "functions": 56,
+  "comparisons": 5021,
+  "memory_address_bits": 64,
+  "equal": true
+}

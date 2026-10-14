@@ -1,0 +1,147 @@
+{
+  "revision": "bd39416351244f273aeff89d495d4b0804b765a5",
+  "required_scope": "Every supported operating system and Python version",
+  "minimum_python": "3.8",
+  "stable_python_minors": [
+    "3.8",
+    "3.9",
+    "3.10",
+    "3.11",
+    "3.12",
+    "3.13",
+    "3.14",
+    "3.15"
+  ],
+  "free_threaded_minors": [
+    "3.13",
+    "3.14",
+    "3.15"
+  ],
+  "python_implementations": "The upstream distribution does not restrict the Python implementation; alternate runtimes need separate evidence.",
+  "targets": [
+    {
+      "target": "x86_64-apple-darwin",
+      "runtime_implementation": "posix",
+      "native_validation": "passed_cpython_3_8_through_3_15_with_adapter_endpoint_regressions",
+      "tier3": false
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "runtime_implementation": "posix",
+      "native_validation": "passed_cpython_3_8_through_3_15_with_adapter_endpoint_regressions",
+      "tier3": false
+    },
+    {
+      "target": "x86_64-pc-windows-msvc",
+      "runtime_implementation": "windows64",
+      "native_validation": "ci_prepared",
+      "tier3": false,
+      "wine_validation": "artifact_comparisons_passed"
+    },
+    {
+      "target": "i686-pc-windows-msvc",
+      "runtime_implementation": "windows32",
+      "native_validation": "ci_prepared",
+      "tier3": true,
+      "wine_validation": "artifact_comparisons_passed"
+    },
+    {
+      "target": "aarch64-pc-windows-msvc",
+      "runtime_implementation": "windows64",
+      "native_validation": "ci_prepared",
+      "tier3": false,
+      "wine_validation": "not_applicable"
+    },
+    {
+      "target": "x86_64-unknown-linux-gnu",
+      "runtime_implementation": "posix",
+      "native_validation": "passed_cpython_3_8_through_3_15_and_free_threaded_3_13_through_3_15",
+      "tier3": false
+    },
+    {
+      "target": "aarch64-unknown-linux-gnu",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "armv7-unknown-linux-gnueabihf",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "i686-unknown-linux-gnu",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "powerpc64le-unknown-linux-gnu",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "riscv64gc-unknown-linux-gnu",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "s390x-unknown-linux-gnu",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "x86_64-unknown-linux-musl",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "aarch64-unknown-linux-musl",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "armv7-unknown-linux-musleabihf",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "i686-unknown-linux-musl",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "riscv64gc-unknown-linux-musl",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "arm-unknown-linux-musleabihf",
+      "runtime_implementation": "posix",
+      "native_validation": "pending",
+      "tier3": false
+    },
+    {
+      "target": "x86_64-unknown-freebsd",
+      "runtime_implementation": "posix",
+      "native_validation": "excluded_from_current_run",
+      "tier3": true
+    }
+  ],
+  "source_files": [
+    "crates/uv-build/pyproject.toml",
+    "docs/reference/policies/platforms.md",
+    ".github/workflows/build-release-binaries.yml"
+  ],
+  "full_parity_established": false,
+  "native_windows_ci": ".github/workflows/uv-build-slim-poc.yml"
+}

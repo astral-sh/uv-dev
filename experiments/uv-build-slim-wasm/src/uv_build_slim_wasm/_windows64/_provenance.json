@@ -1,0 +1,34 @@
+{
+  "uv_revision": "bd39416351244f273aeff89d495d4b0804b765a5",
+  "pywasm_revision": "47abba6c94ecf74c3c173344684891f2ca29c2e3",
+  "rust_toolchain": "1.99.0",
+  "target": "wasm64-pc-windows-gnu",
+  "profile": "dev",
+  "optimization": "z",
+  "wasm_sha256": "a60173e60dbc4e5116d9e20b477f0e4d5ad7b3cb4bf6efd6f0f3a9ef445e913d",
+  "cargo_lock_sha256": "bd8d07ccb6b2f3a09d2036dc842498a4f774a294fe84c6b4d223e14793c57247",
+  "registry_packages": {
+    "getrandom-0.4.3": "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099",
+    "self-replace-1.5.0": "03ec815b5eab420ab893f63393878d89c90fdd94c0bcc44c07abb8ad95552fb7",
+    "windows-0.61.3": "9babd3a767a4c1aef6900409f85f5d53ce2544ccdfaa86dad48c91782c6d6893",
+    "windows-link-0.1.3": "5e6ad25900d524eaabdbbb96d20b4311e1e7ae1699af4fb28c17ae66c80d798a",
+    "windows-link-0.100.0": "9b39de7c7fe78858b0144c50c3fc000bab3be17d5e9b85b1053871693c7f7415",
+    "windows-link-0.2.1": "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5",
+    "windows-sys-0.52.0": "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d",
+    "windows-sys-0.60.2": "f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb",
+    "windows-sys-0.61.2": "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc",
+    "windows-targets-0.52.6": "9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973",
+    "windows-targets-0.53.5": "4945f9f551b88e0d65f3db0bc25c33b8acea4d9e41163edf90dcd0b19f9069f3",
+    "zlib-rs-0.6.3": "3be3d40e40a133f9c916ee3f9f4fa2d9d63435b5fbe1bfc6d9dae0aa0ada1513"
+  },
+  "port_files": {
+    "dependencies.json": "5644798eb2ae897e52c4ea3493626fc08cc7adbdcd515461cf5f36f1b9e7248e",
+    "dependencies.patch": "8bf864ab42e5b9376451f2c0a1126b8b83b1f2d1729d6879360eb16ea8feecc7",
+    "sysroot.patch": "d15d6ecead4599eba1f154b4bca227c440557d7c1c928013f73a9d22ebad87c3",
+    "target.json": "1ff7ed911d90ca76a03153d59368f0064129f07bd38f2c1267fba8f0ee2710b3",
+    "uv.patch": "865b480bb4349301a561ec8953756fca6c811a22da4949d71cf7fc6492e1dd0b"
+  },
+  "generator_sha256": "8f9ea51bc46b4b13b624346d95f8967d4d3b352ab46132f166a9ce1e67e7955b",
+  "build_script_sha256": "820b065203a659c398be79dc7e9d97be11549c34c387d9bdc32fd0053f9d48ad",
+  "full_parity_established": false
+}

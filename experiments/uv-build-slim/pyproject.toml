@@ -1,0 +1,19 @@
+[project]
+name = "uv-build-slim"
+version = "0.1.0"
+description = "Experimental Python build backend generated from selected uv Rust functions"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { file = "LICENSE-MIT" }
+
+[build-system]
+requires = []
+build-backend = "uv_build_slim"
+backend-path = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["src/uv_build_slim/_generated.py", "vendor"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/test_parity.py" = ["E402"]

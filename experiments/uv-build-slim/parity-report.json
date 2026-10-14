@@ -1,0 +1,11 @@
+{
+  "revision": "bd39416351244f273aeff89d495d4b0804b765a5",
+  "tests": 20,
+  "success": true,
+  "cases": {
+    "normalization": 1508,
+    "metadata": 260,
+    "unicode": 3958,
+    "wheels": 10
+  }
+}

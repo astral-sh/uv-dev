@@ -1,0 +1,17 @@
+{
+  "uv_revision": "bd39416351244f273aeff89d495d4b0804b765a5",
+  "uv_version": "0.13.0",
+  "pywasm_revision": "47abba6c94ecf74c3c173344684891f2ca29c2e3",
+  "rust_toolchain": "1.99.0",
+  "target": "wasm32-wasip1",
+  "profile": "dev",
+  "optimization": "z",
+  "lto": "fat",
+  "codegen_units": 1,
+  "wasi_port_sha256": "2845e813fca35168ae93c19c9daebe31de5932916daa332ec9f3ea042743154b",
+  "sysroot_adapter_sha256": "7f3e1d929480b6694035aca0c12fb32782e89c14eafe83a9757be1188e1a41cd",
+  "generator_sha256": "8f9ea51bc46b4b13b624346d95f8967d4d3b352ab46132f166a9ce1e67e7955b",
+  "wasi_adapter_generator_sha256": "465a7970e9fe19d39b6daa50eabc02b64fefa094931f8e51232d3f382785ce0d",
+  "cargo_lock_sha256": "6802e72c671e5399f3c17b1313d4ea06651874f60a8b05678338f9f443ce0f12",
+  "wasm_sha256": "862cbc59017fb8cb1fce7812b07b7630ebec44fdfa3c3d53fd27f899b1fd0d5c"
+}
