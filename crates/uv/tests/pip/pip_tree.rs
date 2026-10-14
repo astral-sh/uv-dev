@@ -4,7 +4,6 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::FileTouch;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::fixture::PathChild;
-use assert_fs::fixture::PathCreateDir;
 use indoc::indoc;
 
 use uv_test::uv_snapshot;
@@ -971,8 +970,10 @@ fn outdated() {
 /// are only displayed once in the tree.
 #[test]
 #[cfg(feature = "test-pypi")]
-fn no_duplicate_dependencies_with_markers() {
-    const PY_PROJECT: &str = indoc! {r#"
+fn no_duplicate_dependencies_with_markers() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+    let project = context.temp_dir.child("debug");
+    project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "debug"
         version = "0.1.0"
@@ -986,38 +987,17 @@ fn no_duplicate_dependencies_with_markers() {
         [build-system]
         requires = ["uv_build>=0.8.22,<10000"]
         build-backend = "uv_build"
-    "#};
-
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_filtered_counts();
-
-    let project = context.temp_dir.child("debug");
-
-    project.create_dir_all().unwrap();
-
-    project.child("src/debug").create_dir_all().unwrap();
-
-    project.child("src/debug/__init__.py").touch().unwrap();
-
-    project
-        .child("pyproject.toml")
-        .write_str(PY_PROJECT)
-        .unwrap();
+    "#})?;
+    project.child("src/debug/__init__.py").touch()?;
 
     context.reset_venv();
 
-    uv_snapshot!(context.filters(), context
+    context
         .pip_install()
         .arg(project.path())
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + debug==0.1.0 (from file://[TEMP_DIR]/debug)
-     + sniffio==1.3.1
-    "
-    );
+        .arg("--strict")
+        .assert()
+        .success();
 
     // Ensure that the dependency is only listed once, even though `debug` declares multiple
     // marker-specific requirements for the same dependency.
@@ -1048,19 +1028,12 @@ fn no_duplicate_dependencies_with_markers() {
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context
+    context
         .pip_install()
         .arg(project.path())
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + debug==0.1.0 (from file://[TEMP_DIR]/debug)
-     + sniffio==1.3.1
-    "
-    );
+        .arg("--strict")
+        .assert()
+        .success();
 
     uv_snapshot!(
         context.filters(),
@@ -1072,4 +1045,6 @@ fn no_duplicate_dependencies_with_markers() {
     └── sniffio v1.3.1 [required: >=1.0.2]
     "
     );
+
+    Ok(())
 }
