@@ -18483,7 +18483,7 @@ async fn sync_malware_check_keyring_auth() -> Result<()> {
     Ok(())
 }
 
-/// Ensure that the malware check only reports `MAL-` prefixed IDs and skips others.
+/// Only `MAL-` advisories are reported or block synchronization.
 #[tokio::test]
 async fn sync_malware_check_skips_non_mal() {
     let context = uv_test::test_context!("3.12");
@@ -18506,6 +18506,15 @@ async fn sync_malware_check_skips_non_mal() {
     context.lock().assert().success();
 
     let server = MockServer::start().await;
+    let sync = || {
+        let mut command = context.sync();
+        command
+            .arg("--preview-features")
+            .arg("malware-check")
+            .env(EnvVars::UV_MALWARE_CHECK, "1")
+            .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri());
+        command
+    };
 
     // Return both a MAL- and a non-MAL vulnerability.
     Mock::given(method("POST"))
@@ -18520,17 +18529,33 @@ async fn sync_malware_check_skips_non_mal() {
         .await;
 
     // The error should only mention the MAL- advisory.
-    uv_snapshot!(context.filters(), context
-        .sync()
-        .arg("--preview-features").arg("malware-check")
-        .env(EnvVars::UV_MALWARE_CHECK, "1")
-        .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri()), @"
+    uv_snapshot!(context.filters(), sync(), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     warning: Malware detected in locked dependencies:
       - `iniconfig==2.0.0`: MAL-2026-5678 (https://osv.dev/vulnerability/MAL-2026-5678)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
+    ");
+    context.assert_not_installed("iniconfig");
+
+    server.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": [{"id": "GHSA-xxxx-yyyy"}]}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), sync(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
     ");
 }
 
