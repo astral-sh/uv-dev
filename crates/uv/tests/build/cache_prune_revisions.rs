@@ -114,7 +114,7 @@ fn prune_stale_revision() -> Result<()> {
     assert_ne!(sole_project_revision(&context)?, stale_revision);
     assert_path_missing(stale_revision);
 
-    // Uninstall and reinstall the package. We should use the cached version.
+    // Reinstall the project after pruning.
     uv_snapshot!(context.filters(), context
         .pip_uninstall()
         .arg("."), @"
@@ -208,7 +208,7 @@ fn prune_stale_revision_content_addressed_cache() -> Result<()> {
     assert_path_missing(stale_revision);
     assert_eq!(context.cache_files(CacheBucket::Archive)?, archive_files);
 
-    // Uninstall and reinstall the package. We should use the cached version.
+    // Reinstall the project after pruning.
     uv_snapshot!(context.filters(), context
         .pip_uninstall()
         .arg("."), @"
