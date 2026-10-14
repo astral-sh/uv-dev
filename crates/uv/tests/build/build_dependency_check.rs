@@ -78,9 +78,7 @@ fn build_dependency_check_bundled_backend() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn build_dependency_check_preview_and_skip_dependency_check() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+fn project_with_forbidden_dependency_hook(context: &TestContext) -> Result<ChildPath> {
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -108,7 +106,13 @@ fn build_dependency_check_preview_and_skip_dependency_check() -> Result<()> {
         def get_requires_for_build_wheel(config_settings=None):
             raise RuntimeError("dependency hook must not be called")
     "#})?;
-    // Dependency checks require the preview feature.
+    Ok(project)
+}
+
+#[test]
+fn build_dependency_check_disabled_without_preview() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = project_with_forbidden_dependency_hook(&context)?;
     uv_snapshot!(context.filters(), context.build().args(["--wheel", "--no-build-isolation", "--offline"])
         .current_dir(&project), @"
     exit_code: 0 (success)
@@ -116,7 +120,16 @@ fn build_dependency_check_preview_and_skip_dependency_check() -> Result<()> {
     Building wheel...
     Successfully built dist/project-0.1.0-py3-none-any.whl
     ");
-    // Skip static and dynamic checks even when the preview is enabled.
+    project
+        .child("dist/project-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    Ok(())
+}
+
+#[test]
+fn build_dependency_check_skipped_with_preview() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = project_with_forbidden_dependency_hook(&context)?;
     uv_snapshot!(context.filters(), context.build().args([
         "--preview-features", "build-dependency-check", "--no-build-isolation",
     ]).args(["--wheel", "--offline", "--skip-dependency-check"])
@@ -126,6 +139,9 @@ fn build_dependency_check_preview_and_skip_dependency_check() -> Result<()> {
     Building wheel...
     Successfully built dist/project-0.1.0-py3-none-any.whl
     ");
+    project
+        .child("dist/project-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
     Ok(())
 }
 
