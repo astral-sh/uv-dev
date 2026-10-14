@@ -220,26 +220,24 @@ fn create_junction(target: &Path, path: &Path) -> std::io::Result<()> {
 
     let create_result = junction::create(target, path);
 
-    match path.metadata() {
-        Ok(_) if create_result.is_ok() => Ok(()),
-        Ok(_) => {
+    match (create_result, path.metadata()) {
+        (Ok(()), Ok(_)) => Ok(()),
+        (Err(create_err), Ok(_)) => {
             // Creation failed but left behind an empty directory. Only clean
             // it up if the directory wasn't already there before we tried.
-            if let Err(ref create_err) = create_result {
-                if !matches!(
-                    create_err
-                        .raw_os_error()
-                        .map(|err| WIN32_ERROR(err.cast_unsigned())),
-                    Some(ERROR_ALREADY_EXISTS)
-                ) {
-                    // Not a junction (metadata succeeded normally), just
-                    // an empty directory left behind by junction::create.
-                    let _ = fs_err::remove_dir(path);
-                }
+            if !matches!(
+                create_err
+                    .raw_os_error()
+                    .map(|err| WIN32_ERROR(err.cast_unsigned())),
+                Some(ERROR_ALREADY_EXISTS)
+            ) {
+                // Not a junction (metadata succeeded normally), just
+                // an empty directory left behind by junction::create.
+                let _ = fs_err::remove_dir(path);
             }
-            create_result
+            Err(create_err)
         }
-        Err(err)
+        (create_result, Err(err)) => {
             if matches!(
                 err.raw_os_error()
                     .map(|err| WIN32_ERROR(err.cast_unsigned())),
@@ -249,13 +247,12 @@ fn create_junction(target: &Path, path: &Path) -> std::io::Result<()> {
                         | ERROR_NOT_A_REPARSE_POINT
                         | ERROR_INVALID_REPARSE_DATA
                 )
-            ) =>
-        {
-            // Broken reparse point.
-            let _ = fs_err::remove_dir(path);
+            ) {
+                // Broken reparse point.
+                let _ = fs_err::remove_dir(path);
+            }
             Err(create_result.err().unwrap_or(err))
         }
-        Err(err) => Err(create_result.err().unwrap_or(err)),
     }
 }
 
