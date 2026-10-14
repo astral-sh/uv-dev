@@ -1,6 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use async_compression::tokio::bufread::{GzipDecoder, ZstdDecoder};
 use async_zip::base::read::cd::{CentralDirectoryEntry, Entry};
 use async_zip::error::ZipError;
 use futures::executor::block_on;
@@ -816,48 +817,15 @@ async fn untar_in<R: tokio::io::AsyncRead + Unpin>(
     }
 }
 
-/// Unpack a `.tar.gz` archive into the target directory, without requiring `Seek`.
-///
-/// This is useful for unpacking files as they're being downloaded.
-///
-/// Returns the list of unpacked files and their sizes.
-async fn untar_gz<R: tokio::io::AsyncRead + Unpin>(
+/// Buffer, decode, and unpack a tar archive without requiring `Seek`.
+async fn untar<R: AsyncRead + Unpin, D: AsyncRead + Unpin>(
     reader: R,
-    target: impl AsRef<Path>,
+    target: &Path,
     tar_backend: TarBackend,
+    decode: impl FnOnce(tokio::io::BufReader<R>) -> D,
 ) -> Result<Vec<UnhashedFile>, Error> {
     let reader = tokio::io::BufReader::with_capacity(DEFAULT_BUF_SIZE, reader);
-    let decompressed_bytes = async_compression::tokio::bufread::GzipDecoder::new(reader);
-    untar_in(decompressed_bytes, target.as_ref(), tar_backend).await
-}
-
-/// Unpack a `.tar.zst` archive into the target directory, without requiring `Seek`.
-///
-/// This is useful for unpacking files as they're being downloaded.
-///
-/// Returns the list of unpacked files and their sizes.
-async fn untar_zst<R: tokio::io::AsyncRead + Unpin>(
-    reader: R,
-    target: impl AsRef<Path>,
-    tar_backend: TarBackend,
-) -> Result<Vec<UnhashedFile>, Error> {
-    let reader = tokio::io::BufReader::with_capacity(DEFAULT_BUF_SIZE, reader);
-    let decompressed_bytes = async_compression::tokio::bufread::ZstdDecoder::new(reader);
-    untar_in(decompressed_bytes, target.as_ref(), tar_backend).await
-}
-
-/// Unpack a `.tar` archive into the target directory, without requiring `Seek`.
-///
-/// This is useful for unpacking files as they're being downloaded.
-///
-/// Returns the list of unpacked files and their sizes.
-async fn untar<R: tokio::io::AsyncRead + Unpin>(
-    reader: R,
-    target: impl AsRef<Path>,
-    tar_backend: TarBackend,
-) -> Result<Vec<UnhashedFile>, Error> {
-    let reader = tokio::io::BufReader::with_capacity(DEFAULT_BUF_SIZE, reader);
-    untar_in(reader, target.as_ref(), tar_backend).await
+    untar_in(decode(reader), target, tar_backend).await
 }
 
 /// Unpack a `.zip`, `.tar.gz`, or `.tar.zst` archive into the target directory,
@@ -877,12 +845,14 @@ pub async fn archive(
             return unzip(reader, target).await;
         }
         SourceDistExtension::Legacy(LegacySourceDistExtension::Tar) => {
-            untar(reader, target.path(), tar_backend).await
+            untar(reader, target.path(), tar_backend, |reader| reader).await
         }
         SourceDistExtension::Legacy(LegacySourceDistExtension::Tgz)
-        | SourceDistExtension::TarGz => untar_gz(reader, target.path(), tar_backend).await,
+        | SourceDistExtension::TarGz => {
+            untar(reader, target.path(), tar_backend, GzipDecoder::new).await
+        }
         SourceDistExtension::Legacy(LegacySourceDistExtension::TarZst) => {
-            untar_zst(reader, target.path(), tar_backend).await
+            untar(reader, target.path(), tar_backend, ZstdDecoder::new).await
         }
         SourceDistExtension::Legacy(_) => Err(Error::UnsupportedCompression),
     }?;
