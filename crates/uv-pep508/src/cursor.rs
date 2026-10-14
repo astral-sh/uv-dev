@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 use std::str::Chars;
 
-use crate::{Pep508Error, Pep508ErrorSource, Pep508Url};
+use crate::marker::parse::MarkerParseError;
 
 /// A [`Cursor`] over a string.
 #[derive(Debug, Clone)]
@@ -107,25 +107,21 @@ impl<'a> Cursor<'a> {
     }
 
     /// Consumes characters from the cursor, raising an error if it doesn't match the given token.
-    pub(crate) fn next_expect_char<T: Pep508Url>(
+    pub(crate) fn next_expect_char(
         &mut self,
         expected: char,
         span_start: usize,
-    ) -> Result<(), Pep508Error<T>> {
+    ) -> Result<(), MarkerParseError> {
         match self.next() {
-            None => Err(Pep508Error {
-                message: Pep508ErrorSource::String(format!(
-                    "Expected '{expected}', found end of dependency specification"
-                )),
+            None => Err(MarkerParseError {
+                message: format!("Expected '{expected}', found end of dependency specification"),
                 start: span_start,
                 len: 1,
                 input: self.to_string(),
             }),
             Some((_, value)) if value == expected => Ok(()),
-            Some((pos, other)) => Err(Pep508Error {
-                message: Pep508ErrorSource::String(format!(
-                    "Expected `{expected}`, found `{other}`"
-                )),
+            Some((pos, other)) => Err(MarkerParseError {
+                message: format!("Expected `{expected}`, found `{other}`"),
                 start: pos,
                 len: other.len_utf8(),
                 input: self.to_string(),

@@ -761,7 +761,7 @@ impl FromStr for MarkerTree {
     type Err = Pep508Error;
 
     fn from_str(markers: &str) -> Result<Self, Self::Err> {
-        parse::parse_markers(markers, &mut TracingReporter)
+        parse::parse_markers(markers, &mut TracingReporter).map_err(Into::into)
     }
 }
 
