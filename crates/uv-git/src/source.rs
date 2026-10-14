@@ -72,6 +72,47 @@ impl GitSource {
         })
     }
 
+    /// Open or update the Git database and resolve the requested revision.
+    fn fetch_database(
+        &self,
+        remote: GitRemote,
+        db_path: &Path,
+        lfs_requested: bool,
+    ) -> Result<(GitDatabase, GitOid, Option<usize>)> {
+        let maybe_db = match remote.db_at(db_path) {
+            Ok(db) => {
+                if let Some(revision) = self.cached_revision(&db, lfs_requested) {
+                    debug!("Using existing Git source `{}`", self.git.url());
+                    return Ok((
+                        db.with_lfs_ready(lfs_requested.then_some(true)),
+                        revision,
+                        None,
+                    ));
+                }
+                Some(db)
+            }
+            Err(_) => None,
+        };
+
+        // Updating the database checks offline mode, including when a locked revision is
+        // missing from the local database.
+        debug!("Updating Git source `{}`", self.git.url());
+        let task = self.reporter.as_ref().map(|reporter| {
+            reporter.on_checkout_start(remote.url(), self.git.reference().as_rev())
+        });
+        let (db, actual_rev) = remote.checkout(
+            db_path,
+            maybe_db,
+            self.git.reference(),
+            self.git.precise(),
+            self.disable_ssl,
+            self.offline,
+            lfs_requested,
+        )?;
+
+        Ok((db, actual_rev, task))
+    }
+
     /// Fetch the underlying Git repository at the given revision.
     #[instrument(skip(self), fields(repository = %self.git.url(), rev = ?self.git.precise()))]
     pub(crate) fn fetch(self) -> Result<Fetch> {
@@ -88,45 +129,7 @@ impl GitSource {
             None => url,
         });
 
-        // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes
-        // it easier to short-circuit this in the cases where we do have the commit.
-        let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {
-            let maybe_db = match remote.db_at(&db_path) {
-                Ok(db) => {
-                    if let Some(revision) = self.cached_revision(&db, lfs_requested) {
-                        debug!("Using existing Git source `{}`", self.git.url());
-                        return Ok((
-                            db.with_lfs_ready(lfs_requested.then_some(true)),
-                            revision,
-                            None,
-                        ));
-                    }
-                    Some(db)
-                }
-                Err(_) => None,
-            };
-
-            // Updating the database checks offline mode, including when a locked revision is
-            // missing from the local database.
-            debug!("Updating Git source `{}`", self.git.url());
-
-            // Report the checkout operation to the reporter.
-            let task = self.reporter.as_ref().map(|reporter| {
-                reporter.on_checkout_start(remote.url(), self.git.reference().as_rev())
-            });
-
-            let (db, actual_rev) = remote.checkout(
-                &db_path,
-                maybe_db,
-                self.git.reference(),
-                self.git.precise(),
-                self.disable_ssl,
-                self.offline,
-                lfs_requested,
-            )?;
-
-            Ok((db, actual_rev, task))
-        }()?;
+        let (db, actual_rev, maybe_task) = self.fetch_database(remote, &db_path, lfs_requested)?;
 
         // Validate the resolved commit before checking out its contents.
         let git = self.git.with_precise(actual_rev)?;
