@@ -59,12 +59,12 @@ impl<'lock> From<&'lock ExportTarget> for LockTarget<'lock> {
 }
 
 /// An export reads an existing workspace lock or resolves a project or script manifest.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum ExportSource<'a> {
     Manifest(&'a ExportTarget),
     Lockfile {
         workspace: &'a FrozenWorkspace,
-        project_name: Option<PackageName>,
+        project_name: Option<&'a PackageName>,
     },
 }
 
@@ -116,7 +116,7 @@ impl ExportBatch {
             entry.output_file = uv_fs::normalize_absolute_path(&std::path::absolute(
                 parent.join(&entry.output_file),
             )?)?;
-            if !outputs.insert(entry.output_file.clone()) {
+            if !outputs.insert(entry.output_file.as_path()) {
                 bail!("Duplicate export output: {}", entry.output_file.display());
             }
             if entry.all_packages && !entry.package.is_empty() {
@@ -255,17 +255,16 @@ pub async fn export(
                     );
                 }
                 frozen_workspace = workspace;
-                let project_name = frozen_workspace.current_project(project_dir).cloned();
                 ExportSource::Lockfile {
                     workspace: &frozen_workspace,
-                    project_name,
+                    project_name: frozen_workspace.current_project(project_dir),
                 }
             }
         }
     };
 
     let resolved_lock;
-    let lock = match &source {
+    let lock = match source {
         ExportSource::Lockfile { workspace, .. } => workspace.lock(),
         ExportSource::Manifest(target) => {
             // Find an interpreter for the project, unless `--frozen` is set.
@@ -327,7 +326,7 @@ pub async fn export(
             };
 
             // Determine the lock mode.
-            let lock_target = LockTarget::from(*target);
+            let lock_target = LockTarget::from(target);
             let mode = LockMode::for_read(lock_target, interpreter.as_ref(), frozen, lock_check);
 
             // Initialize any shared state.
@@ -355,18 +354,19 @@ pub async fn export(
         }
     };
 
-    if let Some(batch) = &batch {
+    if let Some(mut batch) = batch {
         let mut writers = Vec::with_capacity(batch.export.len());
-        for entry in &batch.export {
+        // Each writer borrows its output path until commit, so move selection fields separately.
+        for entry in &mut batch.export {
             let groups = DependencyGroups::from_args(
                 None,
-                entry.group.clone(),
-                entry.no_group.clone(),
+                std::mem::take(&mut entry.group),
+                std::mem::take(&mut entry.no_group),
                 entry.no_default_groups,
-                entry.only_group.clone(),
+                std::mem::take(&mut entry.only_group),
                 entry.all_groups,
             );
-            let groups = match &source {
+            let groups = match source {
                 ExportSource::Manifest(ExportTarget::Project(project)) => {
                     groups.with_defaults(project.default_groups_for_packages(&entry.package)?)
                 }
@@ -375,26 +375,21 @@ pub async fn export(
                     project_name,
                 } => {
                     workspace.validate_packages(&entry.package)?;
-                    resolve_lockfile_groups(
-                        &groups,
-                        workspace,
-                        project_name.as_ref(),
-                        &entry.package,
-                    )
-                    .with_context(|| {
-                        format!(
-                            "Failed to resolve dependency groups for batch export `{}`",
-                            entry.output_file.display()
-                        )
-                    })?
+                    resolve_lockfile_groups(&groups, workspace, project_name, &entry.package)
+                        .with_context(|| {
+                            format!(
+                                "Failed to resolve dependency groups for batch export `{}`",
+                                entry.output_file.display()
+                            )
+                        })?
                 }
                 ExportSource::Manifest(ExportTarget::Script(_)) => {
                     bail!("`--batch` does not support scripts")
                 }
             };
             let extras = ExtrasSpecification::from_args(
-                entry.extra.clone(),
-                entry.no_extra.clone(),
+                std::mem::take(&mut entry.extra),
+                std::mem::take(&mut entry.no_extra),
                 false,
                 vec![],
                 entry.all_extras,
@@ -402,7 +397,7 @@ pub async fn export(
             .with_defaults(DefaultExtras::default());
             writers.push(
                 render_export(
-                    &source,
+                    source,
                     lock,
                     format,
                     entry.all_packages,
@@ -436,7 +431,7 @@ pub async fn export(
         return Ok(ExitStatus::Success);
     }
 
-    let groups = match &source {
+    let groups = match source {
         ExportSource::Manifest(ExportTarget::Project(project)) => {
             groups.with_defaults(project.default_groups()?)
         }
@@ -448,13 +443,13 @@ pub async fn export(
             project_name,
         } => {
             workspace.validate_packages(&package)?;
-            resolve_lockfile_groups(&groups, workspace, project_name.as_ref(), &package)?
+            resolve_lockfile_groups(&groups, workspace, project_name, &package)?
         }
     };
     let extras = extras.with_defaults(DefaultExtras::default());
 
     render_export(
-        &source,
+        source,
         lock,
         format,
         all_packages,
@@ -487,7 +482,7 @@ pub async fn export(
 /// Render one selection from a shared lockfile, deferring its file write until validation completes.
 #[expect(clippy::fn_params_excessive_bools)]
 async fn render_export<'output>(
-    source: &ExportSource<'_>,
+    source: ExportSource<'_>,
     lock: &Lock,
     format: Option<ExportFormat>,
     all_packages: bool,
@@ -525,8 +520,8 @@ async fn render_export<'output>(
             project_name,
         } => InstallTarget::Lockfile {
             root: workspace.root(),
-            project_name: project_name.as_ref(),
-            selection: PackageSelection::from_args(all_packages, package, project_name.as_ref()),
+            project_name,
+            selection: PackageSelection::from_args(all_packages, package, project_name),
             lock,
         },
     };
@@ -553,14 +548,9 @@ async fn render_export<'output>(
     // Write the resolved dependencies to the output channel.
     let mut writer = OutputWriter::new(!quiet || output_file.is_none(), output_file);
 
-    // Determine the output format.
+    // Infer PEP 751 from its recognized filenames; otherwise, use requirements text.
     let format = format.unwrap_or_else(|| {
         if output_file
-            .and_then(Path::extension)
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
-        {
-            ExportFormat::RequirementsTxt
-        } else if output_file
             .and_then(Path::file_name)
             .and_then(OsStr::to_str)
             .is_some_and(is_pylock_toml)
@@ -605,12 +595,7 @@ async fn render_export<'output>(
             )?;
 
             if include_header {
-                writeln!(
-                    writer,
-                    "{}",
-                    "# This file was autogenerated by uv via the following command:".green()
-                )?;
-                writeln!(writer, "{}", format!("#    {}", cmd()).green())?;
+                write_header(&mut writer)?;
             }
 
             let mut wrote_preamble = false;
@@ -623,7 +608,6 @@ async fn render_export<'output>(
                 if let Some(index) = settings.index_locations.default_index() {
                     writeln!(writer, "--index-url {}", index.url().verbatim())?;
                     seen.insert(index.url());
-                    wrote_preamble = true;
                     emitted_explicit_index |= index.explicit;
                 }
                 for index in settings
@@ -633,10 +617,10 @@ async fn render_export<'output>(
                 {
                     if seen.insert(index.url()) {
                         writeln!(writer, "--extra-index-url {}", index.url().verbatim())?;
-                        wrote_preamble = true;
                     }
                     emitted_explicit_index |= index.explicit;
                 }
+                wrote_preamble = !seen.is_empty();
 
                 if emitted_explicit_index {
                     warn_user!(
@@ -688,12 +672,7 @@ async fn render_export<'output>(
             }
 
             if include_header {
-                writeln!(
-                    writer,
-                    "{}",
-                    "# This file was autogenerated by uv via the following command:".green()
-                )?;
-                writeln!(writer, "{}", format!("#    {}", cmd()).green())?;
+                write_header(&mut writer)?;
             }
             write!(writer, "{}", export.to_toml()?)?;
         }
@@ -718,66 +697,39 @@ async fn render_export<'output>(
     Ok(writer)
 }
 
+/// Write the command that generated a `requirements.txt` or `pylock.toml` export.
+fn write_header(writer: &mut OutputWriter<'_>) -> std::io::Result<()> {
+    writeln!(
+        writer,
+        "{}",
+        "# This file was autogenerated by uv via the following command:".green()
+    )?;
+    writeln!(writer, "{}", format!("#    {}", cmd()).green())
+}
+
 /// Format the uv command used to generate the output file.
 fn cmd() -> String {
-    let args = env::args_os()
-        .skip(1)
-        .map(|arg| arg.to_string_lossy().to_string())
-        .scan(None, move |skip_next, arg| {
-            if matches!(skip_next, Some(true)) {
-                // Reset state; skip this iteration.
-                *skip_next = None;
-                return Some(None);
+    let mut skip_next = false;
+    let args = env::args_os().skip(1).filter_map(|arg| {
+        if std::mem::take(&mut skip_next) {
+            return None;
+        }
+        let arg = arg.to_string_lossy();
+        match arg.as_ref() {
+            "--upgrade-package" | "-P" | "--upgrade-group" => {
+                skip_next = true;
+                None
             }
-
-            // Always skip the `--upgrade` flag.
-            if arg == "--upgrade" || arg == "-U" {
-                *skip_next = None;
-                return Some(None);
+            "--upgrade" | "-U" | "--quiet" | "-q" | "--verbose" | "-v" => None,
+            value
+                if value.starts_with("--upgrade-package=")
+                    || value.starts_with("--upgrade-group=")
+                    || value.starts_with("-P") =>
+            {
+                None
             }
-
-            // Always skip the `--upgrade-package` and mark the next item to be skipped
-            if arg == "--upgrade-package" || arg == "-P" {
-                *skip_next = Some(true);
-                return Some(None);
-            }
-
-            // Skip only this argument if option and value are together
-            if arg.starts_with("--upgrade-package=") || arg.starts_with("-P") {
-                // Reset state; skip this iteration.
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--upgrade-group` and mark the next item to be skipped
-            if arg == "--upgrade-group" {
-                *skip_next = Some(true);
-                return Some(None);
-            }
-
-            // Skip only this argument if option and value are together
-            if arg.starts_with("--upgrade-group=") {
-                // Reset state; skip this iteration.
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--quiet` flag.
-            if arg == "--quiet" || arg == "-q" {
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Always skip the `--verbose` flag.
-            if arg == "--verbose" || arg == "-v" {
-                *skip_next = None;
-                return Some(None);
-            }
-
-            // Return the argument.
-            Some(Some(arg))
-        })
-        .flatten()
-        .join(" ");
-    format!("uv {args}")
+            _ => Some(arg.into_owned()),
+        }
+    });
+    format!("uv {}", args.format(" "))
 }

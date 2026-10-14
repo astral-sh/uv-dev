@@ -2,7 +2,8 @@ use std::fmt::Write;
 use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
+use itertools::Itertools;
 use owo_colors::OwoColorize;
 use tracing::debug;
 
@@ -24,7 +25,7 @@ use uv_fs::Simplified;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, PackageName};
-use uv_pep440::{BumpCommand, PrereleaseKind, Version};
+use uv_pep440::Version;
 use uv_preview::Preview;
 use uv_project_edit::{DependencyTarget, Error, PyProjectTomlMut};
 use uv_python_discovery::ConfigDiscovery;
@@ -45,30 +46,14 @@ use crate::edit::{ProjectEdit, PythonTarget};
 
 /// Version information for a project (`uv version`).
 #[derive(serde::Serialize)]
-struct ProjectVersionInfo {
+struct ProjectVersionInfo<'version> {
     /// Name of the package.
-    package_name: Option<String>,
+    package_name: &'version str,
     /// Version, such as "0.5.1".
-    version: String,
+    version: &'version Version,
     /// Always `null` for project versions, kept for backwards compatibility.
     // TODO(zanieb): Remove this field in a breaking release.
     commit_info: Option<()>,
-}
-
-impl ProjectVersionInfo {
-    fn new(package_name: Option<&PackageName>, version: &Version) -> Self {
-        Self {
-            package_name: package_name.map(ToString::to_string),
-            version: version.to_string(),
-            commit_info: None,
-        }
-    }
-}
-
-impl std::fmt::Display for ProjectVersionInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.version)
-    }
 }
 
 /// Read or update project version (`uv version`)
@@ -105,7 +90,7 @@ pub async fn project_version(
     // Read the metadata
     let project = find_target(
         project_dir,
-        package.as_ref(),
+        package,
         explicit_project,
         cache,
         workspace_cache,
@@ -164,107 +149,13 @@ pub async fn project_version(
     let new_version = if let Some(value) = value {
         match Version::from_str(&value) {
             Ok(version) => Some(version),
-            Err(err) => match &*value {
-                "major" | "minor" | "patch" | "alpha" | "beta" | "rc" | "dev" | "post"
-                | "stable" => {
-                    return Err(anyhow!(
-                        "Invalid version `{value}`, did you mean to pass `--bump {value}`?"
-                    ));
-                }
-                _ => {
-                    return Err(err)?;
-                }
-            },
+            Err(_) if VersionBump::from_str(&value).is_ok() => {
+                bail!("Invalid version `{value}`, did you mean to pass `--bump {value}`?");
+            }
+            Err(err) => return Err(err.into()),
         }
     } else if !bump.is_empty() {
-        // While we can rationalize many of these combinations of operations together,
-        // we want to conservatively refuse to support any of them until users demand it.
-        //
-        // The most complex thing we *do* allow is `--bump major --bump beta --bump dev`
-        // because that makes perfect sense and is reasonable to do.
-        let release_components: Vec<_> = bump
-            .iter()
-            .filter(|spec| {
-                matches!(
-                    spec.bump,
-                    VersionBump::Major | VersionBump::Minor | VersionBump::Patch
-                )
-            })
-            .collect();
-        let prerelease_components: Vec<_> = bump
-            .iter()
-            .filter(|spec| {
-                matches!(
-                    spec.bump,
-                    VersionBump::Alpha | VersionBump::Beta | VersionBump::Rc | VersionBump::Dev
-                )
-            })
-            .collect();
-        let post_count = bump
-            .iter()
-            .filter(|spec| spec.bump == VersionBump::Post)
-            .count();
-        let stable_count = bump
-            .iter()
-            .filter(|spec| spec.bump == VersionBump::Stable)
-            .count();
-
-        // Very little reason to do "bump to stable" and then do other things,
-        // even if we can make sense of it.
-        if stable_count > 0 && bump.len() > 1 {
-            let components = bump
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow!(
-                "`--bump stable` cannot be used with another `--bump` value, got: {components}"
-            ));
-        }
-
-        // Very little reason to "bump to post" and then do other things,
-        // how is it a post-release otherwise?
-        if post_count > 0 && bump.len() > 1 {
-            let components = bump
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow!(
-                "`--bump post` cannot be used with another `--bump` value, got: {components}"
-            ));
-        }
-
-        // `--bump major --bump minor` makes perfect sense (1.2.3 => 2.1.0)
-        // ...but it's weird and probably a mistake?
-        // `--bump major --bump major` perfect sense (1.2.3 => 3.0.0)
-        // ...but it's weird and probably a mistake?
-        if release_components.len() > 1 {
-            let components = release_components
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow!(
-                "Only one release version component can be provided to `--bump`, got: {components}"
-            ));
-        }
-
-        // `--bump alpha --bump beta` is basically completely incoherent
-        // `--bump beta --bump beta` makes perfect sense (1.2.3b4 => 1.2.3b6)
-        // ...but it's weird and probably a mistake?
-        // `--bump beta --bump dev` makes perfect sense (1.2.3 => 1.2.3b1.dev1)
-        // ...but we want to discourage mixing `dev` with pre-releases
-        if prerelease_components.len() > 1 {
-            let components = prerelease_components
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow!(
-                "Only one pre-release version component can be provided to `--bump`, got: {components}"
-            ));
-        }
+        validate_bumps(&bump)?;
 
         // Sort the given commands so the user doesn't have to care about
         // the ordering of `--bump minor --bump beta` (only one ordering is ever useful)
@@ -273,52 +164,19 @@ pub async fn project_version(
         // Apply all the bumps
         let mut new_version = old_version.clone();
 
-        for spec in &bump {
-            match spec.bump {
-                VersionBump::Major => new_version.bump(BumpCommand::BumpRelease {
-                    index: 0,
-                    value: spec.value,
-                }),
-                VersionBump::Minor => new_version.bump(BumpCommand::BumpRelease {
-                    index: 1,
-                    value: spec.value,
-                }),
-                VersionBump::Patch => new_version.bump(BumpCommand::BumpRelease {
-                    index: 2,
-                    value: spec.value,
-                }),
-                VersionBump::Stable => new_version.bump(BumpCommand::MakeStable),
-                VersionBump::Alpha => new_version.bump(BumpCommand::BumpPrerelease {
-                    kind: PrereleaseKind::Alpha,
-                    value: spec.value,
-                }),
-                VersionBump::Beta => new_version.bump(BumpCommand::BumpPrerelease {
-                    kind: PrereleaseKind::Beta,
-                    value: spec.value,
-                }),
-                VersionBump::Rc => new_version.bump(BumpCommand::BumpPrerelease {
-                    kind: PrereleaseKind::Rc,
-                    value: spec.value,
-                }),
-                VersionBump::Post => new_version.bump(BumpCommand::BumpPost { value: spec.value }),
-                VersionBump::Dev => new_version.bump(BumpCommand::BumpDev { value: spec.value }),
-            }
+        for spec in bump {
+            new_version.bump(spec.into());
         }
 
         if new_version <= old_version {
-            if old_version.is_stable() && new_version.is_pre() {
-                return Err(anyhow!(
-                    "{old_version} => {new_version} didn't increase the version; when bumping to a pre-release version you also need to increase a release version component, e.g., with `--bump <major|minor|patch>`"
-                ));
-            }
-            if new_version.is_dev() && !old_version.is_dev() {
-                return Err(anyhow!(
-                    "{old_version} => {new_version} didn't increase the version; when bumping to a dev version you also need to increase another version component, e.g., with `--bump <major|minor|patch|alpha|beta|rc>`"
-                ));
-            }
-            return Err(anyhow!(
-                "{old_version} => {new_version} didn't increase the version; provide the exact version to force an update"
-            ));
+            let hint = if old_version.is_stable() && new_version.is_pre() {
+                "when bumping to a pre-release version you also need to increase a release version component, e.g., with `--bump <major|minor|patch>`"
+            } else if new_version.is_dev() && !old_version.is_dev() {
+                "when bumping to a dev version you also need to increase another version component, e.g., with `--bump <major|minor|patch|alpha|beta|rc>`"
+            } else {
+                "provide the exact version to force an update"
+            };
+            bail!("{old_version} => {new_version} didn't increase the version; {hint}");
         }
 
         Some(new_version)
@@ -375,11 +233,59 @@ pub async fn project_version(
     };
 
     // Report the results
-    let old_version = ProjectVersionInfo::new(Some(&name), &old_version);
-    let new_version = new_version.map(|version| ProjectVersionInfo::new(Some(&name), &version));
-    print_version(old_version, new_version, short, output_format, printer)?;
+    print_version(
+        &name,
+        &old_version,
+        new_version.as_ref(),
+        short,
+        output_format,
+        printer,
+    )?;
 
     Ok(status)
+}
+
+/// Reject unsupported combinations of version bump operations.
+fn validate_bumps(bumps: &[VersionBumpSpec]) -> Result<()> {
+    if bumps.len() < 2 {
+        return Ok(());
+    }
+
+    for exclusive in [VersionBump::Stable, VersionBump::Post] {
+        if bumps.iter().any(|spec| spec.bump == exclusive) {
+            bail!(
+                "`--bump {exclusive}` cannot be used with another `--bump` value, got: {}",
+                bumps.iter().format(", ")
+            );
+        }
+    }
+
+    let categories: [(&str, &[VersionBump]); 2] = [
+        (
+            "release",
+            &[VersionBump::Major, VersionBump::Minor, VersionBump::Patch],
+        ),
+        (
+            "pre-release",
+            &[
+                VersionBump::Alpha,
+                VersionBump::Beta,
+                VersionBump::Rc,
+                VersionBump::Dev,
+            ],
+        ),
+    ];
+    for (label, kinds) in categories {
+        let components = bumps.iter().filter(|spec| kinds.contains(&spec.bump));
+        if components.clone().nth(1).is_some() {
+            bail!(
+                "Only one {label} version component can be provided to `--bump`, got: {}",
+                components.format(", ")
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// Add hint to use `uv self version` when workspace discovery fails due to missing pyproject.toml
@@ -397,7 +303,7 @@ fn hint_uv_self_version(err: WorkspaceError, explicit_project: bool) -> ProjectE
 /// Note that `uv version` never needs to support PEP 723 scripts, as those are unversioned.
 async fn find_target(
     project_dir: &Path,
-    package: Option<&PackageName>,
+    package: Option<PackageName>,
     explicit_project: bool,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -409,7 +315,7 @@ async fn find_target(
             &DiscoveryOptions::default(),
             cache,
             workspace_cache,
-            package.clone(),
+            package,
         )
         .await
         .map_err(|err| hint_uv_self_version(err, explicit_project))?
@@ -471,25 +377,13 @@ async fn print_frozen_version(
         .await
         .map_err(UvError::from)?;
 
-    // Try to find the package of interest in the lock
-    let Some(package) = lock
-        .packages()
-        .iter()
-        .find(|package| package.name() == name)
-    else {
-        return Err(anyhow!(
-            "Failed to find the {name}'s version in the frozen lockfile"
-        ));
-    };
-    let Some(version) = package.version() else {
-        return Err(anyhow!(
-            "Failed to find the {name}'s version in the frozen lockfile"
-        ));
-    };
+    let version = lock
+        .packages_for_name(name)
+        .first()
+        .and_then(|package| package.version())
+        .ok_or_else(|| anyhow!("Failed to find the {name}'s version in the frozen lockfile"))?;
 
-    // Finally, print!
-    let old_version = ProjectVersionInfo::new(Some(name), version);
-    print_version(old_version, None, short, output_format, printer)?;
+    print_version(name, version, None, short, output_format, printer)?;
 
     Ok(ExitStatus::Success)
 }
@@ -630,7 +524,7 @@ async fn lock_and_sync(
 
     let state = state.fork();
 
-    match sync_from_lock(
+    sync_from_lock(
         target,
         venv,
         &extras,
@@ -653,27 +547,23 @@ async fn lock_and_sync(
         MalwareCheckContext::from(malware_settings),
     )
     .await
-    {
-        Ok(_) => {}
-        Err(err) => return Err(UvError::from(err).into()),
-    }
+    .map_err(UvError::from)?;
 
     Ok(ExitStatus::Success)
 }
 
 fn print_version(
-    old_version: ProjectVersionInfo,
-    new_version: Option<ProjectVersionInfo>,
+    name: &PackageName,
+    old_version: &Version,
+    new_version: Option<&Version>,
     short: bool,
     output_format: VersionFormat,
     printer: Printer,
 ) -> Result<()> {
     match output_format {
         VersionFormat::Text => {
-            if let Some(name) = &old_version.package_name {
-                if !short {
-                    write!(printer.stdout(), "{name} ")?;
-                }
+            if !short {
+                write!(printer.stdout(), "{name} ")?;
             }
             if let Some(new_version) = new_version {
                 if short {
@@ -691,8 +581,12 @@ fn print_version(
             }
         }
         VersionFormat::Json => {
-            let final_version = new_version.unwrap_or(old_version);
-            let string = serde_json::to_string_pretty(&final_version)?;
+            let version_info = ProjectVersionInfo {
+                package_name: name.as_str(),
+                version: new_version.unwrap_or(old_version),
+                commit_info: None,
+            };
+            let string = serde_json::to_string_pretty(&version_info)?;
             writeln!(printer.stdout_important(), "{string}")?;
         }
     }
