@@ -110,6 +110,9 @@ def probe(root, reference):
         initial, mode = Information(), dword()
         checked(information(console, ctypes.byref(initial)))
         checked(get_mode(console, ctypes.byref(mode)))
+        # Interpret ANSI sequences as a modern terminal does; a newly allocated
+        # legacy screen buffer otherwise displays the escape characters literally.
+        mode.value |= 0x0004  # ENABLE_VIRTUAL_TERMINAL_PROCESSING.
 
         def clear():
             written = dword()

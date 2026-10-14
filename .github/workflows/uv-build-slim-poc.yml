@@ -54,7 +54,7 @@ jobs:
 
   windows-parity:
     name: ${{ matrix.runtime }}
-    needs: native-windows
+    needs: [native-windows, windows-console-control]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     strategy:
@@ -236,3 +236,30 @@ jobs:
           name: upstream-parity-${{ matrix.arch }}
           path: upstream-parity.ndjson
           if-no-files-found: warn
+
+  windows-console-control:
+    name: Native console control
+    needs: native-windows
+    runs-on: namespace-profile-windows-2022-x86-64-16x32
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.15.0"
+          architecture: x64
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: native-x86_64
+          path: native
+      - name: Check the native console fixture before the runtime matrix
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $HOME "code/tmp/uv-build-slim-console"
+          New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+          $env:TMPDIR = $scratch
+          $env:UV_SLIM_REFERENCE = Join-Path $env:GITHUB_WORKSPACE "native/uv-build.exe"
+          python experiments/uv-build-slim-wasm/tests/test_terminal_windows.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
