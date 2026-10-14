@@ -8,24 +8,19 @@ use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 
+use uv_normalize::PackageName;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::{copy_dir_ignore, uv_snapshot};
 
-fn write_wheel(
-    path: &Path,
-    name: &str,
-    dist_info_prefix: &str,
-    files: &[(&str, &str)],
-) -> Result<()> {
-    write_wheel_with_metadata(path, name, "0.1.0", dist_info_prefix, "", files)
+fn write_wheel(path: &Path, name: &str, files: &[(&str, &str)]) -> Result<()> {
+    write_wheel_with_metadata(path, name, "0.1.0", "", files)
 }
 
 fn write_wheel_with_metadata(
     path: &Path,
     name: &str,
     version: &str,
-    dist_info_prefix: &str,
     additional_metadata: &str,
     files: &[(&str, &str)],
 ) -> Result<()> {
@@ -38,6 +33,10 @@ fn write_wheel_with_metadata(
         record.push(format!("{file_path},,"));
     }
 
+    let dist_info_prefix = format!(
+        "{}-{version}",
+        name.parse::<PackageName>()?.as_dist_info_name()
+    );
     let metadata_path = format!("{dist_info_prefix}.dist-info/METADATA");
     let entry = ZipEntryBuilder::new(metadata_path.clone().into(), Compression::Stored);
     let metadata = formatdoc! {"
@@ -685,7 +684,6 @@ fn workspace_metadata_script_exact_sync_removes_extraneous_packages() -> Result<
     write_wheel(
         extraneous.path(),
         "metadata-extra",
-        "metadata_extra-0.1.0",
         &[("extra_module.py", "")],
     )?;
 
@@ -771,12 +769,7 @@ fn workspace_metadata_script_dependency_edges() -> Result<()> {
     let child = context
         .temp_dir
         .child("metadata_edge_child-0.1.0-py3-none-any.whl");
-    write_wheel(
-        child.path(),
-        "metadata-edge-child",
-        "metadata_edge_child-0.1.0",
-        &[],
-    )?;
+    write_wheel(child.path(), "metadata-edge-child", &[])?;
     let child_url = SafeUrl::from_file_path(child.path())
         .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
 
@@ -787,7 +780,6 @@ fn workspace_metadata_script_dependency_edges() -> Result<()> {
         first.path(),
         "metadata-edge",
         "1.0.0",
-        "metadata_edge-1.0.0",
         &formatdoc! {"
             Provides-Extra: feature
             Requires-Dist: metadata-edge-child @ {child_url}; extra == 'feature'
@@ -804,7 +796,6 @@ fn workspace_metadata_script_dependency_edges() -> Result<()> {
         second.path(),
         "metadata-edge",
         "2.0.0",
-        "metadata_edge-2.0.0",
         &formatdoc! {"
             Provides-Extra: feature
             Requires-Dist: metadata-edge-child @ {child_url}; extra == 'feature'
@@ -895,7 +886,7 @@ fn workspace_metadata_dependency_edges_include_parent_reachability() -> Result<(
     let child = context
         .temp_dir
         .child("metadata_child-0.1.0-py3-none-any.whl");
-    write_wheel(child.path(), "metadata-child", "metadata_child-0.1.0", &[])?;
+    write_wheel(child.path(), "metadata-child", &[])?;
     let child_url = SafeUrl::from_file_path(child.path())
         .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
 
@@ -906,7 +897,6 @@ fn workspace_metadata_dependency_edges_include_parent_reachability() -> Result<(
         parent.path(),
         "metadata-parent",
         "0.1.0",
-        "metadata_parent-0.1.0",
         &format!("Requires-Dist: metadata-child @ {child_url}\n"),
         &[],
     )?;
@@ -1167,7 +1157,6 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
     write_wheel(
         required.path(),
         "metadata-required",
-        "metadata_required-0.1.0",
         &[("required_module.py", "")],
     )?;
     let required_url = SafeUrl::from_file_path(required.path())
@@ -1179,7 +1168,6 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
     write_wheel(
         extraneous.path(),
         "metadata-extra",
-        "metadata_extra-0.1.0",
         &[("extra_module.py", "")],
     )?;
 
@@ -1333,7 +1321,6 @@ fn workspace_metadata_includes_existing_environment() -> Result<()> {
     write_wheel(
         installed_owner.path(),
         "installed-owner",
-        "installed_owner-0.1.0",
         &[("installed_module.py", "")],
     )?;
 
@@ -1343,7 +1330,6 @@ fn workspace_metadata_includes_existing_environment() -> Result<()> {
     write_wheel(
         missing_owner.path(),
         "missing-owner",
-        "missing_owner-0.1.0",
         &[("missing_module.py", "")],
     )?;
 
@@ -1501,7 +1487,6 @@ fn workspace_metadata_lockfile_workspace_group_module_owners() -> Result<()> {
     write_wheel(
         wheel.path(),
         "installed-owner",
-        "installed_owner-0.1.0",
         &[("installed_module.py", "")],
     )?;
     let wheel_url = SafeUrl::from_file_path(wheel.path())
@@ -1596,10 +1581,10 @@ fn workspace_metadata_module_owners_from_locked_wheels() -> Result<()> {
         .with_filtered_virtualenv_bin();
 
     let gpu_a = context.temp_dir.child("gpu_a-0.1.0-py3-none-any.whl");
-    write_wheel(gpu_a.path(), "gpu-a", "gpu_a-0.1.0", &[("gpu/a.py", "")])?;
+    write_wheel(gpu_a.path(), "gpu-a", &[("gpu/a.py", "")])?;
 
     let gpu_b = context.temp_dir.child("gpu_b-0.1.0-py3-none-any.whl");
-    write_wheel(gpu_b.path(), "gpu-b", "gpu_b-0.1.0", &[("gpu/b.py", "")])?;
+    write_wheel(gpu_b.path(), "gpu-b", &[("gpu/b.py", "")])?;
 
     let typing_extensions = context
         .temp_dir
@@ -1607,7 +1592,6 @@ fn workspace_metadata_module_owners_from_locked_wheels() -> Result<()> {
     write_wheel(
         typing_extensions.path(),
         "typing-extensions",
-        "typing_extensions-0.1.0",
         &[
             ("typing_extensions.py", ""),
             ("café.py", ""),
@@ -1830,7 +1814,6 @@ fn workspace_metadata_module_owners_use_installed_package_id() -> Result<()> {
     write_wheel(
         module_owner_311.path(),
         "module-owner",
-        "module_owner-0.1.0",
         &[("shared.py", "")],
     )?;
 
@@ -1840,7 +1823,6 @@ fn workspace_metadata_module_owners_use_installed_package_id() -> Result<()> {
     write_wheel(
         module_owner_312.path(),
         "module-owner",
-        "module_owner-0.1.0",
         &[("shared.py", "")],
     )?;
 
@@ -1896,12 +1878,7 @@ fn workspace_metadata_module_owners_include_stale_virtual_package() -> Result<()
     let stale_owner = context
         .temp_dir
         .child("module_owner_root-0.1.0-py3-none-any.whl");
-    write_wheel(
-        stale_owner.path(),
-        "module-owner-root",
-        "module_owner_root-0.1.0",
-        &[("stale.py", "")],
-    )?;
+    write_wheel(stale_owner.path(), "module-owner-root", &[("stale.py", "")])?;
 
     context.temp_dir.child("pyproject.toml").write_str(
         r#"[project]
@@ -2281,7 +2258,7 @@ fn workspace_metadata_module_owners_failure_is_error() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let gpu_a = context.temp_dir.child("gpu_a-0.1.0-py3-none-any.whl");
-    write_wheel(gpu_a.path(), "gpu-a", "gpu_a-0.1.0", &[("gpu/a.py", "")])?;
+    write_wheel(gpu_a.path(), "gpu-a", &[("gpu/a.py", "")])?;
 
     let gpu_a_url = SafeUrl::from_file_path(gpu_a.path())
         .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
