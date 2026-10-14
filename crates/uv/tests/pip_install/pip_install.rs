@@ -308,19 +308,26 @@ fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
     Ok(())
 }
 
-/// Cache entries written by the current uv must remain usable by uv 0.11.1. See astral-sh/uv#20949.
-#[test]
-fn install_wheel_cache_compatible_with_uv_0_11_1() -> Result<()> {
+/// New cache entries must not prevent older uv versions from installing. See astral-sh/uv#20949.
+fn install_wheel_with_older_uv(version: &str) -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
     write_many_files_wheel(&wheel, 1)?;
 
     context.pip_install().arg(&wheel).assert().success();
+    let cached_module = context
+        .cache_files(uv_cache::CacheBucket::Archive)?
+        .into_iter()
+        .find(|path| path.ends_with("large_wheel/module_00000.py"))
+        .ok_or_else(|| anyhow!("newer uv did not cache the wheel module"))?;
+    assert_eq!(fs::read_to_string(cached_module)?, "VALUE = 1\n");
     context.venv().arg("--clear").assert().success();
+    context.assert_not_installed("large_wheel");
 
-    uv_snapshot!(context.filters(), context.tool_run()
+    context
+        .tool_run()
         .arg("--from")
-        .arg("uv==0.11.1")
+        .arg(format!("uv=={version}"))
         .arg("uv")
         .arg("pip")
         .arg("install")
@@ -330,58 +337,24 @@ fn install_wheel_cache_compatible_with_uv_0_11_1() -> Result<()> {
         .arg("--cache-dir")
         .arg(context.cache_dir.path())
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .env_remove(EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv==0.11.1
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + large-wheel==1.0.0 (from file://[TEMP_DIR]/large_wheel-1.0.0-py3-none-any.whl)
-    ");
+        .env_remove(EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF)
+        .assert()
+        .success();
+    context
+        .assert_command("from large_wheel.module_00000 import VALUE; assert VALUE == 1")
+        .success();
 
     Ok(())
 }
 
-/// Cache entries written by the current uv must remain usable by uv 0.12.0. See astral-sh/uv#20949.
+#[test]
+fn install_wheel_cache_compatible_with_uv_0_11_1() -> Result<()> {
+    install_wheel_with_older_uv("0.11.1")
+}
+
 #[test]
 fn install_wheel_cache_compatible_with_uv_0_12_0() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
-    write_many_files_wheel(&wheel, 1)?;
-
-    context.pip_install().arg(&wheel).assert().success();
-    context.venv().arg("--clear").assert().success();
-
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("--from")
-        .arg("uv==0.12.0")
-        .arg("uv")
-        .arg("pip")
-        .arg("install")
-        .arg("--python")
-        .arg(context.venv.path())
-        .arg(&wheel)
-        .arg("--cache-dir")
-        .arg(context.cache_dir.path())
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .env_remove(EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + uv==0.12.0
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + large-wheel==1.0.0 (from file://[TEMP_DIR]/large_wheel-1.0.0-py3-none-any.whl)
-    ");
-
-    Ok(())
+    install_wheel_with_older_uv("0.12.0")
 }
 
 #[test]
