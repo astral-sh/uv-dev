@@ -165,6 +165,24 @@ pub enum IncompatibleDist {
     Unavailable,
 }
 
+/// An incompatibility borrowed from a prioritized distribution.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum IncompatibleDistRef<'a> {
+    Wheel(&'a IncompatibleWheel),
+    Source(&'a IncompatibleSource),
+    Unavailable,
+}
+
+impl From<IncompatibleDistRef<'_>> for IncompatibleDist {
+    fn from(incompatibility: IncompatibleDistRef<'_>) -> Self {
+        match incompatibility {
+            IncompatibleDistRef::Wheel(reason) => Self::Wheel(reason.clone()),
+            IncompatibleDistRef::Source(reason) => Self::Source(reason.clone()),
+            IncompatibleDistRef::Unavailable => Self::Unavailable,
+        }
+    }
+}
+
 impl IncompatibleDist {
     /// The singular and plural verbs introducing this incompatibility.
     pub(crate) fn message_verbs(&self) -> (&'static str, &'static str) {
