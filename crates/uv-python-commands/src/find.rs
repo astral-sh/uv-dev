@@ -9,6 +9,7 @@ use uv_errors::ErrorWithHints;
 use uv_fs::Simplified;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
+use uv_python_interpreter::Interpreter;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -109,22 +110,7 @@ pub async fn find(
         warn_user!("{err}");
     }
 
-    if show_version {
-        writeln!(
-            printer.stdout(),
-            "{}",
-            python.interpreter().python_version()
-        )?;
-    } else {
-        let path = if resolve_links {
-            dunce::canonicalize(python.interpreter().sys_executable())?
-        } else {
-            std::path::absolute(python.interpreter().sys_executable())?
-        };
-        writeln!(printer.stdout(), "{}", path.simplified_display())?;
-    }
-
-    Ok(ExitStatus::Success)
+    print_interpreter(python.interpreter(), show_version, resolve_links, printer)
 }
 
 pub async fn find_script(
@@ -167,6 +153,15 @@ pub async fn find_script(
         Ok(ScriptInterpreter::Environment(environment)) => environment.into_interpreter(),
     };
 
+    print_interpreter(&interpreter, show_version, resolve_links, printer)
+}
+
+fn print_interpreter(
+    interpreter: &Interpreter,
+    show_version: bool,
+    resolve_links: bool,
+    printer: Printer,
+) -> Result<ExitStatus> {
     if show_version {
         writeln!(printer.stdout(), "{}", interpreter.python_version())?;
     } else {
