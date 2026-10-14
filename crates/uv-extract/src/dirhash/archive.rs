@@ -175,9 +175,8 @@ fn encode_digest(digest: &blake3::Hash) -> String {
         let mut remainder = 0u16;
         for byte in &mut value {
             let dividend = (remainder << 8) | u16::from(*byte);
-            let quotient = dividend / BASE36_RADIX;
-            debug_assert!(u8::try_from(quotient).is_ok());
-            *byte = quotient.to_le_bytes()[0];
+            *byte =
+                u8::try_from(dividend / BASE36_RADIX).expect("base-36 quotient fits in one byte");
             remainder = dividend % BASE36_RADIX;
         }
         *digit = BASE36_ALPHABET[usize::from(remainder)];
