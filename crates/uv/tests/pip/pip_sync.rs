@@ -5000,27 +5000,75 @@ fn require_hashes_find_links_invalid_hash() -> Result<()> {
     Ok(())
 }
 
+/// A wheel-backed HTML index with a configurable SHA-256 fragment.
+struct RegistryHashFixture {
+    wheel: Vec<u8>,
+    sha256: String,
+}
+
+impl RegistryHashFixture {
+    const FILENAME: &str = "tqdm-1000.0.0-py3-none-any.whl";
+    const REQUIREMENT: &str = "tqdm==1000.0.0";
+
+    fn new(context: &uv_test::TestContext) -> Self {
+        let wheel = context.read_bytes(
+            context
+                .workspace_root
+                .join("test/links")
+                .join(Self::FILENAME),
+        );
+        let sha256 = hex::encode(Sha256::digest(&wheel));
+        Self { wheel, sha256 }
+    }
+
+    fn hashed_requirement(&self) -> String {
+        format!("{} --hash=sha256:{}", Self::REQUIREMENT, self.sha256)
+    }
+
+    async fn serve(self, advertised_hash: Option<&str>) -> MockServer {
+        let server = MockServer::start().await;
+        let fragment = advertised_hash.map_or_else(String::new, |hash| format!("#sha256={hash}"));
+        let filename = Self::FILENAME;
+        Mock::given(method("GET"))
+            .and(path("/simple/tqdm/"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                format!(r#"<a href="/{filename}{fragment}">{filename}</a>"#),
+                "text/html",
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/{filename}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(self.wheel))
+            .mount(&server)
+            .await;
+        server
+    }
+}
+
 /// Using `--index-url`, but the registry doesn't provide us with a hash.
-#[test]
-fn require_hashes_registry_no_hash() -> Result<()> {
+#[tokio::test]
+async fn require_hashes_registry_no_hash() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let fixture = RegistryHashFixture::new(&context);
+    let requirement = fixture.hashed_requirement();
+    let server = fixture.serve(None).await;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
+    requirements_txt.write_str(&requirement)?;
 
     uv_snapshot!(context.pip_sync()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("requirements.txt")
         .arg("--require-hashes")
         .arg("--index-url")
-        .arg("https://astral-test.github.io/astral-test-hash/no-hash/simple-html/"), @"
+        .arg(format!("{}/simple/", server.uri())), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + example-a-961b4c22==1.0.0
+     + tqdm==1000.0.0
     "
     );
 
@@ -5028,24 +5076,29 @@ fn require_hashes_registry_no_hash() -> Result<()> {
 }
 
 /// Using `--index-url`, and the registry serves us a correct hash.
-#[test]
-fn require_hashes_registry_valid_hash() -> Result<()> {
+#[tokio::test]
+async fn require_hashes_registry_valid_hash() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let fixture = RegistryHashFixture::new(&context);
+    let requirement = fixture.hashed_requirement();
+    let hash = fixture.sha256.clone();
+    let server = fixture.serve(Some(&hash)).await;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
+    requirements_txt.write_str(&requirement)?;
 
     uv_snapshot!(context.pip_sync()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("requirements.txt")
         .arg("--require-hashes")
-        .arg("--find-links")
-        .arg("https://astral-test.github.io/astral-test-hash/valid-hash/simple-html/"), @"
-    exit_code: 1 (failure)
+        .arg("--index-url")
+        .arg(format!("{}/simple/", server.uri())), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because example-a-961b4c22 was not found in the package registry and you require example-a-961b4c22==1.0.0, we can conclude that your requirements are unsatisfiable.
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tqdm==1000.0.0
     "
     );
 
@@ -5056,9 +5109,8 @@ fn require_hashes_registry_valid_hash() -> Result<()> {
 #[tokio::test]
 async fn index_wheel_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-    let filename = "tqdm-1000.0.0-py3-none-any.whl";
-    let wheel = context.read_bytes(context.workspace_root.join("test/links").join(filename));
-    let computed_hash = hex::encode(Sha256::digest(&wheel));
+    let fixture = RegistryHashFixture::new(&context);
+    let computed_hash = fixture.sha256.clone();
     let index_hash = "0".repeat(64);
     assert_ne!(
         index_hash, computed_hash,
@@ -5068,25 +5120,12 @@ async fn index_wheel_hash_mismatch() -> Result<()> {
         .with_filter((computed_hash, "[WHEEL_SHA256]"))
         .with_filter((index_hash.clone(), "[INDEX_SHA256]"));
 
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/simple/tqdm/"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            format!(r#"<a href="/{filename}#sha256={index_hash}">{filename}</a>"#),
-            "text/html",
-        ))
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/{filename}")))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
-        .mount(&server)
-        .await;
+    let server = fixture.serve(Some(&index_hash)).await;
 
     context
         .temp_dir
         .child("requirements.txt")
-        .write_str("tqdm==1000.0.0")?;
+        .write_str(RegistryHashFixture::REQUIREMENT)?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
