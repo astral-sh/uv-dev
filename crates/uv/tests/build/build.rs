@@ -1539,9 +1539,10 @@ fn build_dependency_check_isolated_build_calls_dependency_hook_once() -> Result<
 
         def get_requires_for_build_wheel(config_settings=None):
             import sys
-            assert sys.prefix != sys.base_prefix
-            assert not Path("hook-called").exists()
-            Path("hook-called").touch()
+            if sys.prefix == sys.base_prefix:
+                raise RuntimeError("build hook did not run in an isolated environment")
+            with Path("hook-called").open("x"):
+                pass
             return []
     "#})?;
     uv_snapshot!(context.filters(), context.build().args([
@@ -1563,6 +1564,9 @@ fn build_dependency_check_isolated_build_calls_dependency_hook_once() -> Result<
     Building wheel...
     Successfully built dist/project-0.1.0-py3-none-any.whl
     ");
+    project
+        .child("hook-called")
+        .assert(predicate::path::is_file());
     Ok(())
 }
 
