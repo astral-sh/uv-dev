@@ -1698,7 +1698,9 @@ fn install_url_source_dist_cached() -> Result<()> {
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_source_dist_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_file_counts()
+        .with_filtered_sizes_and_units();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389")?;
@@ -1738,14 +1740,14 @@ fn install_git_source_dist_cached() -> Result<()> {
         .assert_command("import uv_public_pypackage")
         .success();
 
-    // Clear the cache, then re-run the installation in a new virtual environment.
+    // Remove the package's cached build, then re-run the installation in a new environment.
     context.reset_venv();
 
     uv_snapshot!(context.filters(), context.clean()
-        .arg("werkzeug"), @"
+        .arg("uv-public-pypackage"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    No cache entries found
+    Removed [N] files ([SIZE])
     "
     );
 
@@ -1756,6 +1758,7 @@ fn install_git_source_dist_cached() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389)
     "
