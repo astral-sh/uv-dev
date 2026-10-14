@@ -196,11 +196,11 @@ async fn prune_force() -> Result<()> {
     let simple = context.cache_dir.child("simple-v4");
     simple.create_dir_all()?;
 
-    // When locked, `--force` should proceed without blocking
-    let _cache = uv_cache::Cache::from_path(context.cache_dir.path())
+    // Bound the wait so a regression in `--force` fails instead of hanging the test.
+    let _cache = Cache::from_path(context.cache_dir.path())
         .with_exclusive_lock()
-        .await;
-    uv_snapshot!(context.filters(), context.prune().arg("--verbose").arg("--force"), @"
+        .await?;
+    uv_snapshot!(context.filters(), context.prune().arg("--verbose").arg("--force").env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
@@ -211,6 +211,7 @@ async fn prune_force() -> Result<()> {
     DEBUG Removing dangling cache bucket: [CACHE_DIR]/simple-v4
     Removed 1 directory (0B)
     ");
+    assert_path_missing(simple);
 
     Ok(())
 }
