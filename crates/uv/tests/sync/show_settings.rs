@@ -3472,6 +3472,18 @@ fn index_priority() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn assert_matching_index_settings(named: &str, explicit: &str, index: &str, case: &str) {
+    assert!(
+        explicit.starts_with("exit_code: 0 (success)\n----- stdout -----\nGlobalSettings {"),
+        "{case}: expected successful settings output, got:\n{explicit}"
+    );
+    assert!(
+        explicit.contains(index),
+        "{case}: expected index {index:?} in settings, got:\n{explicit}"
+    );
+    assert_eq!(named, explicit, "{case}");
+}
+
 /// Named index arguments must resolve identically to their explicit CLI spellings.
 #[test]
 #[cfg_attr(
@@ -3517,18 +3529,18 @@ fn index_by_name() -> anyhow::Result<()> {
         );
 
         // Selecting a name must match spelling out its URL with the same CLI role.
-        assert_eq!(named, explicit, "{argument}");
+        assert_matching_index_settings(&named, &explicit, "example.invalid", argument);
     }
 
-    let commands: [fn(&TestContext) -> Command; 5] = [
-        TestContext::lock,
-        TestContext::sync,
-        TestContext::upgrade,
-        TestContext::venv,
-        TestContext::pip_list,
+    let commands: [(&str, fn(&TestContext) -> Command); 5] = [
+        ("lock", TestContext::lock),
+        ("sync", TestContext::sync),
+        ("upgrade", TestContext::upgrade),
+        ("venv", TestContext::venv),
+        ("pip list", TestContext::pip_list),
     ];
 
-    for command in commands {
+    for (name, command) in commands {
         for argument in ["--index", "--default-index"] {
             let named = capture_uv_snapshot!(
                 context.filters(),
@@ -3549,7 +3561,12 @@ fn index_by_name() -> anyhow::Result<()> {
                     .arg("index-by-name")
             );
 
-            assert_eq!(named, explicit, "{argument}");
+            assert_matching_index_settings(
+                &named,
+                &explicit,
+                "example.invalid",
+                &format!("uv {name} {argument}"),
+            );
         }
     }
 
@@ -3659,7 +3676,7 @@ fn index_by_name_with_matching_path() -> anyhow::Result<()> {
     );
 
     // With preview, the configured name takes precedence over the existing path.
-    assert_eq!(named, explicit);
+    assert_matching_index_settings(&named, &explicit, "example.invalid", "--index");
 
     Ok(())
 }
@@ -3737,13 +3754,13 @@ fn tool_index_by_name() -> anyhow::Result<()> {
         default = true
     "#})?;
 
-    let tools: [fn(&TestContext) -> Command; 3] = [
-        TestContext::tool_run,
-        TestContext::tool_install,
-        TestContext::tool_upgrade,
+    let tools: [(&str, fn(&TestContext) -> Command); 3] = [
+        ("run", TestContext::tool_run),
+        ("install", TestContext::tool_install),
+        ("upgrade", TestContext::tool_upgrade),
     ];
 
-    for tool in tools {
+    for (name, tool) in tools {
         let show_settings = || {
             let mut command = add_shared_args(tool(&context));
             command
@@ -3771,7 +3788,12 @@ fn tool_index_by_name() -> anyhow::Result<()> {
                     .arg("iniconfig")
             );
 
-            assert_eq!(named, explicit, "{argument}");
+            assert_matching_index_settings(
+                &named,
+                &explicit,
+                "example.invalid",
+                &format!("uv tool {name} {argument}"),
+            );
         }
     }
 
@@ -3832,7 +3854,12 @@ fn index_by_name_with_directory() -> anyhow::Result<()> {
         );
 
         // Resolving the configured name must preserve its original configuration directory.
-        assert_eq!(named, explicit, "{argument}");
+        assert_matching_index_settings(
+            &named,
+            &explicit,
+            "configuration/configured-index",
+            argument,
+        );
     }
 
     Ok(())
