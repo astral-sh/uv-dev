@@ -13353,23 +13353,14 @@ fn sync_git_metadata_archive_dependency() -> Result<()> {
 fn sync_build_tag() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("build_tag-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
+    let links = context.temp_dir.join("links/");
+    fs_err::create_dir_all(&links)?;
+    for build_tag in [1, 3, 5] {
+        let wheel = format!("build_tag-1.0.0-{build_tag}-py2.py3-none-any.whl");
+        fs_err::copy(
+            context.workspace_root.join("test/links").join(&wheel),
+            links.join(&wheel),
+        )?;
     }
 
     context
@@ -13385,7 +13376,7 @@ fn sync_build_tag() -> Result<()> {
         [tool.uv]
         find-links = ["{}"]
         "#,
-            context.temp_dir.join("links/").portable_display(),
+            links.portable_display(),
         })?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
