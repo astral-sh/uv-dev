@@ -5,6 +5,8 @@ use uv_auth::{AuthBackend, Credentials, Service};
 use uv_command_support::{ExitStatus, Printer};
 use uv_preview::Preview;
 
+use super::TOKEN_USERNAME;
+
 /// Show the token that will be used for a service.
 pub(crate) async fn token(
     service: Service,
@@ -27,17 +29,13 @@ pub(crate) async fn token(
         }
         (Some(cli), None) => cli,
         (None, Some(url)) => url.to_string(),
-        (None, None) => "__token__".to_string(),
+        (None, None) => TOKEN_USERNAME.to_string(),
     };
     if username.is_empty() {
         bail!("Username cannot be empty");
     }
 
-    let display_url = if username == "__token__" {
-        url.without_credentials().to_string()
-    } else {
-        format!("{username}@{}", url.without_credentials())
-    };
+    let display_url = super::display_service(&service, &username);
 
     let credentials = match &backend {
         AuthBackend::System(provider) => provider
@@ -53,7 +51,7 @@ pub(crate) async fn token(
     let Some(password) = credentials.password() else {
         bail!(
             "No {} found for `{display_url}`",
-            if username != "__token__" {
+            if username != TOKEN_USERNAME {
                 "password"
             } else {
                 "token"
