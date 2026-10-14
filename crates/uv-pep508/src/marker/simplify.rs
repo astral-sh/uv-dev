@@ -281,8 +281,7 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
         }
 
         // Eliminate any redundant terms.
-        redundant_terms.sort_by(|a, b| b.cmp(a));
-        for term in redundant_terms {
+        for term in redundant_terms.into_iter().rev() {
             dnf[i].remove(term);
         }
     }
