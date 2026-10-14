@@ -430,7 +430,7 @@ pub async fn check(
             script,
             lock: result.lock(),
         };
-        match sync_from_lock(
+        sync_from_lock(
             target,
             &venv,
             &extras,
@@ -453,10 +453,7 @@ pub async fn check(
             MalwareCheckContext::from(&malware_settings),
         )
         .await
-        {
-            Ok(_) => {}
-            Err(err) => return Err(UvError::from(err).into()),
-        }
+        .map_err(UvError::from)?;
 
         if no_sync {
             warn_user!(
@@ -616,7 +613,7 @@ pub async fn check(
                 )?;
                 store_credentials_from_target(target, &client_builder)?;
                 let ty_state = state.fork();
-                let environment = match CachedEnvironment::from_locked_resolution(
+                let environment = CachedEnvironment::from_locked_resolution(
                     &resolution,
                     result
                         .lock()
@@ -634,10 +631,7 @@ pub async fn check(
                     preview,
                 )
                 .await
-                {
-                    Ok(environment) => environment,
-                    Err(err) => return Err(UvError::from(err).into()),
-                };
+                .map_err(UvError::from)?;
                 malware_context.record_resolution(&resolution);
                 PythonEnvironment::from(environment)
                     .scripts()
@@ -651,7 +645,7 @@ pub async fn check(
             debug!("Skipping environment synchronization due to `--no-sync`");
         } else {
             let sync_state = state.fork();
-            match sync_from_lock(
+            sync_from_lock(
                 target,
                 &venv,
                 &extras,
@@ -674,10 +668,7 @@ pub async fn check(
                 malware_context,
             )
             .await
-            {
-                Ok(_) => {}
-                Err(err) => return Err(UvError::from(err).into()),
-            }
+            .map_err(UvError::from)?;
         }
 
         (Some(venv), locked_ty_path)
