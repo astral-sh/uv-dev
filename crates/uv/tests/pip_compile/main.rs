@@ -28,3 +28,5 @@ mod pip_compile;
 mod pylock_paths;
 #[cfg(feature = "test-python")]
 mod source_url_hashes;
+#[cfg(feature = "test-python")]
+mod wheel_paths;
