@@ -381,6 +381,11 @@ impl GitRemote {
 }
 
 impl GitDatabase {
+    /// The remote URL used to populate this database.
+    pub(crate) fn remote_url(&self) -> &DisplaySafeUrl {
+        self.remote.url()
+    }
+
     /// Checkouts to a revision at `destination` from this database.
     pub(crate) fn copy_to(&self, rev: GitOid, destination: &Path) -> Result<GitCheckout> {
         // If the existing checkout exists, and it is fresh, use it.
