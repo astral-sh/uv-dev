@@ -4,7 +4,6 @@ use std::sync::Arc;
 use futures::{FutureExt, Stream, TryStreamExt, stream::FuturesUnordered};
 use tracing::{debug, instrument};
 
-use uv_cache::Cache;
 use uv_configuration::BuildOptions;
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{
@@ -21,7 +20,6 @@ use uv_types::{BuildContext, HashStrategy, InFlight};
 /// Downloads, builds, and unzips a set of distributions.
 pub struct Preparer<'a, Context: BuildContext> {
     tags: &'a Tags,
-    cache: &'a Cache,
     hashes: &'a HashStrategy,
     build_options: &'a BuildOptions,
     database: DistributionDatabase<'a, Context>,
@@ -30,7 +28,6 @@ pub struct Preparer<'a, Context: BuildContext> {
 
 impl<'a, Context: BuildContext> Preparer<'a, Context> {
     pub fn new(
-        cache: &'a Cache,
         tags: &'a Tags,
         hashes: &'a HashStrategy,
         build_options: &'a BuildOptions,
@@ -38,7 +35,6 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     ) -> Self {
         Self {
             tags,
-            cache,
             hashes,
             build_options,
             database,
@@ -50,14 +46,11 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     #[must_use]
     pub fn with_reporter(self, reporter: Arc<dyn Reporter>) -> Self {
         Self {
-            tags: self.tags,
-            cache: self.cache,
-            hashes: self.hashes,
-            build_options: self.build_options,
             database: self
                 .database
                 .with_reporter(reporter.clone().into_distribution_reporter()),
             reporter: Some(reporter),
+            ..self
         }
     }
 
