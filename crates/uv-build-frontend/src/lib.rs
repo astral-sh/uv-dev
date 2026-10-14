@@ -50,9 +50,11 @@ use uv_workspace::WorkspaceCache;
 
 pub use crate::error::{Error, MissingHeaderCause};
 
+const LEGACY_SETUPTOOLS_BACKEND: &str = "setuptools.build_meta:__legacy__";
+
 /// The default backend to use when PEP 517 is used without a `build-system` section.
 static DEFAULT_BACKEND: LazyLock<Pep517Backend> = LazyLock::new(|| Pep517Backend {
-    backend: "setuptools.build_meta:__legacy__".to_string(),
+    backend: LEGACY_SETUPTOOLS_BACKEND.to_string(),
     backend_path: None,
     requirements: vec![Requirement::from(
         uv_pep508::Requirement::from_str("setuptools >= 40.8.0").unwrap(),
@@ -803,7 +805,7 @@ impl SourceBuild {
                 // https://github.com/pypa/build/blob/de5b44b0c28c598524832dff685a98d5a5148c44/src/build/__init__.py#L114-L118
                 backend: build_system
                     .build_backend
-                    .unwrap_or_else(|| "setuptools.build_meta:__legacy__".to_string()),
+                    .unwrap_or_else(|| LEGACY_SETUPTOOLS_BACKEND.to_string()),
                 backend_path: build_system.backend_path,
                 requirements,
             }
