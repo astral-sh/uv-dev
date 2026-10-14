@@ -527,7 +527,7 @@ fn upgrade_updates_requirement_without_updating_lockfile_or_environment() -> Res
         "#}),
         "{lock_contents}"
     );
-    assert!(environment_sentinel.exists());
+    environment_sentinel.assert("present");
     Ok(())
 }
 
