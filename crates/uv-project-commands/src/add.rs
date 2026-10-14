@@ -640,16 +640,14 @@ pub async fn add(
     }
     let indexes = valid_indexes;
 
-    // Add any indexes that were provided on the command-line, in priority order.
+    // Add indexes in reverse priority order because each index is inserted at the front.
     if !raw {
         let root_dir = match &target {
             EditTarget::Script(script) => script.path.parent().expect("script path has no parent"),
             EditTarget::Project(project) => project.root(),
         };
         let locations = IndexLocations::new(indexes, Vec::new(), false);
-        let mut indexes = locations.defined_indexes().collect::<Vec<_>>();
-        indexes.reverse();
-        for index in indexes {
+        for index in locations.defined_indexes().rev() {
             toml.add_index(index, root_dir)?;
         }
     }
