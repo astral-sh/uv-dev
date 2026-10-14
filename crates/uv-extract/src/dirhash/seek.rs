@@ -1,11 +1,11 @@
 //! Directory hashing while extracting seekable ZIP archives.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::pin::pin;
 use std::sync::Mutex;
 
 use crate::vendor::CloneableSeekableReader;
-use crate::{Error, insecure_no_validate};
+use crate::{Error, ExtractionDirectories, insecure_no_validate};
 use async_zip::StoredZipEntry;
 use async_zip::base::read::seek::ZipFileReader;
 use async_zip::error::ZipError;
@@ -82,7 +82,7 @@ fn unzip_inner(
         validate_unique_output_paths(archive.file().entries())?;
     }
 
-    let directories = Mutex::new(FxHashSet::default());
+    let directories = Mutex::new(ExtractionDirectories::default());
     let skip_validation = insecure_no_validate();
     // Initialize the threadpool with the user settings.
     initialize_rayon_once();
@@ -174,7 +174,7 @@ fn extract_entry<R>(
     job: &mut ExtractionJob<R>,
     file_number: usize,
     target: &Path,
-    directories: &Mutex<FxHashSet<PathBuf>>,
+    directories: &Mutex<ExtractionDirectories>,
     skip_validation: bool,
     hash_contents: bool,
 ) -> Result<Option<ExtractedEntry>, Error>
@@ -230,16 +230,13 @@ fn entry_file_name(entry: &StoredZipEntry, file_number: usize) -> Result<&str, E
 
 /// Create a directory once across parallel extraction workers.
 fn create_directory_once(
-    directories: &Mutex<FxHashSet<PathBuf>>,
+    directories: &Mutex<ExtractionDirectories>,
     path: &Path,
 ) -> Result<(), Error> {
-    let mut directories = directories.lock().map_err(|_| directory_lock_error())?;
-    if !directories.contains(path) {
-        directories.insert(path.to_path_buf());
-        fs_err::create_dir_all(path).map_err(Error::Io)?;
-    }
-
-    Ok(())
+    directories
+        .lock()
+        .map_err(|_| directory_lock_error())?
+        .create(path)
 }
 
 /// Validate the metadata for a directory entry.

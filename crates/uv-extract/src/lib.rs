@@ -1,5 +1,8 @@
+use std::path::{Path, PathBuf};
+
 pub use error::Error;
 use regex::regex;
+use rustc_hash::FxHashSet;
 pub use sync::*;
 use uv_static::EnvVars;
 
@@ -10,6 +13,22 @@ pub mod hash;
 pub mod stream;
 mod sync;
 mod vendor;
+
+/// Track directories whose creation has been attempted during archive extraction.
+#[derive(Default)]
+pub(crate) struct ExtractionDirectories {
+    attempted: FxHashSet<PathBuf>,
+}
+
+impl ExtractionDirectories {
+    pub(crate) fn create(&mut self, path: &Path) -> Result<(), Error> {
+        if !self.attempted.contains(path) {
+            self.attempted.insert(path.to_path_buf());
+            fs_err::create_dir_all(path).map_err(Error::Io)?;
+        }
+        Ok(())
+    }
+}
 
 static REPLACEMENT_CHARACTER: &str = "\u{FFFD}";
 
