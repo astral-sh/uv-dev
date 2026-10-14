@@ -2503,12 +2503,15 @@ fn run_group() -> Result<()> {
     Checked 4 packages in [TIME]
     ");
 
+    // A fresh environment makes accidental group synchronization observable.
+    context.venv().arg("--clear").assert().success();
+
     uv_snapshot!(context.filters(), context.run().arg("--group").arg("foo").arg("--no-project").arg("main.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    imported `anyio`
-    imported `iniconfig`
-    imported `typing_extensions`
+    failed to import `anyio`
+    failed to import `iniconfig`
+    failed to import `typing_extensions`
 
     ----- stderr -----
     warning: `--group foo` has no effect when used alongside `--no-project`
@@ -2517,9 +2520,9 @@ fn run_group() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--group").arg("foo").arg("--group").arg("bar").arg("--no-project").arg("main.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    imported `anyio`
-    imported `iniconfig`
-    imported `typing_extensions`
+    failed to import `anyio`
+    failed to import `iniconfig`
+    failed to import `typing_extensions`
 
     ----- stderr -----
     warning: `--group` has no effect when used alongside `--no-project`
@@ -2528,9 +2531,9 @@ fn run_group() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--group").arg("dev").arg("--no-project").arg("main.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    imported `anyio`
-    imported `iniconfig`
-    imported `typing_extensions`
+    failed to import `anyio`
+    failed to import `iniconfig`
+    failed to import `typing_extensions`
 
     ----- stderr -----
     warning: `--group dev` has no effect when used alongside `--no-project`
@@ -2539,9 +2542,9 @@ fn run_group() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--all-groups").arg("--no-project").arg("main.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    imported `anyio`
-    imported `iniconfig`
-    imported `typing_extensions`
+    failed to import `anyio`
+    failed to import `iniconfig`
+    failed to import `typing_extensions`
 
     ----- stderr -----
     warning: `--all-groups` has no effect when used alongside `--no-project`
@@ -2550,13 +2553,15 @@ fn run_group() -> Result<()> {
     uv_snapshot!(context.filters(), context.run().arg("--dev").arg("--no-project").arg("main.py"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    imported `anyio`
-    imported `iniconfig`
-    imported `typing_extensions`
+    failed to import `anyio`
+    failed to import `iniconfig`
+    failed to import `typing_extensions`
 
     ----- stderr -----
     warning: `--dev` has no effect when used alongside `--no-project`
     ");
+
+    context.assert_not_installed("sniffio");
 
     Ok(())
 }
