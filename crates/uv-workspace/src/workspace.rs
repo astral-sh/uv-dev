@@ -729,15 +729,17 @@ impl Workspace {
                 else {
                     continue;
                 };
-                let existing = required_members.insert(package.clone(), *editable);
-                if let Some(Some(existing)) = existing {
-                    if let Some(editable) = editable {
-                        // If there are conflicting `editable` values, raise an error.
-                        if existing != *editable {
-                            return Err(WorkspaceError::from(
-                                WorkspaceErrorKind::EditableConflict(package.clone()),
-                            ));
-                        }
+                match required_members.get_mut(package) {
+                    Some(Some(previous))
+                        if editable.is_some_and(|current| current != *previous) =>
+                    {
+                        return Err(WorkspaceError::from(WorkspaceErrorKind::EditableConflict(
+                            package.clone(),
+                        )));
+                    }
+                    Some(previous) => *previous = *editable,
+                    None => {
+                        required_members.insert(package.clone(), *editable);
                     }
                 }
             }
