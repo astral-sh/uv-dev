@@ -139,6 +139,23 @@ fn reset_fixture_venv_ignores_project_configuration() -> Result<()> {
 }
 
 #[test]
+#[cfg(unix)]
+fn reset_fixture_venv_follows_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let target = context.temp_dir.child("target");
+    fs_err::rename(&context.venv, &target)?;
+    symlink(&target, &context.venv)?;
+    let marker = target.child("before-reset");
+    marker.touch()?;
+
+    context.reset_venv();
+
+    assert_link_target(&context.venv, &target);
+    assert_path_missing(marker);
+    Ok(())
+}
+
+#[test]
 fn create_venv_skips_distutils_patch_on_py310() {
     let context = uv_test::test_context_with_versions!(&["3.10"]);
 
