@@ -21,16 +21,17 @@ use crate::wheel::ValidatedWheel;
 
 pub use uv_fs::link::LinkMode;
 
+type InstalledPaths = FxHashMap<PathBuf, BTreeSet<(WheelFilename, PathBuf)>>;
+
 /// Shared state for concurrent wheel installations.
 #[derive(Debug, Default)]
 pub struct InstallState {
     /// Directory-level locks to prevent concurrent write corruption.
     locks: CopyLocks,
     /// Top level files and directories in site-packages, stored as relative path, and wheels they
-    /// are from, with the absolute paths in the unpacked wheel.
-    site_packages_paths: Mutex<FxHashMap<PathBuf, BTreeSet<(WheelFilename, PathBuf)>>>,
-    /// Preview settings for feature flags.
-    preview: Preview,
+    /// are from, with the absolute paths in the unpacked wheel. Only populated when conflict
+    /// detection is enabled.
+    site_packages_paths: Option<Mutex<InstalledPaths>>,
 }
 
 impl InstallState {
@@ -38,8 +39,9 @@ impl InstallState {
     pub fn new(preview: Preview) -> Self {
         Self {
             locks: CopyLocks::default(),
-            site_packages_paths: Mutex::new(FxHashMap::default()),
-            preview,
+            site_packages_paths: preview
+                .is_enabled(PreviewFeature::DetectModuleConflicts)
+                .then(Mutex::default),
         }
     }
 
@@ -53,14 +55,18 @@ impl InstallState {
     /// Only top-level entries are reliably available because cloning a directory on macOS
     /// traverses outside our code.
     fn register_installed_paths(&self, wheel: &Path, filename: &WheelFilename) -> io::Result<()> {
+        // Enumerate every entry before linking so read errors cannot leave a wheel partially installed.
         for entry in fs::read_dir(wheel)? {
             let entry = entry?;
+            debug_assert!(wheel.is_absolute());
+            let Some(site_packages_paths) = &self.site_packages_paths else {
+                continue;
+            };
             let absolute = entry.path();
             let relative = PathBuf::from(entry.file_name());
             debug_assert!(!relative.is_absolute());
-            debug_assert!(absolute.is_absolute());
 
-            self.site_packages_paths
+            site_packages_paths
                 .lock()
                 .unwrap()
                 .entry(relative)
@@ -103,15 +109,11 @@ impl InstallState {
     /// length matches. This also excludes the same empty `__init__.py` files being reported as
     /// conflicting.
     pub fn warn_package_conflicts(self) -> Result<(), io::Error> {
-        // This warning is currently in preview.
-        if !self
-            .preview
-            .is_enabled(PreviewFeature::DetectModuleConflicts)
-        {
+        let Some(site_packages_paths) = self.site_packages_paths else {
             return Ok(());
-        }
+        };
 
-        let site_packages_paths = self.site_packages_paths.into_inner().unwrap();
+        let site_packages_paths = site_packages_paths.into_inner().unwrap();
         for (relative, wheels) in &site_packages_paths {
             // Fast path: Only one package is using this module name, no conflicts.
             let mut wheel_iter = wheels.iter();
