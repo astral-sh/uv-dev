@@ -20291,7 +20291,7 @@ fn compile_client_certificate_warning_chain() -> Result<()> {
 /// Test that pip compile warns on download errors
 #[cfg(feature = "test-python-managed")]
 #[tokio::test]
-async fn compile_missing_python_download_error_warning() {
+async fn compile_missing_python_download_error_warning() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .without_python_download_cache()
         .with_managed_python_dirs()
@@ -20303,20 +20303,30 @@ async fn compile_missing_python_download_error_warning() {
 
     let server = MockServer::start().await;
 
-    Mock::given(method("GET"))
+    Mock::given(method("CONNECT"))
         .respond_with(ResponseTemplate::new(StatusCode::INTERNAL_SERVER_ERROR))
+        .expect(4..)
         .mount(&server)
         .await;
+    let proxy_url = server.uri();
+    let proxy_env = [
+        (EnvVars::HTTPS_PROXY, proxy_url.as_str()),
+        ("https_proxy", proxy_url.as_str()),
+        (EnvVars::NO_PROXY, ""),
+        ("no_proxy", ""),
+    ];
 
-    let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("anyio==3.7.0").unwrap();
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("anyio==3.7.0")?;
 
-    // This produces an error in the end because we've just broken ALL network
-    // traffic. But the goal here is to check the warning.
+    // The proxy blocks both the managed Python download and the package index, so each command
+    // fails after attempting to find a usable interpreter.
     uv_snapshot!(context.filters(), context
         .pip_compile()
         .arg("--python-version").arg("3.10")
-        .env("ALL_PROXY", server.uri())
+        .envs(proxy_env)
         .env(EnvVars::UV_HTTP_RETRIES, "0")
         .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
         .arg("requirements.in"), @"
@@ -20339,7 +20349,7 @@ async fn compile_missing_python_download_error_warning() {
         .pip_compile()
         .arg("--quiet")
         .arg("--python-version").arg("3.10")
-        .env("ALL_PROXY", server.uri())
+        .envs(proxy_env)
         .env(EnvVars::UV_HTTP_RETRIES, "0")
         .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
         .arg("requirements.in"), @"
@@ -20355,7 +20365,7 @@ async fn compile_missing_python_download_error_warning() {
     uv_snapshot!(context.filters(), context
         .pip_compile()
         .arg("--python-version").arg("3.10.99")
-        .env("ALL_PROXY", server.uri())
+        .envs(proxy_env)
         .env(EnvVars::UV_HTTP_RETRIES, "0")
         .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
         .arg("requirements.in"), @"
@@ -20377,7 +20387,7 @@ async fn compile_missing_python_download_error_warning() {
     uv_snapshot!(context.filters(), context
         .pip_compile()
         .arg("--python-version").arg("3.10.19")
-        .env("ALL_PROXY", server.uri())
+        .envs(proxy_env)
         .env(EnvVars::UV_HTTP_RETRIES, "0")
         .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
         .arg("requirements.in"), @"
@@ -20394,6 +20404,8 @@ async fn compile_missing_python_download_error_warning() {
       cause: client error (Connect)
       cause: tunnel error: unsuccessful
     ");
+
+    Ok(())
 }
 
 /// Overrides and constraints must retain the extra conditions of optional dependencies.
