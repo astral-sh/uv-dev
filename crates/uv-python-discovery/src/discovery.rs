@@ -1521,6 +1521,7 @@ fn warn_on_unsupported_python(interpreter: &Interpreter) {
 /// See: <https://github.com/astral-sh/rye/blob/b0e9eccf05fe4ff0ae7b0250a248c54f2d780b4d/rye/src/cli/shim.rs#L108>
 #[cfg(windows)]
 fn is_windows_store_shim(path: &Path) -> bool {
+    use std::mem::size_of;
     use std::os::windows::fs::MetadataExt;
     use std::os::windows::prelude::OsStrExt;
     use windows::Win32::Foundation::CloseHandle;
@@ -1604,19 +1605,19 @@ fn is_windows_store_shim(path: &Path) -> bool {
         return false;
     };
 
-    let mut buf = [0u16; MAXIMUM_REPARSE_DATA_BUFFER_SIZE as usize];
+    let mut reparse_data = [0u16; MAXIMUM_REPARSE_DATA_BUFFER_SIZE as usize / size_of::<u16>()];
     let mut bytes_returned = 0;
 
     // SAFETY: The buffer is large enough to hold the reparse point.
-    #[allow(unsafe_code, clippy::cast_possible_truncation)]
+    #[allow(unsafe_code)]
     let success = unsafe {
         DeviceIoControl(
             reparse_handle,
             FSCTL_GET_REPARSE_POINT,
             None,
             0,
-            Some(buf.as_mut_ptr().cast()),
-            buf.len() as u32 * 2,
+            Some(reparse_data.as_mut_ptr().cast()),
+            MAXIMUM_REPARSE_DATA_BUFFER_SIZE,
             Some(&raw mut bytes_returned),
             None,
         )
@@ -1634,7 +1635,8 @@ fn is_windows_store_shim(path: &Path) -> bool {
         return false;
     }
 
-    let reparse_point = String::from_utf16_lossy(&buf[..bytes_returned as usize]);
+    let code_units_returned = bytes_returned as usize / size_of::<u16>();
+    let reparse_point = String::from_utf16_lossy(&reparse_data[..code_units_returned]);
     reparse_point.contains("\\AppInstallerPythonRedirector.exe")
 }
 
