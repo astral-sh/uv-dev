@@ -1,5 +1,4 @@
-//! Like `wheel.rs`, but for installing wheels that have already been unzipped, rather than
-//! reading from a zip file.
+//! Installation of unpacked wheels into a Python environment.
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -42,7 +41,7 @@ fn wheel_destination<'layout>(
     Ok((dist_info_prefix, site_packages))
 }
 
-/// Install the given wheel to the given venv
+/// Install the given unpacked wheel into a Python environment.
 ///
 /// The caller must ensure that the wheel is compatible to the environment.
 ///
@@ -82,12 +81,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         }
     }
 
-    // We're going step by step though
-    // https://packaging.python.org/en/latest/specifications/binary-distribution-format/#installing-a-wheel-distribution-1-0-py32-none-any-whl
-    // > 1.a Parse distribution-1.0.dist-info/WHEEL.
-    // > 1.b Check that installer is compatible with Wheel-Version. Warn if minor version is greater, abort if major version is greater.
-    // > 1.c If Root-Is-Purelib == ‘true’, unpack archive into purelib (site-packages).
-    // > 1.d Else unpack archive into platlib (site-packages).
+    // Parse `RECORD` and entry points and validate script destinations before linking wheel files.
     let validated_wheel = ValidatedWheel::new(layout, wheel, &dist_info_prefix)?;
     trace!(?name, "Extracting wheel files");
     link_wheel_files(link_mode, site_packages, &validated_wheel, state, filename)?;
@@ -124,8 +118,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         )?;
     }
 
-    // 2.a Unpacked archive includes distribution-1.0.dist-info/ and (if there is data) distribution-1.0.data/.
-    // 2.b Move each subtree of distribution-1.0.data/ onto its destination path. Each subdirectory of distribution-1.0.data/ is a key into a dict of destination directories, such as distribution-1.0.data/(purelib|platlib|headers|scripts|data). The initially supported paths are taken from distutils.command.install.
+    // Move wheel data into the interpreter's installation scheme.
     let data_dir = site_packages.join(format!("{dist_info_prefix}.data"));
     if data_dir.is_dir() {
         install_data(
@@ -138,9 +131,6 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
             &gui_scripts,
             &mut record,
         )?;
-        // 2.c If applicable, update scripts starting with #!python to point to the correct interpreter.
-        // Script are unsupported through data
-        // 2.e Remove empty distribution-1.0.data directory.
         fs_err::remove_dir_all(data_dir)?;
     } else {
         trace!(?name, "No data");
