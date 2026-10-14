@@ -9718,26 +9718,26 @@ fn sync_environment_prompt() -> Result<()> {
         name = "my-project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
         "#,
     )?;
 
     // Running `uv sync` should create `.venv`
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
     ");
 
-    // The `pyvenv.cfg` should contain the prompt matching the project name
     let pyvenv_cfg = context.read(".venv/pyvenv.cfg");
-
-    assert!(pyvenv_cfg.contains("prompt = my-project"));
+    assert_eq!(
+        pyvenv_cfg
+            .lines()
+            .find_map(|line| line.strip_prefix("prompt = ")),
+        Some("my-project")
+    );
 
     Ok(())
 }
