@@ -1,21 +1,75 @@
 use std::io;
+#[cfg(windows)]
+use std::io::Write;
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+#[cfg(windows)]
+use crate::Cache;
 use crate::{ARCHIVE_VERSION, ArchiveId};
 
 /// A file-based reference to an archive in the cache.
 #[derive(Debug)]
-pub(super) struct Link {
+struct Link {
     /// The unique ID of the entry in the archive bucket.
-    pub(super) id: ArchiveId,
+    id: ArchiveId,
     /// The version of the archive bucket.
-    pub(super) version: u8,
+    version: u8,
 }
 
 impl Link {
     /// Encode a reference to an archive in the current bucket.
-    pub(super) fn serialize(id: &ArchiveId) -> String {
+    fn serialize(id: &ArchiveId) -> String {
         format!("archive-v{ARCHIVE_VERSION}/{id}")
+    }
+}
+
+#[cfg(windows)]
+impl Cache {
+    /// Create a file containing the archive ID and bucket version.
+    #[expect(clippy::unused_self)]
+    pub(super) fn create_link(&self, id: &ArchiveId, dst: impl AsRef<Path>) -> io::Result<()> {
+        // Serialize the link.
+        let contents = Link::serialize(id);
+
+        // First, attempt to create a file at the location, but fail if it already exists.
+        match fs_err::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dst.as_ref())
+        {
+            Ok(mut file) => {
+                // Write the target path to the file.
+                file.write_all(contents.as_bytes())?;
+                Ok(())
+            }
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                uv_fs::write_atomic_sync(dst, contents.as_bytes())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Resolve an archive link, returning the fully-resolved path.
+    ///
+    /// Returns an error if the link target does not exist.
+    pub fn resolve_link(&self, path: impl AsRef<Path>) -> io::Result<PathBuf> {
+        // Deserialize the link.
+        let contents = fs_err::read_to_string(path.as_ref())?;
+        let link: Link = contents.parse()?;
+
+        // Ignore stale links.
+        if link.version != ARCHIVE_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "The link target does not exist.",
+            ));
+        }
+
+        // Reconstruct the path.
+        let path = self.archive(&link.id);
+        path.canonicalize()
     }
 }
 

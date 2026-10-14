@@ -16,8 +16,6 @@ use uv_pypi_types::ResolutionMetadata;
 pub use crate::by_timestamp::CachedByTimestamp;
 #[cfg(feature = "clap")]
 pub use crate::cli::CacheArgs;
-#[cfg(windows)]
-use crate::link::Link;
 use crate::removal::Remover;
 pub use crate::removal::{Removal, RemovalAccounting};
 pub use crate::wheel::WheelCache;
@@ -832,53 +830,6 @@ impl Cache {
             }
         }
         Ok(references)
-    }
-
-    /// Create a file containing the archive ID and bucket version.
-    #[cfg(windows)]
-    #[expect(clippy::unused_self)]
-    fn create_link(&self, id: &ArchiveId, dst: impl AsRef<Path>) -> io::Result<()> {
-        // Serialize the link.
-        let contents = Link::serialize(id);
-
-        // First, attempt to create a file at the location, but fail if it already exists.
-        match fs_err::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(dst.as_ref())
-        {
-            Ok(mut file) => {
-                // Write the target path to the file.
-                file.write_all(contents.as_bytes())?;
-                Ok(())
-            }
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                uv_fs::write_atomic_sync(dst, contents.as_bytes())
-            }
-            Err(err) => Err(err),
-        }
-    }
-
-    /// Resolve an archive link, returning the fully-resolved path.
-    ///
-    /// Returns an error if the link target does not exist.
-    #[cfg(windows)]
-    pub fn resolve_link(&self, path: impl AsRef<Path>) -> io::Result<PathBuf> {
-        // Deserialize the link.
-        let contents = fs_err::read_to_string(path.as_ref())?;
-        let link: Link = contents.parse()?;
-
-        // Ignore stale links.
-        if link.version != ARCHIVE_VERSION {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "The link target does not exist.",
-            ));
-        }
-
-        // Reconstruct the path.
-        let path = self.archive(&link.id);
-        path.canonicalize()
     }
 
     /// Create a symlink to a directory in the archive bucket.
