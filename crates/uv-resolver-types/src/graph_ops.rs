@@ -12,6 +12,20 @@ use uv_pypi_types::{ConflictItem, ConflictItemRef, Conflicts, Inference};
 use crate::ResolutionGraphNode;
 use crate::universal_marker::UniversalMarker;
 
+/// Collect all nodes without incoming edges, including the virtual root and virtual dev
+/// dependency packages, since the graph's edges don't cover dev dependencies.
+fn root_nodes<Node, Edge>(graph: &Graph<Node, Edge>) -> Vec<NodeIndex> {
+    graph
+        .node_indices()
+        .filter(|node_index| {
+            graph
+                .edges_directed(*node_index, Direction::Incoming)
+                .next()
+                .is_none()
+        })
+        .collect()
+}
+
 /// Determine the markers under which a package is reachable in the dependency tree.
 ///
 /// The algorithm is a variant of Dijkstra's algorithm for not totally ordered distances:
@@ -27,19 +41,7 @@ pub fn marker_reachability<Marker: Boolean + Copy + PartialEq, Node, Edge: Reach
     // the graph, even though we then only read the markers for base packages.
     let mut reachability = FxHashMap::with_capacity_and_hasher(graph.node_count(), FxBuildHasher);
 
-    // Collect the root nodes.
-    //
-    // Besides the actual virtual root node, virtual dev dependencies packages are also root
-    // nodes since the edges don't cover dev dependencies.
-    let mut queue: Vec<_> = graph
-        .node_indices()
-        .filter(|node_index| {
-            graph
-                .edges_directed(*node_index, Direction::Incoming)
-                .next()
-                .is_none()
-        })
-        .collect();
+    let mut queue = root_nodes(graph);
 
     // The root nodes are always applicable, unless the user has restricted resolver
     // environments with `tool.uv.environments`.
@@ -65,21 +67,21 @@ pub fn marker_reachability<Marker: Boolean + Copy + PartialEq, Node, Edge: Reach
             // The marker for all paths to the child through the parent.
             let mut child_marker = child_edge.weight().marker();
             child_marker.and(marker);
-            match reachability.entry(child_edge.target()) {
+            let child_index = child_edge.target();
+            match reachability.entry(child_index) {
                 Entry::Occupied(mut existing) => {
-                    // If the marker is a subset of the existing marker (A ⊆ B exactly if
-                    // A ∪ B = A), updating the child wouldn't change child's marker.
                     child_marker.or(*existing.get());
-                    if &child_marker != existing.get() {
-                        existing.insert(child_marker);
-                        queue.push(child_edge.target());
+                    // Re-queue only if this path expands the child's marker.
+                    if child_marker == *existing.get() {
+                        continue;
                     }
+                    existing.insert(child_marker);
                 }
                 Entry::Vacant(vacant) => {
                     vacant.insert(child_marker);
-                    queue.push(child_edge.target());
                 }
             }
+            queue.push(child_index);
         }
     }
 
@@ -116,19 +118,7 @@ pub fn simplify_conflict_markers(
     let mut activated: FxHashMap<NodeIndex, Vec<FxHashSet<ConflictItemRef<'_>>>> =
         FxHashMap::default();
 
-    // Collect the root nodes.
-    //
-    // Besides the actual virtual root node, virtual dev dependencies packages are also root
-    // nodes since the edges don't cover dev dependencies.
-    let mut queue: Vec<_> = graph
-        .node_indices()
-        .filter(|node_index| {
-            graph
-                .edges_directed(*node_index, Direction::Incoming)
-                .next()
-                .is_none()
-        })
-        .collect();
+    let mut queue = root_nodes(graph);
 
     while let Some(parent_index) = queue.pop() {
         let extra = graph[parent_index]
@@ -207,11 +197,12 @@ pub fn simplify_conflict_markers(
         // to perfectly disambiguate between them. It's plausible we
         // could do better here, but it requires smarter simplification
         // logic. ---AG
-        let ambiguous_edges = graph
+        let ambiguous = graph
             .edges_directed(from_index, Direction::Outgoing)
             .filter(|edge| graph[to_index].package_name() == graph[edge.target()].package_name())
-            .count();
-        if ambiguous_edges > 1 {
+            .nth(1)
+            .is_some();
+        if ambiguous {
             continue;
         }
         let Some(inference_sets) = inferences.get(&from_index) else {
