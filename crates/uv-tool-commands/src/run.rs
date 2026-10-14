@@ -121,6 +121,19 @@ fn find_verbose_flag(args: &[std::ffi::OsString]) -> Option<&str> {
     })
 }
 
+/// Split a tool command into its UTF-8 target and remaining arguments.
+fn split_tool_command(command: &[OsString]) -> anyhow::Result<(&str, &[OsString])> {
+    let Some((target, args)) = command.split_first() else {
+        bail!("No tool command provided");
+    };
+    let Some(target) = target.to_str() else {
+        bail!(
+            "Tool command could not be parsed as UTF-8 string. Use `--from` to specify the package name"
+        );
+    };
+    Ok((target, args))
+}
+
 /// Run a command.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn run(
@@ -194,15 +207,7 @@ pub async fn run(
         return Ok(ExitStatus::Error);
     };
 
-    let Some((target, args)) = command.split_first() else {
-        return Err(anyhow::anyhow!("No tool command provided"));
-    };
-
-    let Some(target) = target.to_str() else {
-        return Err(anyhow::anyhow!(
-            "Tool command could not be parsed as UTF-8 string. Use `--from` to specify the package name"
-        ));
-    };
+    let (target, args) = split_tool_command(&command)?;
 
     if let Some(ref from) = from {
         if is_python_script(from) {
@@ -260,16 +265,7 @@ pub async fn run(
             );
             let confirmation = uv_console::confirm(&prompt, &term, true)?;
             if confirmation {
-                let Some((next_target, next_args)) = args.split_first() else {
-                    return Err(anyhow::anyhow!("No tool command provided"));
-                };
-                let Some(next_target) = next_target.to_str() else {
-                    return Err(anyhow::anyhow!(
-                        "Tool command could not be parsed as UTF-8 string. Use `--from` to specify the package name"
-                    ));
-                };
-                target = next_target;
-                args = next_args;
+                (target, args) = split_tool_command(args)?;
             }
         }
     }
