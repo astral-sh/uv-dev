@@ -13671,6 +13671,8 @@ fn overlapping_packages_warning() -> Result<()> {
     // Check that correctly overlapping namespace packages don't show a warning
     uv_snapshot!(context.pip_install()
         .arg("--no-deps")
+        .arg("--preview-features")
+        .arg("detect-module-conflicts")
         .arg("poetry")
         .arg("poetry-core"), @"
     exit_code: 0 (success)
@@ -13704,6 +13706,8 @@ fn overlapping_packages_warning() -> Result<()> {
     // Check that installing one of the packages on their own doesn't warn.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-deps")
+        .arg("--preview-features")
+        .arg("detect-module-conflicts")
         .arg(built_by_uv), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -13716,6 +13720,8 @@ fn overlapping_packages_warning() -> Result<()> {
     // Currently, we don't warn if we install them one wheel at a time.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-deps")
+        .arg("--preview-features")
+        .arg("detect-module-conflicts")
         .arg(also_build_by_uv.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
