@@ -1042,17 +1042,16 @@ fn rewrite_specifier(
 
 /// Project a version to the given precision while preserving its compatible-release suffixes.
 fn compatible_version_at_precision(version: &Version, precision: usize) -> Result<Version> {
-    let release = version
-        .release()
+    if precision == 0 {
+        bail!("Cannot rewrite a version constraint without a release segment");
+    }
+    let release = version.release();
+    let projected = release
         .iter()
         .copied()
         .chain(std::iter::repeat(0))
-        .take(precision)
-        .collect::<Vec<_>>();
-    if release.is_empty() {
-        bail!("Cannot rewrite a version constraint without a release segment");
-    }
-    Ok(version.clone().with_release(release).without_local())
+        .take(precision);
+    Ok(version.clone().with_release(projected).without_local())
 }
 
 /// Increment the last release segment after projecting a version to the given precision.
