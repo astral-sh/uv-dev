@@ -321,6 +321,7 @@ fn create_venv_313() {
 fn create_venv_project_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"])
         .with_env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo");
+    let project_environment = context.temp_dir.child("foo");
 
     // `uv venv` ignores `UV_PROJECT_ENVIRONMENT` when it's not a project
     uv_snapshot!(context.filters(), context.venv(), @"
@@ -333,10 +334,7 @@ fn create_venv_project_environment() -> Result<()> {
     );
 
     context.venv.assert(predicates::path::is_dir());
-    context
-        .temp_dir
-        .child("foo")
-        .assert(predicates::path::missing());
+    assert_path_missing(&project_environment);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -359,10 +357,7 @@ fn create_venv_project_environment() -> Result<()> {
     "
     );
 
-    context
-        .temp_dir
-        .child("foo")
-        .assert(predicates::path::is_dir());
+    project_environment.assert(predicates::path::is_dir());
 
     // Unless we're in a child directory
     let child = context.temp_dir.child("child");
@@ -378,7 +373,7 @@ fn create_venv_project_environment() -> Result<()> {
     );
 
     // In which case, we'll use the default name of `.venv`
-    child.child("foo").assert(predicates::path::missing());
+    assert_path_missing(child.child("foo"));
     child.child(".venv").assert(predicates::path::is_dir());
 
     // Or, if a name is provided
@@ -396,7 +391,11 @@ fn create_venv_project_environment() -> Result<()> {
         .child("bar")
         .assert(predicates::path::is_dir());
 
-    // Or, if project discovery is disabled with `--no-workspace` or `--no-project`.
+    // Disabling project discovery must clear `.venv` without touching the project environment.
+    let project_marker = project_environment.child("marker");
+    project_marker.write_str("project environment")?;
+    let default_marker = context.venv.child("marker");
+    default_marker.touch()?;
     uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--no-workspace"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -405,7 +404,9 @@ fn create_venv_project_environment() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     "
     );
+    assert_path_missing(&default_marker);
 
+    default_marker.touch()?;
     uv_snapshot!(context.filters(), context.venv().arg("--clear").arg("--no-project"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -414,6 +415,8 @@ fn create_venv_project_environment() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     "
     );
+    assert_path_missing(&default_marker);
+    project_marker.assert("project environment");
 
     Ok(())
 }
