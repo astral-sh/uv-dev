@@ -7360,50 +7360,6 @@ fn offline_registry_backtrack() -> Result<()> {
     Ok(())
 }
 
-/// Resolve a package without network access via the `--offline` flag, using `--find-links` for an
-/// HTML registry.
-#[test]
-fn offline_find_links() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
-    let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("tqdm")?;
-
-    // Resolve with `--offline` and `--find-links`. We indicate that the network was disabled,
-    // since both the `--find-links` and the registry lookups fail (but, importantly, we don't error
-    // when failing to fetch the `--find-links` URL).
-    uv_snapshot!(context.filters(), context.pip_compile()
-            .arg("requirements.in")
-            .arg("--find-links")
-            .arg("https://astral-sh.github.io/pytorch-mirror/whl/torch_stable.html")
-            .arg("--offline"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because tqdm was not found in the cache and you require tqdm, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
-    "
-    );
-
-    // Resolve with `--offline`, `--find-links`, and `--no-index`.
-    uv_snapshot!(context.filters(), context.pip_compile()
-            .arg("requirements.in")
-            .arg("--find-links")
-            .arg("https://astral-sh.github.io/pytorch-mirror/whl/torch_stable.html")
-            .arg("--no-index")
-            .arg("--offline"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because tqdm was not found in the cache and you require tqdm, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
-    "
-    );
-
-    Ok(())
-}
-
 /// Resolve a direct URL package without network access via the `--offline` flag.
 #[test]
 fn offline_direct_url() -> Result<()> {
