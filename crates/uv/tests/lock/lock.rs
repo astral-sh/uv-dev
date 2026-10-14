@@ -28345,12 +28345,30 @@ fn lock_multiple_default_indexes() -> Result<()> {
 
 /// If a name is defined in both the workspace root and the member, prefer the index in the member.
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_repeat_named_index_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
+#[tokio::test]
+async fn lock_repeat_named_index_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let package = "ok".parse()?;
+    let fixtures = context.workspace_root.join("test/links");
+
+    let root_index = PackageServer::new(&package).await;
+    let root_filename = "ok-2.0.0-py3-none-any.whl";
+    let root_wheel = fs_err::read(fixtures.join(root_filename))?;
+    let root_digest = hex::encode(Sha256::digest(&root_wheel));
+    root_index
+        .serve(root_filename, &root_wheel, Some(&root_digest))
+        .await;
+
+    let member_index = PackageServer::new(&package).await;
+    let member_filename = "ok-1.0.0-py3-none-any.whl";
+    let member_wheel = fs_err::read(fixtures.join(member_filename))?;
+    let member_digest = hex::encode(Sha256::digest(&member_wheel));
+    member_index
+        .serve(member_filename, &member_wheel, Some(&member_digest))
+        .await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&formatdoc! {
         r#"
         [project]
         name = "project"
@@ -28359,40 +28377,41 @@ fn lock_repeat_named_index_member() -> Result<()> {
         dependencies = ["child"]
 
         [[tool.uv.index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121"
+        name = "internal"
+        url = "{}"
 
         [tool.uv.sources]
-        child = { workspace = true }
+        child = {{ workspace = true }}
 
         [tool.uv.workspace]
         members = ["packages/*"]
-        "#,
-    )?;
+        "#, root_index.index_url()
+    })?;
 
     let packages = context.temp_dir.child("packages");
 
     let child = packages.child("child");
-    child.child("pyproject.toml").write_str(
+    child.child("pyproject.toml").write_str(&formatdoc! {
         r#"
         [project]
         name = "child"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["idna"]
+        dependencies = ["ok"]
 
         [[tool.uv.index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+        name = "internal"
+        url = "{}"
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
 
         [tool.uv.sources]
-        idna = { index = "pytorch" }
-        "#,
-    )?;
+        ok = {{ index = "internal" }}
+        "#, member_index.index_url()
+    })?;
+    child.child("src/child/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -28401,9 +28420,12 @@ fn lock_repeat_named_index_member() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
+    let member_origin = regex::escape(&member_index.mock_server().uri());
+    let mut filters = context.filters();
+    filters.insert(0, (&member_origin, "http://[MEMBER_INDEX]"));
 
     insta::with_settings!({
-        filters => context.filters(),
+        filters => filters,
     }, {
         assert_snapshot!(
             lock, @r#"
@@ -28412,7 +28434,7 @@ fn lock_repeat_named_index_member() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
-        exclude-newer = "2025-01-30T00:00:00Z"
+        exclude-newer = "2024-03-25T00:00:00Z"
 
         [manifest]
         members = [
@@ -28425,18 +28447,18 @@ fn lock_repeat_named_index_member() -> Result<()> {
         version = "0.1.0"
         source = { editable = "packages/child" }
         dependencies = [
-            { name = "idna" },
+            { name = "ok" },
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "idna", index = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }]
+        requires-dist = [{ name = "ok", index = "http://[MEMBER_INDEX]/simple" }]
 
         [[package]]
-        name = "idna"
-        version = "3.4"
-        source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }
+        name = "ok"
+        version = "1.0.0"
+        source = { registry = "http://[MEMBER_INDEX]/simple" }
         wheels = [
-            { url = "https://download.pytorch.org/whl/idna-3.4-py3-none-any.whl", hash = "sha256:90b77e79eaa3eba6de819a0c442c0b4ceefc341a7a2ab77d7562bf49f425c5c2", upload-time = "2025-01-29T22:50:56.994Z" },
+            { url = "http://[MEMBER_INDEX]/ok-1.0.0-py3-none-any.whl", hash = "sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f", upload-time = "2024-01-01T00:00:00Z" },
         ]
 
         [[package]]
