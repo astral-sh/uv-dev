@@ -407,28 +407,14 @@ fn binary_payload_wheel(context: &TestContext) -> Result<PathBuf> {
     const METADATA: &[u8] = b"Metadata-Version: 2.1\nName: binary-payload\nVersion: 0.1.0\n";
     const WHEEL: &[u8] =
         b"Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n";
-    const RECORD: &[u8] = b"binary_payload/__init__.py,,\n\
-binary_payload/module.py,,\n\
-binary_payload/native.so,,\n\
-binary_payload/plain.so,,\n\
-binary_payload/versioned.so.1,,\n\
-binary_payload/versioned.so.1.2,,\n\
-binary_payload/native.dylib,,\n\
-binary_payload/native.DLL,,\n\
-binary_payload/native.pyd,,\n\
-binary_payload/tool,,\n\
-binary_payload/large.dat,,\n\
-binary_payload-0.1.0.dist-info/ignored.so,,\n\
-binary_payload-0.1.0.dist-info/METADATA,,\n\
-binary_payload-0.1.0.dist-info/WHEEL,,\n\
-binary_payload-0.1.0.dist-info/RECORD,,\n";
+    const RECORD_PATH: &str = "binary_payload-0.1.0.dist-info/RECORD";
 
     let wheel = context
         .temp_dir
         .join("binary_payload-0.1.0-py3-none-any.whl");
     let mut writer = ZipFileWriter::new(Vec::new());
     let large_file = vec![0; 2 * 1024 * 1024];
-    for (name, contents) in [
+    let files = [
         ("binary_payload/__init__.py", &[][..]),
         (
             "binary_payload/module.py",
@@ -449,8 +435,14 @@ binary_payload-0.1.0.dist-info/RECORD,,\n";
         ),
         ("binary_payload-0.1.0.dist-info/METADATA", METADATA),
         ("binary_payload-0.1.0.dist-info/WHEEL", WHEEL),
-        ("binary_payload-0.1.0.dist-info/RECORD", RECORD),
-    ] {
+    ];
+    let mut record = String::new();
+    for (name, _) in &files {
+        writeln!(record, "{name},,")?;
+    }
+    writeln!(record, "{RECORD_PATH},,")?;
+
+    for (name, contents) in files.into_iter().chain([(RECORD_PATH, record.as_bytes())]) {
         let entry = ZipEntryBuilder::new(name.into(), Compression::Stored).unix_permissions(
             if matches!(name, "binary_payload/native.so" | "binary_payload/tool") {
                 0o755
