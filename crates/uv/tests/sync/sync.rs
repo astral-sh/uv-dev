@@ -13792,6 +13792,7 @@ fn sync_dry_run_and_frozen() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn sync_script() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
@@ -13963,6 +13964,7 @@ fn sync_frozen_script_lockfile_before_environment() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn sync_locked_script() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
