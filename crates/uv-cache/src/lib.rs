@@ -3,7 +3,6 @@ use std::io;
 use std::io::Write;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
@@ -17,6 +16,8 @@ use uv_pypi_types::ResolutionMetadata;
 pub use crate::by_timestamp::CachedByTimestamp;
 #[cfg(feature = "clap")]
 pub use crate::cli::CacheArgs;
+#[cfg(windows)]
+use crate::link::Link;
 use crate::removal::Remover;
 pub use crate::removal::{Removal, RemovalAccounting};
 pub use crate::wheel::WheelCache;
@@ -27,6 +28,8 @@ mod archive;
 mod by_timestamp;
 #[cfg(feature = "clap")]
 mod cli;
+#[cfg(any(windows, test))]
+mod link;
 mod removal;
 mod wheel;
 
@@ -831,10 +834,7 @@ impl Cache {
         Ok(references)
     }
 
-    /// Create a link to a directory in the archive bucket.
-    ///
-    /// On Windows, we write structured data ([`Link`]) to a file containing the archive ID and
-    /// version. On Unix, we create a symlink to the target directory.
+    /// Create a file containing the archive ID and bucket version.
     #[cfg(windows)]
     #[expect(clippy::unused_self)]
     fn create_link(&self, id: &ArchiveId, dst: impl AsRef<Path>) -> io::Result<()> {
@@ -867,7 +867,7 @@ impl Cache {
     pub fn resolve_link(&self, path: impl AsRef<Path>) -> io::Result<PathBuf> {
         // Deserialize the link.
         let contents = fs_err::read_to_string(path.as_ref())?;
-        let link = Link::from_str(&contents)?;
+        let link: Link = contents.parse()?;
 
         // Ignore stale links.
         if link.version != ARCHIVE_VERSION {
@@ -882,10 +882,7 @@ impl Cache {
         path.canonicalize()
     }
 
-    /// Create a link to a directory in the archive bucket.
-    ///
-    /// On Windows, we write structured data ([`Link`]) to a file containing the archive ID and
-    /// version. On Unix, we create a symlink to the target directory.
+    /// Create a symlink to a directory in the archive bucket.
     #[cfg(unix)]
     fn create_link(&self, id: &ArchiveId, dst: impl AsRef<Path>) -> io::Result<()> {
         let dst = dst.as_ref();
@@ -915,70 +912,6 @@ fn should_search_for_archive_references(entry: &walkdir::DirEntry) -> bool {
             .into_iter()
             .any(|ignored| extension.eq_ignore_ascii_case(ignored))
     })
-}
-
-/// An archive (unzipped wheel) that exists in the local cache.
-#[derive(Debug, Clone)]
-#[allow(unused)]
-struct Link {
-    /// The unique ID of the entry in the archive bucket.
-    id: ArchiveId,
-    /// The version of the archive bucket.
-    version: u8,
-}
-
-#[allow(unused)]
-impl Link {
-    /// Create a new [`Archive`] with the given ID and hashes.
-    fn new(id: ArchiveId) -> Self {
-        Self {
-            id,
-            version: ARCHIVE_VERSION,
-        }
-    }
-}
-
-impl Display for Link {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "archive-v{}/{}", self.version, self.id)
-    }
-}
-
-impl FromStr for Link {
-    type Err = io::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut parts = s.splitn(2, '/');
-        let version = parts
-            .next()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing version"))?;
-        let id = parts
-            .next()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing ID"))?;
-
-        // Parse the archive version from `archive-v{version}/{id}`.
-        let version = version
-            .strip_prefix("archive-v")
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing version prefix"))?;
-        let version = u8::from_str(version).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("failed to parse version: {err}"),
-            )
-        })?;
-
-        // Parse the ID from `archive-v{version}/{id}`.
-        let id = ArchiveId::from_str(id).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("failed to parse ID: {err}"),
-            )
-        })?;
-
-        Ok(Self { id, version })
-    }
 }
 
 pub trait CleanReporter: Send + Sync {
@@ -1482,21 +1415,9 @@ impl Refresh {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use crate::ArchiveId;
 
-    use super::{Cache, Link};
-
-    #[test]
-    fn test_link_round_trip() {
-        let id = ArchiveId::new();
-        let link = Link::new(id);
-        let s = link.to_string();
-        let parsed = Link::from_str(&s).unwrap();
-        assert_eq!(link.id, parsed.id);
-        assert_eq!(link.version, parsed.version);
-    }
+    use super::Cache;
 
     #[test]
     fn test_replace_archive_link() {
@@ -1511,14 +1432,6 @@ mod tests {
                 archive.canonicalize().unwrap()
             );
         }
-    }
-
-    #[test]
-    fn test_link_deserialize() {
-        assert!(Link::from_str("archive-v0/foo").is_ok());
-        assert!(Link::from_str("archive/foo").is_err());
-        assert!(Link::from_str("v1/foo").is_err());
-        assert!(Link::from_str("archive-v0/").is_err());
     }
 
     #[test]
