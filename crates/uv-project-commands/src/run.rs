@@ -597,37 +597,15 @@ pub async fn run(
             }
         };
 
-        if no_project {
-            // If the user ran with `--no-project` and provided a project-only setting, warn.
-            for flag in extras.history().as_flags_pretty() {
-                warn_user!("`{flag}` has no effect when used alongside `--no-project`");
-            }
-            for flag in groups.history().as_flags_pretty() {
-                warn_user!("`{flag}` has no effect when used alongside `--no-project`");
-            }
-            if let LockCheck::Enabled(lock_check) = lock_check {
-                warn_user!("`{lock_check}` has no effect when used alongside `--no-project`");
-            }
-            if frozen.is_some() {
-                warn_user!("`--frozen` has no effect when used alongside `--no-project`");
-            }
-            if no_sync {
-                warn_user!("`--no-sync` has no effect when used alongside `--no-project`");
-            }
-        } else if project.is_none() {
-            // If we can't find a project and the user provided a project-only setting, warn.
-            for flag in extras.history().as_flags_pretty() {
-                warn_user!("`{flag}` has no effect when used outside of a project");
-            }
-            for flag in groups.history().as_flags_pretty() {
-                warn_user!("`{flag}` has no effect when used outside of a project");
-            }
-            if let LockCheck::Enabled(lock_check) = lock_check {
-                warn_user!("`{lock_check}` has no effect when used outside of a project",);
-            }
-            if no_sync {
-                warn_user!("`--no-sync` has no effect when used outside of a project");
-            }
+        if no_project || project.is_none() {
+            crate::warnings::warn_ignored_project_settings(
+                no_project,
+                &extras,
+                &groups,
+                lock_check,
+                frozen.filter(|_| no_project),
+                no_sync,
+            );
         }
 
         if let Some(project) = project {
