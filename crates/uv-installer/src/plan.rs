@@ -742,6 +742,23 @@ impl Plan {
             && self.extraneous.is_empty()
     }
 
+    /// Return whether the plan schedules an installation or removal for the package.
+    pub fn contains_package(&self, name: &PackageName) -> bool {
+        let Self {
+            cached,
+            remote,
+            reinstalls,
+            extraneous,
+        } = self;
+
+        cached.iter().any(|dist| dist.name() == name)
+            || remote.iter().any(|dist| dist.name() == name)
+            || reinstalls
+                .iter()
+                .chain(extraneous)
+                .any(|dist| dist.name() == name)
+    }
+
     /// Partition the remote distributions based on a predicate function.
     ///
     /// Returns a tuple of plans, where the first plan contains the remote distributions that match
