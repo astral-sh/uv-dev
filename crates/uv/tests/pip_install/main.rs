@@ -4,6 +4,8 @@
 use uv_test::pypi_proxy;
 
 #[cfg(feature = "test-python")]
+mod archive;
+#[cfg(feature = "test-python")]
 mod binary_policy;
 #[cfg(feature = "test-python")]
 mod bytecode;
