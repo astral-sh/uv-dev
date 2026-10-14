@@ -91,16 +91,13 @@ impl KeyringProvider {
             return Ok(false);
         };
 
-        let target = Self::service_name(url);
-
         match &self.backend {
             KeyringProviderBackend::Native => {
-                self.store_native(&target, username, password).await?;
+                self.store_native(&Self::service_name(url), username, password)
+                    .await?;
                 Ok(true)
             }
-            KeyringProviderBackend::Subprocess => Err(Error::StoreUnsupported(self.backend.name())),
-            #[cfg(test)]
-            KeyringProviderBackend::Dummy(_) => Err(Error::StoreUnsupported(self.backend.name())),
+            backend => Err(Error::StoreUnsupported(backend.name())),
         }
     }
 
@@ -122,18 +119,12 @@ impl KeyringProvider {
     /// Only the native keyring provider is supported at this time.
     #[instrument(skip_all, fields(%url, username))]
     pub async fn remove(&self, url: &DisplaySafeUrl, username: &str) -> Result<(), Error> {
-        let target = Self::service_name(url);
-
         match &self.backend {
-            KeyringProviderBackend::Native => {
-                self.remove_native(&target, username).await?;
-                Ok(())
-            }
-            KeyringProviderBackend::Subprocess => {
-                Err(Error::RemoveUnsupported(self.backend.name()))
-            }
-            #[cfg(test)]
-            KeyringProviderBackend::Dummy(_) => Err(Error::RemoveUnsupported(self.backend.name())),
+            KeyringProviderBackend::Native => self
+                .remove_native(&Self::service_name(url), username)
+                .await
+                .map_err(Error::from),
+            backend => Err(Error::RemoveUnsupported(backend.name())),
         }
     }
 
