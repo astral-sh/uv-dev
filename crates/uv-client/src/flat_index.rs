@@ -347,7 +347,7 @@ impl<'a> FlatIndexClient<'a> {
                     );
                     continue;
                 };
-                if target.is_dir() {
+                if path.join(target).is_dir() {
                     continue;
                 }
             }
@@ -470,5 +470,24 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(actual, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_from_directory_skips_relative_symlinks_to_directories() {
+        let directory = tempdir().unwrap();
+        let target = tempfile::tempdir_in(directory.path()).unwrap();
+        std::os::unix::fs::symlink(
+            target.path().file_name().unwrap(),
+            directory.path().join("example-1.0-py3-none-any.whl"),
+        )
+        .unwrap();
+
+        let entries = FlatIndexClient::read_from_directory(
+            directory.path(),
+            &IndexUrl::parse(&directory.path().to_string_lossy(), None).unwrap(),
+        )
+        .unwrap();
+        assert!(entries.entries.is_empty());
     }
 }
