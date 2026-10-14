@@ -929,41 +929,36 @@ fn generate_package_scripts(
     let pkg_dir = src_dir.join(&*module_name);
     fs_err::create_dir_all(&pkg_dir)?;
 
-    let pure_python_script = if is_lib {
-        indoc::formatdoc! {r#"
-        def hello() -> str:
-            return "Hello from {package}!"
-        "#}
-    } else {
-        indoc::formatdoc! {r#"
-        def main() -> None:
-            print("Hello from {package}!")
-        "#}
+    // Both native backends expose the same Python interface.
+    let generate_native_package_script = || -> Result<String> {
+        let pyi_file = pkg_dir.join("_core.pyi");
+        if !pyi_file.try_exists()? {
+            fs_err::write(
+                pyi_file,
+                indoc::indoc! {r"
+                    def hello_from_bin() -> str: ...
+                "},
+            )?;
+        }
+
+        Ok(if is_lib {
+            indoc::formatdoc! {r"
+            from {module_name}._core import hello_from_bin
+
+
+            def hello() -> str:
+                return hello_from_bin()
+            "}
+        } else {
+            indoc::formatdoc! {r"
+            from {module_name}._core import hello_from_bin
+
+
+            def main() -> None:
+                print(hello_from_bin())
+            "}
+        })
     };
-
-    // Python script for binary-based packaged apps or libs
-    let binary_call_script = if is_lib {
-        indoc::formatdoc! {r"
-        from {module_name}._core import hello_from_bin
-
-
-        def hello() -> str:
-            return hello_from_bin()
-        "}
-    } else {
-        indoc::formatdoc! {r"
-        from {module_name}._core import hello_from_bin
-
-
-        def main() -> None:
-            print(hello_from_bin())
-        "}
-    };
-
-    // .pyi file for binary script
-    let pyi_contents = indoc::indoc! {r"
-        def hello_from_bin() -> str: ...
-    "};
 
     let package_script = match build_backend {
         ProjectBuildBackend::Maturin => {
@@ -990,13 +985,7 @@ fn generate_package_scripts(
                 "#},
                 )?;
             }
-            // Generate .pyi file
-            let pyi_file = pkg_dir.join("_core.pyi");
-            if !pyi_file.try_exists()? {
-                fs_err::write(pyi_file, pyi_contents)?;
-            }
-            // Return python script calling binary
-            binary_call_script
+            generate_native_package_script()?
         }
         ProjectBuildBackend::Scikit => {
             // Generate main.cpp
@@ -1021,15 +1010,16 @@ fn generate_package_scripts(
                 "#},
                 )?;
             }
-            // Generate .pyi file
-            let pyi_file = pkg_dir.join("_core.pyi");
-            if !pyi_file.try_exists()? {
-                fs_err::write(pyi_file, pyi_contents)?;
-            }
-            // Return python script calling binary
-            binary_call_script
+            generate_native_package_script()?
         }
-        _ => pure_python_script,
+        _ if is_lib => indoc::formatdoc! {r#"
+            def hello() -> str:
+                return "Hello from {package}!"
+            "#},
+        _ => indoc::formatdoc! {r#"
+            def main() -> None:
+                print("Hello from {package}!")
+            "#},
     };
 
     // Create `src/{name}/__init__.py`, if it doesn't exist already.
