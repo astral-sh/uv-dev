@@ -1457,31 +1457,28 @@ impl Refresh {
     /// Combine two [`Refresh`] policies, taking the "max" of the two policies.
     #[must_use]
     pub fn combine(self, other: Self) -> Self {
+        let timestamp = self.timestamp().max(other.timestamp());
         match (self, other) {
-            // If the policy is `None`, return the existing refresh policy.
-            // Take the `max` of the two timestamps.
-            (Self::None(t1), Self::None(t2)) => Self::None(t1.max(t2)),
-            (Self::None(t1), Self::All(t2)) => Self::All(t1.max(t2)),
-            (Self::None(t1), Self::Packages(packages, paths, t2)) => {
-                Self::Packages(packages, paths, t1.max(t2))
+            (Self::All(_), _) | (_, Self::All(_)) => Self::All(timestamp),
+            (Self::None(_), Self::None(_)) => Self::None(timestamp),
+            (Self::Packages(packages, paths, _), Self::None(_))
+            | (Self::None(_), Self::Packages(packages, paths, _)) => {
+                Self::Packages(packages, paths, timestamp)
             }
-
-            // If the policy is `All`, refresh all packages.
-            (Self::All(t1), Self::None(t2) | Self::All(t2) | Self::Packages(.., t2)) => {
-                Self::All(t1.max(t2))
-            }
-
-            // If the policy is `Packages`, take the "max" of the two policies.
-            (Self::Packages(packages, paths, t1), Self::None(t2)) => {
-                Self::Packages(packages, paths, t1.max(t2))
-            }
-            (Self::Packages(.., t1), Self::All(t2)) => Self::All(t1.max(t2)),
-            (Self::Packages(packages1, paths1, t1), Self::Packages(packages2, paths2, t2)) => {
+            (Self::Packages(packages1, paths1, _), Self::Packages(packages2, paths2, _)) => {
                 Self::Packages(
                     packages1.into_iter().chain(packages2).collect(),
                     paths1.into_iter().chain(paths2).collect(),
-                    t1.max(t2),
+                    timestamp,
                 )
+            }
+        }
+    }
+
+    fn timestamp(&self) -> Timestamp {
+        match self {
+            Self::None(timestamp) | Self::Packages(.., timestamp) | Self::All(timestamp) => {
+                *timestamp
             }
         }
     }
