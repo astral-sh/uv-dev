@@ -8,6 +8,24 @@ use indoc::indoc;
 use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::uv_snapshot;
 
+fn requests_compatibility_index() -> Result<PackseServer> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "requests-compatibility"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.requests.versions."2.31.0"]
+        requires = ["certifi==2024.2.2", "charset-normalizer==3.3.2", "idna>=2.5,<4", "urllib3>=1.21.1,<3"]
+        [packages.certifi.versions."2024.2.2"]
+        [packages.charset-normalizer.versions."3.3.2"]
+        [packages.idna.versions."2.4"]
+        [packages.idna.versions."3.6"]
+        [packages.urllib3.versions."1.20"]
+        [packages.urllib3.versions."2.2.1"]
+    "#})?;
+    Ok(PackseServer::from_scenario(&scenario))
+}
+
 #[test]
 fn check_incompatible_packages_quiet() -> Result<()> {
     let scenario = toml::from_str::<Scenario>(indoc! {r#"
@@ -46,9 +64,9 @@ fn check_incompatible_packages_quiet() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_compatible_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = requests_compatibility_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==2.31.0")?;
@@ -57,6 +75,8 @@ fn check_compatible_packages() -> Result<()> {
         .pip_install()
         .arg("-r")
         .arg("requirements.txt")
+        .arg("--default-index")
+        .arg(index.index_url())
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -243,9 +263,9 @@ fn check_versionless_egg_info_file() -> Result<()> {
 // requests 2.31.0 requires idna (<4,>=2.5)
 // this test force-installs idna 2.4 to trigger a failure.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_incompatible_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = requests_compatibility_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==2.31.0")?;
@@ -254,6 +274,8 @@ fn check_incompatible_packages() -> Result<()> {
         .pip_install()
         .arg("-r")
         .arg("requirements.txt")
+        .arg("--default-index")
+        .arg(index.index_url())
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -275,6 +297,8 @@ fn check_incompatible_packages() -> Result<()> {
         .pip_install()
         .arg("-r")
         .arg("requirements_idna.txt")
+        .arg("--default-index")
+        .arg(index.index_url())
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -304,9 +328,9 @@ fn check_incompatible_packages() -> Result<()> {
 // this test force-installs idna 2.4 and urllib3 1.20 to trigger a failure
 // with multiple incompatible packages.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn check_multiple_incompatible_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = requests_compatibility_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==2.31.0")?;
@@ -315,6 +339,8 @@ fn check_multiple_incompatible_packages() -> Result<()> {
         .pip_install()
         .arg("-r")
         .arg("requirements.txt")
+        .arg("--default-index")
+        .arg(index.index_url())
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -339,6 +365,8 @@ fn check_multiple_incompatible_packages() -> Result<()> {
         .pip_install()
         .arg("-r")
         .arg("requirements_two.txt")
+        .arg("--default-index")
+        .arg(index.index_url())
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stderr -----
