@@ -705,10 +705,10 @@ fn init_script_bare() -> Result<()> {
     Ok(())
 }
 
-// Ensure python versions passed as arguments are present in file metadata
+/// The explicit Python request controls script metadata even when discovery defaults elsewhere.
 #[test]
 fn init_script_python_version() -> Result<()> {
-    let context = uv_test::test_context!("3.11");
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
     let child = context.temp_dir.child("foo");
     child.create_dir_all()?;
