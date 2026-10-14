@@ -34262,38 +34262,44 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
+const DYNAMIC_VERSION_NO_BUILD_PROJECT: &str = indoc! {r#"
+    [project]
+    name = "project"
+    requires-python = ">=3.12"
+    dynamic = ["version"]
+    dependencies = []
+
+    [build-system]
+    requires = []
+    build-backend = "backend"
+    backend-path = ["."]
+"#};
+
+#[cfg(feature = "test-universal")]
+const DYNAMIC_VERSION_NO_BUILD_BACKEND: &str = indoc! {r#"
+    from pathlib import Path
+
+    Path(__file__).with_name("backend-executed").touch()
+    raise RuntimeError("the build backend must not run")
+"#};
+
 /// Validating a lockfile with a dynamic version (but static dependencies) shouldn't require
 /// building the package.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dynamic_version_no_build() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(DYNAMIC_VERSION_NO_BUILD_PROJECT)?;
+    context
+        .temp_dir
+        .child("backend.py")
+        .write_str(DYNAMIC_VERSION_NO_BUILD_BACKEND)?;
 
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        requires-python = ">=3.12"
-        dynamic = ["version"]
-        dependencies = []
-
-        [build-system]
-        requires = []
-        build-backend = "backend"
-        backend-path = ["."]
-        "#,
-    )?;
-
-    context.temp_dir.child("backend.py").write_str(indoc! {r#"
-        from pathlib import Path
-
-        Path(__file__).with_name("backend-executed").touch()
-        raise RuntimeError("the build backend must not run")
-    "#})?;
-
-    context.temp_dir.child("uv.lock").write_str(indoc::indoc! {
-    r#"
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
         version = 1
         revision = 2
         requires-python = ">=3.12"
@@ -34304,7 +34310,7 @@ fn lock_dynamic_version_no_build() -> Result<()> {
         [[package]]
         name = "project"
         source = { editable = "." }
-        "#})?;
+    "#})?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
     exit_code: 0 (success)
@@ -34315,35 +34321,46 @@ fn lock_dynamic_version_no_build() -> Result<()> {
         .temp_dir
         .child("backend-executed")
         .assert(predicates::path::missing());
+    Ok(())
+}
 
-    let pyproject = context.read("pyproject.toml");
-    pyproject_toml.write_str(&pyproject.replace(
-        "dependencies = []",
-        indoc! {r#"
-            dependencies = []
-
-            [dependency-groups]
-            dev = ["project>=0.1.0"]
-            "#},
-    ))?;
-    let lock = context
-        .read("uv.lock")
-        .replace("revision = 2", "revision = 4");
+/// A metadata-free self-reference must not trigger a build for the project's dynamic version.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_dynamic_version_self_reference_no_build() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
     context
         .temp_dir
-        .child("uv.lock")
+        .child("pyproject.toml")
         .write_str(&formatdoc! {r#"
-            {lock}
+            {DYNAMIC_VERSION_NO_BUILD_PROJECT}
+            [dependency-groups]
+            dev = ["project>=0.1.0"]
+        "#})?;
+    context
+        .temp_dir
+        .child("backend.py")
+        .write_str(DYNAMIC_VERSION_NO_BUILD_BACKEND)?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 4
+        requires-python = ">=3.12"
 
-            [package.dev-dependencies]
-            dev = [{{ name = "project" }}]
-            "#})?;
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "project"
+        source = { editable = "." }
+
+        [package.dev-dependencies]
+        dev = [{ name = "project" }]
+    "#})?;
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features")
         .arg("lock-without-metadata")
         .arg("--check")
         .arg("--offline")
-        .arg("--no-cache")
         .arg("--no-build"), @"
     exit_code: 0 (success)
     ----- stderr -----
