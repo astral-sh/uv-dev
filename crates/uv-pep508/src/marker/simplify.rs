@@ -268,7 +268,7 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
                         .position(|x| x == term)
                         // If the term was already removed from this one, we cannot
                         // depend on it for further simplification.
-                        .is_some_and(|i| !redundant_terms.contains(&i))
+                        .is_some_and(|i| redundant_terms.binary_search(&i).is_err())
                 }) {
                     redundant_terms.push(skipped);
                     continue 'term;
@@ -277,9 +277,7 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
         }
 
         // Eliminate any redundant terms.
-        for term in redundant_terms.into_iter().rev() {
-            dnf[i].remove(term);
-        }
+        remove_sorted_indices(&mut dnf[i], redundant_terms);
     }
 
     // Once we have eliminated redundant terms, there may also be redundant clauses.
@@ -291,7 +289,7 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
 
         for (j, other_clause) in dnf.iter().enumerate() {
             // Ignore clauses that are going to be eliminated.
-            if i == j || redundant_clauses.contains(&j) {
+            if i == j || redundant_clauses.binary_search(&j).is_ok() {
                 continue;
             }
 
@@ -308,9 +306,23 @@ fn simplify(dnf: &mut Vec<Vec<MarkerExpression>>) {
     }
 
     // Eliminate any redundant clauses.
-    for i in redundant_clauses.into_iter().rev() {
-        dnf.remove(i);
-    }
+    remove_sorted_indices(dnf, redundant_clauses);
+}
+
+/// Remove strictly increasing indices in one pass over the affected span.
+fn remove_sorted_indices<T>(values: &mut Vec<T>, indices: Vec<usize>) {
+    let Some((&first, &last)) = indices.first().zip(indices.last()) else {
+        return;
+    };
+    let mut indices = indices.into_iter().peekable();
+    let mut current = first;
+    values
+        .extract_if(first..=last, |_| {
+            let remove = indices.next_if_eq(&current).is_some();
+            current += 1;
+            remove
+        })
+        .for_each(drop);
 }
 
 /// Sort the clauses in a DNF expression, for backwards compatibility. The goal is to avoid
