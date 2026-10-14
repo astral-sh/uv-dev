@@ -20,17 +20,17 @@ use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot, v
 
 #[test]
 fn run_with_python_version() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.11", "3.9"]);
+    let context = uv_test::test_context_with_versions!(&["3.13", "3.12", "3.11"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
         name = "foo"
         version = "1.0.0"
-        requires-python = ">=3.11, <4"
+        requires-python = ">=3.12, <4"
         dependencies = [
-          "anyio==3.6.0 ; python_version == '3.11'",
-          "anyio==3.7.0 ; python_version == '3.12'",
+          "anyio==3.6.0 ; python_version == '3.12'",
+          "anyio==3.7.0 ; python_version == '3.13'",
         ]
 
         [build-system]
@@ -61,11 +61,11 @@ fn run_with_python_version() -> Result<()> {
     uv_snapshot!(context.filters(), command_with_args, @"
     exit_code: 0 (success)
     ----- stdout -----
-    3.12.[X]
+    3.13.[X]
     3.7.0
 
     ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Using CPython 3.13.[X] interpreter at: [PYTHON-3.13]
     Creating virtual environment at: .venv
     Resolved 5 packages in [TIME]
     Prepared 4 packages in [TIME]
@@ -80,19 +80,48 @@ fn run_with_python_version() -> Result<()> {
     let mut command = context.run();
     let command_with_args = command
         .arg("-p")
-        .arg("3.12")
+        .arg("3.13")
         .arg("python")
         .arg("-B")
         .arg("main.py");
     uv_snapshot!(context.filters(), command_with_args, @"
     exit_code: 0 (success)
     ----- stdout -----
-    3.12.[X]
+    3.13.[X]
     3.7.0
 
     ----- stderr -----
     Resolved 5 packages in [TIME]
     Checked 4 packages in [TIME]
+    ");
+
+    // This time, we target Python 3.12 instead.
+    let mut command = context.run();
+    let command_with_args = command
+        .arg("-p")
+        .arg("3.12")
+        .arg("python")
+        .arg("-B")
+        .arg("main.py")
+        .env_remove(EnvVars::VIRTUAL_ENV);
+
+    uv_snapshot!(context.filters(), command_with_args, @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.12.[X]
+    3.6.0
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 5 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 4 packages in [TIME]
+     + anyio==3.6.0
+     + foo==1.0.0 (from file://[TEMP_DIR]/)
+     + idna==3.6
+     + sniffio==1.3.1
     ");
 
     // This time, we target Python 3.11 instead.
@@ -106,39 +135,10 @@ fn run_with_python_version() -> Result<()> {
         .env_remove(EnvVars::VIRTUAL_ENV);
 
     uv_snapshot!(context.filters(), command_with_args, @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    3.11.[X]
-    3.6.0
-
-    ----- stderr -----
-    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
-    Removed virtual environment at: .venv
-    Creating virtual environment at: .venv
-    Resolved 5 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 4 packages in [TIME]
-     + anyio==3.6.0
-     + foo==1.0.0 (from file://[TEMP_DIR]/)
-     + idna==3.6
-     + sniffio==1.3.1
-    ");
-
-    // This time, we target Python 3.9 instead.
-    let mut command = context.run();
-    let command_with_args = command
-        .arg("-p")
-        .arg("3.9")
-        .arg("python")
-        .arg("-B")
-        .arg("main.py")
-        .env_remove(EnvVars::VIRTUAL_ENV);
-
-    uv_snapshot!(context.filters(), command_with_args, @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
-    error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.11, <4` (from `project.requires-python`)
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
+    error: The requested interpreter resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12, <4` (from `project.requires-python`)
     ");
 
     Ok(())
