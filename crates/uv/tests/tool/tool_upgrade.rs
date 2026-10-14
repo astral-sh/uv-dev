@@ -1,11 +1,11 @@
 use std::process::Command;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
-use predicates::prelude::predicate;
+use predicates::prelude::{PredicateStrExt, predicate};
 use serde_json::json;
 use wiremock::{
     Mock, ResponseTemplate,
@@ -16,7 +16,7 @@ use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, scenario::Scenario};
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 
 use crate::workspace_fixture::MixedWorkspace;
 
@@ -1001,6 +1001,7 @@ fn tool_upgrade_python() {
      + pytz==2018.5
     Installed 1 executable: pybabel
     ");
+    assert_tool_python_version(&context, "babel", "3.11");
 
     uv_snapshot!(
         context.filters(),
@@ -1018,13 +1019,7 @@ fn tool_upgrade_python() {
     "
     );
 
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        let content = context.read("tools/babel/pyvenv.cfg");
-        let lines: Vec<&str> = content.split('\n').collect();
-        assert_snapshot!(lines[lines.len() - 3], @"version_info = 3.12.[X]");
-    });
+    assert_tool_python_version(&context, "babel", "3.12");
 }
 
 #[test]
@@ -1067,6 +1062,8 @@ fn tool_upgrade_python_with_all() {
      + python-dotenv==0.10.2.post2
     Installed 1 executable: dotenv
     ");
+    assert_tool_python_version(&context, "babel", "3.11");
+    assert_tool_python_version(&context, "python-dotenv", "3.11");
 
     uv_snapshot!(
         context.filters(),
@@ -1088,21 +1085,8 @@ fn tool_upgrade_python_with_all() {
     "
     );
 
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        let content = context.read("tools/babel/pyvenv.cfg");
-        let lines: Vec<&str> = content.split('\n').collect();
-        assert_snapshot!(lines[lines.len() - 3], @"version_info = 3.12.[X]");
-    });
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        let content = context.read("tools/python-dotenv/pyvenv.cfg");
-        let lines: Vec<&str> = content.split('\n').collect();
-        assert_snapshot!(lines[lines.len() - 3], @"version_info = 3.12.[X]");
-    });
+    assert_tool_python_version(&context, "babel", "3.12");
+    assert_tool_python_version(&context, "python-dotenv", "3.12");
 }
 
 /// Upgrade a tool together with any additional entrypoints from other
@@ -1533,6 +1517,7 @@ fn tool_upgrade_lock_uses_requested_python() -> Result<()> {
         .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
         .success();
+    assert_tool_python_version(&context, "simple-launcher", "3.11");
 
     context
         .tool_upgrade()
@@ -1544,18 +1529,25 @@ fn tool_upgrade_lock_uses_requested_python() -> Result<()> {
         .assert()
         .success();
 
-    let pyvenv = context.read("tools/simple-launcher/pyvenv.cfg");
-    let Some(version_info) = pyvenv
-        .lines()
-        .find(|line| line.starts_with("version_info = "))
-    else {
-        bail!("Missing `version_info` in tool environment")
-    };
-    insta::with_settings!({ filters => context.filters() }, {
-        assert_snapshot!(version_info, @"version_info = 3.12.[X]");
-    });
+    assert_tool_python_version(&context, "simple-launcher", "3.12");
 
     Ok(())
+}
+
+fn assert_tool_python_version(context: &TestContext, tool: &str, version: &str) {
+    let interpreter = venv_bin_path(context.temp_dir.child("tools").child(tool))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    context
+        .external_command(interpreter)
+        .args([
+            "-I",
+            "-B",
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(version).trim());
 }
 
 /// An index containing earlier synthetic tool releases and their dependencies.
