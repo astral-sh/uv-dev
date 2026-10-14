@@ -11,6 +11,9 @@ mod tool_build_hashes;
 
 mod tool_dir;
 
+#[cfg(feature = "test-python")]
+mod tool_fixture;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tool_install;
 
@@ -24,6 +27,9 @@ mod tool_install_validation;
 mod tool_list;
 
 mod tool_list_empty;
+
+#[cfg(feature = "test-python")]
+mod tool_list_installed;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tool_run;

@@ -11,74 +11,6 @@ use wiremock::{
 };
 
 #[test]
-fn tool_list() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black`
-    context
-        .tool_install()
-        .arg("black==24.2.0")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.tool_list(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    black v24.2.0
-    - black
-    - blackd
-    ");
-}
-
-#[test]
-fn tool_list_paths() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black`
-    context
-        .tool_install()
-        .arg("black==24.2.0")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-paths"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    black v24.2.0 ([TEMP_DIR]/tools/black)
-    - black ([TEMP_DIR]/bin/black)
-    - blackd ([TEMP_DIR]/bin/blackd)
-    ");
-}
-
-#[cfg(windows)]
-#[test]
-fn tool_list_paths_windows() {
-    let context = uv_test::test_context!("3.12")
-        .clear_filters()
-        .with_filtered_windows_temp_dir()
-        .with_tool_dirs();
-
-    // Install `black`
-    context
-        .tool_install()
-        .arg("black==24.2.0")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters_without_standard_filters(), context.tool_list().arg("--show-paths"), @r###"
-    exit_code: 0 (success)
-    ----- stdout -----
-    black v24.2.0 ([TEMP_DIR]\tools\black)
-    - black ([TEMP_DIR]\bin\black.exe)
-    - blackd ([TEMP_DIR]\bin\blackd.exe)
-    "###);
-}
-
-#[test]
 fn tool_list_outdated() {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
@@ -595,29 +527,6 @@ fn tool_list_show_extras() {
     - blackd ([TEMP_DIR]/bin/blackd)
     flask v3.0.2 [extras: async, dotenv] [with: requests] ([TEMP_DIR]/tools/flask)
     - flask ([TEMP_DIR]/bin/flask)
-    ");
-}
-
-#[test]
-fn tool_list_show_python() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-
-    // Install `black` with python 3.12
-    context
-        .tool_install()
-        .arg("black==24.2.0")
-        .assert()
-        .success();
-
-    // Test with --show-python
-    uv_snapshot!(context.filters(), context.tool_list().arg("--show-python"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    black v24.2.0 [CPython 3.12.[X]]
-    - black
-    - blackd
     ");
 }
 
