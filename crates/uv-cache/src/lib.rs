@@ -1297,7 +1297,7 @@ impl CacheBucket {
     fn to_str(self) -> &'static str {
         match self {
             // Note that when bumping this, you'll also need to bump it
-            // in `crates/uv/tests/build/cache_prune.rs`.
+            // in `crates/uv/tests/build/cache_prune_revisions.rs`.
             Self::SourceDistributions => "sdists-v10",
             // Note that when bumping this, you'll also need to bump it
             // in `crates/uv/tests/lock/lock.rs`.
