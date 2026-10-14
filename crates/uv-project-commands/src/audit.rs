@@ -18,6 +18,7 @@ use uv_environment_operations::{
 use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_preview::{Preview, PreviewFeature};
+use uv_pypi_types::ResolverMarkerEnvironment;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
@@ -195,7 +196,7 @@ pub async fn audit(
     };
 
     // Determine the markers to use for resolution.
-    let _markers = (!universal).then(|| {
+    let markers = (!universal).then(|| {
         resolution_markers(
             python_version.as_ref(),
             python_platform.as_ref(),
@@ -204,10 +205,13 @@ pub async fn audit(
     });
 
     let outcome = audit_lock(
-        &lock,
+        lock.auditable(
+            &extras,
+            &groups,
+            markers.as_ref().map(ResolverMarkerEnvironment::markers),
+            |_| true,
+        ),
         target.install_path(),
-        &extras,
-        &groups,
         &settings.index_locations,
         settings.keyring_provider,
         client_builder,

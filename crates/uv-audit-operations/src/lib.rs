@@ -15,13 +15,10 @@ use uv_audit::{
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, CachedClient, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, Printer};
-use uv_configuration::{
-    AuditOutputFormat, Concurrency, DependencyGroupsWithDefaults, ExtrasSpecificationWithDefaults,
-    KeyringProviderType,
-};
+use uv_configuration::{AuditOutputFormat, Concurrency, KeyringProviderType};
 use uv_distribution_types::{IndexCapabilities, IndexLocations, IndexUrl};
 use uv_fs::{CWD, find_git_repository_root, relative_to};
-use uv_lock::Lock;
+use uv_lock::Auditable;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
 
@@ -37,12 +34,10 @@ pub struct AuditOutcome {
     pub matched_ignores: FxHashSet<VulnerabilityID>,
 }
 
-/// Audit the dependency graph reachable from a project, script, or tool lockfile.
+/// Audit the selected dependency graph from a project, script, or tool lockfile.
 pub async fn audit_lock(
-    lock: &Lock,
+    auditable: Auditable<'_>,
     root: &Path,
-    extras: &ExtrasSpecificationWithDefaults,
-    groups: &DependencyGroupsWithDefaults,
     index_locations: &IndexLocations,
     keyring_provider: KeyringProviderType,
     client_builder: BaseClientBuilder<'_>,
@@ -54,7 +49,6 @@ pub async fn audit_lock(
     ignore: &[VulnerabilityID],
     ignore_until_fixed: &[VulnerabilityID],
 ) -> Result<AuditOutcome> {
-    let auditable = lock.auditable(extras, groups, |_| true);
     let mut projects = auditable.projects(root)?;
 
     // Flat indexes cannot provide PEP 792 project-status metadata.
