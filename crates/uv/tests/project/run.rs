@@ -3726,8 +3726,13 @@ fn run_module() {
 #[test]
 fn run_module_stdin() {
     let context = uv_test::test_context!("3.12");
+    let mut command = context.run();
+    command.args(["-m", "-"]);
+    // Reading a directory fails, so the module error must be raised before accessing stdin.
+    #[cfg(unix)]
+    command.stdin(std::fs::File::open(context.temp_dir.path()).unwrap());
 
-    uv_snapshot!(context.filters(), context.run().arg("-m").arg("-"), @"
+    uv_snapshot!(context.filters(), command, @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Cannot run a Python module from stdin
