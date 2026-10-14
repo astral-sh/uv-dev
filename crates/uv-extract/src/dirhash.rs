@@ -312,33 +312,34 @@ impl DirhashTree {
         original_path: &str,
         create_dirs: bool,
     ) -> Result<(&mut Self, &'path str), DirhashError> {
-        let Some((component, rest)) = normalized_path.split_once('/') else {
+        let Some((directories, name)) = normalized_path.rsplit_once('/') else {
             return Ok((self, normalized_path));
         };
 
-        // The separate lookup avoids allocating an owned key for an existing directory.
-        let child = if self.children.contains_key(component) {
-            self.children.get_mut(component)
-        } else if create_dirs {
-            Some(
-                self.children
+        let mut parent = self;
+        for component in directories.split('/') {
+            // The separate lookup avoids allocating an owned key for an existing directory.
+            let child = if create_dirs && !parent.children.contains_key(component) {
+                parent
+                    .children
                     .entry(String::from(component))
-                    .or_insert_with(|| DirhashEntry::Directory(Self::default())),
-            )
-        } else {
-            None
-        };
-        match child {
-            Some(DirhashEntry::Directory(child)) => {
-                child.parent_and_name(rest, original_path, create_dirs)
-            }
-            Some(DirhashEntry::File(_)) => Err(DirhashError::FileDirectoryConflict {
-                path: PathBuf::from(original_path),
-            }),
-            None => Err(DirhashError::MissingPath {
-                path: PathBuf::from(original_path),
-            }),
+                    .or_insert_with(|| DirhashEntry::Directory(Self::default()))
+            } else {
+                parent
+                    .children
+                    .get_mut(component)
+                    .ok_or_else(|| DirhashError::MissingPath {
+                        path: PathBuf::from(original_path),
+                    })?
+            };
+            let DirhashEntry::Directory(directory) = child else {
+                return Err(DirhashError::FileDirectoryConflict {
+                    path: PathBuf::from(original_path),
+                });
+            };
+            parent = directory;
         }
+        Ok((parent, name))
     }
 
     /// Add a pre-hashed file to the tree. It's an error if the filepath already exists.
