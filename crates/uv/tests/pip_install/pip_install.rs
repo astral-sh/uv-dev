@@ -6058,18 +6058,10 @@ fn reinstall_duplicate() -> Result<()> {
 
     // Install different versions of `pip` into separate virtual environments.
     let context1 = uv_test::test_context!("3.12");
-    context1
-        .pip_install()
-        .arg("pip==21.3.1")
-        .assert()
-        .success();
+    context1.pip_install().arg("pip==21.3.1").assert().success();
 
     let context2 = uv_test::test_context!("3.12");
-    context2
-        .pip_install()
-        .arg("pip==22.1.1")
-        .assert()
-        .success();
+    context2.pip_install().arg("pip==22.1.1").assert().success();
 
     // Give the first environment duplicate installed distribution metadata.
     copy_dir_all(
