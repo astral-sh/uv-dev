@@ -525,6 +525,8 @@ fn normalize_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use assert_fs::prelude::*;
+    #[cfg(unix)]
+    use fs_err::os::unix::fs::symlink;
 
     use uv_pypi_types::Scheme;
 
@@ -643,14 +645,14 @@ mod tests {
         let site_packages = venv.child("lib/python3.12/site-packages");
         let actual_site_packages = temp.child("actual-site-packages");
         actual_site_packages.create_dir_all()?;
-        std::os::unix::fs::symlink(actual_site_packages.path(), site_packages.path())?;
+        symlink(actual_site_packages.path(), site_packages.path())?;
 
         let outside = temp.child("outside");
         let sentinel = outside.child("sentinel.txt");
         sentinel.write_str("keep")?;
-        std::os::unix::fs::symlink(outside.path(), site_packages.child("escape").path())?;
+        symlink(outside.path(), site_packages.child("escape").path())?;
         let final_symlink = site_packages.child("final-symlink");
-        std::os::unix::fs::symlink(sentinel.path(), final_symlink.path())?;
+        symlink(sentinel.path(), final_symlink.path())?;
 
         let shared = actual_site_packages.child("shared");
         let first = shared.child("first.txt");
@@ -658,7 +660,7 @@ mod tests {
         first.touch()?;
         second.touch()?;
         let alias = site_packages.child("alias");
-        std::os::unix::fs::symlink(shared.path(), alias.path())?;
+        symlink(shared.path(), alias.path())?;
 
         let dist_info = site_packages.child("example-1.0.dist-info");
         dist_info.child("RECORD").write_str(concat!(
