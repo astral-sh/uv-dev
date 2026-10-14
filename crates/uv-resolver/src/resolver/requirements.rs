@@ -138,17 +138,10 @@ impl<'a> RequirementExpander<'a> {
                         requirement
                     }
                     Cow::Borrowed(requirement) => {
-                        let mut marker = marker;
-                        marker = marker.and(requirement.marker);
-                        Requirement {
-                            name: requirement.name.clone(),
-                            extras: requirement.extras.clone(),
-                            groups: requirement.groups.clone(),
-                            source: requirement.source.clone(),
-                            scope: requirement.scope.clone(),
-                            origin: requirement.origin.clone(),
-                            marker: marker.simplify_extras(slice::from_ref(&extra)),
-                        }
+                        let marker = marker.and(requirement.marker);
+                        let mut requirement = requirement.clone();
+                        requirement.marker = marker.simplify_extras(slice::from_ref(&extra));
+                        requirement
                     }
                 };
                 // Filter out unreachable unsatisfiable requirements before they reach the
