@@ -1182,7 +1182,7 @@ fn legacy_metadata_free_lockfile() -> Result<()> {
     Ok(())
 }
 
-/// Revision 4 preview locks do not record member defaults or group Python requirements.
+/// Revision 4 preview locks tolerate omitted group defaults and Python constraints until upgrade.
 #[test]
 fn metadata_free_default_groups_in_lockfile() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1201,6 +1201,9 @@ fn metadata_free_default_groups_in_lockfile() -> Result<()> {
 
         [dependency-groups]
         docs = []
+
+        [tool.uv.dependency-groups]
+        docs = { requires-python = ">=3.13" }
     "#})?;
     let legacy = indoc! {r#"
         version = 1
@@ -1243,7 +1246,28 @@ fn metadata_free_default_groups_in_lockfile() -> Result<()> {
         ])
         .assert()
         .success();
-    let updated = Lock::from_canonical_toml(&context.read("uv.lock"))?;
+    let contents = context.read("uv.lock");
+    assert_snapshot!(contents, @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "root"
+    version = "1.0.0"
+    source = { virtual = "." }
+    default-groups = ["docs"]
+
+    [package.dev-dependencies]
+    docs = []
+
+    [package.group-requires-python]
+    docs = ">=3.13"
+    "#);
+    let updated = Lock::from_canonical_toml(&contents)?;
     assert_eq!(
         updated.member_default_groups(&"root".parse()?),
         Some(DefaultGroups::List(vec!["docs".parse()?]))
@@ -1275,6 +1299,9 @@ fn metadata_free_default_groups_in_lockfile() -> Result<()> {
 
         [dependency-groups]
         docs = []
+
+        [tool.uv.dependency-groups]
+        docs = { requires-python = ">=3.13" }
     "#})?;
     uv_snapshot!(context.filters(), context.lock().args([
         "--offline",
