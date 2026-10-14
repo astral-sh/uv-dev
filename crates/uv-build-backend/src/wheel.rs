@@ -43,6 +43,20 @@ const WHOLE_FILE_ZIP_ENTRY_LIMIT: u64 = 16 * 1024 * 1024;
 // small fixed allocation for entries that are too large for `write_entry_whole`.
 const ZIP_STREAM_BUFFER_SIZE: usize = 128 * 1024;
 
+/// Create the filename for a pure-Python wheel.
+fn wheel_filename(pyproject_toml: &PyProjectToml) -> WheelFilename {
+    WheelFilename::new(
+        pyproject_toml.name().clone(),
+        pyproject_toml.version().clone(),
+        LanguageTag::Python {
+            major: 3,
+            minor: None,
+        },
+        AbiTag::None,
+        PlatformTag::Any,
+    )
+}
+
 /// Build a wheel from the source tree and place it in the output directory.
 pub fn build_wheel(
     source_tree: &Path,
@@ -55,16 +69,7 @@ pub fn build_wheel(
     pyproject_toml.warn_build_system(uv_version, BuildKind::Wheel);
     crate::check_metadata_directory(source_tree, metadata_directory, &pyproject_toml)?;
 
-    let filename = WheelFilename::new(
-        pyproject_toml.name().clone(),
-        pyproject_toml.version().clone(),
-        LanguageTag::Python {
-            major: 3,
-            minor: None,
-        },
-        AbiTag::None,
-        PlatformTag::Any,
-    );
+    let filename = wheel_filename(&pyproject_toml);
 
     let wheel_path = wheel_dir.join(filename.to_string());
     debug!("Writing wheel at `{}`", wheel_path.user_display());
@@ -79,7 +84,6 @@ pub fn build_wheel(
     write_wheel(
         source_tree,
         &pyproject_toml,
-        &filename,
         uv_version,
         wheel_writer,
         show_warnings,
@@ -101,23 +105,13 @@ pub fn list_wheel(
     let pyproject_toml = PyProjectToml::parse(&source_tree.join("pyproject.toml"))?;
     pyproject_toml.warn_build_system(uv_version, BuildKind::Wheel);
 
-    let filename = WheelFilename::new(
-        pyproject_toml.name().clone(),
-        pyproject_toml.version().clone(),
-        LanguageTag::Python {
-            major: 3,
-            minor: None,
-        },
-        AbiTag::None,
-        PlatformTag::Any,
-    );
+    let filename = wheel_filename(&pyproject_toml);
 
     let mut files = FileList::new();
     let writer = ListWriter::new(&mut files);
     write_wheel(
         source_tree,
         &pyproject_toml,
-        &filename,
         uv_version,
         writer,
         show_warnings,
@@ -128,7 +122,6 @@ pub fn list_wheel(
 fn write_wheel(
     source_tree: &Path,
     pyproject_toml: &PyProjectToml,
-    filename: &WheelFilename,
     uv_version: &str,
     mut wheel_writer: impl DirectoryWriter,
     show_warnings: bool,
@@ -234,13 +227,7 @@ fn write_wheel(
     )?;
 
     debug!("Adding metadata files to wheel");
-    let dist_info_dir = write_dist_info(
-        &mut wheel_writer,
-        pyproject_toml,
-        filename,
-        &metadata,
-        uv_version,
-    )?;
+    let dist_info_dir = write_dist_info(&mut wheel_writer, pyproject_toml, &metadata, uv_version)?;
     wheel_writer.close(&dist_info_dir)?;
 
     Ok(())
@@ -261,16 +248,7 @@ pub fn build_editable(
 
     crate::check_metadata_directory(source_tree, metadata_directory, &pyproject_toml)?;
 
-    let filename = WheelFilename::new(
-        pyproject_toml.name().clone(),
-        pyproject_toml.version().clone(),
-        LanguageTag::Python {
-            major: 3,
-            minor: None,
-        },
-        AbiTag::None,
-        PlatformTag::Any,
-    );
+    let filename = wheel_filename(&pyproject_toml);
 
     let wheel_path = wheel_dir.join(filename.to_string());
     debug!("Writing wheel at `{}`", wheel_path.user_display());
@@ -308,13 +286,7 @@ pub fn build_editable(
 
     debug!("Adding metadata files to: {}", wheel_path.user_display());
     let metadata = pyproject_toml.to_metadata(source_tree)?;
-    let dist_info_dir = write_dist_info(
-        &mut wheel_writer,
-        &pyproject_toml,
-        &filename,
-        &metadata,
-        uv_version,
-    )?;
+    let dist_info_dir = write_dist_info(&mut wheel_writer, &pyproject_toml, &metadata, uv_version)?;
     wheel_writer.close(&dist_info_dir)?;
 
     temp_file
@@ -410,30 +382,13 @@ pub fn metadata(
     let pyproject_toml = PyProjectToml::parse(&source_tree.join("pyproject.toml"))?;
     pyproject_toml.warn_build_system(uv_version, BuildKind::Wheel);
 
-    let filename = WheelFilename::new(
-        pyproject_toml.name().clone(),
-        pyproject_toml.version().clone(),
-        LanguageTag::Python {
-            major: 3,
-            minor: None,
-        },
-        AbiTag::None,
-        PlatformTag::Any,
-    );
-
     debug!(
         "Writing metadata files to `{}`",
         metadata_directory.user_display()
     );
     let mut wheel_writer = FilesystemWriter::new(metadata_directory);
     let metadata = pyproject_toml.to_metadata(source_tree)?;
-    let dist_info_dir = write_dist_info(
-        &mut wheel_writer,
-        &pyproject_toml,
-        &filename,
-        &metadata,
-        uv_version,
-    )?;
+    let dist_info_dir = write_dist_info(&mut wheel_writer, &pyproject_toml, &metadata, uv_version)?;
     wheel_writer.close(&dist_info_dir)?;
 
     Ok(dist_info_dir)
@@ -656,7 +611,6 @@ fn wheel_subdir_from_globs(
 fn write_dist_info(
     writer: &mut dyn DirectoryWriter,
     pyproject_toml: &PyProjectToml,
-    filename: &WheelFilename,
     metadata: &Metadata23,
     uv_version: &str,
 ) -> Result<String, Error> {
@@ -669,7 +623,7 @@ fn write_dist_info(
     writer.write_directory(&dist_info_dir)?;
 
     // Add `WHEEL` and `WHEEL.json`.
-    let wheel_info = WheelInfo::new(filename, uv_version);
+    let wheel_info = WheelInfo::new(uv_version);
     writer.write_bytes(
         &format!("{dist_info_dir}/WHEEL"),
         wheel_info.to_string().as_bytes(),
@@ -707,30 +661,22 @@ fn write_dist_info(
 }
 
 /// The contents of the `WHEEL` and `WHEEL.json` files.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct WheelInfo {
-    wheel_version: String,
+    wheel_version: &'static str,
     generator: String,
     root_is_purelib: bool,
-    tags: Vec<String>,
+    tags: [&'static str; 1],
 }
 
 impl WheelInfo {
-    fn new(filename: &WheelFilename, uv_version: &str) -> Self {
-        let mut tags = Vec::new();
-        for python_tag in filename.python_tags() {
-            for abi_tag in filename.abi_tags() {
-                for platform_tag in filename.platform_tags() {
-                    tags.push(format!("{python_tag}-{abi_tag}-{platform_tag}"));
-                }
-            }
-        }
+    fn new(uv_version: &str) -> Self {
         Self {
-            wheel_version: "1.0".to_string(),
+            wheel_version: "1.0",
             generator: format!("uv {uv_version}"),
             root_is_purelib: true,
-            tags,
+            tags: ["py3-none-any"],
         }
     }
 }
@@ -1037,13 +983,8 @@ mod test {
     use indoc::indoc;
     use insta::{assert_debug_snapshot, assert_snapshot};
     use std::path::Path;
-    use std::str::FromStr;
     use tempfile::TempDir;
-    use uv_distribution_filename::WheelFilename;
     use uv_fs::Simplified;
-    use uv_normalize::PackageName;
-    use uv_pep440::Version;
-    use uv_platform_tags::{AbiTag, PlatformTag};
     use walkdir::WalkDir;
 
     #[test]
@@ -1160,18 +1101,7 @@ mod test {
 
     #[test]
     fn test_wheel() {
-        let filename = WheelFilename::new(
-            PackageName::from_str("foo").unwrap(),
-            Version::from_str("1.2.3").unwrap(),
-            LanguageTag::Python {
-                major: 3,
-                minor: None,
-            },
-            AbiTag::None,
-            PlatformTag::Any,
-        );
-
-        assert_snapshot!(WheelInfo::new(&filename, "1.0.0+test").to_string(), @"
+        assert_snapshot!(WheelInfo::new("1.0.0+test").to_string(), @"
         Wheel-Version: 1.0
         Generator: uv 1.0.0+test
         Root-Is-Purelib: true
