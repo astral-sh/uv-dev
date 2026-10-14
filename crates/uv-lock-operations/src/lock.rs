@@ -499,65 +499,16 @@ async fn do_lock(
     }
 
     // Collect the list of supported environments.
-    let environments = {
-        let environments = target.environments();
-
-        // Ensure that the environments are disjoint.
-        if let Some(environments) = &environments {
-            for [lhs, rhs] in environments.as_markers().array_windows() {
-                if !lhs.is_disjoint(*rhs) {
-                    let hint = lhs.negate().and(*rhs);
-
-                    let lhs = lhs
-                        .contents()
-                        .map(|contents| contents.to_string())
-                        .unwrap_or_else(|| "true".to_string());
-                    let rhs = rhs
-                        .contents()
-                        .map(|contents| contents.to_string())
-                        .unwrap_or_else(|| "true".to_string());
-                    let hint = hint
-                        .contents()
-                        .map(|contents| contents.to_string())
-                        .unwrap_or_else(|| "true".to_string());
-
-                    return Err(LockError::OverlappingMarkers(lhs, rhs, hint));
-                }
-            }
-        }
-
-        environments
-    };
+    let environments = target.environments();
+    if let Some(environments) = environments {
+        validate_environment_markers(environments)?;
+    }
 
     // Collect the list of required platforms.
-    let required_environments = if let Some(required_environments) = target.required_environments()
-    {
-        // Ensure that the environments are disjoint.
-        for [lhs, rhs] in required_environments.as_markers().array_windows() {
-            if !lhs.is_disjoint(*rhs) {
-                let hint = lhs.negate().and(*rhs);
-
-                let lhs = lhs
-                    .contents()
-                    .map(|contents| contents.to_string())
-                    .unwrap_or_else(|| "true".to_string());
-                let rhs = rhs
-                    .contents()
-                    .map(|contents| contents.to_string())
-                    .unwrap_or_else(|| "true".to_string());
-                let hint = hint
-                    .contents()
-                    .map(|contents| contents.to_string())
-                    .unwrap_or_else(|| "true".to_string());
-
-                return Err(LockError::OverlappingMarkers(lhs, rhs, hint));
-            }
-        }
-
-        Some(required_environments)
-    } else {
-        None
-    };
+    let required_environments = target.required_environments();
+    if let Some(required_environments) = required_environments {
+        validate_environment_markers(required_environments)?;
+    }
 
     let minimum_libc_version = target.minimum_libc_version();
     if minimum_libc_version.is_some() && !preview.is_enabled(PreviewFeature::MinimumLibcVersion) {
@@ -1052,4 +1003,20 @@ async fn do_lock(
             }
         }
     }
+}
+
+/// Ensure that adjacent environment markers are disjoint.
+fn validate_environment_markers(environments: &SupportedEnvironments) -> Result<(), LockError> {
+    for [lhs, rhs] in environments.as_markers().array_windows() {
+        if !lhs.is_disjoint(*rhs) {
+            let hint = lhs.negate().and(*rhs);
+            let [lhs, rhs, hint] = [*lhs, *rhs, hint].map(|marker| {
+                marker
+                    .contents()
+                    .map_or_else(|| "true".to_string(), |contents| contents.to_string())
+            });
+            return Err(LockError::OverlappingMarkers(lhs, rhs, hint));
+        }
+    }
+    Ok(())
 }
