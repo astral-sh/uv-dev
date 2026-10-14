@@ -283,38 +283,29 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
                                 input: cursor.to_string(),
                             }
                         })?;
-                    let pair = match key {
+                    let (kind, pair) = match key {
                         // `'...' in extras`
-                        MarkerValueList::Extras => match ExtraName::from_str(&l_string) {
-                            Ok(name) => CanonicalMarkerListPair::Extras(name),
-                            Err(err) => {
-                                reporter.report(
-                                    MarkerWarningKind::ExtrasInvalidComparison,
-                                    format!("Expected extra name (found `{l_string}`): {err}"),
-                                );
-                                CanonicalMarkerListPair::Arbitrary {
-                                    key,
-                                    value: l_string.to_string(),
-                                }
-                            }
-                        },
+                        MarkerValueList::Extras => (
+                            "extra",
+                            ExtraName::from_str(&l_string).map(CanonicalMarkerListPair::Extras),
+                        ),
                         // `'...' in dependency_groups`
-                        MarkerValueList::DependencyGroups => {
-                            match GroupName::from_str(&l_string) {
-                                Ok(name) => CanonicalMarkerListPair::DependencyGroup(name),
-                                Err(err) => {
-                                    reporter.report(
-                                    MarkerWarningKind::ExtrasInvalidComparison,
-                                    format!("Expected dependency group name (found `{l_string}`): {err}"),
-                                );
-                                    CanonicalMarkerListPair::Arbitrary {
-                                        key,
-                                        value: l_string.to_string(),
-                                    }
-                                }
-                            }
-                        }
+                        MarkerValueList::DependencyGroups => (
+                            "dependency group",
+                            GroupName::from_str(&l_string)
+                                .map(CanonicalMarkerListPair::DependencyGroup),
+                        ),
                     };
+                    let pair = pair.unwrap_or_else(|err| {
+                        reporter.report(
+                            MarkerWarningKind::ExtrasInvalidComparison,
+                            format!("Expected {kind} name (found `{l_string}`): {err}"),
+                        );
+                        CanonicalMarkerListPair::Arbitrary {
+                            key,
+                            value: l_string.to_string(),
+                        }
+                    });
 
                     Some(MarkerExpression::List { pair, operator })
                 }
