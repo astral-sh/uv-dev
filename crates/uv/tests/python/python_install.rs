@@ -1064,11 +1064,25 @@ fn python_install_freethreaded() {
             .exists()
     );
 
-    assert!(
-        scripts
-            .join(format!("python3.13t{}", std::env::consts::EXE_SUFFIX))
-            .exists()
-    );
+    let freethreaded_python = scripts.join(format!("python3.13t{}", std::env::consts::EXE_SUFFIX));
+    context
+        .external_command(freethreaded_python)
+        .args([
+            "-I",
+            "-c",
+            indoc! {"
+                import sys
+                import sysconfig
+                print(
+                    'venv:', sys.prefix != sys.base_prefix,
+                    'free-threaded:', bool(sysconfig.get_config_var('Py_GIL_DISABLED')),
+                    end='',
+                )
+            "},
+        ])
+        .assert()
+        .success()
+        .stdout("venv: True free-threaded: True");
 
     #[cfg(windows)]
     {
