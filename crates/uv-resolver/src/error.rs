@@ -1809,51 +1809,29 @@ fn simplify_derivation_tree_ranges(
     candidate_selector: &CandidateSelector,
     resolver_environment: &ResolverEnvironment,
 ) -> ErrorTree {
+    let simplify = |package: &PubGrubPackage, versions: &mut Range<Version>| {
+        if let Some(simplified) = simplify_range(
+            versions,
+            package,
+            included_versions,
+            candidate_selector,
+            resolver_environment,
+        ) {
+            *versions = simplified;
+        }
+    };
+
     map_derivation_tree(
         tree,
         |mut external| {
             match &mut external {
                 External::FromDependencyOf(package1, versions1, package2, versions2) => {
-                    if let Some(simplified) = simplify_range(
-                        versions1,
-                        package1,
-                        included_versions,
-                        candidate_selector,
-                        resolver_environment,
-                    ) {
-                        *versions1 = simplified;
-                    }
-                    if let Some(simplified) = simplify_range(
-                        versions2,
-                        package2,
-                        included_versions,
-                        candidate_selector,
-                        resolver_environment,
-                    ) {
-                        *versions2 = simplified;
-                    }
+                    simplify(package1, versions1);
+                    simplify(package2, versions2);
                 }
-                External::NoVersions(package, versions) => {
-                    if let Some(simplified) = simplify_range(
-                        versions,
-                        package,
-                        included_versions,
-                        candidate_selector,
-                        resolver_environment,
-                    ) {
-                        *versions = simplified;
-                    }
-                }
-                External::Custom(package, versions, _) => {
-                    if let Some(simplified) = simplify_range(
-                        versions,
-                        package,
-                        included_versions,
-                        candidate_selector,
-                        resolver_environment,
-                    ) {
-                        *versions = simplified;
-                    }
+                External::NoVersions(package, versions)
+                | External::Custom(package, versions, _) => {
+                    simplify(package, versions);
                 }
                 External::NotRoot(..) => {}
             }
@@ -1863,29 +1841,11 @@ fn simplify_derivation_tree_ranges(
             metadata.terms = metadata
                 .terms
                 .into_iter()
-                .map(|(package, term)| {
-                    let term = match term {
-                        Term::Positive(versions) => Term::Positive(
-                            simplify_range(
-                                &versions,
-                                &package,
-                                included_versions,
-                                candidate_selector,
-                                resolver_environment,
-                            )
-                            .unwrap_or(versions),
-                        ),
-                        Term::Negative(versions) => Term::Negative(
-                            simplify_range(
-                                &versions,
-                                &package,
-                                included_versions,
-                                candidate_selector,
-                                resolver_environment,
-                            )
-                            .unwrap_or(versions),
-                        ),
+                .map(|(package, mut term)| {
+                    let versions = match &mut term {
+                        Term::Positive(versions) | Term::Negative(versions) => versions,
                     };
+                    simplify(&package, versions);
                     (package, term)
                 })
                 .collect();
