@@ -46,30 +46,14 @@ use crate::edit::{ProjectEdit, PythonTarget};
 
 /// Version information for a project (`uv version`).
 #[derive(serde::Serialize)]
-struct ProjectVersionInfo {
+struct ProjectVersionInfo<'version> {
     /// Name of the package.
-    package_name: Option<String>,
+    package_name: &'version str,
     /// Version, such as "0.5.1".
-    version: String,
+    version: &'version Version,
     /// Always `null` for project versions, kept for backwards compatibility.
     // TODO(zanieb): Remove this field in a breaking release.
     commit_info: Option<()>,
-}
-
-impl ProjectVersionInfo {
-    fn new(package_name: Option<&PackageName>, version: &Version) -> Self {
-        Self {
-            package_name: package_name.map(ToString::to_string),
-            version: version.to_string(),
-            commit_info: None,
-        }
-    }
-}
-
-impl std::fmt::Display for ProjectVersionInfo {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.version)
-    }
 }
 
 /// Read or update project version (`uv version`)
@@ -289,9 +273,14 @@ pub async fn project_version(
     };
 
     // Report the results
-    let old_version = ProjectVersionInfo::new(Some(&name), &old_version);
-    let new_version = new_version.map(|version| ProjectVersionInfo::new(Some(&name), &version));
-    print_version(old_version, new_version, short, output_format, printer)?;
+    print_version(
+        &name,
+        &old_version,
+        new_version.as_ref(),
+        short,
+        output_format,
+        printer,
+    )?;
 
     Ok(status)
 }
@@ -445,8 +434,7 @@ async fn print_frozen_version(
     };
 
     // Finally, print!
-    let old_version = ProjectVersionInfo::new(Some(name), version);
-    print_version(old_version, None, short, output_format, printer)?;
+    print_version(name, version, None, short, output_format, printer)?;
 
     Ok(ExitStatus::Success)
 }
@@ -619,18 +607,17 @@ async fn lock_and_sync(
 }
 
 fn print_version(
-    old_version: ProjectVersionInfo,
-    new_version: Option<ProjectVersionInfo>,
+    name: &PackageName,
+    old_version: &Version,
+    new_version: Option<&Version>,
     short: bool,
     output_format: VersionFormat,
     printer: Printer,
 ) -> Result<()> {
     match output_format {
         VersionFormat::Text => {
-            if let Some(name) = &old_version.package_name {
-                if !short {
-                    write!(printer.stdout(), "{name} ")?;
-                }
+            if !short {
+                write!(printer.stdout(), "{name} ")?;
             }
             if let Some(new_version) = new_version {
                 if short {
@@ -648,8 +635,12 @@ fn print_version(
             }
         }
         VersionFormat::Json => {
-            let final_version = new_version.unwrap_or(old_version);
-            let string = serde_json::to_string_pretty(&final_version)?;
+            let version_info = ProjectVersionInfo {
+                package_name: name.as_str(),
+                version: new_version.unwrap_or(old_version),
+                commit_info: None,
+            };
+            let string = serde_json::to_string_pretty(&version_info)?;
             writeln!(printer.stdout_important(), "{string}")?;
         }
     }
