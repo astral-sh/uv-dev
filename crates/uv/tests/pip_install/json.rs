@@ -3,7 +3,7 @@ use assert_cmd::prelude::*;
 use uv_test::uv_snapshot;
 
 #[test]
-fn json() {
+fn json_check() {
     let context = uv_test::test_context!("3.12");
 
     uv_snapshot!(context.pip_install()
@@ -28,6 +28,13 @@ fn json() {
     }
     "#);
 
+    context.pip_freeze().assert().success().stdout("");
+}
+
+#[test]
+fn json_dry_run() {
+    let context = uv_test::test_context!("3.12");
+
     uv_snapshot!(context.pip_install()
         .arg("iniconfig==2.0.0")
         .arg("--dry-run")
@@ -51,6 +58,11 @@ fn json() {
     "#);
 
     context.pip_freeze().assert().success().stdout("");
+}
+
+#[test]
+fn json_install() {
+    let context = uv_test::test_context!("3.12");
 
     uv_snapshot!(context.pip_install()
         .arg("iniconfig==2.0.0")
