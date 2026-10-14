@@ -149,17 +149,10 @@ pub async fn project_version(
     let new_version = if let Some(value) = value {
         match Version::from_str(&value) {
             Ok(version) => Some(version),
-            Err(err) => match &*value {
-                "major" | "minor" | "patch" | "alpha" | "beta" | "rc" | "dev" | "post"
-                | "stable" => {
-                    return Err(anyhow!(
-                        "Invalid version `{value}`, did you mean to pass `--bump {value}`?"
-                    ));
-                }
-                _ => {
-                    return Err(err)?;
-                }
-            },
+            Err(_) if VersionBump::from_str(&value).is_ok() => {
+                bail!("Invalid version `{value}`, did you mean to pass `--bump {value}`?");
+            }
+            Err(err) => return Err(err.into()),
         }
     } else if !bump.is_empty() {
         validate_bumps(&bump)?;
