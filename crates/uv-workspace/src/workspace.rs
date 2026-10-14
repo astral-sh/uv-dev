@@ -496,10 +496,8 @@ impl Workspace {
         cache: &Cache,
         workspace_cache: &WorkspaceCache,
     ) -> Result<Arc<Self>, WorkspaceError> {
-        let path = std::path::absolute(path)
-            .map_err(WorkspaceErrorKind::Normalize)?
-            .clone();
-        let path = normalize_path(&path);
+        let path =
+            normalize_path(std::path::absolute(path).map_err(WorkspaceErrorKind::Normalize)?);
 
         let project_path = path
             .ancestors()
@@ -1708,10 +1706,10 @@ impl ProjectWorkspace {
         cache: &Cache,
         workspace_cache: &WorkspaceCache,
     ) -> Result<Self, WorkspaceError> {
-        let project_path = std::path::absolute(install_path)
-            .map_err(WorkspaceErrorKind::Normalize)?
-            .clone();
-        let project_path = normalize_path(&project_path);
+        let project_path = normalize_path(
+            std::path::absolute(install_path).map_err(WorkspaceErrorKind::Normalize)?,
+        )
+        .into_owned();
 
         // Check if workspaces are explicitly disabled for the project.
         if project_pyproject_toml
@@ -1723,7 +1721,7 @@ impl ProjectWorkspace {
         {
             debug!("Project `{}` is marked as unmanaged", project.name);
             return Err(WorkspaceError::from(WorkspaceErrorKind::NonWorkspace(
-                project_path.to_path_buf(),
+                project_path,
             )));
         }
 
@@ -1789,7 +1787,7 @@ impl ProjectWorkspace {
                 workspace_cache.insert(Ok(workspace.clone()), &project_path);
             }
             return Ok(Self {
-                project_root: project_path.to_path_buf(),
+                project_root: project_path,
                 project_name: project.name.clone(),
                 workspace,
             });
@@ -1809,7 +1807,7 @@ impl ProjectWorkspace {
             .await?;
 
         Ok(Self {
-            project_root: project_path.to_path_buf(),
+            project_root: project_path,
             project_name: project.name.clone(),
             workspace,
         })
