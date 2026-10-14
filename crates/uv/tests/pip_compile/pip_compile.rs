@@ -14202,28 +14202,35 @@ fn compile_index_url_first_match_marker() -> Result<()> {
     Ok(())
 }
 
-/// Install a package via `--extra-index-url`.
-///
-/// If the package "exists" on the "extra" index, but without any versions, the resolution
-/// should fail by default (even though a compatible version exists on the "primary" index).
-#[test]
-fn compile_index_url_first_match_all_versions() -> Result<()> {
+/// An empty package page shadows a compatible version on the default index.
+#[tokio::test]
+async fn compile_index_url_first_match_all_versions() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let default_index = index_with_a_versions(&["1.0.0"])?;
+    let extra_index = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/a/"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw("<html><body></body></html>", "text/html"),
+        )
+        .expect(1)
+        .mount(&extra_index)
+        .await;
 
     let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("pandas")?;
+    requirements_in.write_str("a")?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
         .arg("--index-url")
-        .arg("https://pypi.org/simple")
+        .arg(default_index.index_url())
         .arg("--extra-index-url")
-        .arg("https://test.pypi.org/simple")
+        .arg(format!("{}/simple", extra_index.uri()))
         .arg("requirements.in")
         .arg("--no-deps"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because there are no versions of pandas and you require pandas, we can conclude that your requirements are unsatisfiable.
+      cause: Because there are no versions of a and you require a, we can conclude that your requirements are unsatisfiable.
     "
     );
 
