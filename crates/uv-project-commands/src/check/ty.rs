@@ -166,39 +166,39 @@ pub(super) async fn run(
     // `uv check --script`. This still allows explicitly selected script paths to be checked.
     // Older versions of ty do not support `--exclude-scripts`, so discover and exclude their
     // workspace scripts individually instead.
-    let mut excluded_scripts = Vec::new();
-    if ty_version >= Version::new([0, 0, 64]) {
+    let excluded_scripts = if ty_version >= Version::new([0, 0, 64]) {
         command.arg("--exclude-scripts");
+        Vec::new()
     } else if let Some(workspace_root) = workspace_root {
-        excluded_scripts.extend(
-            find_scripts(workspace_root, cache.root())
-                .filter_map(|script| match script {
-                    Ok(script) => check_targets
-                        .iter()
-                        .any(|target| script.starts_with(target))
-                        .then_some(Ok(script)),
+        find_scripts(workspace_root, cache.root())
+            .filter_map(|script| {
+                let path = match script {
+                    Ok(path) => path,
                     Err(ScriptDiscoveryError::Parse { path, source }) => {
                         debug!(
                             "Excluding invalid PEP 723 script `{}` while checking project root `{}`: {source}",
                             path.simplified_display(),
                             target_dir.simplified_display(),
                         );
-                        check_targets
-                            .iter()
-                            .any(|target| path.starts_with(target))
-                            .then_some(Ok(path))
+                        path
                     }
-                    Err(error) => Some(Err(error)),
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .with_context(|| {
-                    format!(
-                        "Failed to discover PEP 723 scripts while checking project root `{}`",
-                        target_dir.simplified_display()
-                    )
-                })?,
-        );
-    }
+                    Err(error) => return Some(Err(error)),
+                };
+                check_targets
+                    .iter()
+                    .any(|target| path.starts_with(target))
+                    .then_some(Ok(path))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .with_context(|| {
+                format!(
+                    "Failed to discover PEP 723 scripts while checking project root `{}`",
+                    target_dir.simplified_display()
+                )
+            })?
+    } else {
+        Vec::new()
+    };
 
     for excluded_target in excluded_targets.iter().chain(&excluded_scripts) {
         command.arg("--exclude");
