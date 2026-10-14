@@ -16,7 +16,10 @@ use insta::assert_snapshot;
 use uv_platform::{Arch, Os};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
 use uv_test::{assert_path_missing, uv_snapshot};
-use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 /// Pinning through a symlink must not replace a special file at its target.
 #[cfg(unix)]
@@ -215,18 +218,28 @@ fn python_pin() {
     assert_snapshot!(python_version, @"3.7");
 }
 
-#[test]
-fn python_pin_uses_python_downloads_json_url() {
+async fn empty_download_catalog_requested_once() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn python_pin_uses_python_downloads_json_url() {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
-    let metadata = context.temp_dir.child("empty-download-metadata.json");
-    metadata.write_str("{}").unwrap();
+    let server = empty_download_catalog_requested_once().await;
 
     uv_snapshot!(context.filters(), context
         .python_pin()
         .arg("--resolved")
         .arg("3.12")
         .arg("--python-downloads-json-url")
-        .arg(metadata.path()), @r"
+        .arg(server.uri()), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
@@ -252,11 +265,7 @@ async fn python_pin_downloads_metadata_once_for_multiple_pins() -> Result<()> {
         .child(PYTHON_VERSION_FILENAME)
         .write_str("3.11\n3.12\n")?;
 
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
-        .mount(&server)
-        .await;
+    let server = empty_download_catalog_requested_once().await;
 
     uv_snapshot!(context.filters(), context
         .python_pin()
@@ -267,8 +276,6 @@ async fn python_pin_downloads_metadata_once_for_multiple_pins() -> Result<()> {
     3.11
     3.12
     ");
-
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
 
     Ok(())
 }
