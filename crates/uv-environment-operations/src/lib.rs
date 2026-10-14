@@ -29,7 +29,10 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
-use uv_python_interpreter::{BrokenLink, Interpreter, InvalidEnvironmentKind, PythonEnvironment};
+use uv_python_interpreter::{
+    BrokenLink, Interpreter, InterpreterError, InvalidEnvironmentKind, PythonEnvironment,
+    PythonEnvironmentError,
+};
 use uv_python_managed::{PythonMinorVersionLink, UpgradePolicy};
 use uv_python_types::{
     EnvironmentPreference, LenientImplementationName, PythonArchitecture, PythonDownloads,
@@ -183,49 +186,40 @@ fn existing_project_environment(
     policy: ProjectEnvironmentPolicy,
     cache: &Cache,
 ) -> Result<Option<PythonEnvironment>, EnvironmentError> {
-    let environment = match PythonEnvironment::from_root(root, cache) {
-        Ok(environment) => environment,
-        Err(uv_python_interpreter::PythonEnvironmentError::MissingEnvironment(_)) => {
-            return Ok(None);
-        }
-        Err(uv_python_interpreter::PythonEnvironmentError::InvalidEnvironment(inner)) => {
-            match inner.kind {
-                InvalidEnvironmentKind::NotDirectory => {
-                    return Err(EnvironmentError::InvalidProjectEnvironmentDir(
-                        root.to_path_buf(),
-                        inner.kind.to_string(),
-                    ));
-                }
-                InvalidEnvironmentKind::MissingExecutable(_) => {
-                    if !matches!(policy, ProjectEnvironmentPolicy::Optional)
-                        && !centralized
-                        && fs_err::read_dir(root).is_ok_and(|mut dir| dir.next().is_some())
-                    {
-                        if !root.join("pyvenv.cfg").try_exists().unwrap_or_default() {
-                            return Err(EnvironmentError::InvalidProjectEnvironmentDir(
-                                root.to_path_buf(),
-                                "it is not a valid Python environment (no Python executable was found)"
-                                    .to_string(),
-                            ));
-                        }
-                    }
-                }
-                InvalidEnvironmentKind::Empty => {}
+    match PythonEnvironment::from_root(root, cache) {
+        Ok(environment) => Ok(Some(environment)),
+        Err(
+            PythonEnvironmentError::MissingEnvironment(_)
+            | PythonEnvironmentError::Query(InterpreterError::NotFound(_)),
+        ) => Ok(None),
+        Err(PythonEnvironmentError::InvalidEnvironment(inner)) => match inner.kind {
+            InvalidEnvironmentKind::NotDirectory => {
+                Err(EnvironmentError::InvalidProjectEnvironmentDir(
+                    root.to_path_buf(),
+                    inner.kind.to_string(),
+                ))
             }
-            return Ok(None);
-        }
-        Err(uv_python_interpreter::PythonEnvironmentError::Query(
-            uv_python_interpreter::InterpreterError::NotFound(_),
-        )) => {
-            return Ok(None);
-        }
-        Err(uv_python_interpreter::PythonEnvironmentError::Query(
-            uv_python_interpreter::InterpreterError::BrokenLink(BrokenLink {
-                path,
-                unix,
-                venv: _,
-            }),
-        )) => {
+            InvalidEnvironmentKind::MissingExecutable(_)
+                if !matches!(policy, ProjectEnvironmentPolicy::Optional)
+                    && !centralized
+                    && fs_err::read_dir(root).is_ok_and(|mut dir| dir.next().is_some())
+                    && !root.join("pyvenv.cfg").try_exists().unwrap_or_default() =>
+            {
+                Err(EnvironmentError::InvalidProjectEnvironmentDir(
+                    root.to_path_buf(),
+                    "it is not a valid Python environment (no Python executable was found)"
+                        .to_string(),
+                ))
+            }
+            InvalidEnvironmentKind::MissingExecutable(_) | InvalidEnvironmentKind::Empty => {
+                Ok(None)
+            }
+        },
+        Err(PythonEnvironmentError::Query(InterpreterError::BrokenLink(BrokenLink {
+            path,
+            unix,
+            venv: _,
+        }))) => {
             if unix {
                 let target_path = fs_err::read_link(&path)?;
                 warn_user!(
@@ -239,12 +233,10 @@ fn existing_project_environment(
                     path.user_display().cyan(),
                 );
             }
-            return Ok(None);
+            Ok(None)
         }
-        Err(err) => return Err(err.into()),
-    };
-
-    Ok(Some(environment))
+        Err(err) => Err(err.into()),
+    }
 }
 
 /// Discover a compatible project environment at `root`.
