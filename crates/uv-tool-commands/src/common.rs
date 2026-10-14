@@ -217,8 +217,7 @@ impl ToolPython {
                 }
                 _ => true,
             }) {
-                let request = file.version().cloned();
-                (PythonRequestSource::DotPythonVersion(file), request)
+                file.into_sourced_request()
             } else {
                 (
                     PythonRequestSource::RequiresPython,

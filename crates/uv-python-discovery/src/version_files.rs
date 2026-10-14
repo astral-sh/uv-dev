@@ -10,6 +10,8 @@ use uv_warnings::warn_user_once;
 
 use uv_python_types::PythonRequest;
 
+use crate::PythonRequestSource;
+
 /// The file name for Python version pins.
 pub static PYTHON_VERSION_FILENAME: &str = ".python-version";
 
@@ -257,15 +259,17 @@ impl PythonVersionFile {
         self.versions.into_iter().next()
     }
 
+    /// Consume the version file into its source and first request for interpreter selection.
+    pub fn into_sourced_request(self) -> (PythonRequestSource, Option<PythonRequest>) {
+        (
+            PythonRequestSource::DotPythonVersion(self.path),
+            self.versions.into_iter().next(),
+        )
+    }
+
     /// Return the path to the version file.
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// Return the file name of the version file (guaranteed to be one of `.python-version` or
-    /// `.python-versions`).
-    pub(crate) fn file_name(&self) -> &str {
-        self.path.file_name().unwrap().to_str().unwrap()
     }
 
     /// Set the versions for the file.

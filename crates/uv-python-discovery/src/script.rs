@@ -90,9 +90,12 @@ fn validate_script_requires_python(
         PythonRequestSource::UserRequest => {
             PythonSelectionError::RequestedPythonScriptIncompatibility(version, requires_python)
         }
-        PythonRequestSource::DotPythonVersion(file) => {
+        PythonRequestSource::DotPythonVersion(path) => {
             PythonSelectionError::DotPythonVersionScriptIncompatibility(
-                file.file_name().to_string(),
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("a discovered Python version file has a valid filename")
+                    .to_owned(),
                 version,
                 requires_python,
             )
@@ -430,8 +433,7 @@ impl ScriptPython {
             }
         }) {
             // (2) Request from `.python-version`
-            let request = file.version().cloned();
-            (PythonRequestSource::DotPythonVersion(file), request)
+            file.into_sourced_request()
         } else if let Some(specifiers) = script.metadata().requires_python.as_ref() {
             // (3) `requires-python` from script metadata
             let request = PythonRequest::Version(VersionRequest::from_specifiers(
