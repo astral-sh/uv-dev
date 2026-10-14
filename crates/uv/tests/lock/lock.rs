@@ -16926,6 +16926,24 @@ fn lock_upgrade_drop_fork_markers() -> Result<()> {
         .success();
     let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
     assert!(lock.get("resolution-markers").is_none());
+    let packages = lock
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .ok_or_else(|| anyhow!("upgraded lockfile is missing packages"))?;
+    let foo = packages
+        .iter()
+        .find(|package| package.get("name").and_then(toml::Value::as_str) == Some("foo"))
+        .ok_or_else(|| anyhow!("upgraded lockfile is missing foo"))?;
+    assert_eq!(
+        foo.get("version").and_then(toml::Value::as_str),
+        Some("2.0.0")
+    );
+    for package in packages {
+        assert!(
+            package.get("resolution-markers").is_none(),
+            "upgraded package retained fork markers: {package}"
+        );
+    }
     Ok(())
 }
 
