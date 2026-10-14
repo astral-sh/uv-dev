@@ -219,18 +219,17 @@ fn linux_physical_space(path: &Path) -> Result<u64, PhysicalSpaceError> {
 
         let mapped_extents =
             usize::try_from(request.header.mapped_extents).map_err(io::Error::other)?;
-        if mapped_extents > request.extents.len() {
-            return Err(io::Error::new(
+        let extents = request.extents.get(..mapped_extents).ok_or_else(|| {
+            io::Error::new(
                 io::ErrorKind::InvalidData,
                 "the filesystem returned more extents than requested",
             )
-            .into());
-        }
-        if mapped_extents == 0 {
+        })?;
+        let Some(last_extent) = extents.last() else {
             return Ok(physical);
-        }
+        };
 
-        for extent in &request.extents[..mapped_extents] {
+        for extent in extents {
             if extent.flags
                 & (FIEMAP_EXTENT_DELALLOC | FIEMAP_EXTENT_DATA_INLINE | FIEMAP_EXTENT_SHARED)
                 != 0
@@ -252,7 +251,6 @@ fn linux_physical_space(path: &Path) -> Result<u64, PhysicalSpaceError> {
             physical = physical.saturating_add(extent.length);
         }
 
-        let last_extent = &request.extents[mapped_extents - 1];
         if last_extent.flags & FIEMAP_EXTENT_LAST != 0 {
             return Ok(physical);
         }
