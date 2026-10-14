@@ -3052,19 +3052,8 @@ fn install_git_private_https_pat_at_ref() {
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION);
     let token = decode_token(uv_test::READ_ONLY_GITHUB_TOKEN);
 
-    let mut filters = context.filters();
-    filters.push((r"git\+https://", ""));
-
-    // A user is _required_ on Windows
-    let user = if cfg!(windows) {
-        filters.push((r"git:", ""));
-        "git:"
-    } else {
-        ""
-    };
-
     let package = format!(
-        "uv-private-pypackage @ git+https://{user}{token}@github.com/astral-test/uv-private-pypackage@6c09ce9ae81f50670a60abd7d95f30dd416d00ac"
+        "uv-private-pypackage @ git+https://git:{token}@github.com/astral-test/uv-private-pypackage@6c09ce9ae81f50670a60abd7d95f30dd416d00ac"
     );
     uv_snapshot!(context.filters(), context.pip_install()
         .arg(package), @"
@@ -3073,7 +3062,7 @@ fn install_git_private_https_pat_at_ref() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + uv-private-pypackage==0.1.0 (from git+https://****@github.com/astral-test/uv-private-pypackage@6c09ce9ae81f50670a60abd7d95f30dd416d00ac)
+     + uv-private-pypackage==0.1.0 (from git+https://git:****@github.com/astral-test/uv-private-pypackage@6c09ce9ae81f50670a60abd7d95f30dd416d00ac)
     ");
 
     context.assert_installed("uv_private_pypackage", "0.1.0");
