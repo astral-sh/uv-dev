@@ -9290,13 +9290,40 @@ fn sync_active_script_environment_json() -> Result<()> {
         .assert(predicate::path::is_dir());
 
     // A subsequent sync will re-use the environment
-    uv_snapshot!(context.filters(), context.sync().arg("--script").arg("script.py").env(EnvVars::VIRTUAL_ENV, "foo").arg("--active"), @"
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--script").arg("script.py")
+        .arg("--output-format").arg("json")
+        .env(EnvVars::VIRTUAL_ENV, "foo").arg("--active"), @r#"
     exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "target": "script",
+      "script": {
+        "path": "[TEMP_DIR]/script.py"
+      },
+      "sync": {
+        "environment": {
+          "path": "[TEMP_DIR]/foo",
+          "python": {
+            "path": "[TEMP_DIR]/foo/[BIN]/python",
+            "version": "3.11.[X]",
+            "implementation": "cpython"
+          }
+        },
+        "action": "check",
+        "changes": []
+      },
+      "lock": null,
+      "dry_run": false
+    }
+
     ----- stderr -----
-    Using script environment at: foo
     Resolved 3 packages in [TIME]
     Checked 3 packages in [TIME]
-    ");
+    "#);
 
     // Requesting another Python version will invalidate the environment
     uv_snapshot!(context.filters(), context.sync()
