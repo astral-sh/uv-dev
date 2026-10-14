@@ -2037,7 +2037,7 @@ impl Source {
 }
 
 /// The type of a dependency in a `pyproject.toml`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DependencyType {
     /// A dependency in `project.dependencies`.
     Production,
