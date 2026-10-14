@@ -11,7 +11,7 @@ use uv_distribution_types::{Requirement, RequirementSource, ResolutionRecorder};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 
-use crate::dependency_modifier::apply_extra_marker;
+use crate::dependency_modifier::{apply_extra_marker, select_scoped_entry};
 
 /// An override that applies to the dependencies of a specific package version.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
@@ -299,10 +299,7 @@ impl Overrides {
             recorder.scoped_override(package);
         }
         self.scoped.get(package).and_then(|entries| {
-            entries
-                .iter()
-                .find(|entry| entry.version.as_ref() == Some(version))
-                .or_else(|| entries.iter().find(|entry| entry.version.is_none()))
+            select_scoped_entry(entries, version, |entry| entry.version.as_ref())
         })
     }
 

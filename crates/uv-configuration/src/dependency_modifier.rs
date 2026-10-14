@@ -128,6 +128,25 @@ impl DependencyModifiers {
     }
 }
 
+/// Select the first exact-version entry, falling back to the first versionless entry.
+pub(crate) fn select_scoped_entry<'a, T>(
+    entries: &'a [T],
+    version: &Version,
+    entry_version: impl Fn(&T) -> Option<&Version>,
+) -> Option<&'a T> {
+    let mut fallback = None;
+    for entry in entries {
+        match entry_version(entry) {
+            Some(entry_version) if entry_version == version => return Some(entry),
+            None => {
+                fallback.get_or_insert(entry);
+            }
+            Some(_) => {}
+        }
+    }
+    fallback
+}
+
 /// Apply a requirement's extra conditions to its constraints or overrides.
 ///
 /// Project away environmental conditions while retaining alternatives and negative extra
