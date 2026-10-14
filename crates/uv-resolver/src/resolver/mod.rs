@@ -3784,26 +3784,17 @@ impl Fork {
         // produced by the former might work for the latter, but the inverse is unlikely to be true
         // due to maximum version selection. (Selecting `numpy==2.0.0` would satisfy both forks, but
         // selecting the latest `numpy` would not.)
-        let self_upper_bounds = self
-            .dependencies
-            .iter()
-            .filter(|dep| {
-                dep.version
-                    .bounding_range()
-                    .is_some_and(|(_, upper)| !matches!(upper, Bound::Unbounded))
-            })
-            .count();
-        let other_upper_bounds = other
-            .dependencies
-            .iter()
-            .filter(|dep| {
-                dep.version
-                    .bounding_range()
-                    .is_some_and(|(_, upper)| !matches!(upper, Bound::Unbounded))
-            })
-            .count();
-
-        self_upper_bounds.cmp(&other_upper_bounds)
+        let count_upper_bounds = |fork: &Self| {
+            fork.dependencies
+                .iter()
+                .filter(|dep| {
+                    dep.version
+                        .bounding_range()
+                        .is_some_and(|(_, upper)| !matches!(upper, Bound::Unbounded))
+                })
+                .count()
+        };
+        count_upper_bounds(self).cmp(&count_upper_bounds(other))
     }
 }
 
