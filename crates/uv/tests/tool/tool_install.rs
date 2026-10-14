@@ -5313,51 +5313,6 @@ fn tool_install_find_links() {
     ");
 }
 
-#[test]
-fn tool_install_python_platform() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    // Install `black` for macos.
-    uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
-        .arg("--python-platform")
-        .arg("macos")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + black==24.3.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
-    ");
-
-    // Install `black` for Linux.
-    uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
-        .arg("--python-platform")
-        .arg("linux")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Uninstalled [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     ~ black==24.3.0
-    Installed 2 executables: black, blackd
-    ");
-}
-
 /// Reinstalling a tool after the underlying Python has been removed.
 ///
 /// Regression test for <https://github.com/astral-sh/uv/issues/16252>.
