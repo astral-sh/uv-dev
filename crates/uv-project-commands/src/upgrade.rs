@@ -519,7 +519,8 @@ fn collect_resolved_versions(
     lock: &Lock,
     install_path: &Path,
 ) -> Result<()> {
-    let mut requirements_by_package = FxHashMap::<_, Vec<_>>::default();
+    // Visit selected packages in lockfile order so index errors are deterministic.
+    let mut requirements_by_package = BTreeMap::<_, Vec<_>>::new();
     for selected in requirements {
         requirements_by_package
             .entry(&selected.package)
@@ -527,17 +528,15 @@ fn collect_resolved_versions(
             .push((selected.effective_marker, &mut selected.resolved_versions));
     }
 
-    for resolved_package in lock.packages() {
-        let Some(matching_requirements) = requirements_by_package.get_mut(resolved_package.name())
-        else {
-            continue;
-        };
-        if resolved_package.index(install_path)?.is_some()
-            && let Some(version) = resolved_package.version()
-        {
-            for (marker, versions) in matching_requirements {
-                if resolved_package.is_included_by_marker(*marker) {
-                    versions.insert(version.clone());
+    for (name, mut matching_requirements) in requirements_by_package {
+        for resolved_package in lock.packages_for_name(name) {
+            if resolved_package.index(install_path)?.is_some()
+                && let Some(version) = resolved_package.version()
+            {
+                for (marker, versions) in &mut matching_requirements {
+                    if resolved_package.is_included_by_marker(*marker) {
+                        versions.insert(version.clone());
+                    }
                 }
             }
         }
