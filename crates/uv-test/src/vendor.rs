@@ -2,17 +2,15 @@
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 
-use uv_configuration::TrustedHost;
 use uv_fs::{LockedFile, LockedFileMode, persist_with_retry_sync, tempfile_in};
-use uv_static::EnvVars;
 
 use crate::TestContext;
+use crate::download::fixture_client;
 
 pub(crate) struct VendorArtifact {
     pub(crate) filename: &'static str,
@@ -198,16 +196,7 @@ async fn ensure_cached_artifact(artifact: &VendorArtifact, path: &Path) -> Resul
         return Ok(());
     }
 
-    let trusted_hosts = std::env::var(EnvVars::UV_INSECURE_HOST)
-        .unwrap_or_default()
-        .split(' ')
-        .filter(|host| !host.is_empty())
-        .map(TrustedHost::from_str)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let client = uv_client::BaseClientBuilder::default()
-        .allow_insecure_host(trusted_hosts)
-        .build()
-        .context("failed to build vendor artifact client")?;
+    let client = fixture_client().context("failed to build vendor artifact client")?;
 
     let url = artifact
         .url
