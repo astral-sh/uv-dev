@@ -25,6 +25,14 @@ const DEFAULT_COMPILE_TIMEOUT: Duration = Duration::from_mins(1);
 type WorkerOutcome = std::thread::Result<Result<(), CompileError>>;
 type WorkerHandle = oneshot::Receiver<WorkerOutcome>;
 
+/// A ready Python bytecode compiler and its communication streams.
+struct BytecodeCompiler {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    stderr: BufReader<ChildStderr>,
+}
+
 #[derive(Debug, Error)]
 pub enum CompileError {
     #[error("Failed to list files in `site-packages`")]
@@ -337,26 +345,28 @@ async fn worker(
 
     // Handle a broken `python` by using a timeout, one that's higher than any compilation
     // should ever take.
-    let (mut bytecode_compiler, child_stdin, mut child_stdout, mut child_stderr) =
-        if let Some(duration) = timeout {
-            tokio::time::timeout(duration, wait_until_ready)
-                .await
-                .map_err(|_| CompileError::StartupTimeout(timeout.unwrap()))??
-        } else {
-            wait_until_ready.await?
-        };
+    let BytecodeCompiler {
+        mut child,
+        stdin,
+        mut stdout,
+        mut stderr,
+    } = if let Some(duration) = timeout {
+        tokio::time::timeout(duration, wait_until_ready)
+            .await
+            .map_err(|_| CompileError::StartupTimeout(duration))??
+    } else {
+        wait_until_ready.await?
+    };
 
     let stderr_reader = tokio::task::spawn(async move {
         let mut child_stderr_collected: Vec<u8> = Vec::new();
-        child_stderr
-            .read_to_end(&mut child_stderr_collected)
-            .await?;
+        stderr.read_to_end(&mut child_stderr_collected).await?;
         Ok(child_stderr_collected)
     });
 
-    let result = worker_main_loop(receiver, child_stdin, &mut child_stdout, timeout).await;
+    let result = worker_main_loop(receiver, stdin, &mut stdout, timeout).await;
     // Reap the process to avoid zombies.
-    let _ = bytecode_compiler.kill().await;
+    let _ = child.kill().await;
 
     // If there was something printed to stderr (which shouldn't happen, we muted all errors), tell
     // the user, otherwise only forward the result.
@@ -392,22 +402,14 @@ async fn worker(
     result
 }
 
-/// Returns the child and stdin/stdout/stderr on a successful launch or `None` for a broken interpreter state.
+/// Return a ready compiler, or `None` for a broken interpreter state.
 async fn launch_bytecode_compiler(
     dir: &Path,
     interpreter: &Path,
     pip_compileall_py: &Path,
-) -> Result<
-    Option<(
-        Child,
-        ChildStdin,
-        BufReader<ChildStdout>,
-        BufReader<ChildStderr>,
-    )>,
-    CompileError,
-> {
+) -> Result<Option<BytecodeCompiler>, CompileError> {
     // We input the paths through stdin and get the successful paths returned through stdout.
-    let mut bytecode_compiler = Command::new(interpreter)
+    let mut child = Command::new(interpreter)
         .arg(pip_compileall_py)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -420,26 +422,13 @@ async fn launch_bytecode_compiler(
 
     // https://stackoverflow.com/questions/49218599/write-to-child-process-stdin-in-rust/49597789#comment120223107_49597789
     // Unbuffered, we need to write immediately or the python process will get stuck waiting
-    let child_stdin = bytecode_compiler
-        .stdin
-        .take()
-        .expect("Child must have stdin");
-    let mut child_stdout = BufReader::new(
-        bytecode_compiler
-            .stdout
-            .take()
-            .expect("Child must have stdout"),
-    );
-    let child_stderr = BufReader::new(
-        bytecode_compiler
-            .stderr
-            .take()
-            .expect("Child must have stderr"),
-    );
+    let stdin = child.stdin.take().expect("Child must have stdin");
+    let mut stdout = BufReader::new(child.stdout.take().expect("Child must have stdout"));
+    let stderr = BufReader::new(child.stderr.take().expect("Child must have stderr"));
 
     // Check if the launch was successful.
     let mut out_line = String::new();
-    child_stdout
+    stdout
         .read_line(&mut out_line)
         .await
         .map_err(|err| CompileError::ChildStdio {
@@ -448,18 +437,16 @@ async fn launch_bytecode_compiler(
         })?;
 
     if out_line.trim_end() == "Ready" {
-        // Success
-        Ok(Some((
-            bytecode_compiler,
-            child_stdin,
-            child_stdout,
-            child_stderr,
-        )))
+        Ok(Some(BytecodeCompiler {
+            child,
+            stdin,
+            stdout,
+            stderr,
+        }))
     } else if out_line.is_empty() {
         // Failed to launch, try again
         Ok(None)
     } else {
-        // Not observed yet
         Err(CompileError::WrongPath("Ready".to_string(), out_line))
     }
 }
