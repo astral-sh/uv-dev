@@ -13523,9 +13523,12 @@ async fn add_unexpected_error_code() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let server = MockServer::start().await;
+    let retry_count = 1_u64;
 
     Mock::given(method("GET"))
+        .and(path("/anyio/"))
         .respond_with(ResponseTemplate::new(503))
+        .expect(retry_count + 1)
         .mount(&server)
         .await;
 
@@ -13541,7 +13544,7 @@ async fn add_unexpected_error_code() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--index").arg(server.uri())
         .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
-        .env(EnvVars::UV_HTTP_RETRIES, "1"), @"
+        .env(EnvVars::UV_HTTP_RETRIES, retry_count.to_string()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Request failed after 1 retry in [TIME]
