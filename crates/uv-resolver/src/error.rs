@@ -35,7 +35,7 @@ use crate::resolution::ConflictingDistributionError;
 use crate::resolver::{
     MetadataUnavailable, ResolverEnvironment, UnavailablePackage, UnavailableReason,
 };
-use crate::{InMemoryIndex, Options};
+use crate::{FxHashbrownMap, InMemoryIndex, Options};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
@@ -609,7 +609,7 @@ impl NoSolutionError {
     /// requested.
     pub(crate) fn narrow_widened_sets(
         derivation_tree: ErrorTree,
-        known_versions: &FxHashMap<PackageName, Arc<[Version]>>,
+        known_versions: &FxHashbrownMap<PackageName, Arc<[Version]>>,
     ) -> ErrorTree {
         // The known versions of a package, with the lowest and the highest. An empty list carries
         // no information, so it is treated as absent.
@@ -1925,9 +1925,12 @@ mod tests {
         version.parse().expect("valid version")
     }
 
-    fn known_versions(name: &str, versions: &[&str]) -> FxHashMap<PackageName, Arc<[Version]>> {
+    fn known_versions(
+        name: &str,
+        versions: &[&str],
+    ) -> FxHashbrownMap<PackageName, Arc<[Version]>> {
         let versions: Arc<[Version]> = versions.iter().copied().map(version).collect();
-        FxHashMap::from_iter([(package_name(name), versions)])
+        FxHashbrownMap::from_iter([(package_name(name), versions)])
     }
 
     fn unavailable(package: &PubGrubPackage, versions: Range<Version>) -> ErrorTree {
@@ -1941,7 +1944,7 @@ mod tests {
     fn narrow_unavailable(
         package: &PubGrubPackage,
         versions: Range<Version>,
-        known_versions: &FxHashMap<PackageName, Arc<[Version]>>,
+        known_versions: &FxHashbrownMap<PackageName, Arc<[Version]>>,
     ) -> Range<Version> {
         let narrowed =
             NoSolutionError::narrow_widened_sets(unavailable(package, versions), known_versions);
