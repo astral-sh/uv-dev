@@ -2190,6 +2190,48 @@ mod tests {
         }])
     }
 
+    /// A nested index can prohibit credentials even when the host-level index permits them.
+    #[test(tokio::test)]
+    async fn test_auth_policy_prefers_specific_index() -> Result<(), Error> {
+        let server = start_test_server("user", "password").await;
+        let root = DisplaySafeUrl::parse(&server.uri())?;
+        let specific = root.join("private/")?;
+        let cache = CredentialsCache::new();
+        cache.store_credentials(
+            &root,
+            Credentials::basic(Some("user".into()), Some("password".into())),
+        );
+        let indexes = Indexes::from_indexes([
+            Index {
+                url: root.clone(),
+                root_url: root,
+                auth_policy: AuthPolicy::Auto,
+            },
+            Index {
+                url: specific.clone(),
+                root_url: specific.clone(),
+                auth_policy: AuthPolicy::Never,
+            },
+        ]);
+        let client = test_client_builder()
+            .with(
+                AuthMiddleware::new()
+                    .with_cache(cache)
+                    .with_indexes(indexes),
+            )
+            .build();
+
+        assert_eq!(
+            client
+                .get(Url::from(specific.join("package")?))
+                .send()
+                .await?
+                .status(),
+            401
+        );
+        Ok(())
+    }
+
     /// With the "always" auth policy, requests should succeed on
     /// authenticated requests with the correct credentials.
     #[test(tokio::test)]
