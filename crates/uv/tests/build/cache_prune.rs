@@ -8,33 +8,6 @@ use uv_static::EnvVars;
 
 use uv_test::{assert_path_missing, uv_snapshot};
 
-/// `cache prune` should be a no-op if there's nothing out-of-date in the cache.
-#[test]
-fn prune_no_op() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio")?;
-
-    // Install a requirement, to populate the cache.
-    context
-        .pip_sync()
-        .arg("requirements.txt")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
-    DEBUG uv [VERSION] ([COMMIT] DATE)
-    Pruning cache at: [CACHE_DIR]/
-    No unused entries found
-    ");
-
-    Ok(())
-}
-
 /// `cache prune` should remove all cached environments from the cache.
 #[test]
 fn prune_cached_env() -> Result<()> {
@@ -90,59 +63,6 @@ fn prune_cached_env() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
     assert_path_missing(&environments[0]);
-    Ok(())
-}
-
-/// `cache prune` should remove cached wheel archives that no longer have a reference.
-#[test]
-fn prune_unreferenced_archive() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes_and_units();
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio")?;
-
-    // Install a requirement, to populate the cache.
-    context
-        .pip_sync()
-        .arg("requirements.txt")
-        .assert()
-        .success();
-
-    let cache = Cache::from_path(context.cache_dir.path());
-    let archives = fs_err::read_dir(cache.bucket(CacheBucket::Archive))?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    assert!(!archives.is_empty(), "expected cached wheel archives");
-
-    // Removing the wheel bucket leaves the cached archives without references.
-    fs_err::remove_dir_all(cache.bucket(CacheBucket::Wheels))?;
-
-    let filters: Vec<_> = context
-        .filters()
-        .into_iter()
-        .chain([
-            // The cache entry does not have a stable key, so we filter it out
-            (
-                r"\[CACHE_DIR\](\\|\/)(.*?)(\\|\/).*",
-                "[CACHE_DIR]/$2/[ENTRY]",
-            ),
-        ])
-        .collect();
-
-    uv_snapshot!(filters, context.prune().arg("--verbose"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
-    DEBUG uv [VERSION] ([COMMIT] DATE)
-    Pruning cache at: [CACHE_DIR]/
-    DEBUG Removing dangling cache archive: [CACHE_DIR]/archive-v0/[ENTRY]
-    Removed 44 files ([SIZE])
-    ");
-
-    for archive in archives {
-        assert_path_missing(archive);
-    }
-
     Ok(())
 }
 

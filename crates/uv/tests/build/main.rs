@@ -31,6 +31,9 @@ mod cache_file_store;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod cache_prune;
 
+#[cfg(feature = "test-python")]
+mod cache_prune_archives;
+
 mod cache_prune_local;
 
 mod cache_size;
