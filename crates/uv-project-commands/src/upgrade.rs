@@ -20,7 +20,7 @@ use uv_distribution_types::{Identifier, RequiresPython};
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
-use uv_lock::implicit_constraints_marker;
+use uv_lock::{Lock, implicit_constraints_marker};
 use uv_lock_operations::{LockMode, LockOperation, LockResult, LockTarget};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version, VersionSpecifier, VersionSpecifiers};
@@ -409,29 +409,11 @@ pub async fn upgrade(
     .await
     .map_err(UvError::from)?;
 
-    let lock = result.lock();
-    for resolved_package in lock.packages() {
-        let mut matching_requirements = requirements
-            .iter_mut()
-            .filter(|selected| resolved_package.name() == &selected.package)
-            .peekable();
-        if matching_requirements.peek().is_none() {
-            continue;
-        }
-        if resolved_package
-            .index(project.workspace().install_path())?
-            .is_some()
-            && let Some(version) = resolved_package.version()
-        {
-            // A universal lock can contain versions from disjoint forks, so collect each version
-            // only for the declarations that apply to its fork.
-            for selected in matching_requirements {
-                if resolved_package.is_included_by_marker(selected.effective_marker) {
-                    selected.resolved_versions.insert(version.clone());
-                }
-            }
-        }
-    }
+    collect_resolved_versions(
+        &mut requirements,
+        result.lock(),
+        project.workspace().install_path(),
+    )?;
 
     let mut updated_requirements = BTreeMap::new();
     for selected in &requirements {
@@ -533,6 +515,38 @@ pub async fn upgrade(
     }
 
     Ok(ExitStatus::Success)
+}
+
+/// Assign each resolved version to the declarations that apply to its fork.
+fn collect_resolved_versions(
+    requirements: &mut [UpgradableRequirement],
+    lock: &Lock,
+    install_path: &Path,
+) -> Result<()> {
+    let mut requirements_by_package = FxHashMap::<_, Vec<_>>::default();
+    for selected in requirements {
+        requirements_by_package
+            .entry(&selected.package)
+            .or_default()
+            .push((selected.effective_marker, &mut selected.resolved_versions));
+    }
+
+    for resolved_package in lock.packages() {
+        let Some(matching_requirements) = requirements_by_package.get_mut(resolved_package.name())
+        else {
+            continue;
+        };
+        if resolved_package.index(install_path)?.is_some()
+            && let Some(version) = resolved_package.version()
+        {
+            for (marker, versions) in matching_requirements {
+                if resolved_package.is_included_by_marker(*marker) {
+                    versions.insert(version.clone());
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Return whether selected declarations need the interpreter-derived Python bound used by locking.
