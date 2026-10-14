@@ -1870,7 +1870,8 @@ impl TestContext {
         self
     }
 
-    /// Run the given python code and check whether it succeeds.
+    /// Run the given Python code and return an assertion handle for its result.
+    #[must_use = "assert the result with `.success()`, `.failure()`, or another assertion"]
     pub fn assert_command(&self, command: &str) -> Assert {
         self.python_command()
             .arg("-c")
@@ -1879,7 +1880,8 @@ impl TestContext {
             .assert()
     }
 
-    /// Run the given python file and check whether it succeeds.
+    /// Run the given Python file and return an assertion handle for its result.
+    #[must_use = "assert the result with `.success()`, `.failure()`, or another assertion"]
     pub fn assert_file(&self, file: impl AsRef<Path>) -> Assert {
         self.python_command()
             .arg(file.as_ref())
