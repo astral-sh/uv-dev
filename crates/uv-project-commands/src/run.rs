@@ -31,7 +31,7 @@ use uv_configuration::{
 };
 use uv_dispatch::UniversalState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{InstalledDistKind, Name, NameRequirementSpecification, Resolution};
+use uv_distribution_types::{Name, NameRequirementSpecification, Resolution};
 use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
@@ -45,7 +45,6 @@ use uv_fs::{PythonExt, Simplified, create_symlink, normalize_path};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 #[cfg(unix)]
 use uv_install_wheel::format_shebang;
-use uv_install_wheel::read_record;
 use uv_installer::{InstallationStrategy, LayeredSitePackages, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
@@ -2329,19 +2328,7 @@ fn installed_environment_files(
 ) -> anyhow::Result<BTreeSet<PathBuf>> {
     let mut files = BTreeSet::new();
     for distribution in SitePackages::from_environment(environment)?.iter() {
-        match &distribution.kind {
-            InstalledDistKind::Registry(_) | InstalledDistKind::Url(_) => {}
-            InstalledDistKind::EggInfoFile(_)
-            | InstalledDistKind::EggInfoDirectory(_)
-            | InstalledDistKind::LegacyEditable(_) => continue,
-        }
-        let directory = distribution.install_path();
-        let site_packages = directory
-            .parent()
-            .context("Installed distribution has no site-packages directory")?;
-        for entry in read_record(fs_err::File::open(directory.join("RECORD"))?)? {
-            files.insert(normalize_path(site_packages.join(entry.path)).into_owned());
-        }
+        files.extend(distribution.read_files()?);
     }
     Ok(files)
 }
