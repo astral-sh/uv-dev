@@ -16894,8 +16894,12 @@ fn lock_upgrade_drop_fork_markers() -> Result<()> {
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .assert()
         .success();
-    let lock = context.read("uv.lock");
-    assert!(lock.contains("resolution-markers"));
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let markers = lock
+        .get("resolution-markers")
+        .and_then(toml::Value::as_array)
+        .ok_or_else(|| anyhow!("forked lockfile is missing resolution markers"))?;
+    assert!(!markers.is_empty());
 
     // Remove the bound and lock with `--upgrade`.
     pyproject_toml.write_str(&requirements.replace("foo==1", "foo"))?;
@@ -16907,8 +16911,8 @@ fn lock_upgrade_drop_fork_markers() -> Result<()> {
         .arg("--upgrade")
         .assert()
         .success();
-    let lock = context.read("uv.lock");
-    assert!(!lock.contains("resolution-markers"));
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert!(lock.get("resolution-markers").is_none());
     Ok(())
 }
 
