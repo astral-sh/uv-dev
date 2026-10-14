@@ -1440,6 +1440,7 @@ fn json_output_frozen_missing_members() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-universal")]
 fn json_output_depth_with_extra_context() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -1500,41 +1501,14 @@ fn json_output_depth_with_extra_context() -> Result<()> {
         "#,
     )?;
 
-    let package_names = |depth: u8| -> Result<Vec<String>> {
-        let output = context
-            .tree()
-            .arg("--preview-features")
-            .arg("json-output")
-            .arg("--format")
-            .arg("json")
-            .arg("--universal")
-            .arg("--depth")
-            .arg(depth.to_string())
-            .output()?;
-        output.clone().assert().success();
-        let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        report["resolution"]
-            .as_object()
-            .context("dependency graph resolution should be an object")?
-            .values()
-            .filter(|node| node["kind"] == "package")
-            .map(|node| {
-                node["name"]
-                    .as_str()
-                    .context("dependency graph node should have a name")
-                    .map(ToOwned::to_owned)
-            })
-            .collect()
-    };
-
-    assert_json_snapshot!(package_names(2)?, @r#"
+    assert_json_snapshot!(json_tree_package_names(context.tree().args(["--universal", "--depth", "2"]))?, @r#"
     [
       "package-a",
       "package-c",
       "project"
     ]
     "#);
-    assert_json_snapshot!(package_names(3)?, @r#"
+    assert_json_snapshot!(json_tree_package_names(context.tree().args(["--universal", "--depth", "3"]))?, @r#"
     [
       "package-a",
       "package-b",
