@@ -417,12 +417,9 @@ fn python_list_duplicate_path_entries() {
         .with_filtered_python_keys()
         .with_collapsed_whitespace();
 
-    // Construct a `PATH` with all entries duplicated
-    let path = std::env::join_paths(
-        std::env::split_paths(&context.python_path())
-            .chain(std::env::split_paths(&context.python_path())),
-    )
-    .unwrap();
+    let directories = std::env::split_paths(&context.python_path()).collect::<Vec<_>>();
+    // Duplicate every interpreter search directory.
+    let path = std::env::join_paths(directories.iter().chain(&directories)).unwrap();
 
     uv_snapshot!(context.filters(), context.python_list().env(EnvVars::UV_PYTHON_SEARCH_PATH, &path), @"
     exit_code: 0 (success)
@@ -433,15 +430,17 @@ fn python_list_duplicate_path_entries() {
 
     #[cfg(unix)]
     {
-        // Construct a `PATH` with symlinks
-        let path = std::env::join_paths(std::env::split_paths(&context.python_path()).chain(
-            std::env::split_paths(&context.python_path()).map(|path| {
-                let dst = format!("{}-link", path.display());
-                fs_err::os::unix::fs::symlink(&path, &dst).unwrap();
-                std::path::PathBuf::from(dst)
-            }),
-        ))
-        .unwrap();
+        let links = directories
+            .iter()
+            .map(|directory| {
+                let mut link = directory.as_os_str().to_owned();
+                link.push("-link");
+                let link = std::path::PathBuf::from(link);
+                fs_err::os::unix::fs::symlink(directory, &link).unwrap();
+                link
+            })
+            .collect::<Vec<_>>();
+        let path = std::env::join_paths(directories.iter().chain(&links)).unwrap();
 
         uv_snapshot!(context.filters(), context.python_list().env(EnvVars::UV_PYTHON_SEARCH_PATH, &path), @"
         exit_code: 0 (success)
@@ -450,16 +449,8 @@ fn python_list_duplicate_path_entries() {
         cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
         ");
 
-        // Reverse the order so the symlinks are first
-        let path = std::env::join_paths(
-            {
-                let mut paths = std::env::split_paths(&path).collect::<Vec<_>>();
-                paths.reverse();
-                paths
-            }
-            .iter(),
-        )
-        .unwrap();
+        // Put the aliases first without also changing the order of Python versions.
+        let path = std::env::join_paths(links.iter().chain(&directories)).unwrap();
 
         uv_snapshot!(context.filters(), context.python_list().env(EnvVars::UV_PYTHON_SEARCH_PATH, &path), @"
         exit_code: 0 (success)
