@@ -15513,7 +15513,7 @@ fn symlink() -> Result<()> {
     symlink.symlink_to_file(requirements_txt.path())?;
 
     // Write to the symlink.
-    uv_snapshot!(context.pip_compile()
+    let output = uv_snapshot!(context.pip_compile()
         .arg("requirements.in")
         .arg("--output-file")
         .arg("requirements-symlink.txt"), @"
@@ -15533,7 +15533,7 @@ fn symlink() -> Result<()> {
     "
     );
 
-    // The output path still links to the requested file.
+    assert_eq!(fs_err::read(requirements_txt.path())?, output.stdout);
     assert_link_target(symlink, requirements_txt);
 
     Ok(())
