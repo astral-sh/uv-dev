@@ -36,28 +36,20 @@ impl<'lock> From<&'lock EditTarget> for LockTarget<'lock> {
 }
 
 impl EditTarget {
-    /// Write the updated metadata, returning whether the content changed.
-    pub(super) fn write(&self, content: &str) -> Result<bool, io::Error> {
+    /// Write the updated metadata if its content changed.
+    pub(super) fn write(&self, content: &str) -> Result<(), io::Error> {
+        let original = match self {
+            Self::Script(script) => script.metadata.raw.as_str(),
+            Self::Project(project) => project.pyproject_toml().raw.as_str(),
+        };
+        if content == original {
+            debug!("No changes to dependencies; skipping update");
+            return Ok(());
+        }
+
         match self {
-            Self::Script(script) => {
-                if content == script.metadata.raw {
-                    debug!("No changes to dependencies; skipping update");
-                    Ok(false)
-                } else {
-                    script.write(content)?;
-                    Ok(true)
-                }
-            }
-            Self::Project(project) => {
-                if content == project.pyproject_toml().raw {
-                    debug!("No changes to dependencies; skipping update");
-                    Ok(false)
-                } else {
-                    let pyproject_path = project.root().join("pyproject.toml");
-                    fs_err::write(pyproject_path, content)?;
-                    Ok(true)
-                }
-            }
+            Self::Script(script) => script.write(content),
+            Self::Project(project) => fs_err::write(project.root().join("pyproject.toml"), content),
         }
     }
 
