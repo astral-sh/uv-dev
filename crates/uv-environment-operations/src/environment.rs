@@ -86,7 +86,7 @@ impl CachedEnvironment {
                 &interpreter,
                 python_platform,
                 SourceTreeEditablePolicy::Project,
-                build_constraints.clone(),
+                &build_constraints,
                 &settings.resolver,
                 client_builder,
                 state,
