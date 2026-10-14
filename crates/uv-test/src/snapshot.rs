@@ -24,10 +24,11 @@ pub const INSTA_FILTERS: &[(&str, &str)] = &[
     // Rewrite Windows output to Unix output
     (r"\\([\w\d]|\.)", "/$1"),
     (r"uv\.exe", "uv"),
-    // uv version display
+    // Match uv's complete version display, including optional debug logging. Package listings
+    // can contain names starting with `uv` followed by unrelated version numbers.
     (
-        r"uv(-.*)? \d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?(\+\d+)?( \([^)]*\))?",
-        r"uv [VERSION] ([COMMIT] DATE)",
+        r"(?m)^((?:DEBUG )?uv) \d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?(?:\+\d+)? \([^\r\n()]+\)(\r?)$",
+        r"${1} [VERSION] ([COMMIT] DATE)${2}",
     ),
     // Trim end-of-line whitespaces, to allow removing them on save.
     (r"([^\s])[ \t]+(\r?\n)", "$1$2"),
@@ -458,6 +459,31 @@ mod process_status_tests {
         ----- stderr -----
         input rejected
         ");
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::{INSTA_FILTERS, apply_filters};
+
+    #[test]
+    fn uv_version_filter_preserves_package_versions() {
+        let output = concat!(
+            "uv 0.13.1 (x86_64-unknown-linux-gnu)\n",
+            "DEBUG uv 0.13.1+3 (abcdef 2026-10-13 x86_64-unknown-linux-gnu)\r\n",
+            "uv-public-pypackage 0.1.0   0.2.0  wheel\n",
+            "uv 0.1.0   0.2.0  wheel\n",
+        );
+
+        assert_eq!(
+            apply_filters(output.to_string(), INSTA_FILTERS),
+            concat!(
+                "uv [VERSION] ([COMMIT] DATE)\n",
+                "DEBUG uv [VERSION] ([COMMIT] DATE)\r\n",
+                "uv-public-pypackage 0.1.0   0.2.0  wheel\n",
+                "uv 0.1.0   0.2.0  wheel\n",
+            )
+        );
     }
 }
 
