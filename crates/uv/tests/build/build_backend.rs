@@ -11,7 +11,7 @@ use indoc::{formatdoc, indoc};
 use std::path::Path;
 use tempfile::TempDir;
 use uv_static::EnvVars;
-use uv_test::{TestContext, copy_dir_ignore, uv_snapshot};
+use uv_test::{TestContext, assert_path_missing, copy_dir_ignore, uv_snapshot};
 
 const BUILT_BY_UV_TEST_SCRIPT: &str = indoc! {r#"
     from built_by_uv import greet
@@ -1274,79 +1274,94 @@ fn error_on_relative_module_root_outside_project_root() -> Result<()> {
     Ok(())
 }
 
-/// Error when there is a relative data directory outside the project root, such as
-/// `tool.uv.build-backend.data.headers = "../headers"`.
-#[test]
-fn error_on_relative_data_dir_outside_project_root() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
+fn project_with_header_data(context: &TestContext, headers: &str) -> Result<ChildPath> {
     let project = context.temp_dir.child("project");
-    project.create_dir_all()?;
-
-    let pyproject_toml = project.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
+    project.child("pyproject.toml").write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
 
         [tool.uv.build-backend.data]
-        headers = "../header"
+        headers = "{headers}"
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
+    project.child("src/project/__init__.py").touch()?;
+    Ok(project)
+}
 
-    let project_module = project.child("src/project");
-    project_module.create_dir_all()?;
-    project_module.child("__init__.py").touch()?;
+#[test]
+fn sdist_rejects_external_header_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    project_with_header_data(&context, "../header")?;
+    context
+        .temp_dir
+        .child("header/secret.h")
+        .write_str("not for distribution")?;
 
-    context.temp_dir.child("headers").create_dir_all()?;
-
-    uv_snapshot!(context.filters(), context.build().arg("project"), @"
+    uv_snapshot!(context.filters(), context.build()
+        .args(["project", "--sdist", "--no-index", "--out-dir", "dist"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/project`
       cause: The path for the data directory headers must be inside the project: ../header
     ");
+    assert_path_missing(context.temp_dir.child("dist/project-0.1.0.tar.gz"));
+    Ok(())
+}
 
-    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel"), @"
+#[test]
+fn wheel_rejects_external_header_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    project_with_header_data(&context, "../header")?;
+    context
+        .temp_dir
+        .child("header/secret.h")
+        .write_str("not for distribution")?;
+
+    uv_snapshot!(context.filters(), context.build()
+        .args(["project", "--wheel", "--no-index", "--out-dir", "dist"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building wheel...
     error: Failed to build `[TEMP_DIR]/project`
       cause: The path for the data directory headers must be inside the project: ../header
     ");
+    assert_path_missing(
+        context
+            .temp_dir
+            .child("dist/project-0.1.0-py3-none-any.whl"),
+    );
+    Ok(())
+}
 
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [tool.uv.build-backend.data]
-        headers = "header/../../outside"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
+#[test]
+fn wheel_rejects_normalized_external_header_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let project = project_with_header_data(&context, "header/../../outside")?;
     project.child("header").create_dir_all()?;
     context
         .temp_dir
         .child("outside/secret.h")
         .write_str("not for distribution")?;
 
-    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel"), @"
+    uv_snapshot!(context.filters(), context.build()
+        .args(["project", "--wheel", "--no-index", "--out-dir", "dist"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building wheel...
     error: Failed to build `[TEMP_DIR]/project`
       cause: The path for the data directory headers must be inside the project: ../outside
     ");
-
+    assert_path_missing(
+        context
+            .temp_dir
+            .child("dist/project-0.1.0-py3-none-any.whl"),
+    );
     Ok(())
 }
 
