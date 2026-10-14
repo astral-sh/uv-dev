@@ -154,11 +154,8 @@ fn build_basic() -> Result<()> {
     Ok(())
 }
 
-/// Global lazy imports are opt-in on supported build interpreters.
-#[test]
-fn build_lazy_imports() -> Result<()> {
-    let context = uv_test::test_context!("3.15");
-    let project = context.temp_dir.child("project");
+/// Write a build backend that records whether an unused module was imported eagerly.
+fn write_lazy_imports_build_project(project: &ChildPath) -> Result<()> {
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "project"
@@ -188,6 +185,23 @@ fn build_lazy_imports() -> Result<()> {
                 wheel.writestr("project-0.1.0.dist-info/RECORD", "")
             return name
     "#})?;
+    Ok(())
+}
+
+/// Consume the marker so the next build must produce its own observation.
+fn assert_build_import_mode(project: &ChildPath, expected: &str) -> Result<()> {
+    let mode = project.child("mode");
+    mode.assert(expected);
+    fs_err::remove_file(mode)?;
+    Ok(())
+}
+
+/// Global lazy imports are opt-in on supported build interpreters.
+#[test]
+fn build_lazy_imports() -> Result<()> {
+    let context = uv_test::test_context!("3.15");
+    let project = context.temp_dir.child("project");
+    write_lazy_imports_build_project(&project)?;
 
     uv_snapshot!(context.filters(), context.build().arg("--wheel").arg("project").env("PYTHON_LAZY_IMPORTS", "normal"), @"
     exit_code: 0 (success)
@@ -195,7 +209,7 @@ fn build_lazy_imports() -> Result<()> {
     Building wheel...
     Successfully built project/dist/project-0.1.0-py3-none-any.whl
     ");
-    project.child("mode").assert("eager");
+    assert_build_import_mode(&project, "eager")?;
 
     uv_snapshot!(context.filters(), context.build().arg("--wheel").arg("project").arg("--preview-features").arg("build-lazy-imports").env("PYTHON_LAZY_IMPORTS", "normal"), @"
     exit_code: 0 (success)
@@ -203,7 +217,7 @@ fn build_lazy_imports() -> Result<()> {
     Building wheel...
     Successfully built project/dist/project-0.1.0-py3-none-any.whl
     ");
-    project.child("mode").assert("lazy");
+    assert_build_import_mode(&project, "lazy")?;
 
     context.temp_dir.child("uv.toml").write_str(indoc! {r#"
         preview-features = ["build-lazy-imports"]
@@ -214,7 +228,7 @@ fn build_lazy_imports() -> Result<()> {
     Building wheel...
     Successfully built project/dist/project-0.1.0-py3-none-any.whl
     ");
-    project.child("mode").assert("lazy");
+    assert_build_import_mode(&project, "lazy")?;
 
     uv_snapshot!(context.filters(), context.build().arg("--wheel").arg("project").arg("--no-preview").env("PYTHON_LAZY_IMPORTS", "normal"), @"
     exit_code: 0 (success)
@@ -222,7 +236,7 @@ fn build_lazy_imports() -> Result<()> {
     Building wheel...
     Successfully built project/dist/project-0.1.0-py3-none-any.whl
     ");
-    project.child("mode").assert("eager");
+    assert_build_import_mode(&project, "eager")?;
 
     Ok(())
 }
@@ -232,35 +246,7 @@ fn build_lazy_imports() -> Result<()> {
 fn build_lazy_imports_unsupported_python() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
-    project.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-
-        [build-system]
-        requires = []
-        build-backend = "backend"
-        backend-path = ["."]
-    "#})?;
-    project.child("unused_module.py").write_str("VALUE = 1\n")?;
-    project.child("backend.py").write_str(indoc! {r#"
-        import sys
-        import unused_module
-
-        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-            import pathlib
-            import zipfile
-
-            pathlib.Path("mode").write_text(
-                "eager" if "unused_module" in sys.modules else "lazy"
-            )
-            name = "project-0.1.0-py3-none-any.whl"
-            with zipfile.ZipFile(pathlib.Path(wheel_directory) / name, "w") as wheel:
-                wheel.writestr("project-0.1.0.dist-info/METADATA", "Metadata-Version: 2.3\nName: project\nVersion: 0.1.0\n")
-                wheel.writestr("project-0.1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
-                wheel.writestr("project-0.1.0.dist-info/RECORD", "")
-            return name
-    "#})?;
+    write_lazy_imports_build_project(&project)?;
 
     uv_snapshot!(context.filters(), context.build().arg("--wheel").arg("project").env("PYTHON_LAZY_IMPORTS", "normal"), @"
     exit_code: 0 (success)
@@ -268,7 +254,7 @@ fn build_lazy_imports_unsupported_python() -> Result<()> {
     Building wheel...
     Successfully built project/dist/project-0.1.0-py3-none-any.whl
     ");
-    project.child("mode").assert("eager");
+    assert_build_import_mode(&project, "eager")?;
 
     uv_snapshot!(context.filters(), context.build().arg("--wheel").arg("project").arg("--preview-features").arg("build-lazy-imports").env("PYTHON_LAZY_IMPORTS", "normal"), @"
     exit_code: 0 (success)
@@ -276,7 +262,7 @@ fn build_lazy_imports_unsupported_python() -> Result<()> {
     Building wheel...
     Successfully built project/dist/project-0.1.0-py3-none-any.whl
     ");
-    project.child("mode").assert("eager");
+    assert_build_import_mode(&project, "eager")?;
 
     context.temp_dir.child("uv.toml").write_str(indoc! {r#"
         preview-features = ["build-lazy-imports"]
@@ -287,7 +273,7 @@ fn build_lazy_imports_unsupported_python() -> Result<()> {
     Building wheel...
     Successfully built project/dist/project-0.1.0-py3-none-any.whl
     ");
-    project.child("mode").assert("eager");
+    assert_build_import_mode(&project, "eager")?;
 
     uv_snapshot!(context.filters(), context.build().arg("--wheel").arg("project").arg("--no-preview").env("PYTHON_LAZY_IMPORTS", "normal"), @"
     exit_code: 0 (success)
@@ -295,7 +281,7 @@ fn build_lazy_imports_unsupported_python() -> Result<()> {
     Building wheel...
     Successfully built project/dist/project-0.1.0-py3-none-any.whl
     ");
-    project.child("mode").assert("eager");
+    assert_build_import_mode(&project, "eager")?;
 
     Ok(())
 }
