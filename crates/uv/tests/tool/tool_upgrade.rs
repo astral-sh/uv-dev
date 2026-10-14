@@ -1292,6 +1292,10 @@ async fn tool_upgrade_lock_verifies_hashes() -> Result<()> {
         .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
         .success();
+    let receipt = context
+        .temp_dir
+        .child("tools/simple-launcher/uv-receipt.toml");
+    let original_receipt = context.read(&receipt);
 
     mount_simple_launcher_index(
         &server,
@@ -1320,6 +1324,12 @@ async fn tool_upgrade_lock_verifies_hashes() -> Result<()> {
              Computed:
                sha256:5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4
     ");
+    assert_eq!(context.read(receipt), original_receipt);
+    context
+        .external_command(bin_dir.child(format!("simple_launcher{}", std::env::consts::EXE_SUFFIX)))
+        .assert()
+        .success()
+        .stdout("Hi from the simple launcher!\n");
 
     Ok(())
 }
