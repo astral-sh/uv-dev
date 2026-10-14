@@ -122,44 +122,48 @@ fn tool_upgrade_all_unreadable_receipt() -> Result<()> {
 }
 
 #[test]
-fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
+fn tool_upgrade_preserves_workspace_member_non_editability() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
 
     let root_pyproject = context.temp_dir.child("pyproject.toml");
-    root_pyproject.write_str(indoc! {
-        r#"
-        [project]
-        name = "root"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["child"]
+    let write_root_manifest = |version: &str| {
+        root_pyproject.write_str(&formatdoc! {r#"
+            [project]
+            name = "root"
+            version = "{version}"
+            requires-python = ">=3.12"
+            dependencies = ["child"]
 
-        [project.scripts]
-        root_cli = "root:main"
+            [project.scripts]
+            root_cli = "root:main"
 
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
 
-        [tool.uv.sources]
-        child = { workspace = true }
+            [tool.uv.sources]
+            child = {{ workspace = true }}
 
-        [tool.uv.workspace]
-        members = ["child"]
-        "#
-    })?;
+            [tool.uv.workspace]
+            members = ["child"]
+        "#})
+    };
+    write_root_manifest("0.1.0")?;
 
     let root_src = context.temp_dir.child("src").child("root");
     root_src.create_dir_all()?;
     root_src.child("__init__.py").write_str(indoc! {
-        r"
+        r#"
         def main():
+            from importlib.metadata import version
+
             import child
-            print(child.MESSAGE)
-        "
+
+            print(version("root"), child.MESSAGE)
+        "#
     })?;
 
     let child = context.temp_dir.child("child");
@@ -181,18 +185,17 @@ fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
         .child("__init__.py")
         .write_str("MESSAGE = 'OK'\n")?;
 
-    let status = context
+    context
         .tool_install()
         .arg(context.temp_dir.path())
         .env(EnvVars::PATH, bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool install");
-    assert!(status.success());
+        .assert()
+        .success();
 
     uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    OK
+    0.1.0 OK
     ");
 
     child_src
@@ -202,21 +205,21 @@ fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
     uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    OK
+    0.1.0 OK
     ");
 
-    let status = context
+    write_root_manifest("0.1.1")?;
+    context
         .tool_upgrade()
         .arg("root")
         .env(EnvVars::PATH, bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool upgrade");
-    assert!(status.success());
+        .assert()
+        .success();
 
     uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    OK
+    0.1.1 OK
     ");
 
     child_src
@@ -226,7 +229,7 @@ fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
     uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    OK
+    0.1.1 OK
     ");
 
     Ok(())
