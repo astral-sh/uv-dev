@@ -793,15 +793,11 @@ impl<'lock> InstallTarget<'lock> {
                     .map(|package| (package.name(), package))
                     .collect::<BTreeMap<_, _>>();
 
-                // We'll include all specified projects
-                let mut required_members = BTreeSet::new();
-                for name in &roots {
-                    required_members.insert(*name);
-                }
+                // Include all specified projects.
+                let mut required_members = roots.iter().copied().collect::<BTreeSet<_>>();
 
                 // Find all workspace member dependencies recursively for all specified packages
-                let mut queue: VecDeque<(&PackageName, Option<&ExtraName>)> = VecDeque::new();
-                let mut seen: FxHashSet<(&PackageName, Option<&ExtraName>)> = FxHashSet::default();
+                let mut queue = PackageQueue::default();
 
                 for (name, root_kind) in roots
                     .iter()
@@ -817,18 +813,10 @@ impl<'lock> InstallTarget<'lock> {
                     };
 
                     if root_kind == InstallableRootKind::Production && groups.prod() {
-                        // Add the root package
-                        if seen.insert((name, None)) {
-                            queue.push_back((name, None));
-                        }
-
-                        // Add explicitly activated extras for the root package
-                        for extra in extras.extra_names(root_package.optional_dependencies().keys())
-                        {
-                            if seen.insert((name, Some(extra))) {
-                                queue.push_back((name, Some(extra)));
-                            }
-                        }
+                        queue.enqueue(
+                            name,
+                            extras.extra_names(root_package.optional_dependencies().keys()),
+                        );
                     }
 
                     // Add activated dependency groups for the root package
@@ -837,15 +825,7 @@ impl<'lock> InstallTarget<'lock> {
                             continue;
                         }
                         for dependency in dependencies {
-                            let dep_name = dependency.package_name();
-                            if seen.insert((dep_name, None)) {
-                                queue.push_back((dep_name, None));
-                            }
-                            for extra in dependency.extra() {
-                                if seen.insert((dep_name, Some(extra))) {
-                                    queue.push_back((dep_name, Some(extra)));
-                                }
-                            }
+                            queue.enqueue(dependency.package_name(), dependency.extra());
                         }
                     }
                 }
@@ -859,28 +839,17 @@ impl<'lock> InstallTarget<'lock> {
                         continue;
                     };
 
-                    let Some(dependencies) = extra
-                        .map(|extra_name| {
-                            package
-                                .optional_dependencies()
-                                .get(extra_name)
-                                .map(Vec::as_slice)
-                        })
-                        .unwrap_or(Some(package.dependencies()))
-                    else {
-                        continue;
+                    let dependencies = if let Some(extra) = extra {
+                        let Some(dependencies) = package.optional_dependencies().get(extra) else {
+                            continue;
+                        };
+                        dependencies.as_slice()
+                    } else {
+                        package.dependencies()
                     };
 
                     for dependency in dependencies {
-                        let name = dependency.package_name();
-                        if seen.insert((name, None)) {
-                            queue.push_back((name, None));
-                        }
-                        for extra in dependency.extra() {
-                            if seen.insert((name, Some(extra))) {
-                                queue.push_back((name, Some(extra)));
-                            }
-                        }
+                        queue.enqueue(dependency.package_name(), dependency.extra());
                     }
                 }
 
@@ -895,5 +864,30 @@ impl<'lock> InstallTarget<'lock> {
                 BTreeSet::new()
             }
         }
+    }
+}
+
+/// A queue of package and extra combinations to visit during workspace traversal.
+#[derive(Default)]
+struct PackageQueue<'package, 'extra> {
+    pending: VecDeque<(&'package PackageName, Option<&'extra ExtraName>)>,
+    seen: FxHashSet<(&'package PackageName, Option<&'extra ExtraName>)>,
+}
+
+impl<'package, 'extra> PackageQueue<'package, 'extra> {
+    fn enqueue(
+        &mut self,
+        package: &'package PackageName,
+        extras: impl IntoIterator<Item = &'extra ExtraName>,
+    ) {
+        for extra in std::iter::once(None).chain(extras.into_iter().map(Some)) {
+            if self.seen.insert((package, extra)) {
+                self.pending.push_back((package, extra));
+            }
+        }
+    }
+
+    fn pop_front(&mut self) -> Option<(&'package PackageName, Option<&'extra ExtraName>)> {
+        self.pending.pop_front()
     }
 }
