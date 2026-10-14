@@ -98,7 +98,10 @@ pub fn uninstall_wheel(
                     Err(_) => return Err(err.into()),
                 }
                 match fs_err::remove_dir_all(&path) {
-                    Ok(()) => uninstall.record_removed_directory(&path),
+                    Ok(()) => {
+                        record_paths.cached_parent = None;
+                        uninstall.record_removed_directory(&path);
+                    }
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                     Err(_) => return Err(err.into()),
                 }
@@ -176,7 +179,7 @@ fn should_warn_for_distribution(
 struct RecordPathResolver<'a> {
     site_packages: &'a Path,
     roots: [InstallationSchemeRoot<'a>; 5],
-    /// Cache one parent so processing an ancestor evicts its descendant before deletion.
+    /// Cache the last resolved parent until a directory or symlink is removed.
     cached_parent: Option<ResolvedRecordParent>,
 }
 
@@ -761,6 +764,42 @@ mod tests {
         uninstall_wheel(dist_info.path(), "example 1.0", &layout)?;
 
         assert!(!alias.exists());
+        assert!(sentinel.exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_uninstall_re_resolves_a_parent_after_removing_its_directory() -> anyhow::Result<()> {
+        let venv = assert_fs::TempDir::new()?;
+        let site_packages = venv.child("lib/python3.12/site-packages");
+        let victim = site_packages.child("victim");
+        victim.create_dir_all()?;
+        symlink("..", victim.child("link").path())?;
+        let sentinel = site_packages.child("sentinel.txt");
+        sentinel.write_str("keep")?;
+        let dist_info = site_packages.child("example-1.0.dist-info");
+        dist_info.child("RECORD").write_str(concat!(
+            "victim/link/victim,,\n",
+            "victim/link/sentinel.txt,,\n",
+            "example-1.0.dist-info/RECORD,,\n",
+        ))?;
+        let layout = Layout {
+            sys_executable: venv.path().join("bin/python"),
+            python_version: (3, 12),
+            os_name: "posix".to_string(),
+            scheme: Scheme {
+                purelib: site_packages.to_path_buf(),
+                platlib: site_packages.to_path_buf(),
+                scripts: venv.path().join("bin"),
+                data: venv.path().to_path_buf(),
+                include: venv.path().join("include"),
+            },
+        };
+
+        uninstall_wheel(dist_info.path(), "example 1.0", &layout)?;
+
+        assert!(!victim.exists());
         assert!(sentinel.exists());
         Ok(())
     }
