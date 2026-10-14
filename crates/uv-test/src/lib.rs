@@ -856,34 +856,34 @@ impl TestContext {
         Ok(Some(self))
     }
 
-    fn with_working_dir_on_fs(
-        mut self,
-        variable: &str,
-        name: &str,
-    ) -> anyhow::Result<Option<Self>> {
+    fn with_working_dir_on_fs(self, variable: &str, name: &str) -> anyhow::Result<Option<Self>> {
         let Some(tmp) = Self::temp_dir_on_fs(variable)? else {
             return Ok(None);
         };
+        self.with_working_dir(tmp, name).map(Some)
+    }
+
+    fn with_working_dir(mut self, tmp: tempfile::TempDir, name: &str) -> anyhow::Result<Self> {
         self.temp_dir = ChildPath::new(tmp.path()).child("temp");
         fs_err::create_dir_all(&self.temp_dir)?;
         // Place the venv inside temp_dir (matching the default TestContext layout)
         // so that `context.venv()` creates it at the same path that `VIRTUAL_ENV` points to.
         let canonical_temp_dir = self.temp_dir.canonicalize()?;
         self.venv = ChildPath::new(canonical_temp_dir.join(".venv"));
-        let temp_replacement = format!("[{name}]/[TEMP_DIR]/");
-        self.filters.extend(
-            Self::path_patterns(&self.temp_dir)
-                .into_iter()
-                .map(|pattern| (pattern, temp_replacement.clone())),
-        );
-        let venv_replacement = format!("[{name}]/[VENV]/");
-        self.filters.extend(
+        // Apply specific paths before their parents and before generic temporary-path filters.
+        self.filters.splice(
+            0..0,
             Self::path_patterns(&self.venv)
                 .into_iter()
-                .map(|pattern| (pattern, venv_replacement.clone())),
+                .map(|pattern| (pattern, format!("[{name}]/[VENV]/")))
+                .chain(
+                    Self::path_patterns(&self.temp_dir)
+                        .into_iter()
+                        .map(|pattern| (pattern, format!("[{name}]/[TEMP_DIR]/"))),
+                ),
         );
         self._extra_tempdirs.push(tmp);
-        Ok(Some(self))
+        Ok(self)
     }
 
     fn temp_dir_on_fs(variable: &str) -> anyhow::Result<Option<tempfile::TempDir>> {
@@ -2470,7 +2470,7 @@ mod python_discovery_tests {
 
 #[cfg(test)]
 mod path_pattern_tests {
-    use super::TestContext;
+    use super::{TestContext, apply_filters};
 
     #[test]
     fn canonical_path_has_one_pattern() -> anyhow::Result<()> {
@@ -2478,6 +2478,23 @@ mod path_pattern_tests {
         let canonical = directory.path().canonicalize()?;
 
         assert_eq!(TestContext::path_patterns(canonical).len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn relocated_working_directory_filters_precede_generic_filters() -> anyhow::Result<()> {
+        let context = TestContext::new_with_versions_and_bin(&[], "uv".into())
+            .with_working_dir(tempfile::tempdir()?, "COW_FS")?;
+        let output = format!(
+            "{}\n{}",
+            context.temp_dir.join("project").display(),
+            context.venv.join("package").display(),
+        );
+
+        assert_eq!(
+            apply_filters(output, context.filters()),
+            "[COW_FS]/[TEMP_DIR]/project\n[COW_FS]/[VENV]/package"
+        );
         Ok(())
     }
 }
