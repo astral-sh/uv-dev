@@ -701,6 +701,26 @@ fn create_centralized_project_environment_link_failure() -> Result<()> {
     }
 
     assert!(environment.child("keep").is_file());
+    // The activation hint must lead to a usable environment despite the project link failure.
+    let cache = uv_cache::Cache::from_path(context.cache_dir.to_path_buf());
+    let cached = fs_err::read_dir(cache.bucket(uv_cache::CacheBucket::Environments))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    let [fallback] = cached.as_slice() else {
+        panic!("expected one fallback environment, found {cached:?}");
+    };
+    context
+        .external_command(
+            uv_test::venv_bin_path(fallback).join(format!("python{}", std::env::consts::EXE_SUFFIX)),
+        )
+        .args([
+            "-I",
+            "-c",
+            "import sys; assert sys.prefix != sys.base_prefix; print(f'{sys.version_info.major}.{sys.version_info.minor}', end='')",
+        ])
+        .assert()
+        .success()
+        .stdout("3.12");
     Ok(())
 }
 
