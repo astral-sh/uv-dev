@@ -7,15 +7,14 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir};
 use indoc::indoc;
-use uv_python_managed::platform_key_from_env;
 use uv_test::TestContext;
+
+// Repair still resolves the installation's download key, so use an entry independent of the host.
+const INSTALLATION_KEY: &str = "cpython-3.12.9-linux-x86_64-gnu";
 
 /// Create the minimal on-disk shape needed for `uv python install` to repair an installation.
 fn mock_cpython_installation(context: &TestContext) -> anyhow::Result<ChildPath> {
-    let installation = context
-        .temp_dir
-        .child("managed")
-        .child(format!("cpython-3.12.9-{}", platform_key_from_env()?));
+    let installation = context.temp_dir.child("managed").child(INSTALLATION_KEY);
     installation
         .child("lib")
         .child("python3.12")
@@ -51,7 +50,7 @@ fn python_install_sysconfig_prefix() -> anyhow::Result<()> {
 
     context
         .python_install()
-        .arg("3.12.9")
+        .arg(INSTALLATION_KEY)
         .arg("--no-bin")
         .arg("--offline")
         .assert()
@@ -80,7 +79,7 @@ fn python_install_sysconfig_prefix() -> anyhow::Result<()> {
 
     context
         .python_install()
-        .arg("3.12.9")
+        .arg(INSTALLATION_KEY)
         .arg("--no-bin")
         .arg("--offline")
         .assert()
@@ -118,7 +117,7 @@ fn python_install_pkgconfig() -> anyhow::Result<()> {
 
     context
         .python_install()
-        .arg("3.12.9")
+        .arg(INSTALLATION_KEY)
         .arg("--no-bin")
         .arg("--offline")
         .assert()
