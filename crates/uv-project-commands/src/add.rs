@@ -894,11 +894,11 @@ fn edits(
         let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
 
         // Add the specified extras.
-        let mut ex = requirement.extras.to_vec();
-        ex.extend(extras.iter().cloned());
-        ex.sort_unstable();
-        ex.dedup();
-        requirement.extras = ex.into_boxed_slice();
+        let mut merged_extras = requirement.extras.into_vec();
+        merged_extras.extend(extras.iter().cloned());
+        merged_extras.sort_unstable();
+        merged_extras.dedup();
+        requirement.extras = merged_extras.into_boxed_slice();
 
         let (requirement, mut source) = match target {
             EditTarget::Script(_) | EditTarget::Project(_) if raw => {
