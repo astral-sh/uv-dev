@@ -269,7 +269,7 @@ fn python_upgrade_ignored_with_python_pin() {
 // prevent transparent upgrades.
 #[test]
 fn python_no_transparent_upgrade_with_venv_patch_specification() {
-    let context = uv_test::test_context_with_versions!(&["3.13"])
+    let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
         .with_managed_python_dirs()
@@ -292,7 +292,7 @@ fn python_no_transparent_upgrade_with_venv_patch_specification() {
     Activate with: source .venv/[BIN]/activate
     ");
 
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -308,7 +308,7 @@ fn python_no_transparent_upgrade_with_venv_patch_specification() {
     ");
 
     // The virtual environment Python version remains the same.
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
