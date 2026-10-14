@@ -156,6 +156,18 @@ UV_INTERNAL__BUILD_GIT_INFO=1 cargo run -- --version
 
 Release builds, including profiles that inherit from `release`, include Git metadata by default.
 
+### Binary size
+
+The `Binary size` workflow records native Linux x86-64 release binary sizes on `main`. Add the
+`build:binary-size` label to a pull request to compare its merge commit with the target commit used
+in that merge. Results appear in the workflow summary, with raw measurements retained as artifacts.
+Size increases are informational.
+
+Measurements use `release` for `uv` and `uvx`, and `minimal-size` for `uv-build`, without the
+release pipeline's PGO, SBOM embedding, or manylinux packaging. Rust build artifacts are cached
+separately from other CI builds. Baseline measurements are reused only for the exact commit and
+measurement configuration; missing baselines are rebuilt.
+
 ## Formatting
 
 ```shell
