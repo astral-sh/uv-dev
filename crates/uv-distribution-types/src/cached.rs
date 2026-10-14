@@ -128,6 +128,15 @@ impl Hashed for CachedRegistryDist {
     }
 }
 
+impl Hashed for CachedDist {
+    fn hashes(&self) -> &[HashDigest] {
+        match self {
+            Self::Registry(CachedRegistryDist { hashes, .. })
+            | Self::Url(CachedDirectUrlDist { hashes, .. }) => hashes.as_slice(),
+        }
+    }
+}
+
 impl Name for CachedRegistryDist {
     fn name(&self) -> &PackageName {
         &self.filename.name

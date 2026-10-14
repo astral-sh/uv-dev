@@ -10574,6 +10574,63 @@ fn verify_hashes_mismatch() -> Result<()> {
     Ok(())
 }
 
+/// Runtime hash checks apply even when a build dependency has already prepared the same wheel.
+#[test]
+fn verify_hashes_after_build_dependency_preparation() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.workspace_root.join("test/links");
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "validation"
+        dynamic = ["version"]
+
+        [build-system]
+        requires = ["ok==1.0.0"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let wheel = "validation-1.0.0-py3-none-any.whl";
+    fs::copy(links.join(wheel), project.child(wheel).path())?;
+    project.child("backend.py").write_str(&formatdoc! {r#"
+        from pathlib import Path
+        import shutil
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            filename = "{wheel}"
+            shutil.copyfile(Path(__file__).with_name(filename), Path(wheel_directory) / filename)
+            return filename
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {"
+        ./project
+        ok==1.0.0 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--offline")
+        .arg("--no-index")
+        .arg("--find-links").arg(&links)
+        .arg("--verify-hashes")
+        .arg("-r").arg("requirements.txt"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: Failed to download `ok==1.0.0`
+      cause: Hash mismatch for `ok==1.0.0`
+
+             Expected:
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+             Computed:
+               sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f
+    ");
+
+    Ok(())
+}
+
 /// Verify hashes on arbitrary-equality pins in both checking modes.
 #[test]
 fn verify_hashes_exact_equal() -> Result<()> {
