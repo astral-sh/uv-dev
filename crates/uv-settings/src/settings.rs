@@ -217,33 +217,19 @@ impl Options {
     /// Set the [`Origin`] on all indexes without an existing origin.
     #[must_use]
     pub(crate) fn with_origin(mut self, origin: Origin) -> Self {
-        if let Some(indexes) = &mut self.top_level.index {
-            for index in indexes {
-                index.origin.get_or_insert(origin);
-            }
-        }
-        if let Some(index_url) = &mut self.top_level.index_url {
-            index_url.try_set_origin(origin);
-        }
-        if let Some(extra_index_urls) = &mut self.top_level.extra_index_url {
-            for index_url in extra_index_urls {
-                index_url.try_set_origin(origin);
-            }
-        }
+        set_index_origin(
+            origin,
+            &mut self.top_level.index,
+            &mut self.top_level.index_url,
+            &mut self.top_level.extra_index_url,
+        );
         if let Some(pip) = &mut self.pip {
-            if let Some(indexes) = &mut pip.index {
-                for index in indexes {
-                    index.origin.get_or_insert(origin);
-                }
-            }
-            if let Some(index_url) = &mut pip.index_url {
-                index_url.try_set_origin(origin);
-            }
-            if let Some(extra_index_urls) = &mut pip.extra_index_url {
-                for index_url in extra_index_urls {
-                    index_url.try_set_origin(origin);
-                }
-            }
+            set_index_origin(
+                origin,
+                &mut pip.index,
+                &mut pip.index_url,
+                &mut pip.extra_index_url,
+            );
         }
         self
     }
@@ -515,6 +501,24 @@ impl TryFrom<GlobalOptionsWire> for GlobalOptions {
             no_proxy,
             allow_insecure_host,
         })
+    }
+}
+
+/// Set the origin of registry indexes that do not already have one.
+fn set_index_origin(
+    origin: Origin,
+    indexes: &mut Option<Vec<Index>>,
+    index_url: &mut Option<PipIndex>,
+    extra_index_urls: &mut Option<Vec<PipExtraIndex>>,
+) {
+    for index in indexes.iter_mut().flatten() {
+        index.origin.get_or_insert(origin);
+    }
+    if let Some(index_url) = index_url {
+        index_url.try_set_origin(origin);
+    }
+    for index_url in extra_index_urls.iter_mut().flatten() {
+        index_url.try_set_origin(origin);
     }
 }
 
