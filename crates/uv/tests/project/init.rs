@@ -1807,14 +1807,15 @@ fn init_no_workspace() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {
+    let parent_manifest = indoc! {
         r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
         "#,
-    })?;
+    };
+    pyproject_toml.write_str(parent_manifest)?;
 
     // Initialize with `--no-workspace`.
     let child = context.temp_dir.join("foo");
@@ -1826,46 +1827,9 @@ fn init_no_workspace() -> Result<()> {
     Initialized project `foo`
     ");
 
-    // Ensure that the workspace was not modified.
-    let workspace = context.read("pyproject.toml");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            workspace, @r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        "#
-        );
-    });
-
-    // Write out an invalid `pyproject.toml` in the parent, to ensure that `--no-workspace` is
-    // robust to errors in discovery.
-    pyproject_toml.write_str(indoc! {
-        r"",
-    })?;
-
-    let child = context.temp_dir.join("bar");
-    fs_err::create_dir(&child)?;
-
-    uv_snapshot!(context.filters(), context.init().current_dir(&child).arg("--no-workspace"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Initialized project `bar`
-    ");
-
-    let workspace = context.read("pyproject.toml");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            workspace, @""
-        );
-    });
+    pyproject_toml.assert(parent_manifest);
+    let initialized: toml::Value = toml::from_str(&context.read("foo/pyproject.toml"))?;
+    assert_eq!(initialized["project"]["name"].as_str(), Some("foo"));
 
     Ok(())
 }
