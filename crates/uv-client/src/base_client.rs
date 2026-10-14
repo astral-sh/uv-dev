@@ -26,7 +26,7 @@ use uv_auth::{
 };
 use uv_configuration::ProxyUrlKind;
 use uv_configuration::{Concurrency, KeyringProviderType, ProxyUrl, TrustedHost};
-use uv_distribution_types::IndexCredentialsError;
+use uv_distribution_types::{Index, IndexCredentialsError};
 use uv_git::GitHttpSettings;
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
@@ -449,6 +449,14 @@ impl<'a> BaseClientBuilder<'a> {
     /// See [`CredentialsCache::store_credentials`].
     pub fn store_credentials(&self, url: &DisplaySafeUrl, credentials: Credentials) {
         self.credentials_cache.store_credentials(url, credentials);
+    }
+
+    /// Cache index credentials for both the index URL and its root, when available.
+    pub fn store_index_credentials(&self, index: &Index, credentials: Credentials) {
+        if let Some(root_url) = index.root_url() {
+            self.store_credentials(&root_url, credentials.clone());
+        }
+        self.store_credentials(index.raw_url(), credentials);
     }
 
     pub fn is_offline(&self) -> bool {

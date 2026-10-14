@@ -158,12 +158,8 @@ impl<'a> RegistryClientBuilder<'a> {
                         .map(ToString::to_string)
                         .unwrap_or_else(|| index.url.to_string())
                 );
-                if let Some(root_url) = index.root_url() {
-                    self.base_client_builder
-                        .store_credentials(&root_url, credentials.clone());
-                }
                 self.base_client_builder
-                    .store_credentials(index.raw_url(), credentials);
+                    .store_index_credentials(index, credentials);
             }
         }
         Ok(())
