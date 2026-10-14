@@ -262,7 +262,10 @@ fn sync_centralized_env_avoids_project_name_collisions() -> Result<()> {
         .success();
     let target_b = fs_err::read_link(project_b.child(".venv").path())?;
     // Projects with the same name use different environments.
-    assert_ne!(target_a, target_b);
+    assert_ne!(
+        fs_err::canonicalize(project_a.join(target_a))?,
+        fs_err::canonicalize(project_b.join(target_b))?
+    );
     Ok(())
 }
 
