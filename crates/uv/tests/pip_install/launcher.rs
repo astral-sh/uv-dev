@@ -53,3 +53,42 @@ fn symlinked() -> anyhow::Result<()> {
     ");
     Ok(())
 }
+
+#[test]
+fn relocated() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .venv()
+        .arg(context.venv.as_os_str())
+        .args(["--clear", "--python", "3.12", "--relocatable"])
+        .assert()
+        .success();
+
+    let launcher = install_launcher(&context);
+    uv_snapshot!(Command::new(&launcher), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
+
+    let relocated = context.venv.with_file_name("relocated");
+    fs_err::rename(&context.venv, &relocated)?;
+    let relocated_launcher = venv_bin_path(&relocated).join(launcher.file_name().unwrap());
+    uv_snapshot!(Command::new(&relocated_launcher), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hi from the simple launcher!
+    ");
+
+    #[cfg(unix)]
+    {
+        let linked_launcher = context.temp_dir.join(launcher.file_name().unwrap());
+        fs_err::os::unix::fs::symlink(&relocated_launcher, &linked_launcher)?;
+        uv_snapshot!(Command::new(linked_launcher), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        Hi from the simple launcher!
+        ");
+    }
+    Ok(())
+}
