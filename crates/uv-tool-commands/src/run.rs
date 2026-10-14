@@ -868,7 +868,7 @@ async fn get_or_create_environment(
             let (executable, requirement) = match target {
                 // Ex) `ruff>=0.6.0`
                 Target::Unspecified(requirement) => {
-                    let spec = unresolved_target_requirement.clone().ok_or_else(|| {
+                    let spec = unresolved_target_requirement.ok_or_else(|| {
                         anyhow::anyhow!(
                             "Expected parsed requirement for unresolved target `{requirement}`"
                         )
