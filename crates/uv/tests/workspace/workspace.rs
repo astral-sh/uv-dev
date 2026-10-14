@@ -1756,8 +1756,6 @@ fn workspace_unsatisfiable_member_dependencies_conflicting_threeway() -> Result<
 #[cfg(feature = "test-universal")]
 #[test]
 fn workspace_unsatisfiable_member_dependencies_requires_three_members() -> Result<()> {
-    use predicates::prelude::{PredicateBooleanExt, predicate};
-
     let server = uv_test::packse::PackseServer::new("fork/conflict-unsatisfiable.toml");
     let context = uv_test::test_context!("3.12");
     let workspace = context.temp_dir.child("workspace");
@@ -1781,19 +1779,25 @@ fn workspace_unsatisfiable_member_dependencies_requires_three_members() -> Resul
         r#"dependencies = ["a!=2.*"]"#,
     )?;
 
-    context
+    let output = context
         .lock()
         .current_dir(&workspace)
         .arg("--index-url")
         .arg(server.index_url())
         .assert()
         .code(1)
-        .stderr(
-            predicate::str::contains("No solution found when resolving dependencies")
-                .and(predicate::str::is_match(r"\bbird\b")?)
-                .and(predicate::str::is_match(r"\bknot\b")?)
-                .and(predicate::str::is_match(r"\bred\b")?),
+        .stderr(predicates::str::contains(
+            "No solution found when resolving dependencies",
+        ));
+    let stderr = std::str::from_utf8(&output.get_output().stderr)?;
+    for member in ["bird", "knot", "red"] {
+        assert!(
+            stderr
+                .split(|character: char| !character.is_alphanumeric() && character != '_')
+                .any(|word| word == member),
+            "missing workspace member `{member}` in the conflict diagnostic:\n{stderr}"
         );
+    }
 
     Ok(())
 }
