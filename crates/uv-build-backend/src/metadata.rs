@@ -624,37 +624,28 @@ impl PyProjectToml {
         // TODO(konsti): https://peps.python.org/pep-0753/#label-normalization (Draft)
         let project_urls = ProjectUrls::new(self.project.urls.clone().unwrap_or_default());
 
-        let extras = self
+        let mut requires_dist = self
             .project
-            .optional_dependencies
+            .dependencies
             .iter()
-            .flat_map(|optional_dependencies| optional_dependencies.keys())
+            .flatten()
+            .map(ToString::to_string)
             .collect::<Vec<_>>();
-
-        let requires_dist =
-            self.project
-                .dependencies
-                .iter()
-                .flatten()
-                .cloned()
-                .chain(self.project.optional_dependencies.iter().flat_map(
-                    |optional_dependencies| {
-                        optional_dependencies
-                            .iter()
-                            .flat_map(|(extra, requirements)| {
-                                requirements.iter().cloned().map(|mut requirement| {
-                                    requirement.marker = requirement.marker.and(
-                                        MarkerTree::expression(MarkerExpression::Extra {
-                                            operator: ExtraOperator::Equal,
-                                            name: MarkerValueExtra::Extra(extra.clone()),
-                                        }),
-                                    );
-                                    requirement
-                                })
-                            })
-                    },
-                ))
-                .collect::<Vec<_>>();
+        let mut provides_extra = Vec::new();
+        for (extra, requirements) in self.project.optional_dependencies.iter().flatten() {
+            provides_extra.push(extra.to_string());
+            for requirement in requirements {
+                let mut requirement = requirement.clone();
+                requirement.marker =
+                    requirement
+                        .marker
+                        .and(MarkerTree::expression(MarkerExpression::Extra {
+                            operator: ExtraOperator::Equal,
+                            name: MarkerValueExtra::Extra(extra.clone()),
+                        }));
+                requires_dist.push(requirement.to_string());
+            }
+        }
 
         let import_names = import_names
             .map(|import_names| {
@@ -702,8 +693,8 @@ impl PyProjectToml {
                 .cloned()
                 .map(Into::into)
                 .collect(),
-            requires_dist: requires_dist.iter().map(ToString::to_string).collect(),
-            provides_extra: extras.iter().map(ToString::to_string).collect(),
+            requires_dist,
+            provides_extra,
             // Not commonly set.
             provides_dist: vec![],
             // Not supported.
