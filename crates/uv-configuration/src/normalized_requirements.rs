@@ -201,24 +201,22 @@ impl PartialEq for SemanticRequirement<'_> {
     fn eq(&self, other: &Self) -> bool {
         let left = self.0;
         let right = other.0;
+        let (Some(left_specifiers), Some(right_specifiers)) = (
+            left.source.version_specifiers(),
+            right.source.version_specifiers(),
+        ) else {
+            return left == right;
+        };
+
         // Compare identical declarations without allocating semantic keys. Version equality ignores
         // release precision, which can affect wildcard and compatible clauses.
         if left == right
-            && if let (
-                RequirementSource::Registry {
-                    specifier: left, ..
-                },
-                RequirementSource::Registry {
-                    specifier: right, ..
-                },
-            ) = (&left.source, &right.source)
-            {
-                left.iter().zip(right.iter()).all(|(left, right)| {
+            && left_specifiers
+                .iter()
+                .zip(right_specifiers.iter())
+                .all(|(left, right)| {
                     left.version().release().len() == right.version().release().len()
                 })
-            } else {
-                true
-            }
         {
             return true;
         }
