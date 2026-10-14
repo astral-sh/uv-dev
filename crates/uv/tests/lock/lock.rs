@@ -8855,7 +8855,13 @@ fn lock_requires_python() -> Result<()> {
         );
     });
 
-    // Validate that attempting to install with an unsupported Python version raises an error.
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+
+    // The copied lock requires a compatible interpreter for validation and installation.
     let context_unsupported = uv_test::test_context!("3.9").with_filtered_python_sources();
 
     fs_err::copy(
@@ -8864,15 +8870,14 @@ fn lock_requires_python() -> Result<()> {
     )?;
     fs_err::copy(&lockfile, context_unsupported.temp_dir.join("uv.lock"))?;
 
-    // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
-    exit_code: 0 (success)
+    uv_snapshot!(context_unsupported.filters(), context_unsupported.lock().args(["--locked", "--no-python-downloads"]), @"
+    exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
+    error: No interpreter found for Python >=3.12 in [PYTHON SOURCES]
+
+    hint: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
     ");
 
-    // Install from the lockfile.
-    // Note we need to disable Python fetches or we'll just download 3.12
     uv_snapshot!(context_unsupported.filters(), context_unsupported.sync().arg("--frozen").arg("--no-python-downloads"), @"
     exit_code: 2 (failure)
     ----- stderr -----
