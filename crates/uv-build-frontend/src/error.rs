@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::env;
 use std::fmt::{self, Display, Formatter};
 use std::io;
@@ -206,15 +205,11 @@ fn extract_package_name(version_id: &str) -> &str {
 /// Write a hint about missing build dependencies.
 fn hint_build_dependency(
     f: &mut std::fmt::Formatter<'_>,
-    display_name: &str,
+    display_name: impl Display,
     package_name: &str,
     package: &str,
 ) -> std::fmt::Result {
-    let table_key = if package_name.contains('.') {
-        Cow::Owned(format!("\"{package_name}\""))
-    } else {
-        Cow::Borrowed(package_name)
-    };
+    let quote = if package_name.contains('.') { "\"" } else { "" };
     write!(
         f,
         "This error likely indicates that `{}` depends on `{}`, but doesn't declare it as a build dependency. \
@@ -230,9 +225,9 @@ fn hint_build_dependency(
         package_name.cyan(),
         package.cyan(),
         "build-system.requires".green(),
-        table_key.cyan(),
+        format_args!("{quote}{package_name}{quote}").cyan(),
         package.cyan(),
-        format!("uv pip install {package}").green(),
+        format_args!("uv pip install {package}").green(),
         "--no-build-isolation".green(),
     )
 }
@@ -241,7 +236,7 @@ impl MissingHeaderCause {
     /// Write the package context for a missing system library.
     fn fmt_package_context(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if let (Some(name), Some(version)) = (&self.package_name, &self.package_version) {
-            write!(f, " for `{}`", format!("{name}@{version}").cyan())
+            write!(f, " for `{}`", format_args!("{name}@{version}").cyan())
         } else if let Some(version_id) = &self.version_id {
             write!(f, " for `{}`", version_id.cyan())
         } else {
@@ -268,7 +263,7 @@ impl Display for MissingHeaderCause {
                     library.cyan(),
                 )?;
                 self.fmt_package_context(f)?;
-                write!(f, " (e.g., `{}`)", format!("lib{library}-dev").cyan())
+                write!(f, " (e.g., `{}`)", format_args!("lib{library}-dev").cyan())
             }
             MissingLibrary::BuildDependency(package) => {
                 if let (Some(package_name), Some(package_version)) =
@@ -276,7 +271,7 @@ impl Display for MissingHeaderCause {
                 {
                     hint_build_dependency(
                         f,
-                        &format!("{package_name}@{package_version}"),
+                        format_args!("{package_name}@{package_version}"),
                         package_name.as_str(),
                         package,
                     )
@@ -290,7 +285,7 @@ impl Display for MissingHeaderCause {
                         package.cyan(),
                         package.cyan(),
                         "build-system.requires".green(),
-                        format!("uv pip install {package}").green(),
+                        format_args!("uv pip install {package}").green(),
                         "--no-build-isolation".green(),
                     )
                 }
@@ -303,7 +298,7 @@ impl Display for MissingHeaderCause {
                         f,
                         "`{}` was removed from the standard library in Python {version}. Consider adding a constraint (like `{}`) to avoid building a version of `{}` that depends on `{}`.",
                         package.cyan(),
-                        format!("{package_name} >{package_version}").green(),
+                        format_args!("{package_name} >{package_version}").green(),
                         package_name.cyan(),
                         package.cyan(),
                     )
