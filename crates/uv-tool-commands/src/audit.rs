@@ -18,9 +18,7 @@ use uv_settings::{Combine, ResolverInstallerOptions};
 use uv_tool::InstalledTools;
 use uv_warnings::warn_user;
 
-use uv_audit_operations::{
-    AuditResults, artifact_uri, audit_lock, json, sarif, warn_unmatched_ignores,
-};
+use uv_audit_operations::{AuditResults, audit_lock, json, sarif, warn_unmatched_ignores};
 use uv_command_support::ExitStatus;
 use uv_command_support::Printer;
 use uv_settings::ResolverInstallerSettings;
@@ -225,7 +223,7 @@ pub async fn audit(
                 n_packages: outcome.n_packages,
                 output_format,
                 findings: outcome.findings,
-                artifact_uri: artifact_uri(&lock_path),
+                artifact_path: lock_path,
             },
         ));
     }

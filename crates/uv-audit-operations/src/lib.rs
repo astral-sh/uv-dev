@@ -1,7 +1,7 @@
 //! Shared auditing and reporting for project and tool lockfiles.
 
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use itertools::Itertools as _;
@@ -17,7 +17,6 @@ use uv_client::{BaseClientBuilder, CachedClient, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{AuditOutputFormat, Concurrency, KeyringProviderType};
 use uv_distribution_types::{IndexCapabilities, IndexLocations, IndexUrl};
-use uv_fs::{CWD, find_git_repository_root, relative_to};
 use uv_lock::Auditable;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
@@ -142,26 +141,12 @@ pub fn warn_unmatched_ignores(
     }
 }
 
-/// Resolve a lockfile path into the URI used by SARIF consumers.
-pub fn artifact_uri(path: &Path) -> String {
-    let path = if let Some(repository_root) = find_git_repository_root(path)
-        && let Ok(relative) = relative_to(path, repository_root)
-    {
-        relative
-    } else if let Ok(relative) = path.strip_prefix(&*CWD) {
-        relative.to_path_buf()
-    } else {
-        path.to_path_buf()
-    };
-    path.to_string_lossy().replace('\\', "/")
-}
-
 pub struct AuditResults {
     pub printer: Printer,
     pub n_packages: usize,
     pub output_format: AuditOutputFormat,
     pub findings: Vec<Finding>,
-    pub artifact_uri: String,
+    pub artifact_path: PathBuf,
 }
 
 impl AuditResults {
@@ -345,8 +330,7 @@ impl AuditResults {
     }
 
     fn render_sarif(&self) -> Result<ExitStatus> {
-        let (vulnerabilities, statuses) = self.split_findings();
-        let report = sarif::Report::from_findings(&vulnerabilities, &statuses, &self.artifact_uri);
+        let report = sarif::Report::from_audit(self);
 
         writeln!(
             self.printer.stdout_important(),
