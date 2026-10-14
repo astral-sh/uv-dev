@@ -28,7 +28,7 @@ use crate::dirhash::{
     DirhashTree, HashedFile, UnhashedFile, UnzipOutput, blake3_copy_with_buffer,
     directory_tree_from_extracted,
 };
-use crate::{Error, insecure_no_validate};
+use crate::{Error, ExtractionDirectories, insecure_no_validate};
 
 /// Default buffer size for streaming archive reads and file copies.
 const DEFAULT_BUF_SIZE: usize = 128 * 1024;
@@ -171,7 +171,7 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
     let mut reader = futures::io::BufReader::with_capacity(DEFAULT_BUF_SIZE, reader.compat());
     let mut zip = async_zip::base::read::stream::ZipFileReader::new(&mut reader);
 
-    let mut directories = FxHashSet::default();
+    let mut directories = ExtractionDirectories::default();
     let mut local_headers = FxHashMap::default();
     let mut output_paths = FxHashSet::default();
     let mut files = Vec::new();
@@ -224,9 +224,7 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
         let path = target.join(relpath.as_path());
         let is_dir = zip_entry.dir()?;
         let computed = if is_dir {
-            if directories.insert(path.clone()) {
-                fs_err::create_dir_all(&path).map_err(Error::Io)?;
-            }
+            directories.create(&path)?;
 
             // If this is a directory, we expect the CRC32 to be 0.
             if zip_entry.crc32() != 0 {
@@ -258,9 +256,7 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
             }
         } else {
             if let Some(parent) = path.parent() {
-                if directories.insert(parent.to_path_buf()) {
-                    fs_err::create_dir_all(parent).map_err(Error::Io)?;
-                }
+                directories.create(parent)?;
             }
 
             // We don't know the file permissions here, because we haven't seen the central directory yet.
