@@ -2370,7 +2370,7 @@ fn init_requires_python_version() -> Result<()> {
 /// specifiers verbatim.
 #[test]
 fn init_requires_python_specifiers() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {
@@ -2386,7 +2386,7 @@ fn init_requires_python_specifiers() -> Result<()> {
     })?;
 
     let child = context.temp_dir.join("foo");
-    uv_snapshot!(context.filters(), context.init().arg(&child).arg("--python").arg("==3.9.*"), @"
+    uv_snapshot!(context.filters(), context.init().arg(&child).arg("--python").arg("==3.11.*"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Adding `foo` as member of workspace `[TEMP_DIR]/`
@@ -2404,7 +2404,7 @@ fn init_requires_python_specifiers() -> Result<()> {
         version = "0.1.0"
         description = "Add your description here"
         readme = "README.md"
-        requires-python = "==3.9.*"
+        requires-python = "==3.11.*"
         dependencies = []
 
         [project.scripts]
@@ -2422,7 +2422,7 @@ fn init_requires_python_specifiers() -> Result<()> {
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            python_version, @"3.9"
+            python_version, @"3.11"
         );
     });
 
@@ -2432,9 +2432,12 @@ fn init_requires_python_specifiers() -> Result<()> {
 /// Run `uv init`, inferring the `requires-python` from the `.python-version` file.
 #[test]
 fn init_requires_python_version_file() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.9"]);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
 
-    context.temp_dir.child(".python-version").write_str("3.9")?;
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("3.11")?;
 
     let child = context.temp_dir.join("foo");
     uv_snapshot!(context.filters(), context.init().arg(&child), @"
@@ -2454,7 +2457,7 @@ fn init_requires_python_version_file() -> Result<()> {
         version = "0.1.0"
         description = "Add your description here"
         readme = "README.md"
-        requires-python = ">=3.9"
+        requires-python = ">=3.11"
         dependencies = []
 
         [project.scripts]
