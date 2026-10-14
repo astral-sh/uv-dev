@@ -522,12 +522,19 @@ impl SitePackages {
                         .with_context(|| format!("Failed to read metadata for: {distribution}"))?;
 
                     // Add the dependencies to the queue.
-                    let dependencies = metadata
-                        .requires_dist
-                        .iter()
-                        .cloned()
-                        .map(Requirement::from)
-                        .collect::<Vec<_>>();
+                    let dependencies: Vec<_> = match metadata {
+                        Cow::Borrowed(metadata) => metadata
+                            .requires_dist
+                            .iter()
+                            .cloned()
+                            .map(Requirement::from)
+                            .collect(),
+                        Cow::Owned(metadata) => metadata
+                            .requires_dist
+                            .into_iter()
+                            .map(Requirement::from)
+                            .collect(),
+                    };
                     for dependency in modifiers.apply(
                         DependencyModifierScope::Package(name, distribution.version()),
                         &dependencies,
