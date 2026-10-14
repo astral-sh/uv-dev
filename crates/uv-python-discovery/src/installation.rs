@@ -33,14 +33,6 @@ pub struct PythonInstallation {
 }
 
 impl PythonInstallation {
-    /// Create a new [`PythonInstallation`] from a source and interpreter.
-    pub(crate) fn new(source: PythonSource, interpreter: Interpreter) -> Self {
-        Self {
-            source,
-            interpreter,
-        }
-    }
-
     /// Return a new installation with the given [`PythonSource`].
     #[must_use]
     fn with_source(self, source: PythonSource) -> Self {
@@ -375,7 +367,11 @@ impl PythonInstallation {
     ///
     /// Uses the source as a fast path, then falls back to checking the interpreter's base prefix.
     pub(crate) fn is_managed(&self) -> bool {
-        if self.source.is_managed() {
+        Self::is_managed_interpreter(&self.interpreter, self.source)
+    }
+
+    fn is_managed_interpreter(interpreter: &Interpreter, source: PythonSource) -> bool {
+        if source.is_managed() {
             return true;
         }
 
@@ -389,15 +385,15 @@ impl PythonInstallation {
                     "`UV_INTERNAL__TEST_PYTHON_MANAGED` items should be valid Python versions",
                 );
                 if version.patch().is_some() {
-                    version.version() == self.interpreter.python_version()
+                    version.version() == interpreter.python_version()
                 } else {
-                    (version.major(), version.minor()) == self.interpreter.python_tuple()
+                    (version.major(), version.minor()) == interpreter.python_tuple()
                 }
             });
         }
 
         ManagedPythonInstallations::from_settings(None)
-            .is_ok_and(|installations| installations.contains(&self.interpreter))
+            .is_ok_and(|installations| installations.contains(interpreter))
     }
 
     /// Whether selecting this installation requires opting in to alternative implementations.
@@ -546,12 +542,18 @@ impl PythonInstallation {
     /// Explicit sources, including provided paths and active environments, are accepted even
     /// when their managed status conflicts with the preference.
     pub fn satisfies_preference(&self, preference: &PythonPreference) -> bool {
-        let source = self.source;
-        let interpreter = &self.interpreter;
+        Self::satisfies_preference_for(&self.interpreter, self.source, *preference)
+    }
 
+    /// Check a discovered interpreter against a Python preference without taking ownership.
+    pub(crate) fn satisfies_preference_for(
+        interpreter: &Interpreter,
+        source: PythonSource,
+        preference: PythonPreference,
+    ) -> bool {
         match preference {
             PythonPreference::OnlyManaged => {
-                if self.is_managed() {
+                if Self::is_managed_interpreter(interpreter, source) {
                     true
                 } else if source.is_explicit() {
                     debug!(
@@ -570,7 +572,7 @@ impl PythonInstallation {
             // If not "only" a kind, any interpreter is okay
             PythonPreference::Managed | PythonPreference::System => true,
             PythonPreference::OnlySystem => {
-                if !self.is_managed() {
+                if !Self::is_managed_interpreter(interpreter, source) {
                     true
                 } else if source.is_explicit() {
                     debug!(
