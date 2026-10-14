@@ -3462,11 +3462,19 @@ impl ForkedDependencies {
                 && marker::requires_python(marker)
                     .is_none_or(|bound| !python_requirement.raises(&bound))
             {
-                for dep in deps {
-                    for fork in &mut forks {
-                        if fork.env.included_by_marker(marker) {
-                            fork.add_dependency(dep.clone());
+                let mut included = forks
+                    .iter_mut()
+                    .filter(|fork| fork.env.included_by_marker(marker))
+                    .peekable();
+                while let Some(fork) = included.next() {
+                    if included.peek().is_none() {
+                        for dep in deps {
+                            fork.add_dependency(dep);
                         }
+                        break;
+                    }
+                    for dep in &deps {
+                        fork.add_dependency(dep.clone());
                     }
                 }
                 continue;
