@@ -1215,8 +1215,10 @@ fn build_dependency_check_dynamic_requirements() -> Result<()> {
             return filename
 
         def get_requires_for_build_wheel(config_settings):
-            assert os.environ["BUILD_CHECK_ENV"] == "preserved"
-            assert config_settings == {"dependency": "idna>=3.6"}
+            if os.environ.get("BUILD_CHECK_ENV") != "preserved":
+                raise RuntimeError("build hook did not receive the expected environment")
+            if config_settings != {"dependency": "idna>=3.6"}:
+                raise RuntimeError(f"unexpected build hook settings: {config_settings!r}")
             Path("wheel-hook-called").touch()
             return [config_settings["dependency"]]
 
