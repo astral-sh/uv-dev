@@ -3471,6 +3471,27 @@ mod test {
     }
 
     #[test]
+    fn combine_bounded_python_versions_with_gaps() {
+        let supported = m("python_full_version < '3.9' or python_full_version > '3.10'")
+            .complexify_python_versions(
+                Bound::Included(&Version::new([3, 8])),
+                Bound::Excluded(&Version::new([3, 12])),
+            );
+        let requested = m("python_full_version <= '3.8' or \
+             (python_full_version >= '3.9' and python_full_version <= '3.10') or \
+             python_full_version >= '3.11'");
+
+        assert_eq!(
+            supported.and(requested),
+            m("python_full_version == '3.8' or \
+               (python_full_version >= '3.11' and python_full_version < '3.12')"),
+        );
+        assert!(supported.is_disjoint(m(
+            "python_full_version >= '3.9' and python_full_version <= '3.10'"
+        )));
+    }
+
+    #[test]
     fn simplified_markers() {
         // Takes optional lower (inclusive) and upper (exclusive)
         // bounds representing `requires-python` and a "complexified"
