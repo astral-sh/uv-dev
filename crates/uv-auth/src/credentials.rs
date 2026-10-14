@@ -431,20 +431,6 @@ pub(crate) enum AuthenticationError {
     },
 }
 
-impl PartialEq for Authentication {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Credentials(a), Self::Credentials(b)) => a == b,
-            (Self::AwsSigner(..), Self::AwsSigner(..)) => true,
-            (Self::GcsSigner(..), Self::GcsSigner(..)) => true,
-            (Self::AzureSigner(..), Self::AzureSigner(..)) => true,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for Authentication {}
-
 impl From<Credentials> for Authentication {
     fn from(credentials: Credentials) -> Self {
         Self::Credentials(credentials)
