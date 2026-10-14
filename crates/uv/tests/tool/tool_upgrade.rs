@@ -18,6 +18,8 @@ use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{uv_snapshot, venv_bin_path};
 
+use crate::workspace_fixture::MixedWorkspace;
+
 #[test]
 fn tool_upgrade_empty() {
     let context = uv_test::test_context!("3.12")
@@ -240,120 +242,31 @@ fn assert_mixed_workspace_upgrade(
     expected_child_message: &str,
 ) -> Result<()> {
     let context = uv_test::test_context!("3.12").with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    let tool_root = context.temp_dir.child("tool-root");
-    tool_root.create_dir_all()?;
-    let write_tool_manifest = |version: &str| {
-        tool_root.child("pyproject.toml").write_str(&formatdoc! {r#"
-            [project]
-            name = "tool-root"
-            version = "{version}"
-            requires-python = ">=3.12"
-
-            [project.scripts]
-            root_cli = "tool_root:main"
-
-            [build-system]
-            requires = ["uv_build>=0.7,<10000"]
-            build-backend = "uv_build"
-        "#})
-    };
-    write_tool_manifest("0.1.0")?;
-    let tool_root_src = tool_root.child("src").child("tool_root");
-    tool_root_src.create_dir_all()?;
-    tool_root_src.child("__init__.py").write_str(indoc! {
-        r#"
-        def main():
-            import importlib.metadata
-            import other_child
-
-            print(f"{importlib.metadata.version('tool-root')} {other_child.MESSAGE}")
-        "#
-    })?;
-
-    let other_workspace = context.temp_dir.child("other-workspace");
-    other_workspace.create_dir_all()?;
-    other_workspace
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-        [project]
-        name = "other-workspace"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["other-child"]
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.sources]
-        other-child = { workspace = true }
-
-        [tool.uv.workspace]
-        members = ["packages/*"]
-    "#})?;
-    let other_workspace_src = other_workspace.child("src").child("other_workspace");
-    other_workspace_src.create_dir_all()?;
-    other_workspace_src.child("__init__.py").touch()?;
-
-    let other_child = other_workspace.child("packages").child("other-child");
-    other_child.create_dir_all()?;
-    other_child.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "other-child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    let other_child_src = other_child.child("src").child("other_child");
-    other_child_src.create_dir_all()?;
-    other_child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
+    let fixture = MixedWorkspace::new(&context)?;
 
     context
         .tool_install()
         .args(install_args)
-        .arg(other_workspace.path())
-        .arg(tool_root.path())
-        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .arg(fixture.other_workspace.path())
+        .arg(fixture.tool_root.path())
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
         .assert()
         .success();
+    fixture.assert_tool_output(&context, "0.1.0 OK");
 
-    let launcher = bin_dir.child(format!("root_cli{}", std::env::consts::EXE_SUFFIX));
-    let assert_tool_output = |expected: &str| {
-        let output = context
-            .external_command(launcher.path())
-            .assert()
-            .success()
-            .stderr("");
-        let stdout = std::str::from_utf8(&output.get_output().stdout)
-            .expect("tool output should be valid UTF-8");
-        assert_eq!(stdout.replace("\r\n", "\n"), format!("{expected}\n"));
-    };
-    assert_tool_output("0.1.0 OK");
-
-    write_tool_manifest("0.1.1")?;
-
+    fixture.set_tool_version("0.1.1")?;
     context
         .tool_upgrade()
         .arg("tool-root")
-        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
         .assert()
         .success();
+    fixture.assert_tool_output(&context, "0.1.1 OK");
 
-    assert_tool_output("0.1.1 OK");
-
-    other_child_src
-        .child("__init__.py")
+    fixture
+        .child_module
         .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
-
-    assert_tool_output(&format!("0.1.1 {expected_child_message}"));
-
+    fixture.assert_tool_output(&context, &format!("0.1.1 {expected_child_message}"));
     Ok(())
 }
 

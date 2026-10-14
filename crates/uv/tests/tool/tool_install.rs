@@ -20,6 +20,8 @@ use uv_static::EnvVars;
 use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{assert_path_missing, copy_dir_ignore, uv_snapshot};
 
+use crate::workspace_fixture::MixedWorkspace;
+
 fn assert_tool_launcher(path: &ChildPath) {
     // On Unix, tool launchers can be symlinks to scripts in the tool environment.
     path.assert(predicate::path::is_file().follow_links(true));
@@ -856,217 +858,36 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
     Ok(())
 }
 
-#[test]
-fn tool_install_preserves_mixed_workspace_member_editability() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
+fn assert_mixed_workspace_install(
+    install_args: &[&str],
+    expected_child_message: &str,
+) -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let fixture = MixedWorkspace::new(&context)?;
 
-    let tool_root = context.temp_dir.child("tool-root");
-    tool_root.create_dir_all()?;
-    tool_root.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "tool-root"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [project.scripts]
-        root_cli = "tool_root:main"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    let tool_root_src = tool_root.child("src").child("tool_root");
-    tool_root_src.create_dir_all()?;
-    tool_root_src.child("__init__.py").write_str(indoc! {
-        r#"
-        def main():
-            import importlib.metadata
-            import other_child
-
-            print(f"{importlib.metadata.version('tool-root')} {other_child.MESSAGE}")
-        "#
-    })?;
-
-    let other_workspace = context.temp_dir.child("other-workspace");
-    other_workspace.create_dir_all()?;
-    other_workspace
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-        [project]
-        name = "other-workspace"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["other-child"]
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.sources]
-        other-child = { workspace = true }
-
-        [tool.uv.workspace]
-        members = ["packages/*"]
-    "#})?;
-    let other_workspace_src = other_workspace.child("src").child("other_workspace");
-    other_workspace_src.create_dir_all()?;
-    other_workspace_src.child("__init__.py").touch()?;
-
-    let other_child = other_workspace.child("packages").child("other-child");
-    other_child.create_dir_all()?;
-    other_child.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "other-child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    let other_child_src = other_child.child("src").child("other_child");
-    other_child_src.create_dir_all()?;
-    other_child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
-
-    let status = context
+    context
         .tool_install()
-        .arg("--with-editable")
-        .arg(other_workspace.path())
-        .arg(tool_root.path())
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool install with mixed workspace editability");
-    assert!(status.success());
+        .args(install_args)
+        .arg(fixture.other_workspace.path())
+        .arg(fixture.tool_root.path())
+        .env(EnvVars::PATH, fixture.bin_dir.as_os_str())
+        .assert()
+        .success();
+    fixture.assert_tool_output(&context, "0.1.0 OK");
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.0 OK
-    ");
-
-    other_child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'CHANGED'\n")?;
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.0 CHANGED
-    ");
-
+    fixture.child_module.write_str("MESSAGE = 'CHANGED'\n")?;
+    fixture.assert_tool_output(&context, &format!("0.1.0 {expected_child_message}"));
     Ok(())
 }
 
 #[test]
+fn tool_install_preserves_mixed_workspace_member_editability() -> Result<()> {
+    assert_mixed_workspace_install(&["--with-editable"], "CHANGED")
+}
+
+#[test]
 fn tool_install_preserves_mixed_workspace_member_non_editability() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    let tool_root = context.temp_dir.child("tool-root");
-    tool_root.create_dir_all()?;
-    tool_root.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "tool-root"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [project.scripts]
-        root_cli = "tool_root:main"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    let tool_root_src = tool_root.child("src").child("tool_root");
-    tool_root_src.create_dir_all()?;
-    tool_root_src.child("__init__.py").write_str(indoc! {
-        r#"
-        def main():
-            import importlib.metadata
-            import other_child
-
-            print(f"{importlib.metadata.version('tool-root')} {other_child.MESSAGE}")
-        "#
-    })?;
-
-    let other_workspace = context.temp_dir.child("other-workspace");
-    other_workspace.create_dir_all()?;
-    other_workspace
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-        [project]
-        name = "other-workspace"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["other-child"]
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.sources]
-        other-child = { workspace = true }
-
-        [tool.uv.workspace]
-        members = ["packages/*"]
-    "#})?;
-    let other_workspace_src = other_workspace.child("src").child("other_workspace");
-    other_workspace_src.create_dir_all()?;
-    other_workspace_src.child("__init__.py").touch()?;
-
-    let other_child = other_workspace.child("packages").child("other-child");
-    other_child.create_dir_all()?;
-    other_child.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "other-child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    let other_child_src = other_child.child("src").child("other_child");
-    other_child_src.create_dir_all()?;
-    other_child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
-
-    let status = context
-        .tool_install()
-        .arg("--editable")
-        .arg("--with")
-        .arg(other_workspace.path())
-        .arg(tool_root.path())
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool install with mixed workspace editability");
-    assert!(status.success());
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.0 OK
-    ");
-
-    other_child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'CHANGED'\n")?;
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.0 OK
-    ");
-
-    Ok(())
+    assert_mixed_workspace_install(&["--editable", "--with"], "OK")
 }
 
 #[test]
