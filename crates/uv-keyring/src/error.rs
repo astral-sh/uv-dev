@@ -10,9 +10,11 @@ are integer error codes, this requirement
 is not much of a burden on the platform-specific store providers.)
  */
 
+use std::fmt;
+
 use crate::Credential;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 /// Each variant of the `Error` enum provides a summary of the error.
 /// More details, if relevant, are contained in the associated value,
 /// which may be platform-specific.
@@ -41,7 +43,7 @@ pub enum Error {
     NoEntry,
     /// This indicates that the retrieved password blob was not
     /// a UTF-8 string.  The underlying bytes are available
-    /// for examination in the attached value.
+    /// for examination in the attached value, but redacted from debug output.
     #[error("Data is not UTF-8 encoded")]
     BadEncoding(Vec<u8>),
     /// This indicates that one of the entry's credential
@@ -67,6 +69,29 @@ pub enum Error {
     NoDefaultCredentialBuilder,
 }
 
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PlatformFailure(error) => f.debug_tuple("PlatformFailure").field(error).finish(),
+            Self::NoStorageAccess(error) => f.debug_tuple("NoStorageAccess").field(error).finish(),
+            Self::NoEntry => f.write_str("NoEntry"),
+            Self::BadEncoding(_) => f.write_str("BadEncoding(****)"),
+            Self::TooLong(attribute, limit) => f
+                .debug_tuple("TooLong")
+                .field(attribute)
+                .field(limit)
+                .finish(),
+            Self::Invalid(attribute, reason) => f
+                .debug_tuple("Invalid")
+                .field(attribute)
+                .field(reason)
+                .finish(),
+            Self::Ambiguous(credentials) => f.debug_tuple("Ambiguous").field(credentials).finish(),
+            Self::NoDefaultCredentialBuilder => f.write_str("NoDefaultCredentialBuilder"),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Try to interpret a byte vector as a password string
@@ -83,10 +108,11 @@ mod tests {
         // malformed sequences here taken from:
         // https://www.cl.cam.ac.uk/~mgk25/ucs/examples/UTF-8-test.txt
         for bytes in [b"\x80".to_vec(), b"\xbf".to_vec(), b"\xed\xa0\xa0".to_vec()] {
-            match decode_password(bytes.clone()) {
-                Err(Error::BadEncoding(str)) => assert_eq!(str, bytes),
-                Err(other) => panic!("Bad password ({bytes:?}) decode gave wrong error: {other}"),
-                Ok(s) => panic!("Bad password ({bytes:?}) decode gave results: {s:?}"),
+            let error = decode_password(bytes.clone()).unwrap_err();
+            assert_eq!(format!("{error:?}"), "BadEncoding(****)");
+            match error {
+                Error::BadEncoding(str) => assert_eq!(str, bytes),
+                other => panic!("Bad password ({bytes:?}) decode gave wrong error: {other}"),
             }
         }
     }

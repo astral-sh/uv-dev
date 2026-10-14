@@ -85,8 +85,11 @@ pub enum TomlCredentialError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     LockedFile(#[from] LockedFileError),
-    #[error("Failed to parse TOML credential file: {0}")]
-    ParseError(#[from] toml::de::Error),
+    #[error(
+        "Failed to parse TOML credential file{}",
+        .location.map_or_else(String::new, |(line, column)| format!(" at line {line}, column {column}"))
+    )]
+    ParseError { location: Option<(usize, usize)> },
     #[error("Failed to serialize credentials to TOML")]
     SerializeError(#[from] toml::ser::Error),
     #[error(transparent)]
@@ -96,7 +99,27 @@ pub enum TomlCredentialError {
     #[error("Failed to determine credentials directory")]
     CredentialsDirError,
     #[error("Token is not valid unicode")]
-    TokenNotUnicode(#[from] std::string::FromUtf8Error),
+    TokenNotUnicode(#[from] std::str::Utf8Error),
+}
+
+impl TomlCredentialError {
+    fn from_parse_error(error: &toml::de::Error, content: &str) -> Self {
+        // Parser diagnostics can contain credential values in both source excerpts and messages.
+        let location = error
+            .span()
+            .and_then(|span| content.get(..span.start))
+            .map(|prefix| {
+                let line = prefix.bytes().filter(|&byte| byte == b'\n').count() + 1;
+                let column = prefix
+                    .rsplit_once('\n')
+                    .map_or(prefix, |(_, line)| line)
+                    .chars()
+                    .count()
+                    + 1;
+                (line, column)
+            });
+        Self::ParseError { location }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -133,7 +156,8 @@ struct TomlCredential {
     credentials: Credentials,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// Do not derive `Debug`: the wire representation contains a plaintext bearer token.
+#[derive(Serialize, Deserialize)]
 struct TomlCredentialWire {
     /// The service URL for this credential.
     service: Service,
@@ -165,7 +189,7 @@ impl TryFrom<TomlCredential> for TomlCredentialWire {
                 username: Username::new(None),
                 scheme: AuthScheme::Bearer,
                 password: None,
-                token: Some(String::from_utf8(token.into_bytes())?),
+                token: Some(String::from_utf8(token.into_bytes()).map_err(|err| err.utf8_error())?),
             },
         })
     }
@@ -268,7 +292,8 @@ impl TextCredentialStore {
     /// Read credentials from a file.
     fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, TomlCredentialError> {
         let content = fs::read_to_string(path)?;
-        let mut credentials: TomlCredentials<TomlCredential> = toml::from_str(&content)?;
+        let mut credentials: TomlCredentials<TomlCredential> = toml::from_str(&content)
+            .map_err(|error| TomlCredentialError::from_parse_error(&error, &content))?;
 
         // A canonical entry takes precedence over a legacy key left in the same store after login.
         credentials.credentials.sort_by_key(|credential| {
@@ -506,6 +531,43 @@ mod tests {
                 .to_string()
                 .contains("HTTPS is required for non-local hosts")
         );
+    }
+
+    #[test]
+    fn credential_parse_error_does_not_retain_file_contents() {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(
+            file.path(),
+            "[[credential]]\nservice = 'http://user:private@example.com'\nusername = 'user'\n",
+        )
+        .unwrap();
+        let error = TextCredentialStore::from_file(file.path()).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Failed to parse TOML credential file at line 2, column 11"
+        );
+        assert!(std::error::Error::source(&error).is_none());
+        insta::assert_debug_snapshot!(error, @r#"
+        ParseError {
+            location: Some(
+                (
+                    2,
+                    11,
+                ),
+            ),
+        }
+        "#);
+    }
+
+    #[test]
+    fn credential_parse_error_without_a_location() {
+        let error = TomlCredentialError::ParseError { location: None };
+        assert_eq!(error.to_string(), "Failed to parse TOML credential file");
+        insta::assert_debug_snapshot!(error, @r#"
+        ParseError {
+            location: None,
+        }
+        "#);
     }
 
     #[test]
@@ -769,10 +831,13 @@ password = "pass2"
             Credentials::bearer(vec![0xff]),
         );
 
-        assert!(matches!(
-            store.write(lock),
-            Err(TomlCredentialError::TokenNotUnicode(_))
-        ));
+        let error = store.write(lock).unwrap_err();
+        assert!(matches!(error, TomlCredentialError::TokenNotUnicode(_)));
+        assert!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .is::<std::str::Utf8Error>()
+        );
         assert!(!path.exists());
     }
 
