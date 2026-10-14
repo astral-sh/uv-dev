@@ -138,10 +138,10 @@ fn spawn_workers(
     worker_handles
 }
 
-/// Wait for all workers to exit so worker failures are not hidden by channel send errors.
+/// Wait for all workers to exit, prioritizing worker failures over producer failures.
 async fn wait_for_workers(
     worker_handles: Vec<WorkerHandle>,
-    send_error: Option<SendError<PathBuf>>,
+    producer_result: Result<(), CompileError>,
 ) -> Result<(), CompileError> {
     for result in futures::future::join_all(worker_handles).await {
         match result {
@@ -152,13 +152,7 @@ async fn wait_for_workers(
         }
     }
 
-    if let Some(send_error) = send_error {
-        // This is suspicious: Why did the channel stop working, but all workers exited
-        // successfully?
-        return Err(CompileError::WorkerDisappeared(send_error));
-    }
-
-    Ok(())
+    producer_result
 }
 
 /// Bytecode compile all file in `dir` using a pool of Python interpreters running a Python script
@@ -206,7 +200,7 @@ pub async fn compile_tree(
 
     // Start the producer, sending all `.py` files to workers.
     let mut source_files = 0;
-    let mut send_error = None;
+    let mut producer_result = Ok(());
     let walker = WalkDir::new(dir)
         .into_iter()
         // Otherwise we stumble over temporary files from `compileall`.
@@ -233,7 +227,7 @@ pub async fn compile_tree(
                 // If e.g. something with the Python interpreter is wrong, the workers have exited
                 // with an error. We try to report this informative error and only if that fails,
                 // report the send error.
-                send_error = Some(err);
+                producer_result = Err(CompileError::WorkerDisappeared(err));
                 break;
             }
         }
@@ -243,7 +237,7 @@ pub async fn compile_tree(
     // up to worker_count * 10 items in the queue.
     drop(sender);
 
-    wait_for_workers(worker_handles, send_error).await?;
+    wait_for_workers(worker_handles, producer_result).await?;
 
     Ok(source_files)
 }
@@ -285,14 +279,13 @@ pub async fn compile_files(
     );
     drop(receiver);
 
-    let mut send_error = None;
-    let mut source_error = None;
+    let mut producer_result = Ok(());
     let mut source_files = 0;
     for file in initial_files.into_iter().map(Ok).chain(files) {
         let file = match file {
             Ok(file) => file,
             Err(err) => {
-                source_error = Some(err);
+                producer_result = Err(CompileError::SourceFiles(err));
                 break;
             }
         };
@@ -303,16 +296,13 @@ pub async fn compile_files(
         );
         source_files += 1;
         if let Err(err) = sender.send(file).await {
-            send_error = Some(err);
+            producer_result = Err(CompileError::WorkerDisappeared(err));
             break;
         }
     }
     drop(sender);
 
-    wait_for_workers(worker_handles, send_error).await?;
-    if let Some(source_error) = source_error {
-        return Err(CompileError::SourceFiles(source_error));
-    }
+    wait_for_workers(worker_handles, producer_result).await?;
 
     Ok(source_files)
 }
