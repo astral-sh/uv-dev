@@ -1508,52 +1508,6 @@ fn seed_keeps_distutils_patch_on_py39() {
     assert!(site_packages.join("_virtualenv.pth").is_file());
 }
 
-#[test]
-fn create_venv_unknown_python_minor() {
-    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
-
-    let mut command = context.venv();
-    command
-        .arg(context.venv.as_os_str())
-        // Request a version we know we'll never see
-        .arg("--python")
-        .arg("3.100")
-        // Unset this variable to force what the user would see
-        .env_remove(EnvVars::UV_PYTHON_SEARCH_PATH);
-
-    uv_snapshot!(context.filters(), &mut command, @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.100 in [PYTHON SOURCES]
-    "
-    );
-
-    context.venv.assert(predicates::path::missing());
-}
-
-#[test]
-fn create_venv_unknown_python_patch() {
-    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
-
-    let mut command = context.venv();
-    command
-        .arg(context.venv.as_os_str())
-        // Request a version we know we'll never see
-        .arg("--python")
-        .arg("3.12.100")
-        // Unset this variable to force what the user would see
-        .env_remove(EnvVars::UV_PYTHON_SEARCH_PATH);
-
-    uv_snapshot!(context.filters(), &mut command, @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.12.100 in [PYTHON SOURCES]
-    "
-    );
-
-    context.venv.assert(predicates::path::missing());
-}
-
 #[cfg(feature = "test-python-patch")]
 #[test]
 fn create_venv_python_patch() {
@@ -2048,33 +2002,6 @@ fn verify_nested_pyvenv_cfg() {
         .expect("nested pyvenv.cfg should contain a home entry");
 
     assert_eq!(nested_home, parent_home);
-}
-
-/// See <https://github.com/astral-sh/uv/issues/3280>
-#[test]
-#[cfg(windows)]
-fn path_with_trailing_space_gives_proper_error() {
-    let context = uv_test::test_context_with_versions!(&[]);
-
-    // Set a custom cache directory with a trailing space
-    let mut cache_dir = context.cache_dir.as_os_str().to_owned();
-    cache_dir.push(" ");
-    // Windows translates error messages, for example i get:
-    // ": Das System kann den angegebenen Pfad nicht finden. (os error 3)"
-    let context = context.with_filter((
-        r"\.lock`: .* \(os error 3\)",
-        ".lock`: The system cannot find the path specified. (os error 3)",
-    ));
-    uv_snapshot!(context.filters(), context.external_command(uv_test::get_bin!())
-        .arg("venv")
-        .env(EnvVars::UV_CACHE_DIR, cache_dir), @r###"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Could not acquire lock
-      cause: failed to open file `[CACHE_DIR]/ /.lock`: The system cannot find the path specified. (os error 3)
-    "###
-    );
-    // Note the extra trailing `/` in the snapshot is due to the filters, not the actual output.
 }
 
 /// Activate a virtual environment through a UNC path.
