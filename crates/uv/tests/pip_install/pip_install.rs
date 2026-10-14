@@ -7320,6 +7320,9 @@ fn already_installed_local_version_of_remote_package() {
      + sniffio==1.3.1
     "
     );
+    context
+        .assert_command("import anyio; assert not hasattr(anyio, 'LOCAL_ANYIO_MARKER')")
+        .success();
 
     // Install the local anyio again so we can test upgrades
     uv_snapshot!(context.filters(), context.pip_install()
@@ -7362,6 +7365,9 @@ fn already_installed_local_version_of_remote_package() {
      + httpx==0.27.0
     "
     );
+    context
+        .assert_command("import anyio; assert anyio.LOCAL_ANYIO_MARKER")
+        .success();
 }
 
 #[cfg(unix)]
