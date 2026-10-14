@@ -42,8 +42,13 @@ async fn install_url_source_dist_cached() -> Result<()> {
     let marker = context.temp_dir.child("backend-ran");
     let archive = source_distribution_archive(marker.path())?;
     let server = MockServer::start().await;
+    // A fresh response allows the direct URL to reuse its cached source revision.
     Mock::given(path(format!("/{SOURCE_ARCHIVE}")))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(archive))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "max-age=3600")
+                .set_body_bytes(archive),
+        )
         .mount(&server)
         .await;
     context
