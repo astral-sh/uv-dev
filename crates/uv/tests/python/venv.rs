@@ -1490,7 +1490,7 @@ fn seed_keeps_distutils_patch_on_py39() {
 
 #[test]
 fn create_venv_unknown_python_minor() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
 
     let mut command = context.venv();
     command
@@ -1513,7 +1513,7 @@ fn create_venv_unknown_python_minor() {
 
 #[test]
 fn create_venv_unknown_python_patch() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]).with_filtered_python_sources();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
 
     let mut command = context.venv();
     command
@@ -1527,7 +1527,7 @@ fn create_venv_unknown_python_patch() {
     uv_snapshot!(context.filters(), &mut command, @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: No interpreter found for Python 3.12.[X] in [PYTHON SOURCES]
+    error: No interpreter found for Python 3.12.100 in [PYTHON SOURCES]
     "
     );
 
