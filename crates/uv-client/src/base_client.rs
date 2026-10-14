@@ -953,7 +953,6 @@ fn request_into_redirect(
     res: &Response,
     cross_origin_credentials_policy: CrossOriginCredentialsPolicy,
 ) -> reqwest_middleware::Result<Option<Request>> {
-    let original_req_url = DisplaySafeUrl::from_url(req.url().clone());
     let status = res.status();
     let should_redirect = match status {
         StatusCode::MOVED_PERMANENTLY
@@ -990,6 +989,7 @@ fn request_into_redirect(
         return Ok(None);
     }
 
+    let original_req_url = DisplaySafeUrl::from_url(req.url().clone());
     let location = res
         .headers()
         .get(LOCATION)
