@@ -516,43 +516,15 @@ async fn determine_requires_python(
         // This can be arbitrary, i.e., not a version — in which case we may need to resolve the
         // interpreter
         let (requires_python, python_pin) = match &python_request {
-            PythonRequest::Version(VersionRequest::MajorMinor(major, minor, variant)) => {
-                let requires_python = RequiresPython::greater_than_equal_version(&Version::new([
-                    u64::from(*major),
-                    u64::from(*minor),
-                ]));
-
-                let python_pin = if pin_python {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                        *major, *minor, *variant,
-                    )))
-                } else {
-                    None
-                };
-
-                (requires_python, python_pin)
-            }
-            PythonRequest::Version(VersionRequest::MajorMinorPatch(
-                major,
-                minor,
-                patch,
-                variant,
-            )) => {
-                let requires_python = RequiresPython::greater_than_equal_version(&Version::new([
-                    u64::from(*major),
-                    u64::from(*minor),
-                    u64::from(*patch),
-                ]));
-
-                let python_pin = if pin_python {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinorPatch(
-                        *major, *minor, *patch, *variant,
-                    )))
-                } else {
-                    None
-                };
-
-                (requires_python, python_pin)
+            PythonRequest::Version(
+                version_request @ (VersionRequest::MajorMinor(major, minor, _)
+                | VersionRequest::MajorMinorPatch(major, minor, _, _)),
+            ) => {
+                let release = [*major, *minor].into_iter().chain(version_request.patch());
+                let requires_python = RequiresPython::greater_than_equal_version(&Version::new(
+                    release.map(u64::from),
+                ));
+                (requires_python, pin_python.then(|| python_request.clone()))
             }
             python_request @ PythonRequest::Version(VersionRequest::Range(specifiers, variant)) => {
                 let requires_python = RequiresPython::from_specifiers(specifiers.clone());
