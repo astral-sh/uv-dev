@@ -1,8 +1,7 @@
 use std::cmp::Reverse;
 
-use hashbrown::hash_map::{EntryRef, OccupiedEntry};
+use hashbrown::hash_map::EntryRef;
 use pubgrub::DependencyProvider;
-use rustc_hash::FxBuildHasher;
 
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -66,7 +65,7 @@ impl PubGrubPriorities {
         match self.package_priority.entry_ref(name) {
             EntryRef::Occupied(mut entry) => {
                 // Preserve the original index.
-                let index = Self::get_index(&entry).unwrap_or(len);
+                let index = entry.get().index().unwrap_or(len);
                 let priority = classify(index);
 
                 // Retain higher priorities, including conflict priorities, to avoid
@@ -78,19 +77,6 @@ impl PubGrubPriorities {
             EntryRef::Vacant(entry) => {
                 entry.insert(classify(len));
             }
-        }
-    }
-
-    fn get_index(
-        entry: &OccupiedEntry<'_, PackageName, PubGrubPriority, FxBuildHasher>,
-    ) -> Option<usize> {
-        match entry.get() {
-            PubGrubPriority::ConflictLate(Reverse(index))
-            | PubGrubPriority::Unspecified(Reverse(index))
-            | PubGrubPriority::ConflictEarly(Reverse(index))
-            | PubGrubPriority::Singleton(Reverse(index))
-            | PubGrubPriority::DirectUrl(Reverse(index)) => Some(*index),
-            PubGrubPriority::Root => None,
         }
     }
 
@@ -184,7 +170,7 @@ impl PubGrubPriorities {
                 if matches!(current, PubGrubPriority::ConflictEarly(_)) {
                     return false;
                 }
-                let index = Self::get_index(&entry).unwrap_or(len);
+                let index = current.index().unwrap_or(len);
                 let priority = make_priority(Reverse(index));
                 if current == priority {
                     return false;
@@ -228,6 +214,20 @@ pub(crate) enum PubGrubPriority {
 
     /// The package is the root package.
     Root,
+}
+
+impl PubGrubPriority {
+    /// Return the package discovery index, if this priority has one.
+    fn index(self) -> Option<usize> {
+        match self {
+            Self::ConflictLate(Reverse(index))
+            | Self::Unspecified(Reverse(index))
+            | Self::ConflictEarly(Reverse(index))
+            | Self::Singleton(Reverse(index))
+            | Self::DirectUrl(Reverse(index)) => Some(index),
+            Self::Root => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
