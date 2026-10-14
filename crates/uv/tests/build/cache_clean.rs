@@ -2,6 +2,7 @@
 use std::fs::Permissions;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
@@ -11,14 +12,27 @@ use indoc::indoc;
 #[cfg(target_os = "linux")]
 use std::process::Command;
 
-use uv_cache::Cache;
+use uv_cache::{Cache, CacheBucket};
 #[cfg(unix)]
 use uv_fs::link::{LinkMode, LinkOptions, link_dir};
 use uv_static::EnvVars;
 
-use uv_test::uv_snapshot;
 #[cfg(unix)]
-use uv_test::{assert_link_target, assert_path_missing};
+use uv_test::assert_link_target;
+use uv_test::{assert_path_missing, uv_snapshot};
+
+fn cached_response<'a>(responses: &'a [PathBuf], filename: &str) -> &'a Path {
+    let matches: Vec<_> = responses
+        .iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == filename))
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected exactly one cached response for {filename}, found {matches:?}"
+    );
+    matches[0]
+}
 
 /// `cache clean` should remove all packages.
 #[test]
@@ -370,16 +384,10 @@ fn clean_package_pypi() -> Result<()> {
         .assert()
         .success();
 
-    // Assert that the `.rkyv` file is created for `iniconfig`.
-    let rkyv = context
-        .cache_dir
-        .child("simple-v27")
-        .child("pypi")
-        .child("iniconfig.rkyv");
-    assert!(
-        rkyv.exists(),
-        "Expected the `.rkyv` file to exist for `iniconfig`"
-    );
+    let responses = context.cache_files(CacheBucket::Simple)?;
+    let removed = cached_response(&responses, "iniconfig.rkyv");
+    let retained = cached_response(&responses, "anyio.rkyv");
+    let retained_contents = context.read_bytes(retained);
 
     uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("iniconfig"), @"
     exit_code: 0 (success)
@@ -390,11 +398,8 @@ fn clean_package_pypi() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
 
-    // Assert that the `.rkyv` file is removed for `iniconfig`.
-    assert!(
-        !rkyv.exists(),
-        "Expected the `.rkyv` file to be removed for `iniconfig`"
-    );
+    assert_path_missing(removed);
+    assert_eq!(context.read_bytes(retained), retained_contents);
 
     // Running `uv cache prune` should have no effect.
     uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
@@ -436,17 +441,10 @@ fn clean_package_index() -> Result<()> {
         .assert()
         .success();
 
-    // Assert that the `.rkyv` file is created for `iniconfig`.
-    let rkyv = context
-        .cache_dir
-        .child("simple-v27")
-        .child("index")
-        .child("e8208120cae3ba69")
-        .child("iniconfig.rkyv");
-    assert!(
-        rkyv.exists(),
-        "Expected the `.rkyv` file to exist for `iniconfig`"
-    );
+    let responses = context.cache_files(CacheBucket::Simple)?;
+    let removed = cached_response(&responses, "iniconfig.rkyv");
+    let retained = cached_response(&responses, "anyio.rkyv");
+    let retained_contents = context.read_bytes(retained);
 
     uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("iniconfig"), @"
     exit_code: 0 (success)
@@ -457,11 +455,8 @@ fn clean_package_index() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
 
-    // Assert that the `.rkyv` file is removed for `iniconfig`.
-    assert!(
-        !rkyv.exists(),
-        "Expected the `.rkyv` file to be removed for `iniconfig`"
-    );
+    assert_path_missing(removed);
+    assert_eq!(context.read_bytes(retained), retained_contents);
 
     Ok(())
 }
