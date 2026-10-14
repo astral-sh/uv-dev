@@ -863,7 +863,7 @@ impl InternerGuard<'_> {
         // outside of our bounds by always mapping them to false.
         let mut new: SmallVec<_> = edges
             .iter()
-            .filter(|(range, _)| !py_range.intersection(range).is_empty())
+            .filter(|(range, _)| !py_range.is_disjoint(range))
             .cloned()
             .collect();
         // Below, we assume `new` has at least one element. It's
