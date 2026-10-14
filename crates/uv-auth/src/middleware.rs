@@ -615,7 +615,9 @@ impl AuthMiddleware {
         let is_azure_endpoint = AzureEndpointProvider::is_azure_endpoint(url, self.preview)
             .map_err(Error::Middleware)?;
         let username = Username::from(
-            credentials.map(|credentials| credentials.username().unwrap_or_default().to_string()),
+            credentials
+                .and_then(Authentication::username)
+                .map(str::to_owned),
         );
 
         // Fetches can be expensive, so we will only run them _once_ per realm or index URL and username combination
