@@ -10,17 +10,21 @@ Duplicate of astral-sh/uv#19023. Upstream fix axodotdev/cargo-dist#2423 is merge
 
 The reporter uses uv 0.13.0 on Ubuntu Linux x86_64, with an install receipt identifying cargo-dist 0.32.0. They report that the standalone installer or self-update leaves a PATH setup script named `env` in the installation directory. When command lookup selects this helper, `env FOO=bar /bin/echo HELLO` produces no output and exits 0; invoking `/usr/bin/env` runs the command correctly. A SLURM wrapper using `env -u TMUX -u TMUX_TMPDIR tmux new-session -A` reportedly exhibits the same silent success.
 
-The requested remedies are to retain safe sourcing while forwarding direct execution, rename or relocate the helper, or write PATH exports directly to shell profiles. These are alternative remedies for one underlying collision. The report's claim that the installer makes the helper executable is not established by the inspected source.
+The requested remedies are to retain safe sourcing while forwarding direct execution, rename or relocate the helper, or write PATH exports directly to shell profiles. These are alternative remedies for one underlying collision. The updated report explicitly acknowledges that the installer does not set the helper's executable bit, consistent with the inspected generator source. The actual file permissions and command-lookup behavior on the affected Ubuntu system remain unverified.
 
-## Draft response
+## Reported installation configuration
 
-This is tracked in astral-sh/uv#19023, including reports of env calls silently doing nothing and returning 0. Please add your reproduction and the helper's file permissions there so we can keep the discussion together.
+The updated issue body supplies an install-receipt excerpt recording uv 0.13.0, provider cargo-dist 0.32.0, `install_layout: flat`, `modify_path: true`, binaries `uv` and `uvx`, and `install_prefix: /home/USER/.tmp/opencode/uvbin`. The reported helper is therefore `/home/USER/.tmp/opencode/uvbin/env`, with shell-profile source lines pointing to that file. This is a custom installation prefix, rather than the default `~/.local/bin` used in the canonical issue.
 
-The cargo-dist 0.32.0 template creates this helper without setting executable permissions, so how it became executable on your Ubuntu system still needs checking. axodotdev/cargo-dist#2423 merged a fix that moves the helpers outside the binary directory and migrates shell references, but uv 0.13.0 still pins the older generator. Using /usr/bin/env explicitly bypasses the collision in the meantime.
+The reporter clarifies that the `opencode` path component is incidental and attributes the helper to uv's installer. That attribution is consistent with the previously inspected cargo-dist template, which constructs `env` inside a forced installation directory. The reporter's separate description of OpenCode's installer and uninstaller has not been independently checked and is not needed to establish the cargo-dist behavior.
+
+## Maintainer decision
+
+Maintainer zanieb identified astral-sh/uv#22543 as a duplicate of astral-sh/uv#19023 in the October 14, 2026 comment. This confirms the classification and canonical discussion already identified in this handoff.
 
 ## Classification
 
-astral-sh/uv#19023 already tracks the same helper-name collision, including the exact silent-success failure and relocation proposals. The additional Ubuntu/uv 0.13.0 reproduction belongs there. The upstream fix is absent from the pinned cargo-dist 0.32.0 template, so there is no evidence of a previously shipped uv fix regressing. The claim that the installer itself sets executable permissions remains unconfirmed.
+astral-sh/uv#19023 already tracks the same helper-name collision, including the exact silent-success failure and relocation proposals. The additional Ubuntu/uv 0.13.0 reproduction belongs there. The upstream fix is absent from the pinned cargo-dist 0.32.0 template, so there is no evidence of a previously shipped uv fix regressing. The reporter now agrees that the installer does not set executable permissions; the remaining reproduction question is why command lookup on the affected system selects and executes this source-only helper.
 
 The canonical issue was opened April 16, 2026 against uv 0.9.28 and remains open with the bug label. Its original SLURM symptom was permission denied because the helper was non-executable. Later comments explicitly cover the new report's silent-success symptom: a June 26 fasd report describes ignored arguments and exit 0, and a September 17 MSYS report describes `env FOO=bar echo hi` doing nothing. These differences in shell and file permissions explain triggering conditions without creating a separate problem.
 
@@ -31,7 +35,7 @@ The canonical issue was opened April 16, 2026 against uv 0.9.28 and remains open
 
 ## Supporting evidence
 
-- In astral-sh/uv#19023, maintainer woodruffw confirmed on April 16 that the helpers were non-executable and suggested moving them to a separate uv-managed directory. On June 26, the maintainer reiterated that uv's installer does not mark the helper executable. The thread includes reports of executable bits added by user tooling or development environments, plus MSYS execution without Unix execute bits. None proves how the new reporter's Ubuntu file acquired its permissions.
+- In astral-sh/uv#19023, maintainer woodruffw confirmed on April 16 that the helpers were non-executable and suggested moving them to a separate uv-managed directory. On June 26, the maintainer reiterated that uv's installer does not mark the helper executable. The thread includes reports of executable bits added by user tooling or development environments, plus MSYS execution without Unix execute bits. The actual helper permissions and lookup behavior on the new reporter's Ubuntu system remain unverified.
 - The canonical issue's timeline leads to atuinsh/atuin#2873. Its July 21 maintainer comment identifies cargo-dist as the shared generator and points to axodotdev/cargo-dist#2423. The upstream PR's body, comments, review, merged state, and installer patch were inspected. Its migration checks that old helpers match generated contents before removing them and updating profile references.
 - The uv 0.13.0 tag's `dist-workspace.toml:9` and this checkout both pin cargo-dist 0.32.0. The release tag configures the standard flat executable-directory layout at line 70. Source: https://raw.githubusercontent.com/astral-sh/uv/0.13.0/dist-workspace.toml
 - cargo-dist v0.32.0's `cargo-dist/templates/installer/installer.sh.j2` constructs a helper path ending in `/env`. Lines 859–869 create the helper only when absent; lines 938–955 write its PATH-only shell body using a heredoc, without setting executable permissions or executing arguments. Consequently, an existing helper is also left untouched. Source: https://raw.githubusercontent.com/axodotdev/cargo-dist/v0.32.0/cargo-dist/templates/installer/installer.sh.j2
@@ -48,6 +52,6 @@ astral-sh/uv#21837 and its proposed upstream fix axodotdev/cargo-dist#2513 norma
 
 ## Verification limits and maintainer next step
 
-The report, candidate discussions, release metadata, tagged generator source, and upstream patch were inspected without executing an installer or running the reporter's commands. Direct reads of Astral-hosted installer artifacts returned HTTP 403, so source conclusions rely on the versioned generator and uv's verified generator pin. The Ubuntu executable-permission claim remains an investigation point, not a confirmed installer action.
+The report, candidate discussions, release metadata, tagged generator source, and upstream patch were inspected without executing an installer or running the reporter's commands. Direct reads of Astral-hosted installer artifacts returned HTTP 403, so source conclusions rely on the versioned generator and uv's verified generator pin. The updated report acknowledges that the installer does not set executable permissions. Its receipt excerpt and custom prefix are reporter-supplied evidence; the helper's actual permissions and the lookup/execution behavior on Ubuntu have not been independently verified.
 
-Centralize discussion in astral-sh/uv#19023 and request the actual helper path and file permissions there. For implementation follow-up, assess adopting a cargo-dist version containing axodotdev/cargo-dist#2423 and verify migration for existing installations. No particular uv release containing that change was identified.
+Follow the maintainer's duplicate decision by centralizing investigation in astral-sh/uv#19023. The reporter has supplied the helper path; the useful remaining evidence is its actual file permissions and how the shell or SLURM resolves and executes it. For implementation follow-up, assess adopting a cargo-dist version containing axodotdev/cargo-dist#2423 and verify migration for existing installations. No particular uv release containing that change was identified.
