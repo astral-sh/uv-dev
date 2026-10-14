@@ -1,5 +1,6 @@
 //! Shared project, script, and tool environment workflows.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::io;
@@ -18,7 +19,7 @@ use uv_configuration::{
 use uv_dispatch::{BuildDispatch, PlatformState, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ExtraBuildRequires, HashCollection, Index, RequiresPython, Resolution,
+    ExtraBuildRequires, HashCollection, Index, Name, RequiresPython, Resolution,
 };
 use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, verbatim_path};
 use uv_git::ResolvedRepositoryReference;
@@ -29,7 +30,10 @@ use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
-use uv_python_interpreter::{BrokenLink, Interpreter, InvalidEnvironmentKind, PythonEnvironment};
+use uv_python_interpreter::{
+    BrokenLink, Interpreter, InterpreterError, InvalidEnvironmentKind, PythonEnvironment,
+    PythonEnvironmentError,
+};
 use uv_python_managed::{PythonMinorVersionLink, UpgradePolicy};
 use uv_python_types::{
     EnvironmentPreference, LenientImplementationName, PythonArchitecture, PythonDownloads,
@@ -37,8 +41,8 @@ use uv_python_types::{
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{
-    DependencyMode, FlatIndex, OptionsBuilder, Preference, PythonRequirement, ResolverEnvironment,
-    ResolverOutput,
+    DependencyMode, FlatIndex, Options, OptionsBuilder, Preference, PythonRequirement,
+    ResolverEnvironment, ResolverOutput,
 };
 use uv_scripts::Pep723ItemRef;
 use uv_settings::PythonInstallMirrors;
@@ -94,76 +98,57 @@ impl std::fmt::Display for ConflictError {
             .join(", ");
 
         // If all the conflicts are of the same kind, show a more succinct error.
-        if self
+        let (shared_kind, description) = if self
             .conflicts
             .iter()
             .all(|conflict| matches!(conflict.kind(), ConflictKind::Extra(..)))
         {
-            write!(
-                f,
-                "Extras {} are incompatible with the declared conflicts: {{{set}}}",
-                conjunction(
-                    self.conflicts
-                        .iter()
-                        .map(|conflict| match conflict.kind() {
-                            ConflictKind::Extra(extra) => format!("`{extra}`"),
-                            ConflictKind::Group(..) | ConflictKind::Project => unreachable!(),
-                        })
-                        .collect()
-                )
-            )
+            (Some("Extras "), "declared conflicts")
         } else if self
             .conflicts
             .iter()
             .all(|conflict| matches!(conflict.kind(), ConflictKind::Group(..)))
         {
-            write!(
-                f,
-                "Groups {} are incompatible with the conflicts: {{{set}}}",
-                conjunction(
-                    self.conflicts
-                        .iter()
-                        .map(|conflict| match conflict.kind() {
-                            ConflictKind::Group(group)
-                                if self.groups.contains_because_default(group) =>
-                                format!("`{group}` (enabled by default)"),
-                            ConflictKind::Group(group) => format!("`{group}`"),
-                            ConflictKind::Extra(..) | ConflictKind::Project => unreachable!(),
-                        })
-                        .collect()
-                )
-            )
+            (Some("Groups "), "conflicts")
         } else {
-            write!(
-                f,
-                "{} are incompatible with the declared conflicts: {{{set}}}",
-                conjunction(
-                    self.conflicts
-                        .iter()
-                        .enumerate()
-                        .map(|(i, conflict)| {
-                            let conflict = match conflict.kind() {
-                                ConflictKind::Project => {
-                                    format!("package `{}`", conflict.package())
-                                }
-                                ConflictKind::Extra(extra) => format!("extra `{extra}`"),
-                                ConflictKind::Group(group)
-                                    if self.groups.contains_because_default(group) =>
-                                {
-                                    format!("group `{group}` (enabled by default)")
-                                }
-                                ConflictKind::Group(group) => format!("group `{group}`"),
-                            };
-                            if i == 0 {
-                                capitalize(&conflict)
-                            } else {
-                                conflict
-                            }
-                        })
-                        .collect()
-                )
-            )
-        }
+            (None, "declared conflicts")
+        };
+
+        let conflicts = self
+            .conflicts
+            .iter()
+            .enumerate()
+            .map(|(index, conflict)| {
+                let (kind, name, enabled_by_default): (&str, &str, bool) = match conflict.kind() {
+                    ConflictKind::Project => ("package ", conflict.package().as_ref(), false),
+                    ConflictKind::Extra(extra) => ("extra ", extra.as_ref(), false),
+                    ConflictKind::Group(group) => (
+                        "group ",
+                        group.as_ref(),
+                        self.groups.contains_because_default(group),
+                    ),
+                };
+                let kind = if shared_kind.is_none() { kind } else { "" };
+                let default_suffix = if enabled_by_default {
+                    " (enabled by default)"
+                } else {
+                    ""
+                };
+                let conflict = format!("{kind}`{name}`{default_suffix}");
+                if index == 0 && shared_kind.is_none() {
+                    capitalize(&conflict)
+                } else {
+                    conflict
+                }
+            })
+            .collect();
+
+        write!(
+            f,
+            "{}{} are incompatible with the {description}: {{{set}}}",
+            shared_kind.unwrap_or_default(),
+            conjunction(conflicts)
+        )
     }
 }
 
@@ -202,49 +187,40 @@ fn existing_project_environment(
     policy: ProjectEnvironmentPolicy,
     cache: &Cache,
 ) -> Result<Option<PythonEnvironment>, EnvironmentError> {
-    let environment = match PythonEnvironment::from_root(root, cache) {
-        Ok(environment) => environment,
-        Err(uv_python_interpreter::PythonEnvironmentError::MissingEnvironment(_)) => {
-            return Ok(None);
-        }
-        Err(uv_python_interpreter::PythonEnvironmentError::InvalidEnvironment(inner)) => {
-            match inner.kind {
-                InvalidEnvironmentKind::NotDirectory => {
-                    return Err(EnvironmentError::InvalidProjectEnvironmentDir(
-                        root.to_path_buf(),
-                        inner.kind.to_string(),
-                    ));
-                }
-                InvalidEnvironmentKind::MissingExecutable(_) => {
-                    if !matches!(policy, ProjectEnvironmentPolicy::Optional)
-                        && !centralized
-                        && fs_err::read_dir(root).is_ok_and(|mut dir| dir.next().is_some())
-                    {
-                        if !root.join("pyvenv.cfg").try_exists().unwrap_or_default() {
-                            return Err(EnvironmentError::InvalidProjectEnvironmentDir(
-                                root.to_path_buf(),
-                                "it is not a valid Python environment (no Python executable was found)"
-                                    .to_string(),
-                            ));
-                        }
-                    }
-                }
-                InvalidEnvironmentKind::Empty => {}
+    match PythonEnvironment::from_root(root, cache) {
+        Ok(environment) => Ok(Some(environment)),
+        Err(
+            PythonEnvironmentError::MissingEnvironment(_)
+            | PythonEnvironmentError::Query(InterpreterError::NotFound(_)),
+        ) => Ok(None),
+        Err(PythonEnvironmentError::InvalidEnvironment(inner)) => match inner.kind {
+            InvalidEnvironmentKind::NotDirectory => {
+                Err(EnvironmentError::InvalidProjectEnvironmentDir(
+                    root.to_path_buf(),
+                    inner.kind.to_string(),
+                ))
             }
-            return Ok(None);
-        }
-        Err(uv_python_interpreter::PythonEnvironmentError::Query(
-            uv_python_interpreter::InterpreterError::NotFound(_),
-        )) => {
-            return Ok(None);
-        }
-        Err(uv_python_interpreter::PythonEnvironmentError::Query(
-            uv_python_interpreter::InterpreterError::BrokenLink(BrokenLink {
-                path,
-                unix,
-                venv: _,
-            }),
-        )) => {
+            InvalidEnvironmentKind::MissingExecutable(_)
+                if !matches!(policy, ProjectEnvironmentPolicy::Optional)
+                    && !centralized
+                    && fs_err::read_dir(root).is_ok_and(|mut dir| dir.next().is_some())
+                    && !root.join("pyvenv.cfg").try_exists().unwrap_or_default() =>
+            {
+                Err(EnvironmentError::InvalidProjectEnvironmentDir(
+                    root.to_path_buf(),
+                    "it is not a valid Python environment (no Python executable was found)"
+                        .to_string(),
+                ))
+            }
+            InvalidEnvironmentKind::MissingExecutable(_) | InvalidEnvironmentKind::Empty => {
+                Ok(None)
+            }
+        },
+        Err(PythonEnvironmentError::Query(InterpreterError::BrokenLink(BrokenLink {
+            path,
+            unix,
+            venv: _,
+        }))) => {
             if unix {
                 let target_path = fs_err::read_link(&path)?;
                 warn_user!(
@@ -258,12 +234,10 @@ fn existing_project_environment(
                     path.user_display().cyan(),
                 );
             }
-            return Ok(None);
+            Ok(None)
         }
-        Err(err) => return Err(err.into()),
-    };
-
-    Ok(Some(environment))
+        Err(err) => Err(err.into()),
+    }
 }
 
 /// Discover a compatible project environment at `root`.
@@ -803,6 +777,25 @@ async fn lock_script_environment(script: Pep723ItemRef<'_>) -> Result<LockedFile
     }
 }
 
+fn create_managed_environment(
+    root: &Path,
+    interpreter: Interpreter,
+    prompt: uv_virtualenv::Prompt,
+    relocatable: bool,
+    upgrade_policy: UpgradePolicy,
+) -> Result<PythonEnvironment, uv_virtualenv::Error> {
+    uv_virtualenv::create_venv(
+        root,
+        interpreter,
+        prompt,
+        false,
+        uv_virtualenv::OnExisting::Remove(uv_virtualenv::RemovalReason::ManagedEnvironment),
+        relocatable,
+        uv_virtualenv::Seed::Disabled,
+        upgrade_policy,
+    )
+}
+
 /// The Python environment for a project.
 #[derive(Debug)]
 pub enum ProjectEnvironment {
@@ -992,16 +985,11 @@ impl ProjectEnvironment {
                 // Under `--dry-run`, avoid modifying the environment.
                 if dry_run.enabled() {
                     let temp_dir = cache.venv_dir()?;
-                    let environment = uv_virtualenv::create_venv(
+                    let environment = create_managed_environment(
                         temp_dir.path(),
                         interpreter,
                         prompt,
-                        false,
-                        uv_virtualenv::OnExisting::Remove(
-                            uv_virtualenv::RemovalReason::ManagedEnvironment,
-                        ),
                         uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
-                        uv_virtualenv::Seed::Disabled,
                         upgrade_policy,
                     )?;
                     return Ok(if replace_environment {
@@ -1014,14 +1002,11 @@ impl ProjectEnvironment {
                 if replace_environment {
                     // Remove centralized references directly to preserve their cached targets.
                     let removed = if centralized_environment_reference {
-                        match uv_fs::remove_virtualenv(&root) {
-                            Ok(()) => true,
-                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-                            Err(err) => return Err(uv_virtualenv::Error::from(err).into()),
-                        }
+                        uv_fs::remove_virtualenv_if_exists(&root)
                     } else {
-                        uv_fs::clear_virtualenv(&root).map_err(uv_virtualenv::Error::from)?
-                    };
+                        uv_fs::clear_virtualenv(&root)
+                    }
+                    .map_err(uv_virtualenv::Error::from)?;
                     if removed {
                         let removed_entry = if centralized_environment_reference {
                             "link to project environment"
@@ -1053,16 +1038,11 @@ impl ProjectEnvironment {
                     )?;
                 }
 
-                let environment = uv_virtualenv::create_venv(
+                let environment = create_managed_environment(
                     &root,
                     interpreter,
                     prompt,
-                    false,
-                    uv_virtualenv::OnExisting::Remove(
-                        uv_virtualenv::RemovalReason::ManagedEnvironment,
-                    ),
                     uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
-                    uv_virtualenv::Seed::Disabled,
                     upgrade_policy,
                 )?;
 
@@ -1207,16 +1187,11 @@ impl ScriptEnvironment {
                 // Under `--dry-run`, avoid modifying the environment.
                 if dry_run.enabled() {
                     let temp_dir = cache.venv_dir()?;
-                    let environment = uv_virtualenv::create_venv(
+                    let environment = create_managed_environment(
                         temp_dir.path(),
                         interpreter,
                         prompt,
                         false,
-                        uv_virtualenv::OnExisting::Remove(
-                            uv_virtualenv::RemovalReason::ManagedEnvironment,
-                        ),
-                        false,
-                        uv_virtualenv::Seed::Disabled,
                         upgrade_policy,
                     )?;
                     return Ok(if root.exists() {
@@ -1227,35 +1202,22 @@ impl ScriptEnvironment {
                 }
 
                 // Remove the existing virtual environment.
-                let replaced = match uv_fs::remove_virtualenv(&root) {
-                    Ok(()) => {
-                        debug!(
-                            "Removed virtual environment at: {}",
-                            root.user_display().cyan()
-                        );
-                        true
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
-                    Err(err) => return Err(uv_virtualenv::Error::from(err).into()),
-                };
+                let replaced = uv_fs::remove_virtualenv_if_exists(&root)
+                    .map_err(uv_virtualenv::Error::from)?;
+                if replaced {
+                    debug!(
+                        "Removed virtual environment at: {}",
+                        root.user_display().cyan()
+                    );
+                }
 
                 debug!(
                     "Creating script environment at: {}",
                     root.user_display().cyan()
                 );
 
-                let environment = uv_virtualenv::create_venv(
-                    &root,
-                    interpreter,
-                    prompt,
-                    false,
-                    uv_virtualenv::OnExisting::Remove(
-                        uv_virtualenv::RemovalReason::ManagedEnvironment,
-                    ),
-                    false,
-                    uv_virtualenv::Seed::Disabled,
-                    upgrade_policy,
-                )?;
+                let environment =
+                    create_managed_environment(&root, interpreter, prompt, false, upgrade_policy)?;
 
                 Ok(if replaced {
                     Self::Replaced(environment)
@@ -1304,22 +1266,22 @@ impl std::ops::Deref for ScriptEnvironment {
 }
 
 #[derive(Debug, Clone)]
-pub enum PreferenceLocation<'lock> {
+pub enum PreferenceLocation<'a> {
     /// The preferences should be extracted from a lockfile.
     Lock {
-        lock: &'lock Lock,
-        install_path: &'lock Path,
+        lock: &'a Lock,
+        install_path: &'a Path,
     },
-    /// The preferences will be provided directly as [`Preference`] entries.
-    Entries(Vec<Preference>),
+    /// The preferences should be extracted from installed distributions.
+    Installed(&'a SitePackages),
 }
 
 #[derive(Debug, Clone)]
-pub struct EnvironmentSpecification<'lock> {
+pub struct EnvironmentSpecification<'a> {
     /// The requirements to include in the environment.
     requirements: RequirementsSpecification,
     /// The preferences to respect when resolving.
-    preferences: Option<PreferenceLocation<'lock>>,
+    preferences: Option<PreferenceLocation<'a>>,
 }
 
 impl From<RequirementsSpecification> for EnvironmentSpecification<'_> {
@@ -1331,10 +1293,10 @@ impl From<RequirementsSpecification> for EnvironmentSpecification<'_> {
     }
 }
 
-impl<'lock> EnvironmentSpecification<'lock> {
+impl<'a> EnvironmentSpecification<'a> {
     /// Set the [`PreferenceLocation`] for the specification.
     #[must_use]
-    pub fn with_preferences(self, preferences: PreferenceLocation<'lock>) -> Self {
+    pub fn with_preferences(self, preferences: PreferenceLocation<'a>) -> Self {
         Self {
             preferences: Some(preferences),
             ..self
@@ -1348,6 +1310,32 @@ pub enum EnvironmentResolution {
     Universal,
 }
 
+/// Bind build-isolation settings to an environment, requesting it only for shared builds.
+fn bind_build_isolation<'a>(
+    config: &'a uv_configuration::BuildIsolation,
+    environment: impl FnOnce() -> &'a PythonEnvironment,
+) -> BuildIsolation<'a> {
+    match config {
+        uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
+        uv_configuration::BuildIsolation::Shared => BuildIsolation::Shared(environment()),
+        uv_configuration::BuildIsolation::SharedPackage(packages) => {
+            BuildIsolation::SharedPackage(environment(), packages)
+        }
+    }
+}
+
+/// Build resolver options from the environment's resolver settings.
+fn resolver_options(settings: &ResolverSettings) -> Options {
+    OptionsBuilder::new()
+        .resolution_mode(settings.resolution)
+        .prerelease(settings.prerelease.clone())
+        .fork_strategy(settings.fork_strategy)
+        .exclude_newer(settings.exclude_newer.clone())
+        .index_strategy(settings.index_strategy)
+        .build_options(settings.build_options.clone())
+        .build()
+}
+
 /// Run dependency resolution for an interpreter, returning the [`ResolverOutput`].
 pub async fn resolve_environment(
     spec: EnvironmentSpecification<'_>,
@@ -1355,7 +1343,7 @@ pub async fn resolve_environment(
     interpreter: &Interpreter,
     python_platform: Option<&TargetTriple>,
     source_tree_editable_policy: SourceTreeEditablePolicy,
-    build_constraints: Constraints,
+    build_constraints: &Constraints,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
     state: &PlatformState,
@@ -1372,9 +1360,9 @@ pub async fn resolve_environment(
         index_locations,
         index_strategy,
         keyring_provider,
-        resolution,
-        prerelease,
-        fork_strategy,
+        resolution: _,
+        prerelease: _,
+        fork_strategy: _,
         dependency_metadata,
         config_setting,
         config_settings_package,
@@ -1406,8 +1394,8 @@ pub async fn resolve_environment(
 
     let client_builder = client_builder.clone().keyring(*keyring_provider);
 
-    // Determine the tags and marker environment to use for resolution.
-    let (tags, resolver_environment) = match resolution_scope {
+    // Determine the target constraints for resolution.
+    let (tags, resolver_environment, python_requirement, python_platform) = match resolution_scope {
         EnvironmentResolution::Specific => {
             let tags = uv_resolve_operations::resolution_tags(None, python_platform, interpreter)?;
             let marker_environment =
@@ -1415,21 +1403,19 @@ pub async fn resolve_environment(
             (
                 Some(tags),
                 ResolverEnvironment::specific(marker_environment),
+                PythonRequirement::from_interpreter(interpreter),
+                python_platform,
             )
         }
-        EnvironmentResolution::Universal => (None, ResolverEnvironment::universal(Vec::new())),
-    };
-    let python_requirement = match resolution_scope {
-        EnvironmentResolution::Specific => PythonRequirement::from_interpreter(interpreter),
-        EnvironmentResolution::Universal => PythonRequirement::from_requires_python(
-            interpreter,
-            RequiresPython::greater_than_equal_version(&interpreter.python_minor_version()),
+        EnvironmentResolution::Universal => (
+            None,
+            ResolverEnvironment::universal(Vec::new()),
+            PythonRequirement::from_requires_python(
+                interpreter,
+                RequiresPython::greater_than_equal_version(&interpreter.python_minor_version()),
+            ),
+            None,
         ),
-    };
-
-    let python_platform = match resolution_scope {
-        EnvironmentResolution::Specific => python_platform,
-        EnvironmentResolution::Universal => None,
     };
 
     // Determine the PyTorch backend.
@@ -1458,27 +1444,12 @@ pub async fn resolve_environment(
         .build()?;
 
     // Determine whether to enable build isolation.
-    let environment;
-    let build_isolation = match build_isolation {
-        uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-        uv_configuration::BuildIsolation::Shared => {
-            environment = PythonEnvironment::from_interpreter(interpreter.clone());
-            BuildIsolation::Shared(&environment)
-        }
-        uv_configuration::BuildIsolation::SharedPackage(packages) => {
-            environment = PythonEnvironment::from_interpreter(interpreter.clone());
-            BuildIsolation::SharedPackage(&environment, packages)
-        }
-    };
+    let mut environment = None;
+    let build_isolation = bind_build_isolation(build_isolation, || {
+        environment.insert(PythonEnvironment::from_interpreter(interpreter.clone()))
+    });
 
-    let options = OptionsBuilder::new()
-        .resolution_mode(*resolution)
-        .prerelease(prerelease.clone())
-        .fork_strategy(*fork_strategy)
-        .exclude_newer(exclude_newer.clone())
-        .index_strategy(*index_strategy)
-        .build_options(build_options.clone())
-        .build();
+    let options = resolver_options(settings);
 
     // TODO(charlie): These are all default values. We should consider whether we want to make them
     // optional on the downstream APIs.
@@ -1489,7 +1460,7 @@ pub async fn resolve_environment(
         EnvironmentResolution::Universal => HashStrategy::collect(HashCollection::Url),
     };
     let build_hasher = HashStrategy::from_constraints(
-        &build_constraints,
+        build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
         *build_hash_checking,
     )?;
@@ -1499,11 +1470,10 @@ pub async fn resolve_environment(
     // a preference source.
     let reinstall = Reinstall::default();
     let upgrade = match resolution_scope {
-        EnvironmentResolution::Specific => Upgrade::default(),
-        EnvironmentResolution::Universal => upgrade.clone(),
+        EnvironmentResolution::Specific => Cow::Owned(Upgrade::default()),
+        EnvironmentResolution::Universal => Cow::Borrowed(upgrade),
     };
 
-    // If an existing lockfile exists, build up a set of preferences.
     let preferences = match spec.preferences {
         Some(PreferenceLocation::Lock { lock, install_path }) => {
             let LockedRequirements { preferences, git } =
@@ -1517,17 +1487,20 @@ pub async fn resolve_environment(
 
             preferences
         }
-        Some(PreferenceLocation::Entries(entries)) => {
-            // Drop preferences for any packages that are included in the upgrade strategy.
+        Some(PreferenceLocation::Installed(site_packages)) => {
+            // Avoid pinning versions for packages selected for upgrade.
             if upgrade.is_all() {
                 vec![]
-            } else if let Some(packages) = upgrade.packages() {
-                entries
-                    .into_iter()
-                    .filter(|preference| !packages.contains(preference.name()))
-                    .collect()
             } else {
-                entries
+                let upgraded_packages = upgrade.packages();
+                site_packages
+                    .iter()
+                    .filter(|distribution| {
+                        upgraded_packages
+                            .is_none_or(|packages| !packages.contains(distribution.name()))
+                    })
+                    .filter_map(Preference::from_installed)
+                    .collect()
             }
         }
         None => vec![],
@@ -1545,7 +1518,7 @@ pub async fn resolve_environment(
     let resolve_dispatch = BuildDispatch::new(
         &client,
         cache,
-        &build_constraints,
+        build_constraints,
         interpreter,
         index_locations,
         &flat_index,
@@ -1569,7 +1542,7 @@ pub async fn resolve_environment(
     );
 
     // Resolve the requirements.
-    Ok(uv_resolve_operations::resolve(
+    let (output, _) = uv_resolve_operations::resolve(
         requirements,
         constraints,
         overrides,
@@ -1600,8 +1573,8 @@ pub async fn resolve_environment(
         logger,
         printer,
     )
-    .await?
-    .0)
+    .await?;
+    Ok(output)
 }
 
 /// Sync a [`PythonEnvironment`] with a set of resolved requirements.
@@ -1657,13 +1630,7 @@ pub async fn sync_environment(
         .build()?;
 
     // Determine whether to enable build isolation.
-    let build_isolation = match build_isolation {
-        uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-        uv_configuration::BuildIsolation::Shared => BuildIsolation::Shared(&venv),
-        uv_configuration::BuildIsolation::SharedPackage(packages) => {
-            BuildIsolation::SharedPackage(&venv, packages)
-        }
-    };
+    let build_isolation = bind_build_isolation(build_isolation, || &venv);
 
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
@@ -1783,7 +1750,7 @@ pub async fn update_environment(
                 config_settings_package,
                 dependency_metadata,
                 exclude_newer,
-                fork_strategy,
+                fork_strategy: _,
                 index_locations,
                 index_strategy,
                 keyring_provider,
@@ -1792,8 +1759,8 @@ pub async fn update_environment(
                 build_hash_checking,
                 extra_build_dependencies: _,
                 extra_build_variables,
-                prerelease,
-                resolution,
+                prerelease: _,
+                resolution: _,
                 sources,
                 torch_backend,
                 cuda_driver_version,
@@ -1899,22 +1866,9 @@ pub async fn update_environment(
         .build()?;
 
     // Determine whether to enable build isolation.
-    let build_isolation = match build_isolation {
-        uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-        uv_configuration::BuildIsolation::Shared => BuildIsolation::Shared(&venv),
-        uv_configuration::BuildIsolation::SharedPackage(packages) => {
-            BuildIsolation::SharedPackage(&venv, packages)
-        }
-    };
+    let build_isolation = bind_build_isolation(build_isolation, || &venv);
 
-    let options = OptionsBuilder::new()
-        .resolution_mode(*resolution)
-        .prerelease(prerelease.clone())
-        .fork_strategy(*fork_strategy)
-        .exclude_newer(exclude_newer.clone())
-        .index_strategy(*index_strategy)
-        .build_options(build_options.clone())
-        .build();
+    let options = resolver_options(&settings.resolver);
 
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
@@ -1962,7 +1916,7 @@ pub async fn update_environment(
     );
 
     // Resolve the requirements.
-    let (resolution, hasher) = match uv_resolve_operations::resolve(
+    let (output, hasher) = uv_resolve_operations::resolve(
         requirements,
         constraints,
         overrides,
@@ -1993,11 +1947,9 @@ pub async fn update_environment(
         resolve,
         printer,
     )
-    .await
-    {
-        Ok((resolution, hasher)) => (Resolution::from(resolution), hasher),
-        Err(err) => return Err(err.into()),
-    };
+    .await?;
+    let resolution = Resolution::from(output);
+
     // Sync the environment.
     let changelog = uv_install_operations::install(
         &resolution,
@@ -2046,32 +1998,29 @@ pub fn detect_conflicts(
     // can be declared as conflicting with groups. So if extra `x` and
     // group `g` are declared as conflicting, then enabling both of
     // those should result in an error.
-    let lock = target.lock();
+    let conflicts = target.lock().conflicts();
+    if conflicts.is_empty() {
+        return Ok(());
+    }
+
     let packages = target.packages(extras, groups);
-    let conflicts = lock.conflicts();
     for set in conflicts.iter() {
-        let mut conflicts: Vec<ConflictItem> = vec![];
-        for item in set.iter() {
-            if !packages.contains(item.package()) {
-                // Ignore items that are not in the install targets
-                continue;
-            }
-            let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod(),
-                ConflictKind::Extra(extra) => extras.contains(extra),
-                ConflictKind::Group(group1) => groups.contains(group1),
-            };
-            if is_conflicting {
-                conflicts.push(item.clone());
-            }
-        }
-        if conflicts.len() >= 2 {
-            return Err(EnvironmentError::Conflict(ConflictError {
-                set: set.clone(),
-                conflicts,
-                groups: groups.clone(),
-            }));
-        }
+        let mut enabled = set.iter().filter(|item| {
+            packages.contains(item.package())
+                && match item.kind() {
+                    ConflictKind::Project => groups.prod(),
+                    ConflictKind::Extra(extra) => extras.contains(extra),
+                    ConflictKind::Group(group) => groups.contains(group),
+                }
+        });
+        let Some(first_two) = enabled.next_array::<2>() else {
+            continue;
+        };
+        return Err(EnvironmentError::Conflict(ConflictError {
+            set: set.clone(),
+            conflicts: first_two.into_iter().chain(enabled).cloned().collect(),
+            groups: groups.clone(),
+        }));
     }
     Ok(())
 }
@@ -2134,7 +2083,7 @@ fn warn_on_requirements_txt_setting(spec: &RequirementsSpecification, settings: 
 
     if !no_build.is_none() && settings.build_options.no_build() != no_build {
         warn_user_once!(
-            "Ignoring `--no-binary` setting from requirements file. Instead, use the `--no-build` command-line argument, or set `no-build` in a `uv.toml` or `pyproject.toml` file."
+            "Ignoring `--only-binary` setting from requirements file. Instead, use the `--no-build` command-line argument, or set `no-build` in a `uv.toml` or `pyproject.toml` file."
         );
     }
 }

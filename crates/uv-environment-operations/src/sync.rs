@@ -9,7 +9,7 @@ use uv_configuration::{
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{Dist, Resolution, ResolvedDist, SourceDist};
+use uv_distribution_types::{Dist, Resolution, ResolvedDist};
 use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::InstallLogger;
 use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
@@ -22,13 +22,13 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_resolver::FlatIndex;
 use uv_settings::InstallerSettingsRef;
-use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
+use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::pyproject::Source;
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache};
 
 use crate::install_target::InstallTarget;
 use crate::malware::{MalwareCheckContext, maybe_check_malware};
-use crate::{EnvironmentError, detect_conflicts};
+use crate::{EnvironmentError, bind_build_isolation, detect_conflicts};
 use uv_requirements::script_extra_build_requires;
 
 /// Install the selected packages from a lockfile into an environment.
@@ -77,21 +77,24 @@ pub async fn sync_from_lock(
     } = settings;
 
     // Lower the extra build dependencies with source resolution.
+    let lower_workspace_build_dependencies = async |workspace: &Workspace| {
+        LoweredExtraBuildDependencies::from_workspace(
+            extra_build_dependencies.clone(),
+            workspace,
+            index_locations,
+            &sources,
+            cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        )
+        .await
+    };
     let extra_build_requires = match &target {
         InstallTarget::Workspace { workspace, .. }
         | InstallTarget::Project { workspace, .. }
         | InstallTarget::Projects { workspace, .. }
         | InstallTarget::NonProjectWorkspace { workspace, .. } => {
-            LoweredExtraBuildDependencies::from_workspace(
-                extra_build_dependencies.clone(),
-                workspace,
-                index_locations,
-                &sources,
-                cache,
-                workspace_cache,
-                client_builder.credentials_cache(),
-            )
-            .await?
+            lower_workspace_build_dependencies(workspace).await?
         }
         InstallTarget::Lockfile {
             root,
@@ -99,13 +102,14 @@ pub async fn sync_from_lock(
             lock,
             ..
         } => {
-            let member = project_name.and_then(|name| {
-                lock.workspace_member_paths()
-                    .find_map(|(member, path)| (member == name).then(|| root.join(path)))
-            });
-            if let Some(member) = member.filter(|path| {
-                !extra_build_dependencies.is_empty() && path.join("pyproject.toml").is_file()
-            }) {
+            let member = project_name
+                .filter(|_| !extra_build_dependencies.is_empty())
+                .and_then(|name| {
+                    lock.workspace_member_paths()
+                        .find_map(|(member, path)| (member == name).then(|| root.join(path)))
+                })
+                .filter(|path| path.join("pyproject.toml").is_file());
+            if let Some(member) = member {
                 let workspace = Workspace::discover(
                     &member,
                     &DiscoveryOptions {
@@ -116,16 +120,7 @@ pub async fn sync_from_lock(
                     workspace_cache,
                 )
                 .await?;
-                LoweredExtraBuildDependencies::from_workspace(
-                    extra_build_dependencies.clone(),
-                    &workspace,
-                    index_locations,
-                    &sources,
-                    cache,
-                    workspace_cache,
-                    client_builder.credentials_cache(),
-                )
-                .await?
+                lower_workspace_build_dependencies(&workspace).await?
             } else {
                 LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
             }
@@ -145,9 +140,6 @@ pub async fn sync_from_lock(
     .into_inner();
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
-    // Save an authenticated builder for the malware check before moving the
-    // primary builder into the registry client below.
-    let malware_check_client_builder = client_builder.clone();
 
     // Validate that the Python version is supported by the lockfile.
     if !target
@@ -249,7 +241,7 @@ pub async fn sync_from_lock(
         maybe_check_malware(
             &target,
             &resolution,
-            &malware_check_client_builder,
+            &client_builder,
             concurrency,
             cache,
             preview,
@@ -267,7 +259,8 @@ pub async fn sync_from_lock(
         )?);
     }
 
-    // Initialize the registry client.
+    // Initialize the registry client and retain the authenticated builder for the malware check.
+    let malware_check_client_builder = client_builder.clone();
     let client = RegistryClientBuilder::new(client_builder, cache.clone())
         .index_locations(index_locations.clone())
         .index_strategy(index_strategy)
@@ -276,13 +269,7 @@ pub async fn sync_from_lock(
         .build()?;
 
     // Determine whether to enable build isolation.
-    let build_isolation = match build_isolation {
-        uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-        uv_configuration::BuildIsolation::Shared => BuildIsolation::Shared(venv),
-        uv_configuration::BuildIsolation::SharedPackage(packages) => {
-            BuildIsolation::SharedPackage(venv, packages)
-        }
-    };
+    let build_isolation = bind_build_isolation(build_isolation, || venv);
 
     // Read the build constraints from the lockfile.
     let build_constraints = target.build_constraints();
@@ -369,20 +356,11 @@ pub async fn sync_from_lock(
 
 /// Filter out any virtual workspace members.
 fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
-    resolution.filter(|dist| {
-        let ResolvedDist::Installable { dist, .. } = dist else {
-            return true;
-        };
-
-        let Dist::Source(dist) = dist.as_ref() else {
-            return true;
-        };
-
-        let SourceDist::Directory(dist) = dist else {
-            return true;
-        };
-
-        !dist.r#virtual.unwrap_or(false)
+    resolution.filter(|resolved| match resolved {
+        ResolvedDist::Installed { .. } => true,
+        ResolvedDist::Installable { dist, .. } => {
+            !matches!(dist.as_ref(), Dist::Source(source) if source.is_virtual())
+        }
     })
 }
 

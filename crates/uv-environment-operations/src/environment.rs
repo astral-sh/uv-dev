@@ -36,9 +36,9 @@ impl From<CachedEnvironment> for PythonEnvironment {
 }
 
 #[derive(Debug, Clone, Hash)]
-struct CachedEnvironmentDist {
-    dist: ResolvedDist,
-    hashes: uv_pypi_types::HashDigests,
+struct CachedEnvironmentDist<'a> {
+    dist: &'a ResolvedDist,
+    hashes: &'a uv_pypi_types::HashDigests,
     cache_info: Option<CacheInfo>,
 }
 
@@ -86,7 +86,7 @@ impl CachedEnvironment {
                 &interpreter,
                 python_platform,
                 SourceTreeEditablePolicy::Project,
-                build_constraints.clone(),
+                &build_constraints,
                 &settings.resolver,
                 client_builder,
                 state,
@@ -204,8 +204,8 @@ impl CachedEnvironment {
                 })
                 .map(|(dist, hashes)| {
                     Ok(CachedEnvironmentDist {
-                        dist: dist.clone(),
-                        hashes: hashes.clone(),
+                        dist,
+                        hashes,
                         cache_info: Self::cache_info(dist).map_err(EnvironmentError::from)?,
                     })
                 })
@@ -312,20 +312,16 @@ impl CachedEnvironment {
         } else {
             interpreter.to_base_python()?
         };
-        if base_python == interpreter.sys_executable() {
-            debug!(
-                "Caching via base interpreter: {}",
-                interpreter.sys_executable().display()
-            );
-            Ok(interpreter.clone())
+        let base_interpreter = if base_python == interpreter.sys_executable() {
+            interpreter.clone()
         } else {
-            let base_interpreter = Interpreter::query(base_python, cache)?;
-            debug!(
-                "Caching via base interpreter: {}",
-                base_interpreter.sys_executable().display()
-            );
-            Ok(base_interpreter)
-        }
+            Interpreter::query(base_python, cache)?
+        };
+        debug!(
+            "Caching via base interpreter: {}",
+            base_interpreter.sys_executable().display()
+        );
+        Ok(base_interpreter)
     }
 }
 
