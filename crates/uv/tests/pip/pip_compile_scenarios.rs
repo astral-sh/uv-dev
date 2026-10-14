@@ -10,7 +10,6 @@ use std::process::Command;
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild};
-use predicates::prelude::predicate;
 
 use uv_static::EnvVars;
 use uv_test::packse::PackseServer;
@@ -102,9 +101,9 @@ fn lowest_direct_fork_max_python() -> Result<()> {
     output
         .assert()
         .success()
-        .stdout(predicate::str::contains("forkdep==2.8"))
-        .stdout(predicate::str::contains("forkleaf==1.1.0"))
-        .stdout(predicate::str::contains("forkroot==3.0.0"));
+        .stdout(predicates::str::contains("forkdep==2.8"))
+        .stdout(predicates::str::contains("forkleaf==1.1.0"))
+        .stdout(predicates::str::contains("forkroot==3.0.0"));
 
     Ok(())
 }
@@ -179,9 +178,9 @@ fn lowest_direct_fork_min_python() -> Result<()> {
     output
         .assert()
         .success()
-        .stdout(predicate::str::contains("forkdep==3.1"))
-        .stdout(predicate::str::contains("forkleaf==1.1.0"))
-        .stdout(predicate::str::contains("forkroot==3.0.0"));
+        .stdout(predicates::str::contains("forkdep==3.1"))
+        .stdout(predicates::str::contains("forkleaf==1.1.0"))
+        .stdout(predicates::str::contains("forkroot==3.0.0"));
 
     Ok(())
 }
@@ -253,9 +252,9 @@ fn lowest_fork_max_python() -> Result<()> {
     output
         .assert()
         .success()
-        .stdout(predicate::str::contains("forkdep==2.8"))
-        .stdout(predicate::str::contains("forkleaf==1.1.0"))
-        .stdout(predicate::str::contains("forkroot==3.0.0"));
+        .stdout(predicates::str::contains("forkdep==2.8"))
+        .stdout(predicates::str::contains("forkleaf==1.1.0"))
+        .stdout(predicates::str::contains("forkroot==3.0.0"));
 
     Ok(())
 }
@@ -330,9 +329,9 @@ fn lowest_fork_min_python() -> Result<()> {
     output
         .assert()
         .success()
-        .stdout(predicate::str::contains("forkdep==3.0"))
-        .stdout(predicate::str::contains("forkleaf==1.1.0"))
-        .stdout(predicate::str::contains("forkroot==3.0.0"));
+        .stdout(predicates::str::contains("forkdep==3.0"))
+        .stdout(predicates::str::contains("forkleaf==1.1.0"))
+        .stdout(predicates::str::contains("forkroot==3.0.0"));
 
     Ok(())
 }
@@ -423,7 +422,7 @@ fn incompatible_python_compatible_override_available_no_wheels() -> Result<()> {
     output
         .assert()
         .success()
-        .stdout(predicate::str::contains("a==1.0.0"));
+        .stdout(predicates::str::contains("a==1.0.0"));
 
     Ok(())
 }
@@ -614,7 +613,7 @@ fn incompatible_python_compatible_override() -> Result<()> {
     output
         .assert()
         .success()
-        .stdout(predicate::str::contains("a==1.0.0"));
+        .stdout(predicates::str::contains("a==1.0.0"));
 
     Ok(())
 }
@@ -704,7 +703,7 @@ fn python_patch_override_patch_compatible() -> Result<()> {
     output
         .assert()
         .success()
-        .stdout(predicate::str::contains("a==1.0.0"));
+        .stdout(predicates::str::contains("a==1.0.0"));
 
     Ok(())
 }
