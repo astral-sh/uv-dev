@@ -471,51 +471,23 @@ impl InternerGuard<'_> {
             return self.and(xi, yi).is_false();
         }
 
-        // Perform Shannon Expansion of the higher order variable.
-        match x.var.cmp(&y.var) {
-            // X is higher order than Y, Y must be disjoint with every child of X.
-            Ordering::Less => x
-                .children
-                .nodes()
-                .all(|x| self.disjointness(x.negate(xi), yi)),
-            // Y is higher order than X, X must be disjoint with every child of Y.
-            Ordering::Greater => y
-                .children
-                .nodes()
-                .all(|y| self.disjointness(y.negate(yi), xi)),
-            // X and Y represent the same variable, their merged edges must be unsatisfiable.
-            Ordering::Equal => x.children.is_disjoint(xi, &y.children, yi, self),
-        }
+        self.disjoint_children(xi, x, yi, y)
     }
 
-    /// Returns `true` if there is no environment in which both marker trees can apply,
-    /// i.e., their conjunction is always `false`.
+    /// Check disjointness without applying mutually incompatible marker rules.
+    ///
+    /// `and` uses this check while applying those rules, so checking them again would recurse.
     fn disjointness(&mut self, xi: NodeId, yi: NodeId) -> bool {
-        // NOTE(charlie): This is equivalent to `is_disjoint`, with the exception that it doesn't
-        // perform the mutually-incompatible marker check. If it did, we'd create an infinite loop,
-        // since `is_disjoint` calls `and` (when relevant variables are present) which then calls
-        // `disjointness`.
-
-        // `false` is disjoint with any marker.
-        if xi.is_false() || yi.is_false() {
-            return true;
-        }
-        // `true` is not disjoint with any marker except `false`.
-        if xi.is_true() || yi.is_true() {
-            return false;
-        }
-        // `X` and `X` are not disjoint.
-        if xi == yi {
-            return false;
-        }
-        // `X` and `not X` are disjoint by definition.
-        if xi.not() == yi {
-            return true;
+        if let Some(result) = xi.is_disjoint_trivial(yi) {
+            return result;
         }
 
         let (x, y) = (self.shared.node(xi), self.shared.node(yi));
+        self.disjoint_children(xi, x, yi, y)
+    }
 
-        // Perform Shannon Expansion of the higher order variable.
+    /// Perform Shannon expansion of the higher-order variable for a nontrivial disjointness check.
+    fn disjoint_children(&mut self, xi: NodeId, x: &Node, yi: NodeId, y: &Node) -> bool {
         match x.var.cmp(&y.var) {
             // X is higher order than Y, Y must be disjoint with every child of X.
             Ordering::Less => x
