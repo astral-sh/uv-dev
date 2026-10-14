@@ -1,4 +1,3 @@
-use std::fmt::{Debug, Display};
 use std::path::Path;
 
 use same_file::is_same_file;
@@ -15,10 +14,11 @@ use uv_distribution_types::{
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_platform_tags::{AbiTag, IncompatibleTag, TagCompatibility, Tags};
+use uv_platform_tags::{IncompatibleTag, PlatformTag, TagCompatibility, Tags};
 use uv_pypi_types::{DirInfo, DirectUrl, VcsInfo, VcsKind};
 
 use crate::InstallationStrategy;
+use crate::compatibility::CompatibilitySubject;
 
 /// Expected build settings when deciding whether to reuse an installed distribution.
 #[derive(Debug, Clone, Copy)]
@@ -441,84 +441,44 @@ fn git_commit_matches(installed_commit: Option<&str>, requested_git: &GitUrl) ->
 }
 
 /// Generate a hint for explaining tag compatibility issues.
-// TODO(zanieb): We should refactor this to share logic with `generate_wheel_compatibility_hint`
 fn generate_dist_compatibility_hint(wheel_tags: &ExpandedTags, tags: &Tags) -> Option<String> {
     let TagCompatibility::Incompatible(incompatible_tag) = wheel_tags.compatibility(tags) else {
         return None;
     };
 
-    Some(match incompatible_tag {
-        IncompatibleTag::Python => format_dist_compatibility_hint(
+    let subject = CompatibilitySubject::Distribution;
+    let mut hint = String::new();
+    match incompatible_tag {
+        IncompatibleTag::Python => subject.write_tag_hint(
+            &mut hint,
             wheel_tags.python_tags(),
             tags.python_tag().as_ref(),
             "using",
             |tag| tag.pretty(),
         ),
-        IncompatibleTag::FreethreadedAbi => {
-            let wheel_abi = wheel_tags
-                .abi_tags()
-                .map(|tag| match tag {
-                    AbiTag::Abi3 => format!("the stable ABI (`{tag}`)"),
-                    _ => {
-                        if let Some(pretty) = tag.pretty() {
-                            format!("the {pretty} ABI (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        }
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let current = tags.abi_tag().map_or_else(
-                || "free-threaded Python".to_string(),
-                |current| format_tag(&current, current.pretty()),
-            );
-            format!(
-                "You're using {current}, but the distribution was built for {wheel_abi}, which requires a GIL-enabled interpreter"
-            )
-        }
-        IncompatibleTag::Abi => format_dist_compatibility_hint(
+        IncompatibleTag::FreethreadedAbi => subject.write_freethreaded_hint(
+            &mut hint,
+            wheel_tags.abi_tags(),
+            tags.abi_tag().as_ref(),
+        ),
+        IncompatibleTag::Abi => subject.write_tag_hint(
+            &mut hint,
             wheel_tags.abi_tags(),
             tags.abi_tag().as_ref(),
             "using",
             |tag| tag.pretty(),
         ),
-        IncompatibleTag::Platform => format_dist_compatibility_hint(
+        IncompatibleTag::Platform => subject.write_tag_hint(
+            &mut hint,
             wheel_tags.platform_tags(),
             tags.platform_tag(),
             "on",
-            |tag| tag.pretty(),
+            PlatformTag::pretty,
         ),
         IncompatibleTag::Variant | IncompatibleTag::Invalid | IncompatibleTag::AbiPythonVersion => {
             return None;
         }
-    })
-}
-
-fn format_dist_compatibility_hint<'tag, T: Display + 'tag, P: Display>(
-    wheel_tags: impl Iterator<Item = &'tag T>,
-    current: Option<&T>,
-    current_phrase: &str,
-    pretty: impl Fn(&T) -> Option<P>,
-) -> String {
-    let current = current.map(|tag| format_tag(tag, pretty(tag)));
-    let wheel_tags = wheel_tags
-        .map(|tag| format_tag(tag, pretty(tag)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    if let Some(current) = current {
-        format!(
-            "The distribution is compatible with {wheel_tags}, but you're {current_phrase} {current}"
-        )
-    } else {
-        format!("The distribution requires {wheel_tags}")
     }
-}
-
-fn format_tag(tag: &impl Display, pretty: Option<impl Display>) -> String {
-    if let Some(pretty) = pretty {
-        format!("{pretty} (`{tag}`)")
-    } else {
-        format!("`{tag}`")
-    }
+    .expect("writing to a String cannot fail");
+    Some(hint)
 }
