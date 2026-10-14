@@ -678,7 +678,7 @@ impl Cache {
     pub fn prune(&self, ci: bool) -> Result<Removal, io::Error> {
         let mut summary = self.removal();
 
-        // First, remove any top-level directories that are unused. These typically represent
+        // Remove any unused top-level entries. These typically represent
         // outdated cache buckets (e.g., `wheels-v0`, when latest is `wheels-v1`).
         for entry in fs_err::read_dir(&self.root)? {
             let entry = entry?;
@@ -698,36 +698,25 @@ impl Cache {
             summary += self.remove_path(path)?;
         }
 
-        // Second, remove all cached environments. Centralized project environments can be
+        // Remove cached and temporary build environments. Centralized project environments can be
         // referenced by `.venv` links, but are recreated when next needed.
-        match fs_err::read_dir(self.bucket(CacheBucket::Environments)) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = entry?;
-                    let path = entry.path();
-                    debug!("Removing cached environment: {}", path.display());
-                    summary += self.remove_path(path)?;
-                }
+        for (bucket, kind) in [
+            (CacheBucket::Environments, "cached environment"),
+            (CacheBucket::Builds, "temporary build environment"),
+        ] {
+            let entries = match fs_err::read_dir(self.bucket(bucket)) {
+                Ok(entries) => entries,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err),
+            };
+            for entry in entries {
+                let path = entry?.path();
+                debug!("Removing {kind}: {}", path.display());
+                summary += self.remove_path(path)?;
             }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => (),
-            Err(err) => return Err(err),
         }
 
-        // Third, remove all temporary build environments.
-        match fs_err::read_dir(self.bucket(CacheBucket::Builds)) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = entry?;
-                    let path = entry.path();
-                    debug!("Removing temporary build environment: {}", path.display());
-                    summary += self.remove_path(path)?;
-                }
-            }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => (),
-            Err(err) => return Err(err),
-        }
-
-        // Fourth, if enabled, remove all unzipped wheels, leaving only the wheel archives.
+        // If enabled, remove all unzipped wheels, leaving only the wheel archives.
         if ci {
             // Remove the entire pre-built wheel cache, since every entry is an unzipped wheel.
             match fs_err::read_dir(self.bucket(CacheBucket::Wheels)) {
@@ -795,7 +784,7 @@ impl Cache {
             }
         }
 
-        // Fifth, remove any unused archives (by searching for archives that are not symlinked).
+        // Remove any unused archives (by searching for archives that are not symlinked).
         let references = self.find_archive_references()?;
 
         match fs_err::read_dir(self.bucket(CacheBucket::Archive)) {
