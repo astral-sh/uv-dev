@@ -362,23 +362,38 @@ fn workspace_list_scripts() -> Result<()> {
     warning: The `--scripts` option is experimental and may change without warning. Pass `--preview-features workspace-list-scripts` to disable this warning.
     ");
 
-    // The configured cache is excluded even when it has not been initialized with ignore files.
-    let cache = project.child("cache");
+    Ok(())
+}
+
+/// Exclude the configured cache even when it has no ignore files.
+#[test]
+fn workspace_list_scripts_excludes_configured_cache() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str("[project]\nname = \"project\"\nversion = \"0.1.0\"\n")?;
+    let script = "# /// script\n# dependencies = []\n# ///\n";
+    context.temp_dir.child("script.py").write_str(script)?;
+    let cache = context.temp_dir.child("cache");
     cache.child("script.py").write_str(script)?;
-    let context = context.with_cache_dir(cache.path());
+
     uv_snapshot!(context.filters(), context.workspace_list()
-        .arg("--scripts")
-        .current_dir(&project), @"
+        .args(["--scripts", "--preview-features", "workspace-list-scripts"]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    .github/hidden.py
+    cache/script.py
     script.py
-    scripts/nested.py
-    tool
-
-    ----- stderr -----
-    warning: The `--scripts` option is experimental and may change without warning. Pass `--preview-features workspace-list-scripts` to disable this warning.
     ");
+
+    let context = context.with_cache_dir(cache.path());
+    uv_snapshot!(context.filters(), context.workspace_list()
+        .args(["--scripts", "--preview-features", "workspace-list-scripts"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    script.py
+    ");
+    assert!(!cache.child(".gitignore").exists());
 
     Ok(())
 }
