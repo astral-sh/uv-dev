@@ -125,6 +125,17 @@ pub(crate) struct WheelTagSmall {
     pub(crate) platform_tag: PlatformTag,
 }
 
+impl WheelTagSmall {
+    /// Parse a single recognized tag of each kind.
+    pub(crate) fn parse(python: &str, abi: &str, platform: &str) -> Option<Self> {
+        Some(Self {
+            python_tag: python.parse().ok()?,
+            abi_tag: abi.parse().ok()?,
+            platform_tag: platform.parse().ok()?,
+        })
+    }
+}
+
 impl Display for WheelTagSmall {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
