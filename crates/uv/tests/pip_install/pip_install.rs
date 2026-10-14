@@ -4974,7 +4974,7 @@ fn no_deps_installed() -> Result<()> {
 fn no_deps_editable() {
     let context = uv_test::test_context!("3.12");
 
-    // Install the editable version of Black. This should remove the registry-based version.
+    // The `dev` extra requests `black[d]` and `black[uvloop]`.
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-deps")
         .arg("-e")
@@ -4989,7 +4989,8 @@ fn no_deps_editable() {
     );
 
     context.assert_command("import black").success();
-    context.assert_command("import aiohttp").failure();
+    context.assert_not_installed("aiohttp");
+    context.assert_not_installed("uvloop");
 }
 
 /// Avoid downgrading already-installed packages when `--upgrade` is provided.
