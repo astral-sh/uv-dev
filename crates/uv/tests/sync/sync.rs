@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::process::Command;
 
 use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
@@ -8,8 +9,6 @@ use insta::assert_snapshot;
 use predicates::prelude::{PredicateStrExt, predicate};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-#[cfg(feature = "test-git")]
-use std::process::Command;
 use tempfile::tempdir_in;
 use wiremock::matchers::{any, basic_auth, body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -11436,7 +11435,8 @@ fn sync_python_version() -> Result<()> {
     Updated `.python-version` from `3.12` -> `3.10`
     ");
 
-    // We should warn on subsequent uses, but respect the pinned version?
+    let compatible_lock = context.read("uv.lock");
+    // Reject an incompatible pin without replacing the compatible project environment.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 2 (failure)
     ----- stderr -----
@@ -11444,6 +11444,15 @@ fn sync_python_version() -> Result<()> {
     error: The Python request from `.python-version` resolved to Python 3.10.[X], which is incompatible with the project's Python requirement: `>=3.11` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
     ");
+    assert_eq!(context.read("uv.lock"), compatible_lock);
+    Command::new(context.interpreter())
+        .args([
+            "-I",
+            "-c",
+            "import anyio, sys; assert sys.version_info[:2] == (3, 12), sys.version",
+        ])
+        .assert()
+        .success();
 
     // Unless the pin file is outside the project, in which case we should just ignore it entirely
     let child_dir = context.temp_dir.child("child");
