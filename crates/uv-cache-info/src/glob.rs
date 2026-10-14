@@ -27,31 +27,25 @@ struct GlobParts {
 
 /// Split a glob into longest possible base + shortest possible glob pattern.
 fn split_glob(pattern: impl AsRef<str>) -> GlobParts {
-    let pattern = Path::new(pattern.as_ref());
-
+    let mut parts = Path::new(pattern.as_ref()).components();
+    let last = parts.next_back();
     let mut glob = GlobParts::default();
     let mut globbing = false;
-    let mut last = None;
 
-    for part in pattern.components() {
-        if let Some(last) = last
-            && last != Component::CurDir
-        {
-            if globbing {
-                glob.pattern.push(last);
-            } else {
-                glob.base.push(last);
-            }
+    for part in parts {
+        if part == Component::CurDir {
+            continue;
         }
-        if !globbing {
-            globbing = is_glob_like(part);
+        globbing = globbing || is_glob_like(part);
+        if globbing {
+            glob.pattern.push(part);
+        } else {
+            glob.base.push(part);
         }
-        // we don't know if this part is the last one, defer handling it by one iteration
-        last = Some(part);
     }
 
     if let Some(last) = last {
-        // defer handling the last component to prevent draining entire pattern into base
+        // Keep the final normal component in the pattern, even if it has no glob syntax.
         if globbing || matches!(last, Component::Normal(_)) {
             glob.pattern.push(last);
         } else {
