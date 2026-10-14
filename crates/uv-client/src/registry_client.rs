@@ -441,10 +441,8 @@ impl RegistryClient {
                         }
                     })
                     .buffered(8)
-                    .filter_map(async |result: Result<_, Error>| match result {
-                        Ok((index, Some(metadata))) => Some(Ok((index, metadata))),
-                        Ok((_, None)) => None,
-                        Err(err) => Some(Err(err)),
+                    .try_filter_map(async |(index, metadata)| {
+                        Ok::<_, Error>(metadata.map(|metadata| (index, metadata)))
                     })
                     .try_collect::<Vec<_>>()
                     .await?;
