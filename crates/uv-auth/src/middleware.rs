@@ -165,20 +165,14 @@ pub struct AuthMiddleware {
     preview: Preview,
 }
 
-impl Default for AuthMiddleware {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl AuthMiddleware {
-    pub fn new() -> Self {
+    /// Create middleware using the credential cache shared across clients.
+    pub fn new(cache: Arc<CredentialsCache>) -> Self {
         Self {
             netrc: NetrcMode::default(),
             text_store: TextStoreMode::default(),
             keyring: None,
-            // TODO(konsti): There shouldn't be a credential cache without that in the initializer.
-            cache: Arc::new(CredentialsCache::default()),
+            cache,
             indexes: Indexes::new(),
             only_authenticated: false,
             s3_credentials: OnceCell::new(),
@@ -227,21 +221,6 @@ impl AuthMiddleware {
     #[must_use]
     pub fn with_preview(mut self, preview: Preview) -> Self {
         self.preview = preview;
-        self
-    }
-
-    /// Configure the [`CredentialsCache`] to use.
-    #[must_use]
-    #[cfg(test)]
-    fn with_cache(mut self, cache: CredentialsCache) -> Self {
-        self.cache = Arc::new(cache);
-        self
-    }
-
-    /// Configure the [`CredentialsCache`] to use from an existing [`Arc`].
-    #[must_use]
-    pub fn with_cache_arc(mut self, cache: Arc<CredentialsCache>) -> Self {
-        self.cache = cache;
         self
     }
 
@@ -864,7 +843,7 @@ mod tests {
     async fn test_no_credentials() -> Result<(), Error> {
         let server = start_test_server("user", "password").await;
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(CredentialsCache::new()))
+            .with(AuthMiddleware::new(Arc::default()))
             .build();
 
         assert_eq!(
@@ -901,7 +880,7 @@ mod tests {
             );
         }
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache))
+            .with(AuthMiddleware::new(Arc::new(cache)))
             .build();
 
         assert_eq!(
@@ -927,7 +906,7 @@ mod tests {
             Credentials::basic(Some("user".into()), Some("password".into())),
         );
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache))
+            .with(AuthMiddleware::new(Arc::new(cache)))
             .build();
         client
             .get(root.join("private/index/package")?)
@@ -951,7 +930,7 @@ mod tests {
 
         let server = start_test_server(username, password).await;
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(CredentialsCache::new()))
+            .with(AuthMiddleware::new(Arc::default()))
             .build();
 
         let base_url = Url::parse(&server.uri())?;
@@ -1007,7 +986,7 @@ mod tests {
         );
 
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache))
+            .with(AuthMiddleware::new(Arc::new(cache)))
             .build();
 
         let mut url = base_url.clone();
@@ -1061,7 +1040,7 @@ mod tests {
         );
 
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache))
+            .with(AuthMiddleware::new(Arc::new(cache)))
             .build();
 
         let mut url = base_url.clone();
@@ -1115,8 +1094,7 @@ mod tests {
         let server = start_test_server(username, password).await;
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
+                AuthMiddleware::new(Arc::default())
                     .with_netrc(Netrc::from_file(netrc_file.path()).ok()),
             )
             .build();
@@ -1160,13 +1138,9 @@ mod tests {
         )?;
 
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_netrc(Some(
-                        Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
-                    )),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_netrc(Some(
+                Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
+            )))
             .build();
 
         assert_eq!(
@@ -1206,13 +1180,9 @@ mod tests {
         )?;
 
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_netrc(Some(
-                        Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
-                    )),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_netrc(Some(
+                Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
+            )))
             .build();
 
         assert_eq!(
@@ -1248,13 +1218,9 @@ mod tests {
         )?;
 
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_netrc(Some(
-                        Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
-                    )),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_netrc(Some(
+                Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
+            )))
             .build();
 
         let mut url = base_url.clone();
@@ -1285,17 +1251,15 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_keyring(Some(KeyringProvider::dummy([(
-                        format!(
-                            "{}:{}",
-                            base_url.host_str().unwrap(),
-                            base_url.port().unwrap()
-                        ),
-                        username,
-                        password,
-                    )]))),
+                AuthMiddleware::new(Arc::default()).with_keyring(Some(KeyringProvider::dummy([(
+                    format!(
+                        "{}:{}",
+                        base_url.host_str().unwrap(),
+                        base_url.port().unwrap()
+                    ),
+                    username,
+                    password,
+                )]))),
             )
             .build();
 
@@ -1351,8 +1315,7 @@ mod tests {
         let indexes = indexes_for(&base_url, AuthPolicy::Always);
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
+                AuthMiddleware::new(Arc::default())
                     .with_keyring(Some(KeyringProvider::dummy([(
                         format!(
                             "{}:{}",
@@ -1413,14 +1376,12 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_keyring(Some(KeyringProvider::dummy([(
-                        // Omit the port from the keyring entry
-                        base_url.host_str().unwrap(),
-                        username,
-                        password,
-                    )]))),
+                AuthMiddleware::new(Arc::default()).with_keyring(Some(KeyringProvider::dummy([(
+                    // Omit the port from the keyring entry
+                    base_url.host_str().unwrap(),
+                    username,
+                    password,
+                )]))),
             )
             .build();
 
@@ -1453,19 +1414,20 @@ mod tests {
                 None,
             ))),
         );
-        let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache).with_keyring(Some(
-                KeyringProvider::dummy([(
-                    format!(
-                        "{}:{}",
-                        base_url.host_str().unwrap(),
-                        base_url.port().unwrap()
-                    ),
-                    username,
-                    password,
-                )]),
-            )))
-            .build();
+        let client =
+            test_client_builder()
+                .with(AuthMiddleware::new(Arc::new(cache)).with_keyring(Some(
+                    KeyringProvider::dummy([(
+                        format!(
+                            "{}:{}",
+                            base_url.host_str().unwrap(),
+                            base_url.port().unwrap()
+                        ),
+                        username,
+                        password,
+                    )]),
+                )))
+                .build();
 
         assert_eq!(
             client.get(server.uri()).send().await?.status(),
@@ -1514,7 +1476,7 @@ mod tests {
         );
 
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache))
+            .with(AuthMiddleware::new(Arc::new(cache)))
             .build();
 
         // Both servers should work
@@ -1565,28 +1527,26 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_keyring(Some(KeyringProvider::dummy([
-                        (
-                            format!(
-                                "{}:{}",
-                                base_url_1.host_str().unwrap(),
-                                base_url_1.port().unwrap()
-                            ),
-                            username_1,
-                            password_1,
+                AuthMiddleware::new(Arc::default()).with_keyring(Some(KeyringProvider::dummy([
+                    (
+                        format!(
+                            "{}:{}",
+                            base_url_1.host_str().unwrap(),
+                            base_url_1.port().unwrap()
                         ),
-                        (
-                            format!(
-                                "{}:{}",
-                                base_url_2.host_str().unwrap(),
-                                base_url_2.port().unwrap()
-                            ),
-                            username_2,
-                            password_2,
+                        username_1,
+                        password_1,
+                    ),
+                    (
+                        format!(
+                            "{}:{}",
+                            base_url_2.host_str().unwrap(),
+                            base_url_2.port().unwrap()
                         ),
-                    ]))),
+                        username_2,
+                        password_2,
+                    ),
+                ]))),
             )
             .build();
 
@@ -1709,7 +1669,7 @@ mod tests {
         );
 
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache))
+            .with(AuthMiddleware::new(Arc::new(cache)))
             .build();
 
         // Both servers should work
@@ -1815,28 +1775,26 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_keyring(Some(KeyringProvider::dummy([
-                        (
-                            format!(
-                                "{}:{}",
-                                base_url_1.host_str().unwrap(),
-                                base_url_1.port().unwrap()
-                            ),
-                            username_1,
-                            password_1,
+                AuthMiddleware::new(Arc::default()).with_keyring(Some(KeyringProvider::dummy([
+                    (
+                        format!(
+                            "{}:{}",
+                            base_url_1.host_str().unwrap(),
+                            base_url_1.port().unwrap()
                         ),
-                        (
-                            format!(
-                                "{}:{}",
-                                base_url_2.host_str().unwrap(),
-                                base_url_2.port().unwrap()
-                            ),
-                            username_2,
-                            password_2,
+                        username_1,
+                        password_1,
+                    ),
+                    (
+                        format!(
+                            "{}:{}",
+                            base_url_2.host_str().unwrap(),
+                            base_url_2.port().unwrap()
                         ),
-                    ]))),
+                        username_2,
+                        password_2,
+                    ),
+                ]))),
             )
             .build();
 
@@ -1946,12 +1904,10 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_keyring(Some(KeyringProvider::dummy([
-                        (base_url_1.clone(), username, password_1),
-                        (base_url_2.clone(), username, password_2),
-                    ]))),
+                AuthMiddleware::new(Arc::default()).with_keyring(Some(KeyringProvider::dummy([
+                    (base_url_1.clone(), username, password_1),
+                    (base_url_2.clone(), username, password_2),
+                ]))),
             )
             .build();
 
@@ -2058,8 +2014,7 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
+                AuthMiddleware::new(Arc::default())
                     .with_keyring(Some(KeyringProvider::dummy([
                         (base_url_1.clone(), username, password_1),
                         (base_url_2.clone(), username, password_2),
@@ -2160,8 +2115,7 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
+                AuthMiddleware::new(Arc::default())
                     .with_keyring(Some(KeyringProvider::dummy([(
                         base_url.clone(),
                         username,
@@ -2242,11 +2196,7 @@ mod tests {
             },
         ]);
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(cache)
-                    .with_indexes(indexes),
-            )
+            .with(AuthMiddleware::new(Arc::new(cache)).with_indexes(indexes))
             .build();
 
         assert_eq!(
@@ -2273,11 +2223,7 @@ mod tests {
 
         let indexes = indexes_for(&base_url, AuthPolicy::Always);
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_indexes(indexes),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_indexes(indexes))
             .build();
 
         Mock::given(method("GET"))
@@ -2340,11 +2286,7 @@ mod tests {
 
         let indexes = indexes_for(&base_url, AuthPolicy::Always);
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_indexes(indexes),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_indexes(indexes))
             .build();
 
         // Unauthenticated requests are not allowed.
@@ -2380,11 +2322,7 @@ mod tests {
 
         let indexes = indexes_for(&base_url, AuthPolicy::Never);
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_indexes(indexes),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_indexes(indexes))
             .build();
 
         let mut url = base_url.clone();
@@ -2425,11 +2363,7 @@ mod tests {
 
         let indexes = indexes_for(&base_url, AuthPolicy::Never);
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_indexes(indexes),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_indexes(indexes))
             .build();
 
         assert_eq!(
@@ -2488,11 +2422,7 @@ mod tests {
         store.insert(service.clone(), credentials);
 
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_text_store(Some(store)),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_text_store(Some(store)))
             .build();
 
         assert_eq!(
@@ -2512,9 +2442,7 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_text_store(None), // Explicitly disable text store
+                AuthMiddleware::new(Arc::default()).with_text_store(None), // Explicitly disable text store
             )
             .build();
 
@@ -2543,11 +2471,7 @@ mod tests {
         store.insert(service.clone(), credentials);
 
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_text_store(Some(store)),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_text_store(Some(store)))
             .build();
 
         // Request with matching username should succeed
@@ -2625,7 +2549,7 @@ mod tests {
             .await;
 
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(CredentialsCache::new()))
+            .with(AuthMiddleware::new(Arc::default()))
             .build();
 
         let base_url = Url::parse(&server.uri())?;
