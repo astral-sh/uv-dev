@@ -979,7 +979,7 @@ pub(crate) fn write_record(
     dist_info_prefix: &str,
     mut record: Vec<RecordEntry>,
 ) -> Result<(), Error> {
-    let record_file = site_packages.join(format!("{dist_info_prefix}.dist-info/RECORD"));
+    let record_file = dist_info_file(site_packages, dist_info_prefix, "RECORD");
     let mut record_writer = csv::WriterBuilder::new()
         .has_headers(false)
         .escape(b'"')
@@ -1147,15 +1147,9 @@ pub(crate) fn find_dist_info(path: impl AsRef<Path>) -> Result<String, Error> {
     Ok(dist_info_prefix.to_string_lossy().to_string())
 }
 
-/// Read the `dist-info` metadata from a directory.
-pub(crate) fn dist_info_metadata(
-    dist_info_prefix: &str,
-    wheel: impl AsRef<Path>,
-) -> Result<Vec<u8>, Error> {
-    let metadata_file = wheel
-        .as_ref()
-        .join(format!("{dist_info_prefix}.dist-info/METADATA"));
-    Ok(fs::read(metadata_file)?)
+/// Return the path to a file in a distribution's `.dist-info` directory.
+pub(crate) fn dist_info_file(base: &Path, prefix: &str, file: &str) -> PathBuf {
+    base.join(format!("{prefix}.dist-info/{file}"))
 }
 
 /// Parses the `entry_points.txt` entry in the wheel for console scripts
@@ -1168,9 +1162,7 @@ pub(crate) fn parse_scripts(
     dist_info_prefix: &str,
     python_minor: u8,
 ) -> Result<(Vec<Script>, Vec<Script>), Error> {
-    let entry_points_path = wheel
-        .as_ref()
-        .join(format!("{dist_info_prefix}.dist-info/entry_points.txt"));
+    let entry_points_path = dist_info_file(wheel.as_ref(), dist_info_prefix, "entry_points.txt");
 
     let EntryPoints {
         console_scripts,
