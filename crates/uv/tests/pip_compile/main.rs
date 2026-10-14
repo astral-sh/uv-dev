@@ -23,5 +23,7 @@ mod offline;
 mod output_streams;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod pip_compile;
+#[cfg(all(feature = "test-python", feature = "test-universal"))]
+mod pylock_paths;
 #[cfg(feature = "test-python")]
 mod source_url_hashes;
