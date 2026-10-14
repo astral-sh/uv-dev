@@ -241,15 +241,13 @@ impl SimpleDetailHTML {
 
         // Extract the `yanked` field, which should be set on the `data-yanked`
         // attribute.
-        let yanked = if link.has_attribute("data-yanked") {
-            if let Some(yanked) = attribute(link, "data-yanked") {
-                Some(Box::new(Yanked::Reason(yanked.into())))
+        let yanked = link.attribute("data-yanked").map(|attribute| {
+            Box::new(if attribute.raw_value().is_some() {
+                Yanked::Reason(attribute.value().into())
             } else {
-                Some(Box::new(Yanked::Bool(true)))
-            }
-        } else {
-            None
-        };
+                Yanked::Bool(true)
+            })
+        });
 
         // Extract the `size` field, which should be set on the `data-size` attribute. This isn't
         // included in PEP 700, which omits the HTML API, but we respect it anyway. Since this
