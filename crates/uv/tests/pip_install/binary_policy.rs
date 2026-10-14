@@ -199,7 +199,8 @@ fn only_binary_all_and_no_binary_all() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because all versions of anyio have no usable wheels and you require anyio, we can conclude that your requirements are unsatisfiable.
+      cause: Because anyio==1.0.0 has no usable wheels and only anyio==1.0.0 is available, we can conclude that all versions of anyio cannot be used.
+             And because you require anyio, we can conclude that your requirements are unsatisfiable.
 
     hint: Wheels are required for `anyio` because building from source is disabled for all packages (i.e., with `--no-build`)
     ");
