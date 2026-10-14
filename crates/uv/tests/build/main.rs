@@ -13,6 +13,8 @@ mod build;
 #[cfg(feature = "test-python")]
 mod build_backend;
 
+mod build_backend_license;
+
 mod build_backend_requires;
 
 #[cfg(feature = "test-python")]
