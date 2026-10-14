@@ -8096,28 +8096,74 @@ fn lock_unsupported_tag() -> Result<()> {
     Ok(())
 }
 
-/// Respect locked versions with `uv lock`, unless `--upgrade` is passed.
+/// Respect a locked Git revision until the package is explicitly upgraded.
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_git_sha() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "uv-public-pypackage"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
 
-    // Lock against `main`.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let git = || {
+        let mut command = Command::new("git");
+        command.arg("-C").arg(repository.path());
+        command
+    };
+    git()
+        .args(["init", "--initial-branch=main"])
+        .assert()
+        .success();
+    git().args(["add", "pyproject.toml"]).assert().success();
+    let commit = |message: &str| -> Result<String> {
+        git()
+            .args([
+                "-c",
+                "user.name=Example",
+                "-c",
+                "user.email=example@example.com",
+                "commit",
+                "--allow-empty",
+                "--no-gpg-sign",
+                "-m",
+                message,
+            ])
+            .assert()
+            .success();
+        let output = git().args(["rev-parse", "HEAD"]).assert().success();
+        Ok(std::str::from_utf8(&output.get_output().stdout)?
+            .trim()
+            .to_owned())
+    };
+    let initial = commit("Initial package")?;
+    let latest = commit("Advance main without changing the package version")?;
+    let context = context
+        .with_filter((latest.clone(), "[LATEST_COMMIT]"))
+        .with_filter((initial[..8].to_owned(), "[INITIAL_COMMIT]"))
+        .with_filter((latest[..8].to_owned(), "[LATEST_COMMIT]"));
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@main"]
-        "#,
-    )?;
+        dependencies = ["uv-public-pypackage @ git+{repository_url}@main"]
+        "#})?;
 
-    // Write the lockfile such that it's locked against `main`, but a specific commit that isn't
-    // the latest.
-    let lock = context.temp_dir.child("uv.lock");
-    lock.write_str(r#"
+    // Start with an older lockfile revision pinned to the first commit on the branch.
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&formatdoc! {r#"
         version = 1
         revision = 2
         requires-python = ">=3.12"
@@ -8128,56 +8174,39 @@ fn lock_git_sha() -> Result<()> {
         [[package]]
         name = "project"
         version = "0.1.0"
-        source = { virtual = "." }
+        source = {{ virtual = "." }}
         dependencies = [
-            { name = "uv-public-pypackage" },
+            {{ name = "uv-public-pypackage" }},
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "uv-public-pypackage", git = "https://github.com/astral-test/uv-public-pypackage?rev=main" }]
+        requires-dist = [{{ name = "uv-public-pypackage", git = "{repository_url}?rev=main" }}]
 
         [[package]]
         name = "uv-public-pypackage"
         version = "0.1.0"
-        source = { git = "https://github.com/astral-test/uv-public-pypackage?rev=main#0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
-    "#)?;
+        source = {{ git = "{repository_url}?rev=main#{initial}" }}
+    "#})?;
+    let original = context.read("uv.lock");
 
-    // Lock against `main`.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@main"]
-        "#,
-    )?;
-
-    // The lockfile should be unchanged.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--no-index"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    assert_eq!(original, context.read("uv.lock"));
 
-    // Relock with `--upgrade`.
-    uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package").arg("uv-public-pypackage"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--upgrade-package", "uv-public-pypackage", "--no-index"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Updated uv-public-pypackage v0.1.0 (0dacfd66) -> v0.1.0 (b270df1a)
+    Updated uv-public-pypackage v0.1.0 ([INITIAL_COMMIT]) -> v0.1.0 ([LATEST_COMMIT])
     ");
 
-    let lock = context.read("uv.lock");
-
-    // The lockfile should resolve to `b270df1a2fb5d012294e9aaf05e7e0bab1e6a389`, the latest commit
-    // on `main`.
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        assert_snapshot!(
-            lock, @r#"
+        assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -8194,14 +8223,13 @@ fn lock_git_sha() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "uv-public-pypackage", git = "https://github.com/astral-test/uv-public-pypackage?rev=main" }]
+        requires-dist = [{ name = "uv-public-pypackage", git = "file://[TEMP_DIR]/repository/?rev=main" }]
 
         [[package]]
         name = "uv-public-pypackage"
         version = "0.1.0"
-        source = { git = "https://github.com/astral-test/uv-public-pypackage?rev=main#b270df1a2fb5d012294e9aaf05e7e0bab1e6a389" }
-        "#
-        );
+        source = { git = "file://[TEMP_DIR]/repository/?rev=main#[LATEST_COMMIT]" }
+        "#);
     });
 
     Ok(())
