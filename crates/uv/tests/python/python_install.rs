@@ -2537,7 +2537,7 @@ fn python_install_emulated_windows_x86_on_x64() {
 //
 // Regression test for <https://github.com/astral-sh/uv/issues/17963>.
 #[test]
-fn install_managed_venv_allow_existing() {
+fn install_managed_venv_allow_existing() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -2562,8 +2562,10 @@ fn install_managed_venv_allow_existing() {
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     ");
+    let marker = context.venv.child("marker");
+    marker.write_str("keep this environment\n")?;
 
-    // Create the venv again with `--allow-existing` — this should not fail.
+    // Recreating the environment with `--allow-existing` must leave existing files intact.
     uv_snapshot!(context.filters(), context.venv().arg("-p").arg("3.13")
         .arg("--allow-existing")
         .arg(context.venv.as_os_str()), @"
@@ -2573,6 +2575,9 @@ fn install_managed_venv_allow_existing() {
     Creating virtual environment at: .venv
     Activate with: source .venv/[BIN]/activate
     ");
+    assert_eq!(context.read(marker), "keep this environment\n");
+
+    Ok(())
 }
 
 // A virtual environment should track the latest patch version installed.
