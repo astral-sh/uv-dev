@@ -275,7 +275,7 @@ impl SsCredential {
     ///
     /// This emulates what keyring v1 did, and can be very handy when you need to
     /// access an old v1 credential that's in your secret service default collection.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-auth"))]
     fn new_with_no_target(service: &str, user: &str) -> Self {
         let attributes = HashMap::from([
             ("service".to_string(), service.to_string()),
@@ -308,7 +308,7 @@ impl SsCredential {
 
     /// Construct a credential for this credential's underlying matching item,
     /// if there is exactly one.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-auth"))]
     async fn new_from_matching_item(&self) -> Result<Self> {
         Ok(self
             .map_matching_items(Self::new_from_item, true)
@@ -675,7 +675,8 @@ mod tests {
             .await
             .expect("Can't set password for get_credential");
         let credential: &SsCredential = entry
-            .get_credential()
+            .inner
+            .as_any()
             .downcast_ref()
             .expect("Not a secret service credential");
         let actual = credential
