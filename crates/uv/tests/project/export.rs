@@ -22,6 +22,8 @@ use uv_test::copy_dir_ignore;
 use uv_test::packse::PackseServer;
 use uv_test::packse::generate_wheel;
 use uv_test::packse::scenario::Scenario;
+#[cfg(feature = "test-universal")]
+use uv_test::subdirectory_archive::SubdirectoryArchive;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_SSH_DEPLOY_KEY, READ_ONLY_GITHUB_TOKEN, decode_token};
 use uv_test::{TestContext, apply_filters, uv_snapshot};
@@ -5259,11 +5261,11 @@ fn pep_751_sdist_url() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn pep_751_sdist_url_subdirectory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let archive = SubdirectoryArchive::start()?;
+    let context = uv_test::test_context!("3.12").with_filter((archive.sha256(), "[ARCHIVE_HASH]"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -5271,9 +5273,8 @@ fn pep_751_sdist_url_subdirectory() -> Result<()> {
         dependencies = ["root"]
 
         [tool.uv.sources]
-        root = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
-        "#,
-    )?;
+        root = {{ url = "{}", subdirectory = "packages/root" }}
+        "#, archive.url()})?;
 
     context.lock().assert().success();
 
@@ -5303,7 +5304,7 @@ fn pep_751_sdist_url_subdirectory() -> Result<()> {
     [[packages]]
     name = "root"
     version = "0.0.1"
-    archive = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root", subdirectory = "packages/root", hashes = { sha256 = "24b55efee28d08ad3cdc58903e359e820601baa6a4a4b3424311541ebcfb09d3" } }
+    archive = { url = "http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root", subdirectory = "packages/root", hashes = { sha256 = "[ARCHIVE_HASH]" } }
 
     [[packages]]
     name = "sniffio"
