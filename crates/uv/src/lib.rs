@@ -131,7 +131,7 @@ impl uv_errors::Hinted for ExternallyInstalledError {
 
 #[instrument(skip_all)]
 #[doc(hidden)]
-pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
+pub async fn run(mut cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
     let config_discovery = ConfigDiscovery::from_args(cli.top_level.no_config);
 
     // Configure color before resolving settings so argument errors retain their styling.
@@ -153,21 +153,16 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         std::env::set_current_dir(directory)?;
     }
 
-    // Parse the external command, if necessary.
-    let parsed_run_command = if let Commands::Project(command) = &*cli.command
-        && let ProjectCommand::Run(uv_cli::RunArgs {
-            command: Some(ref command),
-            module,
-            script,
-            gui_script,
-            ..
-        }) = **command
+    // Parse and take ownership of the external command before loading its configuration.
+    let parsed_run_command = if let Commands::Project(command) = &mut *cli.command
+        && let ProjectCommand::Run(args) = &mut **command
+        && let Some(uv_cli::ExternalCommand::Cmd(command)) = args.command.take()
     {
         Some(ParsedRunCommand::from_args(
-            command.as_slice(),
-            module,
-            script,
-            gui_script,
+            command,
+            args.module,
+            args.script,
+            args.gui_script,
         )?)
     } else {
         None
