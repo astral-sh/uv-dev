@@ -107,53 +107,35 @@ impl RequirementsSpecification {
     }
 
     /// Create a [`RequirementsSpecification`] from PEP 723 script metadata.
-    fn from_pep723_metadata(metadata: &Pep723Metadata) -> Self {
+    fn from_pep723_metadata(metadata: Pep723Metadata) -> Self {
         let requirements = metadata
             .dependencies
-            .as_ref()
-            .map(|dependencies| {
-                dependencies
-                    .iter()
-                    .map(|dependency| {
-                        UnresolvedRequirementSpecification::from(Requirement::from(
-                            dependency.to_owned(),
-                        ))
-                    })
-                    .collect::<Vec<UnresolvedRequirementSpecification>>()
-            })
-            .unwrap_or_default();
+            .into_iter()
+            .flatten()
+            .map(Requirement::from)
+            .map(UnresolvedRequirementSpecification::from)
+            .collect();
 
-        if let Some(tool_uv) = metadata.tool.as_ref().and_then(|tool| tool.uv.as_ref()) {
+        if let Some(tool_uv) = metadata.tool.and_then(|tool| tool.uv) {
             let constraints = tool_uv
                 .constraint_dependencies
-                .as_ref()
-                .map(|dependencies| {
-                    dependencies
-                        .iter()
-                        .map(|dependency| {
-                            NameRequirementSpecification::from(Requirement::from(
-                                dependency.to_owned(),
-                            ))
-                        })
-                        .collect::<Vec<NameRequirementSpecification>>()
-                })
-                .unwrap_or_default();
+                .into_iter()
+                .flatten()
+                .map(Requirement::from)
+                .map(NameRequirementSpecification::from)
+                .collect();
 
             let override_dependencies = tool_uv
                 .override_dependencies
-                .as_ref()
                 .into_iter()
                 .flatten()
                 .map(|dependency| match dependency {
                     OverrideDependency::Requirement(requirement) => {
-                        Override::Requirement(Requirement::from(requirement.clone()))
+                        Override::Requirement(Requirement::from(requirement))
                     }
                     OverrideDependency::Package(package) => Override::Package(PackageOverride {
-                        package: package.package.clone(),
-                        dependencies: package
-                            .dependencies
-                            .iter()
-                            .cloned()
+                        package: package.package,
+                        dependencies: Box::into_iter(package.dependencies)
                             .map(Requirement::from)
                             .collect(),
                     }),
@@ -164,42 +146,33 @@ impl RequirementsSpecification {
                 requirements,
                 constraints,
                 override_dependencies,
-                excludes: tool_uv.exclude_dependencies.clone().unwrap_or_default(),
+                excludes: tool_uv.exclude_dependencies.unwrap_or_default(),
                 index_url: tool_uv
                     .top_level
                     .index_url
-                    .as_ref()
-                    .map(|index| Index::from(index.clone()).url),
+                    .map(|index| Index::from(index).url),
                 extra_index_urls: tool_uv
                     .top_level
                     .extra_index_url
-                    .as_ref()
                     .into_iter()
-                    .flat_map(|urls| urls.iter().map(|index| Index::from(index.clone()).url))
+                    .flatten()
+                    .map(|index| Index::from(index).url)
                     .collect(),
                 no_index: tool_uv.top_level.no_index.unwrap_or_default(),
                 find_links: tool_uv
                     .top_level
                     .find_links
-                    .as_ref()
                     .into_iter()
-                    .flat_map(|urls| urls.iter().map(|index| Index::from(index.clone()).url))
+                    .flatten()
+                    .map(|index| Index::from(index).url)
                     .collect(),
                 no_binary: NoBinary::from_args(
                     tool_uv.top_level.no_binary,
-                    tool_uv
-                        .top_level
-                        .no_binary_package
-                        .clone()
-                        .unwrap_or_default(),
+                    tool_uv.top_level.no_binary_package.unwrap_or_default(),
                 ),
                 no_build: NoBuild::from_args(
                     tool_uv.top_level.no_build,
-                    tool_uv
-                        .top_level
-                        .no_build_package
-                        .clone()
-                        .unwrap_or_default(),
+                    tool_uv.top_level.no_build_package.unwrap_or_default(),
                 ),
                 ..Self::default()
             }
@@ -330,7 +303,7 @@ impl RequirementsSpecification {
                     Err(err) => return Err(err.into()),
                 };
 
-                Self::from_pep723_metadata(&metadata)
+                Self::from_pep723_metadata(metadata)
             }
             RequirementsSource::SetupPy(path) => {
                 if !path.is_file() {
@@ -375,7 +348,7 @@ impl RequirementsSpecification {
 
                 // Detect if it's a PEP 723 script.
                 if let Some(metadata) = Pep723Metadata::parse(content.as_bytes())? {
-                    Self::from_pep723_metadata(&metadata)
+                    Self::from_pep723_metadata(metadata)
                 } else {
                     // If it's not a PEP 723 script, assume it's a `requirements.txt` file.
                     let content = content.to_owned();
