@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using installed uv 0.13.0, Python 3.12.3, and oksh 7.9 (portable OpenBSD ksh) on Linux, with SHELL identifying ksh, `uv venv --python /usr/bin/python3 --no-config --offline` succeeds and prints `Activate with: source .venv/bin/activate`. Executing that command in ksh produces `ksh: source: not found` and exits 127. Using `. .venv/bin/activate` additionally fails on `${.sh.file}` with bad substitution, so it is not a verified complete workaround. Native OpenBSD was not tested. Updated the issue-context README with findings and existing test-coverage gaps."
+}
