@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::hash::Hash;
 
+use either::Either;
+use itertools::Itertools;
 use owo_colors::OwoColorize;
 use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Direction, Graph};
@@ -242,13 +244,12 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
                         }
                         dependents => {
                             let separator = if has_hashes { "\n    " } else { "  " };
-                            let dependents = dependents
+                            let origins = dependents
                                 .iter()
-                                .map(ToString::to_string)
-                                .chain(source.iter().map(ToString::to_string))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            let comment = format!("# via {dependents}").green().to_string();
+                                .map(Either::Left)
+                                .chain(source.iter().map(Either::Right))
+                                .format(", ");
+                            let comment = format!("# via {origins}").green().to_string();
                             annotation = Some((separator, comment));
                         }
                     },
@@ -268,14 +269,13 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
                         }
                         dependents => {
                             let separator = "\n";
-                            let dependent = source
+                            let origins = source
                                 .iter()
-                                .map(ToString::to_string)
-                                .chain(dependents.iter().map(ToString::to_string))
-                                .map(|name| format!("    #   {name}"))
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            let comment = format!("    # via\n{dependent}").green().to_string();
+                                .map(Either::Left)
+                                .chain(dependents.iter().map(Either::Right))
+                                .format("\n    #   ");
+                            let comment =
+                                format!("    # via\n    #   {origins}").green().to_string();
                             annotation = Some((separator, comment));
                         }
                     },
