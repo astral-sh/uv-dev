@@ -2144,12 +2144,12 @@ impl TestContext {
             EnvVars::UV_SYSTEM_CERTS,
         ];
 
-        // Python can redirect bytecode writes outside the fixture even though uv does not read
-        // this variable itself.
+        // Python can redirect user installations or bytecode writes outside the fixture even
+        // though uv does not read these variables itself.
         for name in EnvVars::all_names()
             .iter()
             .copied()
-            .chain(["PYTHONPYCACHEPREFIX"])
+            .chain(["PYTHONPYCACHEPREFIX", "PYTHONUSERBASE"])
         {
             if !passthrough.contains(&name) && !is_explicit(name) {
                 command.env_remove(name);
@@ -2403,7 +2403,11 @@ mod command_environment_tests {
 
         context.add_shared_env(&mut command, false);
 
-        for isolated in [EnvVars::UV_INDEX_URL, "PYTHONPYCACHEPREFIX"] {
+        for isolated in [
+            EnvVars::UV_INDEX_URL,
+            "PYTHONPYCACHEPREFIX",
+            "PYTHONUSERBASE",
+        ] {
             assert!(
                 command
                     .get_envs()
