@@ -199,7 +199,7 @@ impl GitRepository {
 
     /// Configures the given remote as the promisor remote for this repository.
     fn configure_promisor_remote(&self, remote: &str, url: &DisplaySafeUrl) -> Result<()> {
-        let url = without_credentials(url);
+        let url = url.without_credentials();
         GIT.as_ref()
             .cloned()?
             .arg("config")
@@ -777,24 +777,6 @@ fn remote_url_root(mut url: Url) -> Url {
     url
 }
 
-/// Returns the URL without embedded credentials for persistence in Git config.
-fn without_credentials(url: &DisplaySafeUrl) -> DisplaySafeUrl {
-    DisplaySafeUrl::from_url(url.without_credentials().into_owned())
-}
-
-/// Adds a one-shot Git URL rewrite so commands that perform lazy fetches can
-/// authenticate without storing credentials in the repository config.
-fn apply_url_rewrite(cmd: &mut ProcessBuilder, url: &DisplaySafeUrl) {
-    let url_without_credentials = without_credentials(url);
-    if url_without_credentials != *url {
-        append_git_config(
-            cmd,
-            &format!("url.{}.insteadOf", url.as_str()),
-            url_without_credentials.as_str(),
-        );
-    }
-}
-
 /// Append command-local configuration without replacing inherited entries.
 fn append_git_config(cmd: &mut ProcessBuilder, key: &str, value: &str) {
     // Git before 2.31 accepts quoted `key=value` entries. Newer Git also accepts
@@ -826,7 +808,6 @@ fn configure_git_network(
 ) {
     // Terminal prompts would be hidden by the progress bar. GUI prompts remain available.
     cmd.env(EnvVars::GIT_TERMINAL_PROMPT, "0");
-    apply_url_rewrite(cmd, url);
     if disable_ssl {
         let remote_url = url.without_credentials();
         let origin = remote_url_root(remote_url.clone().into_owned());
