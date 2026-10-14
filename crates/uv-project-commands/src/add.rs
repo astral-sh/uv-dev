@@ -575,14 +575,13 @@ pub async fn add(
     )?;
 
     // If the user provides a single, named index, pin all requirements to that index.
-    let index = indexes
-        .first()
-        .as_ref()
-        .and_then(|index| index.name.as_ref())
-        .filter(|_| indexes.len() == 1)
-        .inspect(|index| {
-            debug!("Pinning all requirements to index: `{index}`");
-        });
+    let index = match indexes.as_slice() {
+        [index] => index.name.as_ref(),
+        _ => None,
+    }
+    .inspect(|index| {
+        debug!("Pinning all requirements to index: `{index}`");
+    });
 
     match (&target, workspace) {
         (EditTarget::Project(project), None | Some(true)) => {
