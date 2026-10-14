@@ -58,14 +58,14 @@ mod origin;
 mod unnamed;
 mod verbatim_url;
 
-/// Error with a span attached. Not that those aren't `String` but `Vec<char>` indices.
+/// A parse error with a byte-indexed span.
 #[derive(Debug)]
 pub struct Pep508Error<T: Pep508Url = VerbatimUrl> {
     /// Either we have an error string from our parser or an upstream error from `url`
     pub message: Pep508ErrorSource<T>,
-    /// Span start index
+    /// Byte offset of the error span.
     pub start: usize,
-    /// Span length
+    /// Length of the error span in bytes.
     pub len: usize,
     /// The input string so we can print it underlined
     pub input: String,
@@ -105,11 +105,12 @@ impl<T: Pep508Url> Display for Pep508Error<T> {
             return Display::fmt(&self.message, f);
         }
 
-        // We can use char indices here since it's a Vec<char>
-        let start_offset = self.input[..self.start]
-            .chars()
-            .filter_map(unicode_width::UnicodeWidthChar::width)
-            .sum::<usize>();
+        let display_width = |text: &str| {
+            text.chars()
+                .filter_map(unicode_width::UnicodeWidthChar::width)
+                .sum::<usize>()
+        };
+        let start_offset = display_width(&self.input[..self.start]);
         let underline_len = if self.start == self.input.len() {
             // We also allow 0 here for convenience
             assert!(
@@ -119,10 +120,7 @@ impl<T: Pep508Url> Display for Pep508Error<T> {
             );
             1
         } else {
-            self.input[self.start..self.start + self.len]
-                .chars()
-                .filter_map(unicode_width::UnicodeWidthChar::width)
-                .sum::<usize>()
+            display_width(&self.input[self.start..self.start + self.len])
         };
         write!(
             f,
