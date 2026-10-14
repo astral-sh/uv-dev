@@ -693,13 +693,12 @@ fn fetch(
     disable_ssl: bool,
     offline: bool,
 ) -> Result<()> {
-    if let ReferenceOrOid::Oid(rev) = reference {
-        let local_object = reference.resolve(repo).ok();
-        if let Some(local_object) = local_object {
-            if rev == local_object {
-                return Ok(());
-            }
-        }
+    if let ReferenceOrOid::Oid(rev) = reference
+        && reference
+            .resolve(repo)
+            .is_ok_and(|local_object| rev == local_object)
+    {
+        return Ok(());
     }
 
     // Translate the reference desired here into an actual list of refspecs
