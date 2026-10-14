@@ -2870,19 +2870,22 @@ impl<'index> ForkState<'index> {
         version: Option<&Version>,
         incompatibility: IncompId<PubGrubPackage, Range<Version>, UnavailableReason>,
     ) {
-        let mut culprit_is_real = false;
-        for (incompatible, _term) in self.pubgrub.incompatibility_store[incompatibility].iter() {
-            if incompatible == affected {
-                continue;
-            }
-            if self.pubgrub.package_store[affected].name()
-                == self.pubgrub.package_store[incompatible].name()
-            {
-                // Don't track conflicts between a marker package and the main package, when the
-                // marker is "copying" the obligations from the main package through conflicts.
-                continue;
-            }
-            culprit_is_real = true;
+        // A marker package can copy obligations from its main package through conflicts; those
+        // conflicts do not identify a real culprit.
+        let mut culprits = self.pubgrub.incompatibility_store[incompatibility]
+            .iter()
+            .map(|(package, _term)| package)
+            .filter(|&package| {
+                package != affected
+                    && self.pubgrub.package_store[affected].name()
+                        != self.pubgrub.package_store[package].name()
+            })
+            .peekable();
+        if culprits.peek().is_none() {
+            return;
+        }
+
+        for incompatible in culprits {
             let culprit_count = self
                 .conflict_tracker
                 .culprit
@@ -2893,32 +2896,28 @@ impl<'index> ForkState<'index> {
                 self.conflict_tracker.deprioritize.push(incompatible);
             }
         }
-        // Don't track conflicts between a marker package and the main package, when the
-        // marker is "copying" the obligations from the main package through conflicts.
-        if culprit_is_real {
-            if tracing::enabled!(Level::DEBUG) {
-                let incompatibility = self.pubgrub.incompatibility_store[incompatibility]
-                    .iter()
-                    .map(|(package, _term)| &self.pubgrub.package_store[package])
-                    .join(", ");
-                if let Some(version) = version {
-                    debug!(
-                        "Recording dependency conflict of {}=={} from incompatibility of ({})",
-                        self.pubgrub.package_store[affected], version, incompatibility
-                    );
-                } else {
-                    debug!(
-                        "Recording unit propagation conflict of {} from incompatibility of ({})",
-                        self.pubgrub.package_store[affected], incompatibility
-                    );
-                }
+        if tracing::enabled!(Level::DEBUG) {
+            let incompatibility = self.pubgrub.incompatibility_store[incompatibility]
+                .iter()
+                .map(|(package, _term)| &self.pubgrub.package_store[package])
+                .join(", ");
+            if let Some(version) = version {
+                debug!(
+                    "Recording dependency conflict of {}=={} from incompatibility of ({})",
+                    self.pubgrub.package_store[affected], version, incompatibility
+                );
+            } else {
+                debug!(
+                    "Recording unit propagation conflict of {} from incompatibility of ({})",
+                    self.pubgrub.package_store[affected], incompatibility
+                );
             }
+        }
 
-            let affected_count = self.conflict_tracker.affected.entry(self.next).or_default();
-            *affected_count += 1;
-            if *affected_count == CONFLICT_THRESHOLD {
-                self.conflict_tracker.prioritize.push(self.next);
-            }
+        let affected_count = self.conflict_tracker.affected.entry(self.next).or_default();
+        *affected_count += 1;
+        if *affected_count == CONFLICT_THRESHOLD {
+            self.conflict_tracker.prioritize.push(self.next);
         }
     }
 
