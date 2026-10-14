@@ -4,7 +4,7 @@ use assert_fs::fixture::{FileWriteStr, PathChild};
 
 use uv_static::EnvVars;
 
-use uv_test::uv_snapshot;
+use uv_test::{assert_path_missing, uv_snapshot};
 
 #[test]
 fn tool_uninstall() {
@@ -26,6 +26,9 @@ fn tool_uninstall() {
     Uninstalled 2 executables: black, blackd
     ");
 
+    assert_path_missing(context.temp_dir.child("tools/black"));
+    assert_path_missing(bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX)));
+    assert_path_missing(bin_dir.child(format!("blackd{}", std::env::consts::EXE_SUFFIX)));
     assert!(context.temp_dir.child("tools/.lock").is_file());
 
     // After uninstalling the tool, it shouldn't be listed.
