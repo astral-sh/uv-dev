@@ -163,20 +163,25 @@ impl GitUrl {
 
     /// Set the precise [`GitOid`] to use for this Git URL.
     pub fn with_precise(mut self, precise: GitOid) -> Result<Self, GitUrlParseError> {
-        match self.reference.as_commit() {
-            Some(commit) => {
-                if commit != precise {
-                    return Err(GitUrlParseError::MismatchedRevision {
-                        revision: commit.to_string(),
-                        precise,
-                        url: Box::new(self.url),
-                    });
-                }
-            }
-            None => self.resolved = Some(precise),
+        self.validate_precise(precise)?;
+        if self.reference.as_commit().is_none() {
+            self.resolved = Some(precise);
         }
-
         Ok(self)
+    }
+
+    /// Check that a resolved commit agrees with an exact revision in the URL.
+    pub fn validate_precise(&self, precise: GitOid) -> Result<(), GitUrlParseError> {
+        if let Some(commit) = self.reference.as_commit()
+            && commit != precise
+        {
+            return Err(GitUrlParseError::MismatchedRevision {
+                revision: commit.to_string(),
+                precise,
+                url: Box::new(self.url.clone()),
+            });
+        }
+        Ok(())
     }
 
     /// Set the [`GitReference`] to use for this Git URL, clearing any resolved commit if it changes.
