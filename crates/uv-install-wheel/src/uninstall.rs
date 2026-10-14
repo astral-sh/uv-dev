@@ -102,13 +102,7 @@ pub fn uninstall_wheel(
         // Iterate up the directory tree, removing any empty directories. It's insufficient to
         // rely on `visited` alone here, because we may end up removing a directory whose parent
         // directory doesn't contain any files, leaving the _parent_ directory empty.
-        let mut path = path.as_path();
-        loop {
-            // If we reach the site-packages directory, we're done.
-            if path == site_packages {
-                break;
-            }
-
+        for path in path.ancestors().take_while(|&path| path != site_packages) {
             // If the directory contains a `__pycache__` directory, always remove it. `__pycache__`
             // may or may not be listed in the RECORD, but installers are expected to be smart
             // enough to remove it either way.
@@ -135,12 +129,6 @@ pub fn uninstall_wheel(
             fs_err::remove_dir(path)?;
 
             uninstall.record_removed_directory(path);
-
-            if let Some(parent) = path.parent() {
-                path = parent;
-            } else {
-                break;
-            }
         }
     }
 
