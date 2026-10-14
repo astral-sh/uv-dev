@@ -1228,8 +1228,10 @@ fn create_venv_respects_group_requires_python() -> Result<()> {
     "
     );
 
-    // We error if there's no compatible version
-    // non-default groups are not consulted here!
+    // Conflicting project and default-group requirements fail before clearing the environment;
+    // non-default groups do not participate in the conflict.
+    let marker = context.venv.child("marker");
+    marker.write_str("existing environment\n")?;
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! { r#"
         [project]
@@ -1256,6 +1258,7 @@ fn create_venv_respects_group_requires_python() -> Result<()> {
     - foo:dev: >=3.12
     "
     );
+    assert_eq!(context.read(marker), "existing environment\n");
 
     Ok(())
 }
