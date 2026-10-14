@@ -100,97 +100,23 @@ fn nested_dependencies() {
     );
 }
 
-/// Identical test as `invert` since `--reverse` is simply an alias for `--invert`.
 #[test]
-#[cfg(feature = "test-pypi")]
-fn reverse() {
+fn reverse_dependencies() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
-    "
-    );
+    diamond_dependency_graph(&context)?;
 
     uv_snapshot!(context.filters(), context.pip_tree().arg("--reverse"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    blinker v1.7.0
-    └── flask v3.0.2
-    click v8.1.7
-    └── flask v3.0.2
-    itsdangerous v2.1.2
-    └── flask v3.0.2
-    markupsafe v2.1.5
-    ├── jinja2 v3.1.3
-    │   └── flask v3.0.2
-    └── werkzeug v3.0.1
-        └── flask v3.0.2
-    "
-    );
-}
-
-#[test]
-#[cfg(feature = "test-pypi")]
-fn invert() {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("flask").unwrap();
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + blinker==1.7.0
-     + click==8.1.7
-     + flask==3.0.2
-     + itsdangerous==2.1.2
-     + jinja2==3.1.3
-     + markupsafe==2.1.5
-     + werkzeug==3.0.1
+    leaf v1.0.0
+    ├── left v1.0.0
+    │   └── root v1.0.0
+    └── right v1.0.0
+        └── root v1.0.0
     "
     );
 
-    uv_snapshot!(context.filters(), context.pip_tree().arg("--invert"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    blinker v1.7.0
-    └── flask v3.0.2
-    click v8.1.7
-    └── flask v3.0.2
-    itsdangerous v2.1.2
-    └── flask v3.0.2
-    markupsafe v2.1.5
-    ├── jinja2 v3.1.3
-    │   └── flask v3.0.2
-    └── werkzeug v3.0.1
-        └── flask v3.0.2
-    "
-    );
+    Ok(())
 }
 
 #[test]
