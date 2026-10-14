@@ -325,6 +325,35 @@ impl SitePackages {
         Ok(diagnostics)
     }
 
+    /// Resolve unnamed requirements using the installed distribution for their URL.
+    fn name_requirements<'a>(
+        &self,
+        requirements: &'a [UnresolvedRequirementSpecification],
+    ) -> Result<Vec<Cow<'a, Requirement>>, &'a UnresolvedRequirement> {
+        let mut named = Vec::with_capacity(requirements.len());
+        for specification in requirements {
+            let requirement = match &specification.requirement {
+                UnresolvedRequirement::Named(requirement) => Cow::Borrowed(requirement),
+                UnresolvedRequirement::Unnamed(requirement) => {
+                    let distributions = self.get_urls(requirement.url.verbatim.raw());
+                    let [distribution] = distributions.as_slice() else {
+                        return Err(&specification.requirement);
+                    };
+                    let requirement = uv_pep508::Requirement {
+                        name: distribution.name().clone(),
+                        version_or_url: Some(VersionOrUrl::Url(requirement.url.clone())),
+                        marker: requirement.marker,
+                        extras: requirement.extras.clone(),
+                        origin: requirement.origin.clone(),
+                    };
+                    Cow::Owned(Requirement::from(requirement))
+                }
+            };
+            named.push(requirement);
+        }
+        Ok(named)
+    }
+
     /// Returns if the installed packages satisfy the given requirements, including transitive
     /// dependencies when requested by [`DependencyMode`].
     pub fn satisfies_spec(
@@ -344,83 +373,15 @@ impl SitePackages {
         extra_build_requires: &ExtraBuildRequires,
         extra_build_variables: &ExtraBuildVariables,
     ) -> Result<SatisfiesResult<UnresolvedRequirement>> {
-        // First, map all unnamed requirements to named requirements.
-        let requirements = {
-            let mut named = Vec::with_capacity(requirements.len());
-            for requirement in requirements {
-                match &requirement.requirement {
-                    UnresolvedRequirement::Named(requirement) => {
-                        named.push(Cow::Borrowed(requirement));
-                    }
-                    UnresolvedRequirement::Unnamed(requirement) => {
-                        match self.get_urls(requirement.url.verbatim.raw()).as_slice() {
-                            [] => {
-                                return Ok(SatisfiesResult::Unsatisfied(
-                                    UnresolvedRequirement::Unnamed(requirement.clone()),
-                                ));
-                            }
-                            [distribution] => {
-                                let requirement = uv_pep508::Requirement {
-                                    name: distribution.name().clone(),
-                                    version_or_url: Some(VersionOrUrl::Url(
-                                        requirement.url.clone(),
-                                    )),
-                                    marker: requirement.marker,
-                                    extras: requirement.extras.clone(),
-                                    origin: requirement.origin.clone(),
-                                };
-                                named.push(Cow::Owned(Requirement::from(requirement)));
-                            }
-                            _ => {
-                                return Ok(SatisfiesResult::Unsatisfied(
-                                    UnresolvedRequirement::Unnamed(requirement.clone()),
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-            named
+        let requirements = match self.name_requirements(requirements) {
+            Ok(requirements) => requirements,
+            Err(requirement) => return Ok(SatisfiesResult::Unsatisfied(requirement.clone())),
         };
 
-        // Second, map all overrides to named requirements. We assume that all overrides are
-        // relevant.
-        let overrides = {
-            let mut named = Vec::with_capacity(overrides.len());
-            for requirement in overrides {
-                match &requirement.requirement {
-                    UnresolvedRequirement::Named(requirement) => {
-                        named.push(Cow::Borrowed(requirement));
-                    }
-                    UnresolvedRequirement::Unnamed(requirement) => {
-                        match self.get_urls(requirement.url.verbatim.raw()).as_slice() {
-                            [] => {
-                                return Ok(SatisfiesResult::Unsatisfied(
-                                    UnresolvedRequirement::Unnamed(requirement.clone()),
-                                ));
-                            }
-                            [distribution] => {
-                                let requirement = uv_pep508::Requirement {
-                                    name: distribution.name().clone(),
-                                    version_or_url: Some(VersionOrUrl::Url(
-                                        requirement.url.clone(),
-                                    )),
-                                    marker: requirement.marker,
-                                    extras: requirement.extras.clone(),
-                                    origin: requirement.origin.clone(),
-                                };
-                                named.push(Cow::Owned(Requirement::from(requirement)));
-                            }
-                            _ => {
-                                return Ok(SatisfiesResult::Unsatisfied(
-                                    UnresolvedRequirement::Unnamed(requirement.clone()),
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-            named
+        // All overrides are assumed relevant.
+        let overrides = match self.name_requirements(overrides) {
+            Ok(overrides) => overrides,
+            Err(requirement) => return Ok(SatisfiesResult::Unsatisfied(requirement.clone())),
         };
 
         let overrides = Overrides::from_entries(
