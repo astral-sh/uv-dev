@@ -614,7 +614,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     let version = match version {
                         ResolverVersion::Unforked(version) => version,
                         ResolverVersion::Forked(forks) => {
-                            forked_states.extend(self.version_forks_to_fork_states(state, forks));
+                            forked_states.extend(state.split_versions(forks));
                             continue 'FORK;
                         }
                         ResolverVersion::Unavailable(version, reason) => {
@@ -814,8 +814,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                                         version: None,
                                     })
                                     .collect();
-                                forked_states
-                                    .extend(self.version_forks_to_fork_states(state, forks));
+                                forked_states.extend(state.split_versions(forks));
                                 continue 'FORK;
                             }
                         }
@@ -904,26 +903,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             if forks.len() == 1 { "" } else { "s" }
         );
         assert!(forks.len() >= 2);
-        // This is a somewhat tortured technique to ensure
-        // that our resolver state is only cloned as much
-        // as it needs to be. We basically move the state
-        // into `forked_states`, and then only clone it if
-        // there is at least one more fork to visit.
         let package = current_state.next;
-        let mut cur_state = Some(current_state);
-        let forks_len = forks.len();
-        forks
-            .into_iter()
-            .enumerate()
-            .map(move |(i, fork)| {
-                let is_last = i == forks_len - 1;
-                let forked_state = cur_state.take().unwrap();
-                if !is_last {
-                    cur_state = Some(forked_state.clone());
-                }
-
+        current_state
+            .split(forks)
+            .map(|(fork, state)| {
                 let env = fork.env.clone();
-                (fork, forked_state.with_env(env))
+                (fork, state.with_env(env))
             })
             .map(move |(fork, mut forked_state)| {
                 // Enrich the state with any URLs, etc.
@@ -959,39 +944,6 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
                 Ok(forked_state)
             })
-    }
-
-    /// Convert the dependency [`Fork`]s into [`ForkState`]s.
-    #[expect(clippy::unused_self)]
-    fn version_forks_to_fork_states<'index>(
-        &self,
-        current_state: ForkState<'index>,
-        forks: Vec<VersionFork>,
-    ) -> impl Iterator<Item = ForkState<'index>> {
-        // This is a somewhat tortured technique to ensure
-        // that our resolver state is only cloned as much
-        // as it needs to be. We basically move the state
-        // into `forked_states`, and then only clone it if
-        // there is at least one more fork to visit.
-        let mut cur_state = Some(current_state);
-        let forks_len = forks.len();
-        forks.into_iter().enumerate().map(move |(i, fork)| {
-            let is_last = i == forks_len - 1;
-            let forked_state = cur_state.take().unwrap();
-            if !is_last {
-                cur_state = Some(forked_state.clone());
-            }
-            let continuation = match fork.version {
-                Some(version) => ForkContinuation::UseVersion {
-                    package: fork.id,
-                    version,
-                },
-                None => ForkContinuation::SelectVersion { package: fork.id },
-            };
-            forked_state
-                .with_env(fork.env)
-                .with_continuation(continuation)
-        })
     }
 
     /// Visit a set of [`PubGrubDependency`] entities prior to selection.
@@ -2719,6 +2671,33 @@ impl<'index> ForkState<'index> {
             conflict_tracker: ConflictTracker::default(),
             prefetcher,
         }
+    }
+
+    /// Pair each fork with a resolver state, cloning only while another fork remains.
+    fn split<T>(self, forks: Vec<T>) -> impl Iterator<Item = (T, Self)> {
+        let fork_count = forks.len();
+        let mut current = Some(self);
+        forks.into_iter().enumerate().map(move |(index, fork)| {
+            let state = current.take().expect("a state is available for each fork");
+            if index + 1 < fork_count {
+                current = Some(state.clone());
+            }
+            (fork, state)
+        })
+    }
+
+    /// Apply the environment and continuation selected for each version fork.
+    fn split_versions(self, forks: Vec<VersionFork>) -> impl Iterator<Item = Self> {
+        self.split(forks).map(|(fork, state)| {
+            let continuation = match fork.version {
+                Some(version) => ForkContinuation::UseVersion {
+                    package: fork.id,
+                    version,
+                },
+                None => ForkContinuation::SelectVersion { package: fork.id },
+            };
+            state.with_env(fork.env).with_continuation(continuation)
+        })
     }
 
     /// Visit the dependencies for the selected version of the current package, incorporating any
