@@ -328,7 +328,7 @@ fn find_uv_bin_user_bin() -> anyhow::Result<()> {
 
 #[test]
 fn find_uv_bin_error_message() -> anyhow::Result<()> {
-    let (mut context, _) = with_user_scheme(
+    let (context, _) = with_user_scheme(
         uv_test::test_context!("3.12")
             .with_filtered_python_names()
             .with_filtered_virtualenv_bin()
@@ -337,29 +337,6 @@ fn find_uv_bin_error_message() -> anyhow::Result<()> {
             // `with_filtered_virtualenv_bin` only filters "Scripts", not "bin".
             .with_filter((r"[\\/]bin".to_string(), "/[BIN]".to_string())),
     )?;
-
-    // Add filters for Python bin directories using with_filtered_path
-    // This inserts at the beginning, so these filters are applied first
-    let python_info: Vec<_> = context.python_versions.clone();
-    for (version, executable) in &python_info {
-        let bin_dir = if cfg!(windows) {
-            // On Windows, the Python executable is in the root, not the bin directory
-            executable
-                .canonicalize()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join("Scripts")
-        } else {
-            executable
-                .canonicalize()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .to_path_buf()
-        };
-        context = context.with_filtered_path(&bin_dir, &format!("PYTHON-BIN-{version}"));
-    }
 
     // Install in a virtual environment
     uv_snapshot!(context.filters(), context.pip_install()
@@ -373,13 +350,10 @@ fn find_uv_bin_error_message() -> anyhow::Result<()> {
     "
     );
 
-    // Remove the virtual environment executable for some reason
-    fs::remove_file(if cfg!(unix) {
-        context.venv.child("bin").child("uv")
-    } else {
-        context.venv.child("Scripts").child("uv.exe")
-    })
-    .unwrap();
+    // Remove the fixture's executable to inspect the attempted search paths.
+    fs::remove_file(
+        venv_bin_path(&context.venv).join(format!("uv{}", std::env::consts::EXE_SUFFIX)),
+    )?;
 
     uv_snapshot!(context.filters(), context.python_command()
         .arg("-c")
