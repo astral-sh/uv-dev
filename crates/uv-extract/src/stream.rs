@@ -501,39 +501,39 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 };
                 let is_dir = entry.dir()?;
 
-                match local_headers.remove(&entry.file_offset()) {
-                    Some(local_header) => {
-                        if !skip_validation {
-                            local_header
-                                .validate_central_directory_entry(&entry, &relpath, is_dir)?;
-                        }
-                        if is_dir {
-                            if hash_contents {
-                                digest_directories.insert(relpath.clone());
-                            }
-                        } else if let Some(digest) = local_header.digest {
-                            hashed_files.push(HashedFile::new(
-                                relpath.clone(),
-                                local_header.uncompressed_size,
-                                digest,
-                                entry
-                                    .unix_permissions()
-                                    .is_some_and(|mode| mode & 0o111 != 0),
-                            ));
-                        } else {
-                            files.push(UnhashedFile::new(
-                                relpath.to_path_buf(),
-                                local_header.uncompressed_size,
-                            ));
-                        }
+                let local_header = local_headers.remove(&entry.file_offset());
+                if !skip_validation {
+                    let Some(local_header) = &local_header else {
+                        return Err(Error::MissingLocalFileHeader {
+                            path: relpath.to_path_buf(),
+                            offset: entry.file_offset(),
+                        });
+                    };
+                    local_header.validate_central_directory_entry(&entry, &relpath, is_dir)?;
+                }
+
+                if is_dir {
+                    if hash_contents && local_header.is_some() {
+                        digest_directories.insert(relpath);
                     }
-                    None => {
-                        if !skip_validation {
-                            return Err(Error::MissingLocalFileHeader {
-                                path: relpath.to_path_buf(),
-                                offset: entry.file_offset(),
-                            });
-                        }
+                    continue;
+                }
+
+                if let Some(local_header) = local_header {
+                    if let Some(digest) = local_header.digest {
+                        hashed_files.push(HashedFile::new(
+                            relpath.clone(),
+                            local_header.uncompressed_size,
+                            digest,
+                            entry
+                                .unix_permissions()
+                                .is_some_and(|mode| mode & 0o111 != 0),
+                        ));
+                    } else {
+                        files.push(UnhashedFile::new(
+                            relpath.to_path_buf(),
+                            local_header.uncompressed_size,
+                        ));
                     }
                 }
 
@@ -542,9 +542,6 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 // which indicates the first entry in the central directory. So we continue reading from there.
                 #[cfg(unix)]
                 {
-                    if is_dir {
-                        continue;
-                    }
                     let Some(mode) = entry.unix_permissions() else {
                         continue;
                     };
