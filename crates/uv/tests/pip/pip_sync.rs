@@ -1,4 +1,5 @@
 use std::env::consts::EXE_SUFFIX;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
@@ -16,7 +17,9 @@ use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
 use uv_test::find_links::FindLinksServer;
 use uv_test::packse::PackseServer;
-use uv_test::{copy_dir_ignore, download_to_disk, site_packages_path, uv_snapshot, venv_bin_path};
+use uv_test::{
+    TestContext, copy_dir_ignore, download_to_disk, site_packages_path, uv_snapshot, venv_bin_path,
+};
 
 #[test]
 fn missing_requirements_txt() {
@@ -5274,12 +5277,11 @@ fn target_source_distribution() -> Result<()> {
      + iniconfig==2.0.0
     ");
 
-    // Ensure that the build requirements are not present in the target directory.
-    assert!(!context.temp_dir.child("target").child("hatchling").is_dir());
-
-    // Ensure that the package is present in the target directory.
-    assert!(context.temp_dir.child("target").child("iniconfig").is_dir());
-
+    let target = context.temp_dir.child("target");
+    assert_target_distributions(&context, target.path(), "iniconfig==2.0.0\n");
+    target
+        .child("hatchling")
+        .assert(predicates::path::missing());
     context.assert_not_installed("iniconfig");
 
     // Ensure that we can import the package by augmenting the `PYTHONPATH`.
@@ -5287,7 +5289,7 @@ fn target_source_distribution() -> Result<()> {
         .python_command()
         .arg("-c")
         .arg("import iniconfig")
-        .env(EnvVars::PYTHONPATH, context.temp_dir.child("target").path())
+        .env(EnvVars::PYTHONPATH, target.path())
         .assert()
         .success();
 
@@ -5337,24 +5339,46 @@ fn target_no_build_isolation() -> Result<()> {
      + wheel==0.43.0
     ");
 
-    // Ensure that the build requirements are not present in the target directory.
-    assert!(!context.temp_dir.child("target").child("flit_core").is_dir());
-
-    // Ensure that the package is present in the target directory.
-    assert!(context.temp_dir.child("target").child("wheel").is_dir());
-
+    let target = context.temp_dir.child("target");
+    assert_target_distributions(&context, target.path(), "wheel==0.43.0\n");
+    target
+        .child("flit_core")
+        .assert(predicates::path::missing());
     context.assert_not_installed("wheel");
+    context
+        .assert_command(
+            "from importlib.metadata import version; print(version('flit-core'), end='')",
+        )
+        .success()
+        .stdout("3.9.0");
 
     // Ensure that we can import the package by augmenting the `PYTHONPATH`.
     context
         .python_command()
         .arg("-c")
         .arg("import wheel")
-        .env(EnvVars::PYTHONPATH, context.temp_dir.child("target").path())
+        .env(EnvVars::PYTHONPATH, target.path())
         .assert()
         .success();
 
     Ok(())
+}
+
+fn assert_target_distributions(context: &TestContext, target: &Path, expected: &'static str) {
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            from importlib.metadata import distributions
+            import sys
+
+            installed = sorted(f'{dist.metadata["Name"]}=={dist.version}' for dist in distributions(path=[sys.argv[1]]))
+            print('\n'.join(installed))
+        "#})
+        .arg(target)
+        .assert()
+        .success()
+        .stdout(expected);
 }
 
 /// Sync to a `--target` directory without a virtual environment.
