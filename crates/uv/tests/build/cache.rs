@@ -769,7 +769,7 @@ fn binary_payloads_use_archive_file_store() -> Result<()> {
     Pruning cache at: [CACHE_DIR]/
     No unused entries found
     ");
-    assert!(object.exists());
+    assert_eq!(context.read_bytes(object), BINARY_PAYLOAD_CONTENTS);
 
     // The archive remains complete even if its file-store entry is removed.
     fs_err::remove_file(object)?;
@@ -817,7 +817,8 @@ fn binary_payloads_use_archive_file_store() -> Result<()> {
     Pruning cache at: [CACHE_DIR]/
     Removed [N] files ([SIZE])
     ");
-    assert!(context.cache_files(CacheBucket::Files)?.is_empty());
+    let remaining_objects = context.cache_files(CacheBucket::Files)?;
+    assert!(remaining_objects.is_empty(), "{remaining_objects:?}");
 
     Ok(())
 }
