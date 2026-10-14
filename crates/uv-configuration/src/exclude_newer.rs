@@ -212,13 +212,8 @@ impl FromStr for ExcludeNewerPackageEntry {
             format!("Invalid `exclude-newer-package` package name `{package}`: {err}")
         })?;
 
-        let setting = if value == "false" {
-            ExcludeNewerOverride::Disabled
-        } else {
-            ExcludeNewerOverride::Enabled(Box::new(ExcludeNewerValue::from_str(value).map_err(
-                |err| format!("Invalid `exclude-newer-package` value `{value}`: {err}"),
-            )?))
-        };
+        let setting = ExcludeNewerOverride::from_str(value)
+            .map_err(|err| format!("Invalid `exclude-newer-package` value `{value}`: {err}"))?;
 
         Ok(Self { package, setting })
     }
