@@ -3824,8 +3824,8 @@ impl Lock {
         serialize::to_toml(self)
     }
 
-    /// Locate every locked version without scanning unrelated sorted packages.
-    fn packages_for_name(&self, name: &PackageName) -> &[Package] {
+    /// Return all locked packages with the given name.
+    pub fn packages_for_name(&self, name: &PackageName) -> &[Package] {
         let first = self
             .packages
             .partition_point(|package| &package.id.name < name);
