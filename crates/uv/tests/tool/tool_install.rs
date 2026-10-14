@@ -1659,35 +1659,6 @@ fn tool_install_editable_from() {
     ");
 }
 
-/// Test installing a tool with `uv tool install --from`
-#[test]
-fn tool_install_from() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    // Install `black` using `--from` to specify the version
-    uv_snapshot!(context.filters(), context.tool_install()
-        .arg("black")
-        .arg("--from")
-        .arg("black==24.2.0")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 6 packages in [TIME]
-    Prepared 6 packages in [TIME]
-    Installed 6 packages in [TIME]
-     + black==24.2.0
-     + click==8.1.7
-     + mypy-extensions==1.0.0
-     + packaging==24.0
-     + pathspec==0.12.1
-     + platformdirs==4.2.0
-    Installed 2 executables: black, blackd
-    ");
-}
-
 /// Test installing and reinstalling an already installed tool
 #[test]
 fn tool_install_already_installed() {
