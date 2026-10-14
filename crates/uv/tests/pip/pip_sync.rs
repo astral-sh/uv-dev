@@ -2775,6 +2775,10 @@ requires-python = ">=3.8"
      + example==0.0.0 (from file://[TEMP_DIR]/editable)
     "
     );
+    context
+        .assert_command("from importlib.metadata import requires; print(requires('example'))")
+        .success()
+        .stdout(predicates::str::contains("['anyio==4.0.0']"));
 
     // Installing again should be a no-op.
     uv_snapshot!(context.filters(), context.pip_sync()
@@ -2810,6 +2814,10 @@ requires-python = ">=3.8"
      ~ example==0.0.0 (from file://[TEMP_DIR]/editable)
     "
     );
+    context
+        .assert_command("from importlib.metadata import requires; print(requires('example'))")
+        .success()
+        .stdout(predicates::str::contains("['anyio==3.7.1']"));
 
     Ok(())
 }
