@@ -288,7 +288,7 @@ fn python_find_cached_launcher_override() {
 
 #[test]
 fn python_find_pin() {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let mut context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     // Pin to a version
     uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
@@ -334,7 +334,8 @@ fn python_find_pin() {
     Pinned `.python-version` to `3.11`
     ");
 
-    // Unless the child directory also has a pin
+    // Make both the search path and parent pin prefer 3.12, so only the child pin selects 3.11.
+    context.python_versions.reverse();
     uv_snapshot!(context.filters(), context.python_find().current_dir(&child_dir), @"
     exit_code: 0 (success)
     ----- stdout -----
