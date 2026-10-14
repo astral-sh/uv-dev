@@ -6,24 +6,22 @@ use uv_pep440::Version;
 use version_ranges::Ranges;
 
 /// The number of remaining specifiers that exclude each part of the version range.
-pub(super) struct VersionRangeCoverage {
-    endpoints: Vec<Version>,
+pub(super) struct VersionRangeCoverage<'a> {
+    endpoints: Vec<&'a Version>,
     counts: RangeCounts,
 }
 
-impl VersionRangeCoverage {
-    pub(super) fn new(exclusions: &[Ranges<Version>]) -> Self {
-        let mut endpoints = Vec::new();
-        for exclusion in exclusions {
-            for (lower, upper) in exclusion.iter() {
-                if let Bound::Included(version) | Bound::Excluded(version) = lower {
-                    endpoints.push(version.clone());
-                }
-                if let Bound::Included(version) | Bound::Excluded(version) = upper {
-                    endpoints.push(version.clone());
-                }
-            }
-        }
+impl<'a> VersionRangeCoverage<'a> {
+    pub(super) fn new(exclusions: &'a [Ranges<Version>]) -> Self {
+        let mut endpoints: Vec<_> = exclusions
+            .iter()
+            .flat_map(Ranges::iter)
+            .flat_map(|(lower, upper)| [lower, upper])
+            .filter_map(|bound| match bound {
+                Bound::Included(version) | Bound::Excluded(version) => Some(version),
+                Bound::Unbounded => None,
+            })
+            .collect();
         endpoints.sort();
         endpoints.dedup();
 
@@ -61,7 +59,7 @@ impl VersionRangeCoverage {
     fn coordinates(&self, (lower, upper): (Bound<&Version>, Bound<&Version>)) -> (usize, usize) {
         let endpoint = |version| {
             self.endpoints
-                .partition_point(|candidate| candidate < version)
+                .partition_point(|candidate| *candidate < version)
         };
         let start = match lower {
             Bound::Included(version) => 2 * endpoint(version) + 1,
