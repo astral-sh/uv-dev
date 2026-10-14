@@ -12463,7 +12463,8 @@ fn emit_marker_expression_pypy() -> Result<()> {
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("pendulum")?;
 
-    uv_snapshot!(context
+    // The Linux target includes `tzdata` even when the test host is Windows.
+    uv_snapshot!(context.filters(), windows_filters=false, context
         .pip_compile()
         .arg("requirements.in")
         .arg("--python-platform")
