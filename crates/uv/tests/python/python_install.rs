@@ -3412,6 +3412,21 @@ fn uninstall_last_patch() {
     );
 }
 
+#[track_caller]
+fn assert_minor_version_link(link: &Path, patch: &Path) {
+    fs_err::read_link(link).expect("minor-version installation must be a link");
+    assert!(
+        patch.is_dir(),
+        "patch installation must be a directory: {}",
+        patch.display()
+    );
+    assert_eq!(
+        dunce::canonicalize(link).expect("minor-version link target must exist"),
+        dunce::canonicalize(patch).expect("patch installation must exist"),
+        "minor-version link must resolve to the expected patch"
+    );
+}
+
 /// After uninstalling the last patch for a minor version, the minor version link
 /// (symlink on Unix, junction on Windows) should be removed.
 ///
@@ -3439,9 +3454,7 @@ fn uninstall_last_patch_removes_minor_version_link() {
      + cpython-3.12.8-[PLATFORM] (python3.12)
     ");
 
-    // The patch directory and the minor version link should both exist
-    patch_dir.assert(predicate::path::exists());
-    minor_version_link.assert(predicate::path::exists());
+    assert_minor_version_link(minor_version_link.path(), patch_dir.path());
 
     // Uninstall the only patch version for this minor
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.12.8"), @"
@@ -3453,7 +3466,7 @@ fn uninstall_last_patch_removes_minor_version_link() {
     ");
 
     // The patch directory should be removed
-    patch_dir.assert(predicate::path::missing());
+    assert_path_missing(patch_dir);
 
     // Removing the last patch also removes the minor version link itself.
     assert_path_missing(minor_version_link);
@@ -3463,8 +3476,6 @@ fn uninstall_last_patch_removes_minor_version_link() {
 /// the minor version link should be updated (not removed).
 #[test]
 fn uninstall_highest_patch_updates_minor_version_link() {
-    use uv_python_managed::platform_key_from_env;
-
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -3487,26 +3498,12 @@ fn uninstall_highest_patch_updates_minor_version_link() {
      + cpython-3.12.9-[PLATFORM] (python3.12)
     ");
 
-    // All directories should exist
-    patch_dir_8.assert(predicate::path::exists());
-    patch_dir_9.assert(predicate::path::exists());
-    minor_version_link.assert(predicate::path::exists());
-
-    // The minor version link should resolve to the highest patch (3.12.9).
-    // Use `dunce::canonicalize` directly because `canonicalize_link_path` goes
-    // through `launcher_path` on Windows, which only works for trampoline
-    // executables, not junction directories.
-    let link_target = dunce::canonicalize(minor_version_link.path())
-        .unwrap()
-        .simplified_display()
-        .to_string();
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        insta::assert_snapshot!(
-            link_target, @"[TEMP_DIR]/managed/cpython-3.12.9-[PLATFORM]"
-        );
-    });
+    assert!(
+        patch_dir_8.is_dir(),
+        "missing older patch installation: {}",
+        patch_dir_8.path().display()
+    );
+    assert_minor_version_link(minor_version_link.path(), patch_dir_9.path());
 
     // Uninstall the highest patch version
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.12.9"), @"
@@ -3518,24 +3515,10 @@ fn uninstall_highest_patch_updates_minor_version_link() {
     ");
 
     // The highest patch dir should be removed
-    patch_dir_9.assert(predicate::path::missing());
-
-    // The lower patch dir should still exist
-    patch_dir_8.assert(predicate::path::exists());
+    assert_path_missing(patch_dir_9);
 
     // The minor version link should still exist, now pointing to the remaining patch
-    minor_version_link.assert(predicate::path::exists());
-    let link_target = dunce::canonicalize(minor_version_link.path())
-        .unwrap()
-        .simplified_display()
-        .to_string();
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        insta::assert_snapshot!(
-            link_target, @"[TEMP_DIR]/managed/cpython-3.12.8-[PLATFORM]"
-        );
-    });
+    assert_minor_version_link(minor_version_link.path(), patch_dir_8.path());
 
     // Uninstall the last remaining patch
     uv_snapshot!(context.filters(), context.python_uninstall().arg("3.12.8"), @"
@@ -3547,7 +3530,7 @@ fn uninstall_highest_patch_updates_minor_version_link() {
     ");
 
     // The patch directory should be removed
-    patch_dir_8.assert(predicate::path::missing());
+    assert_path_missing(patch_dir_8);
 
     // Removing the last patch also removes the minor version link itself.
     assert_path_missing(minor_version_link);
