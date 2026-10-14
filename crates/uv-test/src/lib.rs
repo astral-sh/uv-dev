@@ -867,8 +867,7 @@ impl TestContext {
     }
 
     fn with_working_dir(mut self, tmp: tempfile::TempDir, name: &str) -> anyhow::Result<Self> {
-        self.temp_dir = ChildPath::new(tmp.path()).child("temp");
-        fs_err::create_dir_all(&self.temp_dir)?;
+        self.temp_dir = Self::create_working_dir(tmp.path())?;
         // Place the venv inside temp_dir (matching the default TestContext layout)
         // so that `context.venv()` creates it at the same path that `VIRTUAL_ENV` points to.
         let canonical_temp_dir = self.temp_dir.canonicalize()?;
@@ -887,6 +886,14 @@ impl TestContext {
         );
         self._extra_tempdirs.push(tmp);
         Ok(self)
+    }
+
+    fn create_working_dir(root: &Path) -> io::Result<ChildPath> {
+        // Bound discovery to this fixture even when its filesystem is nested in a repository.
+        fs_err::create_dir_all(root.join(".git"))?;
+        let working_dir = ChildPath::new(root).child("temp");
+        fs_err::create_dir_all(&working_dir)?;
+        Ok(working_dir)
     }
 
     fn temp_dir_on_fs(variable: &str) -> anyhow::Result<Option<tempfile::TempDir>> {
@@ -926,13 +933,8 @@ impl TestContext {
 
         let root = tempfile::TempDir::new_in(bucket).expect("Failed to create test root directory");
 
-        // Create a `.git` directory to isolate tests that search for git boundaries from the state
-        // of the file system
-        fs_err::create_dir_all(root.path().join(".git"))
-            .expect("Failed to create `.git` placeholder in test root directory");
-
-        let temp_dir = ChildPath::new(root.path()).child("temp");
-        fs_err::create_dir_all(&temp_dir).expect("Failed to create test working directory");
+        let temp_dir =
+            Self::create_working_dir(root.path()).expect("Failed to create test working directory");
 
         let cache_dir = ChildPath::new(root.path()).child("cache");
         fs_err::create_dir_all(&cache_dir).expect("Failed to create test cache directory");
@@ -1338,20 +1340,14 @@ impl TestContext {
             // Since downloads, fetches and builds run in parallel, their message output order is
             // non-deterministic, so can't capture them in test output.
             .env(EnvVars::UV_INTERNAL__TEST_NO_CLI_PROGRESS, "1")
-            // I believe the intent of all tests is that they are run outside the
-            // context of an existing git repository. And when they aren't, state
-            // from the parent git repository can bleed into the behavior of `uv
-            // init` in a way that makes it difficult to test consistently. By
-            // setting GIT_CEILING_DIRECTORIES, we specifically prevent git from
-            // climbing up past the root of our test directory to look for any
-            // other git repos.
-            //
-            // If one wants to write a test specifically targeting uv within a
-            // pre-existing git repository, then the test should make the parent
-            // git repo explicitly. The GIT_CEILING_DIRECTORIES here shouldn't
-            // impact it, since it only prevents git from discovering repositories
-            // at or above the root.
-            .env(EnvVars::GIT_CEILING_DIRECTORIES, self.root.path())
+            // Keep Git subprocesses from discovering repositories at or above the working
+            // directory's fixture root. Tests can create their own repositories below it.
+            .env(
+                EnvVars::GIT_CEILING_DIRECTORIES,
+                self.temp_dir
+                    .parent()
+                    .expect("test working directory must have a parent"),
+            )
             .current_dir(self.temp_dir.path());
 
         for (key, value) in &self.extra_env {
@@ -2401,6 +2397,23 @@ mod command_environment_tests {
                 name == offline && value.is_some_and(|value| value == "1")
             })
         );
+    }
+
+    #[test]
+    fn relocated_working_directory_bounds_repository_discovery() -> anyhow::Result<()> {
+        let relocated_root = tempfile::tempdir()?;
+        let expected_ceiling = relocated_root.path().to_path_buf();
+        let context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"))
+            .with_working_dir(relocated_root, "COW_FS")?;
+        let command = context.command();
+
+        let ceiling = command
+            .get_envs()
+            .find(|(name, _)| *name == EnvVars::GIT_CEILING_DIRECTORIES)
+            .and_then(|(_, value)| value);
+        assert_eq!(ceiling, Some(expected_ceiling.as_os_str()));
+        assert!(expected_ceiling.join(".git").is_dir());
+        Ok(())
     }
 }
 
