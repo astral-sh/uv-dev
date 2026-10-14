@@ -305,15 +305,17 @@ impl RequirementSatisfaction {
         }
 
         // If the distribution isn't compatible with the current platform, it is a mismatch.
-        if let Ok(Some(wheel_tags)) = distribution.read_tags() {
-            if !wheel_tags.is_compatible(tags) {
+        if let Ok(Some(wheel_tags)) = distribution.read_tags()
+            && !wheel_tags.is_compatible(tags)
+        {
+            let hint = std::fmt::from_fn(|f| {
                 if let Some(hint) = generate_dist_compatibility_hint(wheel_tags, tags) {
-                    debug!("Platform tags mismatch for `{distribution}`: {hint}");
-                } else {
-                    debug!("Platform tags mismatch for `{distribution}`");
+                    write!(f, ": {hint}")?;
                 }
-                return Self::Mismatch;
-            }
+                Ok(())
+            });
+            debug!("Platform tags mismatch for `{distribution}`{hint}");
+            return Self::Mismatch;
         }
 
         // If a resolved version is provided, check that it matches the installed version.
