@@ -21,7 +21,6 @@ use uv_configuration::{
     Overrides, TargetTriple, ToolRunCommand,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::InstalledDist;
 use uv_distribution_types::{
     IndexUrl, Name, NameRequirementSpecification, Requirement, RequirementSource,
     UnresolvedRequirement, UnresolvedRequirementSpecification,
@@ -32,7 +31,7 @@ use uv_normalize::PackageName;
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
-use uv_python_interpreter::PythonEnvironment;
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -48,7 +47,7 @@ use uv_command_support::{
     ExitStatus, Printer, UvError, child::read_env_files, child::run_to_completion,
 };
 
-use crate::common::{ToolPython, matching_packages, refine_interpreter};
+use crate::common::{ToolPython, matching_package_names, refine_interpreter};
 use crate::error::ToolError;
 use crate::requirements::{registry_requirement, resolve_latest};
 use crate::{Target, ToolRequest};
@@ -120,6 +119,19 @@ fn find_verbose_flag(args: &[std::ffi::OsString]) -> Option<&str> {
             None
         }
     })
+}
+
+/// Split a tool command into its UTF-8 target and remaining arguments.
+fn split_tool_command(command: &[OsString]) -> anyhow::Result<(&str, &[OsString])> {
+    let Some((target, args)) = command.split_first() else {
+        bail!("No tool command provided");
+    };
+    let Some(target) = target.to_str() else {
+        bail!(
+            "Tool command could not be parsed as UTF-8 string. Use `--from` to specify the package name"
+        );
+    };
+    Ok((target, args))
 }
 
 /// Run a command.
@@ -195,15 +207,7 @@ pub async fn run(
         return Ok(ExitStatus::Error);
     };
 
-    let Some((target, args)) = command.split_first() else {
-        return Err(anyhow::anyhow!("No tool command provided"));
-    };
-
-    let Some(target) = target.to_str() else {
-        return Err(anyhow::anyhow!(
-            "Tool command could not be parsed as UTF-8 string. Use `--from` to specify the package name"
-        ));
-    };
+    let (target, args) = split_tool_command(&command)?;
 
     if let Some(ref from) = from {
         if is_python_script(from) {
@@ -261,16 +265,7 @@ pub async fn run(
             );
             let confirmation = uv_console::confirm(&prompt, &term, true)?;
             if confirmation {
-                let Some((next_target, next_args)) = args.split_first() else {
-                    return Err(anyhow::anyhow!("No tool command provided"));
-                };
-                let Some(next_target) = next_target.to_str() else {
-                    return Err(anyhow::anyhow!(
-                        "Tool command could not be parsed as UTF-8 string. Use `--from` to specify the package name"
-                    ));
-                };
-                target = next_target;
-                args = next_args;
+                (target, args) = split_tool_command(args)?;
             }
         }
     }
@@ -384,34 +379,34 @@ pub async fn run(
 
     // Check if the provided command is not part of the executables for the `from` package,
     // and if it's provided by another package in the environment.
-    let provider_hints = match &from {
+    let deferred_provider_hints = match &from {
         ToolRequirement::Python { .. } => None,
-        ToolRequirement::Package { requirement, .. } => Some(ExecutableProviderHints::new(
-            executable,
-            requirement,
-            &site_packages,
-            invocation_source,
-        )),
-    };
-
-    if let Some(ref provider_hints) = provider_hints {
-        if provider_hints.not_from_any() {
-            if !explicit_from {
-                // If the user didn't use `--from` and the command isn't in the environment, we're now
-                // just invoking an arbitrary executable on the `PATH` and should exit instead.
-                writeln!(printer.stderr(), "{provider_hints}")?;
-                return Ok(ExitStatus::Failure);
+        ToolRequirement::Package { requirement, .. } => {
+            let provider_hints = ExecutableProviderHints::new(
+                executable,
+                requirement,
+                &site_packages,
+                invocation_source,
+            );
+            if provider_hints.not_from_any() {
+                if !explicit_from {
+                    // Without `--from`, invoking an arbitrary executable on `PATH` would be unexpected.
+                    writeln!(printer.stderr(), "{provider_hints}")?;
+                    return Ok(ExitStatus::Failure);
+                }
+                // With `--from`, the executable may be on `PATH`; defer the hint until it cannot be found.
+                // TODO(zanieb): Consider if we should require `--with` instead of `--from` in this case?
+                // It'd be a breaking change but would make `uvx` invocations safer.
+                Some(provider_hints)
+            } else {
+                if provider_hints.not_from_expected() {
+                    // The executable is available through another package, which could be confusing.
+                    warn_user_once!("{provider_hints}");
+                }
+                None
             }
-            // In the case where `--from` is used, we'll warn on failure if the command is not found
-            // TODO(zanieb): Consider if we should require `--with` instead of `--from` in this case?
-            // It'd be a breaking change but would make `uvx` invocations safer.
-        } else if provider_hints.not_from_expected() {
-            // However, if the user used `--from`, we shouldn't fail because they requested that the
-            // package and executable be different. We'll warn if the executable comes from another
-            // package though, because that could be confusing
-            warn_user_once!("{provider_hints}");
         }
-    }
+    };
 
     // Construct the command
     let mut process = if cfg!(windows) {
@@ -444,23 +439,14 @@ pub async fn run(
         args.iter().map(|arg| arg.to_string_lossy()).join(" ")
     );
 
-    let handle = match process.spawn() {
-        Ok(handle) => Ok(handle),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            if let Some(ref provider_hints) = provider_hints {
-                if provider_hints.not_from_any() && explicit_from {
-                    // We deferred this warning earlier, because `--from` was used and the command
-                    // could have come from the `PATH`. Display a more helpful message instead of the
-                    // OS error.
-                    writeln!(printer.stderr(), "{provider_hints}")?;
-                    return Ok(ExitStatus::Failure);
-                }
-            }
-            Err(err)
+    let handle = match (process.spawn(), deferred_provider_hints) {
+        (Ok(handle), _) => handle,
+        (Err(err), Some(provider_hints)) if err.kind() == std::io::ErrorKind::NotFound => {
+            writeln!(printer.stderr(), "{provider_hints}")?;
+            return Ok(ExitStatus::Failure);
         }
-        Err(err) => Err(err),
-    }
-    .with_context(|| format!("Failed to spawn: {executable}"))?;
+        (Err(err), _) => return Err(err).with_context(|| format!("Failed to spawn: {executable}")),
+    };
 
     run_to_completion(handle).await
 }
@@ -515,22 +501,20 @@ async fn show_help(
         Err(err) => return Err(err.into()),
     };
 
-    let tools = installed_tools
+    let mut tools = installed_tools
         .tools()?
         .into_iter()
         // Skip invalid tools
         .filter_map(|(name, tool)| {
-            tool.ok().and_then(|_| {
-                installed_tools
-                    .get_environment(&name, cache)
-                    .ok()
-                    .flatten()
-                    .and_then(|tool_env| tool_env.version().ok())
-                    .map(|version| (name, version))
-            })
+            tool.ok()?;
+            let environment = installed_tools
+                .get_environment(&name, cache)
+                .ok()
+                .flatten()?;
+            Some((name, environment.version().ok()?))
         })
-        .sorted_by(|(name1, ..), (name2, ..)| name1.cmp(name2))
         .collect::<Vec<_>>();
+    tools.sort_by(|(name1, ..), (name2, ..)| name1.cmp(name2));
 
     // No tools installed or they're all malformed
     if tools.is_empty() {
@@ -562,8 +546,8 @@ struct ExecutableProviderHints<'a> {
     from: &'a Requirement,
     /// The packages in the [`PythonEnvironment`] the command will run in
     site_packages: &'a SitePackages,
-    /// The packages with matching executable names
-    packages: Vec<InstalledDist>,
+    /// The names of packages that provide the executable
+    packages: Vec<&'a PackageName>,
     /// The source of the invocation, for suggestions to the user
     invocation_source: ToolRunCommand,
 }
@@ -575,7 +559,7 @@ impl<'a> ExecutableProviderHints<'a> {
         site_packages: &'a SitePackages,
         invocation_source: ToolRunCommand,
     ) -> Self {
-        let packages = matching_packages(executable, site_packages);
+        let packages = matching_package_names(executable, site_packages).collect();
         ExecutableProviderHints {
             executable,
             from,
@@ -587,10 +571,9 @@ impl<'a> ExecutableProviderHints<'a> {
 
     /// If the executable is not provided by the expected package.
     fn not_from_expected(&self) -> bool {
-        !self
-            .packages
+        self.packages
             .iter()
-            .any(|package| package.name() == &self.from.name)
+            .all(|&package| package != &self.from.name)
     }
 
     /// If the executable is not provided by any package.
@@ -647,7 +630,7 @@ impl std::fmt::Display for ExecutableProviderHints<'_> {
                     writeln!(f, "\nUse `{}` instead.", suggested_command.green().bold())?;
                 }
             }
-            [package] if package.name() == &from.name => {
+            [package] if *package == &from.name => {
                 write!(
                     f,
                     "An executable named `{}` is provided by package `{}`",
@@ -656,24 +639,20 @@ impl std::fmt::Display for ExecutableProviderHints<'_> {
                 )?;
             }
             [package] => {
-                let suggested_command = format!(
-                    "{invocation_source} --from {} {}",
-                    package.name(),
-                    executable
-                );
+                let suggested_command =
+                    format!("{invocation_source} --from {package} {executable}");
                 write!(
                     f,
                     "An executable named `{}` is not provided by package `{}` but is available via the dependency `{}`. Consider using `{}` instead.",
                     executable.cyan(),
                     from.name.cyan(),
-                    package.name().cyan(),
+                    package.cyan(),
                     suggested_command.green()
                 )?;
             }
             packages => {
                 let provided_by = packages
                     .iter()
-                    .map(uv_distribution_types::Name::name)
                     .map(|name| format!("- {}", name.cyan()))
                     .join("\n");
                 if self.not_from_expected() {
@@ -776,18 +755,15 @@ async fn get_or_create_environment(
         _ => None,
     };
 
-    // Determine explicit Python version requests
-    let explicit_python_request = python.map(PythonRequest::parse);
-    let tool_python_request = match request {
-        ToolRequest::Python { request, .. } => Some(request.clone()),
-        ToolRequest::Package { .. } => None,
-    };
-
     // Resolve an argument-derived Python request, if any.
-    let python_request = match (explicit_python_request, tool_python_request) {
-        // e.g., `uvx --python 3.10 python3.12`
-        (Some(explicit), Some(tool_request)) if tool_request != PythonRequest::Default => {
-            // Conflict: both --python flag and versioned tool name
+    let explicit_python_request = python.map(PythonRequest::parse);
+    let python_request = if let ToolRequest::Python {
+        request: tool_request,
+        ..
+    } = request
+        && *tool_request != PythonRequest::Default
+    {
+        if let Some(explicit) = explicit_python_request {
             return Err(anyhow::anyhow!(
                 "Received multiple Python version requests: `{}` and `{}`",
                 explicit.to_canonical_string().cyan(),
@@ -795,12 +771,9 @@ async fn get_or_create_environment(
             )
             .into());
         }
-        // e.g, `uvx --python 3.10 ...`
-        (Some(explicit), _) => Some(explicit),
-        // e.g., `uvx python` or `uvx <tool>`
-        (None, Some(PythonRequest::Default) | None) => None,
-        // e.g., `uvx python3.12`
-        (None, Some(tool_request)) => Some(tool_request),
+        Some(tool_request.clone())
+    } else {
+        explicit_python_request
     };
     let python_request = ToolPython::from_request(
         python_request,
@@ -868,7 +841,7 @@ async fn get_or_create_environment(
             let (executable, requirement) = match target {
                 // Ex) `ruff>=0.6.0`
                 Target::Unspecified(requirement) => {
-                    let spec = unresolved_target_requirement.clone().ok_or_else(|| {
+                    let spec = unresolved_target_requirement.ok_or_else(|| {
                         anyhow::anyhow!(
                             "Expected parsed requirement for unresolved target `{requirement}`"
                         )
@@ -896,28 +869,22 @@ async fn get_or_create_environment(
                     // 2. The verbatim executable provided by the user as a named requirement (as in: `uvx change_wheel_version`).
                     // 3. The resolved package name (as in: `uvx git+https://github.com/pallets/flask`).
                     let executable = request_executable
-                        .map(ToString::to_string)
-                        .or_else(|| name.map(ToString::to_string))
-                        .unwrap_or_else(|| requirement.name.to_string());
+                        .or(name)
+                        .unwrap_or(requirement.name.as_str())
+                        .to_owned();
 
                     (executable, requirement)
                 }
-                // Ex) `ruff@0.6.0`
-                Target::Version(executable, name, extras, version) => {
-                    let executable = request_executable
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| (*executable).to_string());
-                    let requirement =
-                        registry_requirement(name.clone(), extras.clone(), Some(version.clone()));
-
-                    (executable, requirement)
-                }
-                // Ex) `ruff@latest`
-                Target::Latest(executable, name, extras) => {
-                    let executable = request_executable
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| (*executable).to_string());
-                    let requirement = registry_requirement(name.clone(), extras.clone(), None);
+                // Ex) `ruff@0.6.0` or `ruff@latest`
+                Target::Version(executable, name, extras, _)
+                | Target::Latest(executable, name, extras) => {
+                    let executable = request_executable.unwrap_or(executable).to_string();
+                    let version = if let Target::Version(.., version) = target {
+                        Some(version.clone())
+                    } else {
+                        None
+                    };
+                    let requirement = registry_requirement(name.clone(), extras.clone(), version);
 
                     (executable, requirement)
                 }
@@ -953,7 +920,6 @@ async fn get_or_create_environment(
         client_builder,
     )
     .await?;
-    let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
 
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
@@ -962,20 +928,19 @@ async fn get_or_create_environment(
             ToolRequirement::Python { .. } => {}
             ToolRequirement::Package { requirement, .. } => requirements.push(requirement.clone()),
         }
-        requirements.extend(resolve_names(spec.requirements.clone()).await?);
+        requirements.extend(resolve_names(spec.requirements).await?);
         requirements
     };
 
     // Resolve the constraints.
     let constraints = spec
         .constraints
-        .clone()
         .into_iter()
         .map(|constraint| constraint.requirement)
         .collect::<Vec<_>>();
 
     // Resolve the overrides.
-    let overrides = resolve_names(spec.overrides.clone()).await?;
+    let overrides = resolve_names(spec.overrides).await?;
 
     // Check if the tool is already installed in a compatible environment.
     if !isolated && !request.is_latest() {
@@ -1034,7 +999,7 @@ async fn get_or_create_environment(
                             constraints.iter().chain(latest.iter()),
                             &DependencyModifiers::new(
                                 Overrides::from_requirements(overrides.clone()),
-                                exclusions,
+                                Excludes::from_entries(spec.excludes.iter().cloned()),
                             ),
                             dependency_metadata,
                             DependencyMode::Transitive,
@@ -1079,97 +1044,74 @@ async fn get_or_create_environment(
     // TODO(zanieb): When implementing project-level tools, discover the project and check if it has the tool.
     // TODO(zanieb): Determine if we should layer on top of the project environment if it is present.
 
-    let result = CachedEnvironment::from_spec(
-        spec.clone(),
-        build_constraints.clone(),
-        &interpreter,
-        python_platform.as_ref(),
-        settings,
-        client_builder,
-        &state,
-        if show_resolution {
-            Box::new(DefaultResolveLogger)
-        } else {
-            Box::new(SummaryResolveLogger)
-        },
-        if show_resolution {
-            Box::new(DefaultInstallLogger)
-        } else {
-            Box::new(SummaryInstallLogger)
-        },
-        installer_metadata,
-        concurrency,
-        cache,
-        workspace_cache,
-        printer,
-        preview,
-    )
-    .await;
+    let get_cached_environment = async |spec, constraints, interpreter: &Interpreter| {
+        CachedEnvironment::from_spec(
+            spec,
+            constraints,
+            interpreter,
+            python_platform.as_ref(),
+            settings,
+            client_builder,
+            &state,
+            if show_resolution {
+                Box::new(DefaultResolveLogger)
+            } else {
+                Box::new(SummaryResolveLogger)
+            },
+            if show_resolution {
+                Box::new(DefaultInstallLogger)
+            } else {
+                Box::new(SummaryInstallLogger)
+            },
+            installer_metadata,
+            concurrency,
+            cache,
+            workspace_cache,
+            printer,
+            preview,
+        )
+        .await
+    };
+    let result =
+        get_cached_environment(spec.clone(), build_constraints.clone(), &interpreter).await;
 
     let environment = match result {
         Ok(environment) => environment,
-        Err(err) => match err {
-            EnvironmentError::Resolve(err) => {
-                let err = *err;
-                // If the resolution failed due to the discovered interpreter not satisfying the
-                // `requires-python` constraint, we can try to refine the interpreter.
-                //
-                // For example, if we discovered a Python 3.8 interpreter on the user's machine,
-                // but the tool requires Python 3.10 or later, we can try to download a
-                // Python 3.10 interpreter and re-resolve.
-                let Some(interpreter) = refine_interpreter(
-                    &interpreter,
-                    python_request.as_ref(),
-                    &err,
-                    client_builder,
-                    &reporter,
-                    &install_mirrors,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    cache,
-                )
-                .await
-                .ok()
-                .flatten() else {
-                    return Err(err.into());
-                };
+        Err(EnvironmentError::Resolve(err)) => {
+            let err = *err;
+            // If the resolution failed due to the discovered interpreter not satisfying the
+            // `requires-python` constraint, we can try to refine the interpreter.
+            //
+            // For example, if we discovered a Python 3.8 interpreter on the user's machine,
+            // but the tool requires Python 3.10 or later, we can try to download a
+            // Python 3.10 interpreter and re-resolve.
+            let Some(interpreter) = refine_interpreter(
+                &interpreter,
+                python_request.as_ref(),
+                &err,
+                client_builder,
+                &reporter,
+                &install_mirrors,
+                python_preference,
+                python_arch,
+                python_downloads,
+                cache,
+            )
+            .await
+            .ok()
+            .flatten() else {
+                return Err(err.into());
+            };
 
-                debug!(
-                    "Re-resolving with Python {} (`{}`)",
-                    interpreter.python_version(),
-                    interpreter.sys_executable().display()
-                );
+            debug!(
+                "Re-resolving with Python {} (`{}`)",
+                interpreter.python_version(),
+                interpreter.sys_executable().display()
+            );
 
-                CachedEnvironment::from_spec(
-                    spec,
-                    build_constraints,
-                    &interpreter,
-                    python_platform.as_ref(),
-                    settings,
-                    client_builder,
-                    &state,
-                    if show_resolution {
-                        Box::new(DefaultResolveLogger)
-                    } else {
-                        Box::new(SummaryResolveLogger)
-                    },
-                    if show_resolution {
-                        Box::new(DefaultInstallLogger)
-                    } else {
-                        Box::new(SummaryInstallLogger)
-                    },
-                    installer_metadata,
-                    concurrency,
-                    cache,
-                    workspace_cache,
-                    printer,
-                    preview,
-                )
-                .await?
-            }
-            err => return Err(err.into()),
-        },
+            get_cached_environment(spec, build_constraints, &interpreter).await?
+        }
+        Err(err) => return Err(err.into()),
     };
 
     Ok((from, environment.into()))

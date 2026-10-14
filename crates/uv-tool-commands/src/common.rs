@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, Bound},
-    ffi::OsString,
+    ffi::OsStr,
     fmt::Write,
     io,
     path::{Path, PathBuf},
@@ -22,8 +22,8 @@ use uv_distribution::{
     DistributionDatabase, LoweredExtraBuildDependencies, StaticMetadataDatabase,
 };
 use uv_distribution_types::{
-    DependencyMetadata, HashCollection, IndexLocations, InstalledDist, Name,
-    NameRequirementSpecification, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
+    DependencyMetadata, HashCollection, IndexLocations, Name, NameRequirementSpecification,
+    Requirement, RequiresPython, Resolution, UnresolvedRequirement,
 };
 use uv_errors::{ErrorWithHints, Hinted, Hints};
 #[cfg(unix)]
@@ -123,26 +123,26 @@ use uv_settings::ResolverSettings;
 
 use crate::error::ToolLockError;
 
-/// Return all packages which contain an executable with the given name.
-pub(super) fn matching_packages(name: &str, site_packages: &SitePackages) -> Vec<InstalledDist> {
+/// Return the names of packages that contain an executable with the given name.
+pub(super) fn matching_package_names<'a>(
+    executable: &str,
+    site_packages: &'a SitePackages,
+) -> impl Iterator<Item = &'a PackageName> {
     site_packages
         .iter()
-        .filter_map(|package| {
-            entrypoint_paths(site_packages, package.name(), package.version())
-                .ok()
-                .and_then(|entrypoints| {
-                    entrypoints
-                        .iter()
-                        .any(|entrypoint| {
-                            entrypoint
-                                .0
-                                .strip_suffix(std::env::consts::EXE_SUFFIX)
-                                .is_some_and(|stripped| stripped == name)
-                        })
-                        .then(|| package.clone())
-                })
+        .filter(move |package| {
+            entrypoint_paths(site_packages, package.name(), package.version()).is_ok_and(
+                |entrypoints| {
+                    entrypoints.iter().any(|entrypoint| {
+                        entrypoint
+                            .0
+                            .strip_suffix(std::env::consts::EXE_SUFFIX)
+                            .is_some_and(|stripped| stripped == executable)
+                    })
+                },
+            )
         })
-        .collect()
+        .map(Name::name)
 }
 
 /// Remove any entrypoints attached to the [`Tool`].
@@ -188,8 +188,10 @@ impl ToolPython {
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
     ) -> Result<Self, io::Error> {
-        let requires_python = if python_request.is_none() {
-            match requirement {
+        let (source, python_request) = if let Some(request) = python_request {
+            (PythonRequestSource::UserRequest, Some(request))
+        } else {
+            let requires_python = match requirement {
                 Some(requirement) => {
                     infer_requires_python_from_requirement(
                         requirement,
@@ -201,37 +203,30 @@ impl ToolPython {
                     .await
                 }
                 None => None,
-            }
-        } else {
-            None
-        };
-
-        let (source, python_request) = if let Some(request) = python_request {
-            (PythonRequestSource::UserRequest, Some(request))
-        } else if let Some(file) = PythonVersionFile::discover(
-            &*CWD,
-            &VersionFileDiscoveryOptions::default()
-                .with_config_discovery(config_discovery)
-                .with_no_local(true),
-        )
-        .await?
-        .filter(|file| match (file.version(), requires_python.as_ref()) {
-            (Some(request), Some(requires_python)) => {
-                request.intersects_specifiers(requires_python.specifiers())
-            }
-            _ => true,
-        }) {
-            (
-                PythonRequestSource::DotPythonVersion(file.clone()),
-                file.version().cloned(),
+            };
+            if let Some(file) = PythonVersionFile::discover(
+                &*CWD,
+                &VersionFileDiscoveryOptions::default()
+                    .with_config_discovery(config_discovery)
+                    .with_no_local(true),
             )
-        } else {
-            (
-                PythonRequestSource::RequiresPython,
-                requires_python.as_ref().and_then(|requires_python| {
-                    PythonRequest::from_specifiers(requires_python.specifiers())
-                }),
-            )
+            .await?
+            .filter(|file| match (file.version(), requires_python.as_ref()) {
+                (Some(request), Some(requires_python)) => {
+                    request.intersects_specifiers(requires_python.specifiers())
+                }
+                _ => true,
+            }) {
+                let request = file.version().cloned();
+                (PythonRequestSource::DotPythonVersion(file), request)
+            } else {
+                (
+                    PythonRequestSource::RequiresPython,
+                    requires_python.as_ref().and_then(|requires_python| {
+                        PythonRequest::from_specifiers(requires_python.specifiers())
+                    }),
+                )
+            }
         };
 
         if let Some(python_request) = python_request.as_ref() {
@@ -667,20 +662,10 @@ pub(super) async fn refine_interpreter(
         Bound::Excluded(version) => VersionSpecifier::greater_than_version(version.clone()),
         Bound::Unbounded => unreachable!("`requires-python` should never be unbounded"),
     };
-
-    let upper_bound = match requires_python.as_ref() {
-        Bound::Included(version) => {
-            let major = version.release().first().copied().unwrap_or(0);
-            let minor = version.release().get(1).copied().unwrap_or(0);
-            VersionSpecifier::less_than_version(Version::new([major, minor + 1]))
-        }
-        Bound::Excluded(version) => {
-            let major = version.release().first().copied().unwrap_or(0);
-            let minor = version.release().get(1).copied().unwrap_or(0);
-            VersionSpecifier::less_than_version(Version::new([major, minor + 1]))
-        }
-        Bound::Unbounded => unreachable!("`requires-python` should never be unbounded"),
-    };
+    let release = lower_bound.version().release();
+    let major = release.first().copied().unwrap_or(0);
+    let minor = release.get(1).copied().unwrap_or(0);
+    let upper_bound = VersionSpecifier::less_than_version(Version::new([major, minor + 1]));
 
     let requires_python_request = PythonRequest::Version(VersionRequest::from_specifiers(
         VersionSpecifiers::from_iter([lower_bound, upper_bound]),
@@ -760,65 +745,17 @@ pub(super) fn finalize_tool_install(
         }
 
         let installed = site_packages.get_packages(package);
-        let Some(dist) = installed.first() else {
-            if package != name {
-                bail!("Expected package `{package}` to be installed");
-            }
-
-            writeln!(
-                printer.stdout(),
-                "No executables are provided by package `{}`; removing tool",
-                package.cyan()
-            )?;
-            remove_entrypoint_paths(
-                installed_entrypoints
-                    .iter()
-                    .map(|entrypoint| entrypoint.install_path.as_path()),
-            );
-            installed_tools.remove_environment(name)?;
-
-            return Err(NoExecutablesError::Root {
-                package: package.clone(),
-                matching_dependency_packages: Vec::new(),
-            }
-            .into());
+        let dist_entrypoints = match installed.first() {
+            Some(dist) => entrypoint_paths(&site_packages, dist.name(), dist.version())?,
+            None if package != name => bail!("Expected package `{package}` to be installed"),
+            None => Vec::new(),
         };
-        let dist_entrypoints = entrypoint_paths(&site_packages, dist.name(), dist.version())?;
-
-        // Determine the entry points targets. Use a sorted collection for deterministic output.
-        let target_entrypoints = dist_entrypoints
-            .into_iter()
-            .map(|(name, source_path)| {
-                let target_path = executable_directory.join(
-                    source_path
-                        .file_name()
-                        .map(std::borrow::ToOwned::to_owned)
-                        .unwrap_or_else(|| OsString::from(name.clone())),
-                );
-                (name, source_path, target_path)
-            })
-            .collect::<BTreeSet<_>>();
-
-        if target_entrypoints.is_empty() {
-            let err = if package != name {
-                NoExecutablesError::Dependency {
-                    package: package.clone(),
-                }
-            } else {
-                NoExecutablesError::Root {
-                    package: package.clone(),
-                    matching_dependency_packages: matching_packages(
-                        package.as_ref(),
-                        &site_packages,
-                    )
-                    .into_iter()
-                    .map(|dist| dist.name().clone())
-                    .collect(),
-                }
-            };
-
+        if dist_entrypoints.is_empty() {
             if package != name {
                 // Non-root package: display the error with hints and continue.
+                let err = NoExecutablesError::Dependency {
+                    package: package.clone(),
+                };
                 writeln!(
                     printer.stdout(),
                     "{}",
@@ -828,22 +765,36 @@ pub(super) fn finalize_tool_install(
             }
 
             // For the root package, this is a fatal error.
+            let err = NoExecutablesError::Root {
+                package: package.clone(),
+                matching_dependency_packages: if installed.is_empty() {
+                    Vec::new()
+                } else {
+                    matching_package_names(package.as_ref(), &site_packages)
+                        .cloned()
+                        .collect()
+                },
+            };
             writeln!(
                 printer.stdout(),
                 "No executables are provided by package `{}`; removing tool",
                 package.cyan()
             )?;
 
-            // Clean up the environment we just created.
-            remove_entrypoint_paths(
-                installed_entrypoints
-                    .iter()
-                    .map(|entrypoint| entrypoint.install_path.as_path()),
-            );
-            installed_tools.remove_environment(name)?;
+            rollback_tool_install(installed_tools, name, &installed_entrypoints)?;
 
             return Err(err.into());
         }
+
+        // Sort entrypoint targets by name for deterministic installation and reporting.
+        let target_entrypoints = dist_entrypoints
+            .into_iter()
+            .map(|(name, source_path)| {
+                let target_path = executable_directory
+                    .join(source_path.file_name().unwrap_or_else(|| OsStr::new(&name)));
+                (name, source_path, target_path)
+            })
+            .collect::<BTreeSet<_>>();
 
         // Error if we're overwriting an existing entrypoint, unless the user passed `--force`.
         if !force {
@@ -852,13 +803,7 @@ pub(super) fn finalize_tool_install(
                 .filter(|(_, _, target_path)| target_path.exists())
                 .peekable();
             if existing_entrypoints.peek().is_some() {
-                // Clean up the environment we just created
-                remove_entrypoint_paths(
-                    installed_entrypoints
-                        .iter()
-                        .map(|entrypoint| entrypoint.install_path.as_path()),
-                );
-                installed_tools.remove_environment(name)?;
+                rollback_tool_install(installed_tools, name, &installed_entrypoints)?;
 
                 let existing_entrypoints = existing_entrypoints
                     // SAFETY: We know the target has a filename because we just constructed it above
@@ -882,7 +827,7 @@ pub(super) fn finalize_tool_install(
         #[cfg(windows)]
         let itself = std::env::current_exe().ok();
 
-        let mut names = BTreeSet::new();
+        let first_entrypoint = installed_entrypoints.len();
         for (name, src, target) in target_entrypoints {
             debug!("Installing executable: {name}");
 
@@ -898,12 +843,17 @@ pub(super) fn finalize_tool_install(
                 fs_err::copy(src, &target).context("Failed to install entrypoint")?;
             }
 
-            let tool_entry = ToolEntrypoint::new(name, target, package.to_string());
-            names.insert(tool_entry.name.clone());
-            installed_entrypoints.push(tool_entry);
+            installed_entrypoints.push(ToolEntrypoint::new(name, target, package.to_string()));
         }
 
-        let s = if names.len() == 1 { "" } else { "s" };
+        let entrypoints = installed_entrypoints[first_entrypoint..]
+            .iter()
+            .map(|entrypoint| entrypoint.name.as_str())
+            .sorted_unstable()
+            .dedup()
+            .collect::<Vec<_>>();
+        let count = entrypoints.len();
+        let s = if count == 1 { "" } else { "s" };
         let from_pkg = if name == package {
             String::new()
         } else {
@@ -911,9 +861,8 @@ pub(super) fn finalize_tool_install(
         };
         writeln!(
             printer.stderr(),
-            "Installed {} executable{s}{from_pkg}: {}",
-            names.len(),
-            names.iter().map(|name| name.bold()).join(", ")
+            "Installed {count} executable{s}{from_pkg}: {}",
+            entrypoints.iter().map(|name| name.bold()).join(", ")
         )?;
     }
 
@@ -927,36 +876,46 @@ pub(super) fn finalize_tool_install(
     Ok(())
 }
 
+/// Remove executables and the environment from a partially installed tool.
+fn rollback_tool_install(
+    installed_tools: &InstalledTools,
+    name: &PackageName,
+    entrypoints: &[ToolEntrypoint],
+) -> Result<(), uv_tool::Error> {
+    remove_entrypoint_paths(
+        entrypoints
+            .iter()
+            .map(|entrypoint| entrypoint.install_path.as_path()),
+    );
+    installed_tools.remove_environment(name)
+}
+
 fn warn_out_of_path(executable_directory: &Path) {
-    // If the executable directory isn't on the user's PATH, warn.
-    if !Shell::contains_path(executable_directory) {
-        if let Some(shell) = Shell::from_env() {
-            if let Some(command) = shell.prepend_path(executable_directory) {
-                if shell.supports_update() {
-                    warn_user_once!(
-                        "`{}` is not on your PATH. To use installed tools, run `{}` or `{}`.",
-                        executable_directory.simplified_display().cyan(),
-                        command.green(),
-                        "uv tool update-shell".green()
-                    );
-                } else {
-                    warn_user_once!(
-                        "`{}` is not on your PATH. To use installed tools, run `{}`.",
-                        executable_directory.simplified_display().cyan(),
-                        command.green()
-                    );
-                }
-            } else {
-                warn_user_once!(
-                    "`{}` is not on your PATH. To use installed tools, add the directory to your PATH.",
-                    executable_directory.simplified_display().cyan(),
-                );
-            }
+    if Shell::contains_path(executable_directory) {
+        return;
+    }
+
+    if let Some(shell) = Shell::from_env()
+        && let Some(command) = shell.prepend_path(executable_directory)
+    {
+        if shell.supports_update() {
+            warn_user_once!(
+                "`{}` is not on your PATH. To use installed tools, run `{}` or `{}`.",
+                executable_directory.simplified_display().cyan(),
+                command.green(),
+                "uv tool update-shell".green()
+            );
         } else {
             warn_user_once!(
-                "`{}` is not on your PATH. To use installed tools, add the directory to your PATH.",
+                "`{}` is not on your PATH. To use installed tools, run `{}`.",
                 executable_directory.simplified_display().cyan(),
+                command.green()
             );
         }
+    } else {
+        warn_user_once!(
+            "`{}` is not on your PATH. To use installed tools, add the directory to your PATH.",
+            executable_directory.simplified_display().cyan(),
+        );
     }
 }
