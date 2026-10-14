@@ -2932,9 +2932,15 @@ async fn lock_sdist_registry_relock_hash_mismatch() -> Result<()> {
     Checked 1 package in [TIME]
     ");
     assert!(sentinel.exists());
-    assert_ne!(context.read("uv.lock"), locked);
-    // A local version inherits the public version's trust policy until explicitly upgraded.
     let locked = context.read("uv.lock");
+    let package = locked_package(&locked, "demo-pkg")?;
+    let replacement_hash = format!("sha256:{replacement_digest}");
+    assert_eq!(
+        package["sdist"]["hash"].as_str(),
+        Some(replacement_hash.as_str())
+    );
+
+    // A local version inherits the public version's trust policy until explicitly upgraded.
     fs_err::remove_file(&sentinel)?;
     let local = generate_source_archive(&name, &"1.0.0+local".parse()?, "", Some(sentinel.path()))?;
     let local_digest = hex::encode(Sha256::digest(&local));
@@ -3590,7 +3596,7 @@ fn lock_sdist_path_locked_hash_mismatch() -> Result<()> {
     let replacement_digest = hex::encode(Sha256::digest(&replacement));
     let context = context
         .with_filter((trusted_digest, "[TRUSTED_HASH]"))
-        .with_filter((replacement_digest, "[REPLACEMENT_HASH]"));
+        .with_filter((replacement_digest.clone(), "[REPLACEMENT_HASH]"));
 
     archive.write_binary(&trusted)?;
     context
@@ -3651,7 +3657,12 @@ fn lock_sdist_path_locked_hash_mismatch() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
     assert!(sentinel.exists(), "the upgraded backend was not executed");
-    assert_ne!(context.read("uv.lock"), locked);
+    let package = locked_package(&context.read("uv.lock"), "demo-pkg")?;
+    let replacement_hash = format!("sha256:{replacement_digest}");
+    assert_eq!(
+        package["sdist"]["hash"].as_str(),
+        Some(replacement_hash.as_str())
+    );
     Ok(())
 }
 
