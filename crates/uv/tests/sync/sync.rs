@@ -6828,10 +6828,9 @@ fn sync_non_existent_extra_no_optional_dependencies() -> Result<()> {
     Ok(())
 }
 
-/// Ensures that we do not perform validation of extras against a lock file that was generated on a
-/// version of uv that predates when `provides-extras` feature was added.
+/// Extra validation depends on whether the lockfile revision supports `provides-extras`.
 #[test]
-fn sync_ignore_extras_check_when_no_provides_extras() -> Result<()> {
+fn sync_extra_validation_respects_lock_revision() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -6883,12 +6882,13 @@ fn sync_ignore_extras_check_when_no_provides_extras() -> Result<()> {
     Checked in [TIME]
     ");
 
-    // Supplying the extra metadata enables validation for the same lock and request.
-    lockfile.write_str(&legacy_lock.replacen(
+    // Revision 1 introduced extra metadata and enables validation of the same request.
+    let validated_lock = legacy_lock.replacen(
         "[package.metadata]",
         "[package.metadata]\nprovides-extras = [\"types\"]",
         1,
-    ))?;
+    );
+    lockfile.write_str(&format!("revision = 1\n{validated_lock}"))?;
     uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--extra", "baz", "--offline"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
