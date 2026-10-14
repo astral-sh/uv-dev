@@ -48,11 +48,9 @@ fn write_wheel(context: &TestContext, name: &str, requires: &[Requirement]) -> R
     Ok(ChildPath::new(context.site_packages()).child(marker))
 }
 
-/// Write both distribution types with markers identifying which artifact was selected.
-fn wheel_and_sdist(context: &TestContext, name: &str) -> Result<ArtifactMarkers> {
-    let wheel_installed = write_wheel(context, name, &[])?;
+fn write_sdist(context: &TestContext, name: &str, version: &str) -> Result<ChildPath> {
     let package_name = name.parse()?;
-    let version = "1.0.0".parse()?;
+    let version = version.parse()?;
     let source_built = context.temp_dir.child(format!("{name}-built"));
     let source = generate_source_archive(&package_name, &version, "", Some(source_built.path()))?;
     context
@@ -62,6 +60,13 @@ fn wheel_and_sdist(context: &TestContext, name: &str) -> Result<ArtifactMarkers>
             package_name.as_dist_info_name()
         ))
         .write_binary(&source)?;
+    Ok(source_built)
+}
+
+/// Write both distribution types with markers identifying which artifact was selected.
+fn wheel_and_sdist(context: &TestContext, name: &str) -> Result<ArtifactMarkers> {
+    let wheel_installed = write_wheel(context, name, &[])?;
+    let source_built = write_sdist(context, name, "1.0.0")?;
     Ok(ArtifactMarkers {
         source_built,
         wheel_installed,
@@ -320,5 +325,30 @@ async fn build_policy_cache() -> Result<()> {
     ");
     context.assert_installed("idna", "1.0.0");
     markers.source_built.assert(predicates::path::missing());
+    Ok(())
+}
+
+/// A requirements-file wheel-only policy rejects an available source distribution.
+#[test]
+fn only_binary_requirements_txt() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let source_built = write_sdist(&context, "django-allauth", "0.51.0")?;
+    let requirements = context.temp_dir.child("requirements.txt");
+    requirements.write_str("django_allauth==0.51.0\n--only-binary django_allauth\n")?;
+
+    uv_snapshot!(context.filters(), install(&context)
+        .arg("-r")
+        .arg(requirements.path())
+        .arg("--strict"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because django-allauth==0.51.0 has no usable wheels and you require django-allauth==0.51.0, we can conclude that your requirements are unsatisfiable.
+
+    hint: Wheels are required for `django-allauth` because building from source is disabled for `django-allauth` (i.e., with `--no-build-package django-allauth`)
+    ");
+
+    source_built.assert(predicates::path::missing());
+    context.assert_not_installed("django_allauth");
     Ok(())
 }
