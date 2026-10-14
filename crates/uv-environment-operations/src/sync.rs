@@ -99,13 +99,14 @@ pub async fn sync_from_lock(
             lock,
             ..
         } => {
-            let member = project_name.and_then(|name| {
-                lock.workspace_member_paths()
-                    .find_map(|(member, path)| (member == name).then(|| root.join(path)))
-            });
-            if let Some(member) = member.filter(|path| {
-                !extra_build_dependencies.is_empty() && path.join("pyproject.toml").is_file()
-            }) {
+            let member = project_name
+                .filter(|_| !extra_build_dependencies.is_empty())
+                .and_then(|name| {
+                    lock.workspace_member_paths()
+                        .find_map(|(member, path)| (member == name).then(|| root.join(path)))
+                })
+                .filter(|path| path.join("pyproject.toml").is_file());
+            if let Some(member) = member {
                 let workspace = Workspace::discover(
                     &member,
                     &DiscoveryOptions {
