@@ -1,10 +1,10 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_fs::fixture::{FileWriteStr, PathChild};
 use indoc::indoc;
 use insta::assert_snapshot;
 use uv_static::EnvVars;
 
-use uv_test::uv_snapshot;
+use uv_test::{TestContext, uv_snapshot};
 
 /// Lock with a relative exclude-newer value.
 ///
@@ -70,7 +70,7 @@ fn lock_exclude_newer_relative() -> Result<()> {
     requires-dist = [{ name = "idna" }]
     "#);
 
-    // Changing the current time should not result in a new lockfile
+    // Moving the clock makes 3.7 eligible, but a locked run must keep the existing resolution.
     let later_timestamp = "2024-06-01T00:00:00Z";
     uv_snapshot!(context.filters(), context
         .lock()
@@ -86,113 +86,65 @@ fn lock_exclude_newer_relative() -> Result<()> {
 
     assert_eq!(context.read("uv.lock"), lock);
 
-    // Changing the span to 2 weeks should cause a new resolution.
-    // 2 weeks before 2024-05-01 is 2024-04-17, which is after idna 3.7 (released 2024-04-11).
+    // Refreshing the cache also keeps the locked version stable.
     uv_snapshot!(context.filters(), context
         .lock()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, current_timestamp)
+        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, later_timestamp)
         .arg("--exclude-newer")
-        .arg("2 weeks")
-        .arg("--upgrade"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P3W` to `P2W`
-    Resolved 2 packages in [TIME]
-    Updated idna v3.6 -> v3.7
-    ");
-
-    // Both `exclude-newer` values in the lockfile should be changed, and we should now have idna 3.7
-    let lock = context.read("uv.lock");
-    assert_snapshot!(lock, @r#"
-    version = 1
-    revision = 5
-    requires-python = ">=3.12"
-
-    [options]
-    exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
-    exclude-newer-span = "P2W"
-
-    [[package]]
-    name = "idna"
-    version = "3.7"
-    source = { registry = "https://pypi.org/simple" }
-    sdist = { url = "https://files.pythonhosted.org/packages/21/ed/f86a79a07470cb07819390452f178b3bef1d375f2ec021ecfc709fc7cf07/idna-3.7.tar.gz", hash = "sha256:028ff3aadf0609c1fd278d8ea3089299412a7a8b9bd005dd08b9f8285bcb5cfc", size = 189575, upload-time = "2024-04-11T03:34:43.276Z" }
-    wheels = [
-        { url = "https://files.pythonhosted.org/packages/e5/3e/741d8c82801c347547f8a2a06aa57dbb1992be9e948df2ea0eda2c8b79e8/idna-3.7-py3-none-any.whl", hash = "sha256:82fee1fc78add43492d3a1898bfa6d8a904cc97d8427f683ed8e798d07761aa0", size = 66836, upload-time = "2024-04-11T03:34:41.447Z" },
-    ]
-
-    [[package]]
-    name = "project"
-    version = "0.1.0"
-    source = { virtual = "." }
-    dependencies = [
-        { name = "idna" },
-    ]
-
-    [package.metadata]
-    requires-dist = [{ name = "idna" }]
-    "#);
-
-    // Similarly, using something like `--upgrade` should cause a new resolution
-    let current_timestamp = "2024-06-01T00:00:00Z";
-    uv_snapshot!(context.filters(), context
-        .lock()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, current_timestamp)
-        .arg("--exclude-newer")
-        .arg("2 weeks")
-        .arg("--upgrade"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    ");
-
-    // And the `exclude-newer` timestamp value in the lockfile should be changed
-    let lock = context.read("uv.lock");
-    assert_snapshot!(lock, @r#"
-    version = 1
-    revision = 5
-    requires-python = ">=3.12"
-
-    [options]
-    exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
-    exclude-newer-span = "P2W"
-
-    [[package]]
-    name = "idna"
-    version = "3.7"
-    source = { registry = "https://pypi.org/simple" }
-    sdist = { url = "https://files.pythonhosted.org/packages/21/ed/f86a79a07470cb07819390452f178b3bef1d375f2ec021ecfc709fc7cf07/idna-3.7.tar.gz", hash = "sha256:028ff3aadf0609c1fd278d8ea3089299412a7a8b9bd005dd08b9f8285bcb5cfc", size = 189575, upload-time = "2024-04-11T03:34:43.276Z" }
-    wheels = [
-        { url = "https://files.pythonhosted.org/packages/e5/3e/741d8c82801c347547f8a2a06aa57dbb1992be9e948df2ea0eda2c8b79e8/idna-3.7-py3-none-any.whl", hash = "sha256:82fee1fc78add43492d3a1898bfa6d8a904cc97d8427f683ed8e798d07761aa0", size = 66836, upload-time = "2024-04-11T03:34:41.447Z" },
-    ]
-
-    [[package]]
-    name = "project"
-    version = "0.1.0"
-    source = { virtual = "." }
-    dependencies = [
-        { name = "idna" },
-    ]
-
-    [package.metadata]
-    requires-dist = [{ name = "idna" }]
-    "#);
-
-    // Similarly, using something like `--refresh` should cause a new resolution
-    let current_timestamp = "2024-07-01T00:00:00Z";
-    uv_snapshot!(context.filters(), context
-        .lock()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, current_timestamp)
-        .arg("--exclude-newer")
-        .arg("2 weeks")
+        .arg("3 weeks")
         .arg("--refresh"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+
+    assert_eq!(context.read("uv.lock"), lock);
+
+    // Upgrading at the same later time resolves against the newly computed cutoff.
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, later_timestamp)
+        .arg("--exclude-newer")
+        .arg("3 weeks")
+        .arg("--upgrade"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Updated idna v3.6 -> v3.7
+    ");
+
+    let lock = context.read("uv.lock");
+    assert_snapshot!(lock, @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+
+    [options]
+    exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+    exclude-newer-span = "P3W"
+
+    [[package]]
+    name = "idna"
+    version = "3.7"
+    source = { registry = "https://pypi.org/simple" }
+    sdist = { url = "https://files.pythonhosted.org/packages/21/ed/f86a79a07470cb07819390452f178b3bef1d375f2ec021ecfc709fc7cf07/idna-3.7.tar.gz", hash = "sha256:028ff3aadf0609c1fd278d8ea3089299412a7a8b9bd005dd08b9f8285bcb5cfc", size = 189575, upload-time = "2024-04-11T03:34:43.276Z" }
+    wheels = [
+        { url = "https://files.pythonhosted.org/packages/e5/3e/741d8c82801c347547f8a2a06aa57dbb1992be9e948df2ea0eda2c8b79e8/idna-3.7-py3-none-any.whl", hash = "sha256:82fee1fc78add43492d3a1898bfa6d8a904cc97d8427f683ed8e798d07761aa0", size = 66836, upload-time = "2024-04-11T03:34:41.447Z" },
+    ]
+
+    [[package]]
+    name = "project"
+    version = "0.1.0"
+    source = { virtual = "." }
+    dependencies = [
+        { name = "idna" },
+    ]
+
+    [package.metadata]
+    requires-dist = [{ name = "idna" }]
+    "#);
 
     Ok(())
 }
@@ -232,11 +184,7 @@ fn lock_exclude_newer_older_vs_newer() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-    assert!(
-        lock.contains("version = \"3.7\""),
-        "Expected idna 3.7 in lockfile"
-    );
+    assert_global_cutoff_lock(&context, "P2W", "3.7")?;
 
     // Now make exclude-newer OLDER (more restrictive): 3 weeks back from 2024-05-01 is 2024-04-10
     // This is BEFORE idna 3.7 release (2024-04-11), so 3.7 becomes INVALID and must be replaced
@@ -253,11 +201,7 @@ fn lock_exclude_newer_older_vs_newer() -> Result<()> {
     Updated idna v3.7 -> v3.6
     ");
 
-    let lock = context.read("uv.lock");
-    assert!(
-        lock.contains("version = \"3.6\""),
-        "Expected idna 3.6 in lockfile after downgrade"
-    );
+    assert_global_cutoff_lock(&context, "P3W", "3.6")?;
 
     // Now make exclude-newer NEWER (less restrictive): back to 2 weeks (2024-04-17)
     // This allows idna 3.7 again, but existing version (3.6) is still valid so it stays
@@ -273,11 +217,7 @@ fn lock_exclude_newer_older_vs_newer() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-    assert!(
-        lock.contains("version = \"3.6\""),
-        "Expected idna 3.6 to stay stable without --upgrade"
-    );
+    assert_global_cutoff_lock(&context, "P2W", "3.6")?;
 
     // With --upgrade, should now get idna 3.7 since the constraint allows it
     uv_snapshot!(context.filters(), context
@@ -293,12 +233,30 @@ fn lock_exclude_newer_older_vs_newer() -> Result<()> {
     Updated idna v3.6 -> v3.7
     ");
 
-    let lock = context.read("uv.lock");
-    assert!(
-        lock.contains("version = \"3.7\""),
-        "Expected idna 3.7 after --upgrade"
-    );
+    assert_global_cutoff_lock(&context, "P2W", "3.7")?;
 
+    Ok(())
+}
+
+#[track_caller]
+fn assert_global_cutoff_lock(context: &TestContext, span: &str, version: &str) -> Result<()> {
+    let lock = uv_lock::Lock::from_canonical_toml(&context.read("uv.lock"))?;
+    let cutoff = lock
+        .exclude_newer()
+        .global
+        .as_ref()
+        .and_then(|value| value.span())
+        .context("missing global relative cutoff")?;
+    assert_eq!(cutoff.to_string(), span);
+    let idna = lock
+        .packages()
+        .iter()
+        .find(|package| package.name().as_str() == "idna")
+        .context("missing idna package")?;
+    assert_eq!(
+        idna.version().context("missing idna version")?.to_string(),
+        version
+    );
     Ok(())
 }
 
