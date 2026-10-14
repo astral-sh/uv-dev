@@ -26,6 +26,7 @@ use std::str::FromStr;
 use std::{env, io};
 use uv_python_managed::downloads::ManagedPythonDownloadList;
 
+use anyhow::Context;
 use assert_cmd::assert::{Assert, OutputAssertExt};
 use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild, PathCreateDir, SymlinkToFile};
@@ -2212,30 +2213,25 @@ fn python_installations_for_versions(
         .init_no_wait()?
         .expect("No cache contention when setting up Python in tests");
     let _preview = uv_preview::test::with_features(&[]);
-    let selected_pythons = python_versions
+    python_versions
         .iter()
         .map(|python_version| {
-            if let Ok(python) = PythonInstallation::find(
+            PythonInstallation::find(
                 &PythonRequest::parse(python_version),
                 EnvironmentPreference::OnlySystem,
                 PythonPreference::Managed,
                 None,
                 download_list,
                 &cache,
-            ) {
-                python.into_interpreter().sys_executable().to_owned()
-            } else {
-                panic!("Could not find Python {python_version} for test\nTry `cargo run python install` first, or refer to CONTRIBUTING.md");
-            }
+            )
+            .map(|python| python.into_interpreter().sys_executable().to_owned())
+            .with_context(|| {
+                format!(
+                    "Could not find Python {python_version} for test\nTry `cargo run python install` first, or refer to CONTRIBUTING.md"
+                )
+            })
         })
-        .collect::<Vec<_>>();
-
-    assert!(
-        python_versions.is_empty() || !selected_pythons.is_empty(),
-        "Failed to fulfill requested test Python versions: {selected_pythons:?}"
-    );
-
-    Ok(selected_pythons)
+        .collect()
 }
 
 /// Recursively copy a directory and its contents, skipping gitignored files.
