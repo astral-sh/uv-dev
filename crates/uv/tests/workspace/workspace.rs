@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
+#[cfg(any(feature = "test-pypi", feature = "test-universal"))]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild};
 #[cfg(feature = "test-universal")]
