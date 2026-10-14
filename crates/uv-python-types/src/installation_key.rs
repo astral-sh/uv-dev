@@ -157,23 +157,18 @@ impl PythonInstallationKey {
 
 impl fmt::Display for PythonInstallationKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let variant = match self.variant {
-            PythonVariant::Default => String::new(),
-            _ => format!("+{}", self.variant),
-        };
         write!(
             f,
-            "{}-{}.{}.{}{}{}-{}",
+            "{}-{}.{}.{}",
             self.implementation(),
             self.major,
             self.minor,
             self.patch,
-            self.prerelease
-                .map(|pre| pre.to_string())
-                .unwrap_or_default(),
-            variant,
-            self.platform
-        )
+        )?;
+        if let Some(prerelease) = self.prerelease {
+            write!(f, "{prerelease}")?;
+        }
+        write!(f, "{}-{}", self.variant.display_suffix(), self.platform)
     }
 }
 
