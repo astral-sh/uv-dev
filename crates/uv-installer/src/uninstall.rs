@@ -6,25 +6,28 @@ pub async fn uninstall(
     dist: &InstalledDist,
     layout: &Layout,
 ) -> Result<uv_install_wheel::Uninstall, UninstallError> {
-    let uninstall = tokio::task::spawn_blocking({
+    tokio::task::spawn_blocking({
         let dist = dist.clone();
         let layout = layout.clone();
-        move || match dist.kind {
-            InstalledDistKind::Registry(_) | InstalledDistKind::Url(_) => Ok(
-                uv_install_wheel::uninstall_wheel(dist.install_path(), &dist, &layout)?,
-            ),
-            InstalledDistKind::EggInfoDirectory(_) => {
-                Ok(uv_install_wheel::uninstall_egg(dist.install_path(), &dist)?)
+        move || {
+            match dist.kind {
+                InstalledDistKind::Registry(_) | InstalledDistKind::Url(_) => {
+                    uv_install_wheel::uninstall_wheel(dist.install_path(), &dist, &layout)
+                }
+                InstalledDistKind::EggInfoDirectory(_) => {
+                    uv_install_wheel::uninstall_egg(dist.install_path(), &dist)
+                }
+                InstalledDistKind::LegacyEditable(dist) => {
+                    uv_install_wheel::uninstall_legacy_editable(&dist.egg_link)
+                }
+                InstalledDistKind::EggInfoFile(dist) => {
+                    return Err(UninstallError::Distutils(dist));
+                }
             }
-            InstalledDistKind::LegacyEditable(dist) => {
-                Ok(uv_install_wheel::uninstall_legacy_editable(&dist.egg_link)?)
-            }
-            InstalledDistKind::EggInfoFile(dist) => Err(UninstallError::Distutils(dist)),
+            .map_err(UninstallError::from)
         }
     })
-    .await??;
-
-    Ok(uninstall)
+    .await?
 }
 
 #[derive(thiserror::Error, Debug)]
