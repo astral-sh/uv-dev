@@ -145,7 +145,9 @@ fn python_list() {
 
 #[test]
 fn python_list_unknown_managed_implementation() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_managed_python_dirs()
+        .with_env(EnvVars::RUST_LOG, "uv_python_managed=warn");
     let installation = context
         .temp_dir
         .join("managed")
@@ -155,11 +157,16 @@ fn python_list_unknown_managed_implementation() -> Result<()> {
     uv_snapshot!(context.filters(), context.python_list()
         .arg("--only-installed"), @"
     exit_code: 0 (success)
+    ----- stderr -----
+    WARN Ignoring malformed managed Python entry:
+        Unknown Python implementation `unknown`
     ");
 
     uv_snapshot!(context.filters(), context.python_upgrade().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    WARN Ignoring malformed managed Python entry:
+        Unknown Python implementation `unknown`
     There are no installed versions to upgrade
     ");
 
