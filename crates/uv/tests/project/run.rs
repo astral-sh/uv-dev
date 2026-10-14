@@ -2780,6 +2780,12 @@ fn run_no_sync() -> Result<()> {
 #[test]
 fn run_no_sync_env_var() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        context.temp_dir.join("ok-1.0.0-py3-none-any.whl"),
+    )?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2788,11 +2794,14 @@ fn run_no_sync_env_var() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
+        dependencies = ["ok"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
+
+        [tool.uv.sources]
+        ok = { path = "ok-1.0.0-py3-none-any.whl" }
         "#,
     )?;
     context
@@ -2803,28 +2812,34 @@ fn run_no_sync_env_var() -> Result<()> {
         .touch()?;
 
     // Running with `UV_NO_SYNC=1` should succeed, even if the lockfile isn't present.
-    uv_snapshot!(context.filters(), context.run().env(EnvVars::UV_NO_SYNC, "1").arg("--").arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.run().env(EnvVars::UV_NO_SYNC, "1").args(["--offline", "--", "python", "--version"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
     ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
 
-    context.lock().assert().success();
+    context.lock().arg("--offline").assert().success();
+    let existing_lockfile = context.read("uv.lock");
 
     // Running with `UV_NO_SYNC=1` should not install any requirements.
-    uv_snapshot!(context.filters(), context.run().env(EnvVars::UV_NO_SYNC, "1").arg("--").arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.run().env(EnvVars::UV_NO_SYNC, "1").args(["--offline", "--", "python", "-I", "-c", "import importlib.util; print(importlib.util.find_spec('ok'))"]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.12.[X]
+    None
     ");
+    assert_eq!(context.read("uv.lock"), existing_lockfile);
 
-    context.sync().assert().success();
+    context.sync().arg("--offline").assert().success();
 
     // But it should have access to the installed packages.
-    uv_snapshot!(context.filters(), context.run().env(EnvVars::UV_NO_SYNC, "1").arg("--").arg("python").arg("-c").arg("import anyio; print(anyio.__name__)"), @"
+    uv_snapshot!(context.filters(), context.run().env(EnvVars::UV_NO_SYNC, "1").args(["--offline", "--", "python", "-I", "-c", "import ok; print(ok.__name__)"]), @"
     exit_code: 0 (success)
     ----- stdout -----
-    anyio
+    ok
     ");
 
     Ok(())
