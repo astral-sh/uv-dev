@@ -432,6 +432,7 @@ fn sync_lockfile_workspace_members() -> Result<()> {
     }
 
     ----- stderr -----
+    warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
     Checked in [TIME]
     "#);
     Ok(())
@@ -1788,6 +1789,7 @@ fn sync_json() -> Result<()> {
     }
 
     ----- stderr -----
+    warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
@@ -1796,8 +1798,10 @@ fn sync_json() -> Result<()> {
 
     assert!(context.temp_dir.child("uv.lock").exists());
 
+    // Enabling the preview feature suppresses the experimental warning.
     uv_snapshot!(context.filters(), context.sync()
         .arg("--frozen")
+        .arg("--preview-features").arg("json-output")
         .arg("--output-format").arg("json"), @r#"
     exit_code: 0 (success)
     ----- stdout -----
@@ -1871,6 +1875,7 @@ fn sync_json() -> Result<()> {
     }
 
     ----- stderr -----
+    warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
     Resolved 2 packages in [TIME]
     Checked 1 package in [TIME]
     "#);
@@ -1892,6 +1897,7 @@ fn sync_json() -> Result<()> {
         .arg("--output-format").arg("json"), @"
     exit_code: 1 (failure)
     ----- stderr -----
+    warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
     Resolved 2 packages in [TIME]
     error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
@@ -1998,6 +2004,7 @@ fn sync_json_check_outdated_environment() -> Result<()> {
     }
 
     ----- stderr -----
+    warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
     Resolved 2 packages in [TIME]
     Would download 1 package
     Would install 1 package
@@ -2069,6 +2076,7 @@ fn sync_dry_json() -> Result<()> {
     }
 
     ----- stderr -----
+    warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 2 packages in [TIME]
     Would download 1 package
@@ -9216,6 +9224,7 @@ fn sync_active_script_environment_json() -> Result<()> {
     }
 
     ----- stderr -----
+    warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
     warning: `VIRTUAL_ENV=foo` does not match the script environment path `[CACHE_DIR]/environments-v2/script-[HASH]` and will be ignored; use `--active` to target the active environment instead
     Resolved 3 packages in [TIME]
     Prepared 3 packages in [TIME]
@@ -9278,6 +9287,7 @@ fn sync_active_script_environment_json() -> Result<()> {
     }
 
     ----- stderr -----
+    warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
     Resolved 3 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
@@ -9350,6 +9360,7 @@ fn sync_active_script_environment_json() -> Result<()> {
     }
 
     ----- stderr -----
+    warning: The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features json-output` to disable this warning.
     Resolved 3 packages in [TIME]
     Installed 3 packages in [TIME]
      + anyio==4.3.0
