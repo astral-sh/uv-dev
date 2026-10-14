@@ -9,7 +9,7 @@ use tempfile::{TempDir, tempdir_in};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
-use tokio::sync::oneshot;
+use tokio::sync::{OnceCell, oneshot};
 use tracing::{debug, instrument};
 use walkdir::WalkDir;
 
@@ -36,8 +36,31 @@ struct BytecodeWorkers {
 struct BytecodeWorkerContext {
     directory: PathBuf,
     interpreter: PathBuf,
-    script: PathBuf,
+    script: BytecodeScript,
     timeout: Option<Duration>,
+}
+
+/// A shared compiler script that must be fully written before any interpreter reads it.
+struct BytecodeScript {
+    path: PathBuf,
+    initialized: OnceCell<()>,
+}
+
+impl BytecodeScript {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            initialized: OnceCell::new(),
+        }
+    }
+
+    async fn initialize(&self) -> Result<&Path, CompileError> {
+        self.initialized
+            .get_or_try_init(|| fs_err::tokio::write(&self.path, COMPILEALL_SCRIPT))
+            .await
+            .map_err(CompileError::TempFile)?;
+        Ok(&self.path)
+    }
 }
 
 /// A ready Python bytecode compiler and its communication streams.
@@ -120,7 +143,7 @@ fn spawn_workers(
 
     // Running Python with an actual file will produce better error messages.
     let script_directory = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let script = script_directory.path().join("pip_compileall.py");
+    let script = BytecodeScript::new(script_directory.path().join("pip_compileall.py"));
     let timeout = compile_timeout()?;
     let context = Arc::new(BytecodeWorkerContext {
         directory: dir.to_path_buf(),
@@ -316,9 +339,7 @@ async fn worker(
     context: Arc<BytecodeWorkerContext>,
     receiver: Receiver<PathBuf>,
 ) -> Result<(), CompileError> {
-    fs_err::tokio::write(&context.script, COMPILEALL_SCRIPT)
-        .await
-        .map_err(CompileError::TempFile)?;
+    let pip_compileall_py = context.script.initialize().await?;
 
     // Sometimes, the first time we read from stdout, we get an empty string back (no newline). If
     // we try to write to stdin, it will often be a broken pipe. In this case, we have to restart
@@ -327,9 +348,12 @@ async fn worker(
     let wait_until_ready = async {
         loop {
             // If the interpreter started successful, return it, else retry.
-            if let Some(child) =
-                launch_bytecode_compiler(&context.directory, &context.interpreter, &context.script)
-                    .await?
+            if let Some(child) = launch_bytecode_compiler(
+                &context.directory,
+                &context.interpreter,
+                pip_compileall_py,
+            )
+            .await?
             {
                 break Ok::<_, CompileError>(child);
             }
@@ -517,7 +541,7 @@ async fn worker_main_loop(
 
 #[cfg(test)]
 mod tests {
-    use std::io::ErrorKind;
+    use std::io::{ErrorKind, Write};
     use std::net::Ipv4Addr;
     use std::time::Duration;
 
@@ -527,7 +551,28 @@ mod tests {
     use uv_python_discovery::find_environment;
     use uv_python_types::{EnvironmentPreference, PythonPreference, PythonRequest};
 
-    use super::launch_bytecode_compiler;
+    use super::{BytecodeScript, COMPILEALL_SCRIPT, launch_bytecode_compiler};
+
+    /// Once an interpreter can read the compiler script, later workers must not rewrite it.
+    #[tokio::test]
+    async fn bytecode_workers_reuse_initialized_script() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let script = BytecodeScript::new(directory.path().join("compile.py"));
+        let path = script.initialize().await?;
+        fs_err::OpenOptions::new()
+            .append(true)
+            .open(path)?
+            .write_all(b"\n# initialized\n")?;
+
+        let (first, second) = tokio::join!(script.initialize(), script.initialize());
+        assert_eq!(first?, path);
+        assert_eq!(second?, path);
+        assert_eq!(
+            fs_err::read_to_string(path)?,
+            format!("{COMPILEALL_SCRIPT}\n# initialized\n")
+        );
+        Ok(())
+    }
 
     /// Cancelling startup must terminate the interpreter before it reports readiness.
     #[tokio::test]
