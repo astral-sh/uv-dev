@@ -59,12 +59,12 @@ impl<'lock> From<&'lock ExportTarget> for LockTarget<'lock> {
 }
 
 /// An export reads an existing workspace lock or resolves a project or script manifest.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum ExportSource<'a> {
     Manifest(&'a ExportTarget),
     Lockfile {
         workspace: &'a FrozenWorkspace,
-        project_name: Option<PackageName>,
+        project_name: Option<&'a PackageName>,
     },
 }
 
@@ -255,17 +255,16 @@ pub async fn export(
                     );
                 }
                 frozen_workspace = workspace;
-                let project_name = frozen_workspace.current_project(project_dir).cloned();
                 ExportSource::Lockfile {
                     workspace: &frozen_workspace,
-                    project_name,
+                    project_name: frozen_workspace.current_project(project_dir),
                 }
             }
         }
     };
 
     let resolved_lock;
-    let lock = match &source {
+    let lock = match source {
         ExportSource::Lockfile { workspace, .. } => workspace.lock(),
         ExportSource::Manifest(target) => {
             // Find an interpreter for the project, unless `--frozen` is set.
@@ -327,7 +326,7 @@ pub async fn export(
             };
 
             // Determine the lock mode.
-            let lock_target = LockTarget::from(*target);
+            let lock_target = LockTarget::from(target);
             let mode = crate::lock::lock_mode_for_read(
                 lock_target,
                 interpreter.as_ref(),
@@ -371,7 +370,7 @@ pub async fn export(
                 entry.only_group.clone(),
                 entry.all_groups,
             );
-            let groups = match &source {
+            let groups = match source {
                 ExportSource::Manifest(ExportTarget::Project(project)) => {
                     groups.with_defaults(project.default_groups_for_packages(&entry.package)?)
                 }
@@ -380,18 +379,13 @@ pub async fn export(
                     project_name,
                 } => {
                     workspace.validate_packages(&entry.package)?;
-                    resolve_lockfile_groups(
-                        &groups,
-                        workspace,
-                        project_name.as_ref(),
-                        &entry.package,
-                    )
-                    .with_context(|| {
-                        format!(
-                            "Failed to resolve dependency groups for batch export `{}`",
-                            entry.output_file.display()
-                        )
-                    })?
+                    resolve_lockfile_groups(&groups, workspace, project_name, &entry.package)
+                        .with_context(|| {
+                            format!(
+                                "Failed to resolve dependency groups for batch export `{}`",
+                                entry.output_file.display()
+                            )
+                        })?
                 }
                 ExportSource::Manifest(ExportTarget::Script(_)) => {
                     bail!("`--batch` does not support scripts")
@@ -407,7 +401,7 @@ pub async fn export(
             .with_defaults(DefaultExtras::default());
             writers.push(
                 render_export(
-                    &source,
+                    source,
                     lock,
                     format,
                     entry.all_packages,
@@ -441,7 +435,7 @@ pub async fn export(
         return Ok(ExitStatus::Success);
     }
 
-    let groups = match &source {
+    let groups = match source {
         ExportSource::Manifest(ExportTarget::Project(project)) => {
             groups.with_defaults(project.default_groups()?)
         }
@@ -453,13 +447,13 @@ pub async fn export(
             project_name,
         } => {
             workspace.validate_packages(&package)?;
-            resolve_lockfile_groups(&groups, workspace, project_name.as_ref(), &package)?
+            resolve_lockfile_groups(&groups, workspace, project_name, &package)?
         }
     };
     let extras = extras.with_defaults(DefaultExtras::default());
 
     render_export(
-        &source,
+        source,
         lock,
         format,
         all_packages,
@@ -492,7 +486,7 @@ pub async fn export(
 /// Render one selection from a shared lockfile, deferring its file write until validation completes.
 #[expect(clippy::fn_params_excessive_bools)]
 async fn render_export<'output>(
-    source: &ExportSource<'_>,
+    source: ExportSource<'_>,
     lock: &Lock,
     format: Option<ExportFormat>,
     all_packages: bool,
@@ -530,8 +524,8 @@ async fn render_export<'output>(
             project_name,
         } => InstallTarget::Lockfile {
             root: workspace.root(),
-            project_name: project_name.as_ref(),
-            selection: PackageSelection::from_args(all_packages, package, project_name.as_ref()),
+            project_name,
+            selection: PackageSelection::from_args(all_packages, package, project_name),
             lock,
         },
     };
