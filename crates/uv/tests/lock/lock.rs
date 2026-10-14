@@ -14,7 +14,7 @@ use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
 use serde_json::json;
 #[cfg(feature = "test-universal")]
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 #[cfg(feature = "test-universal")]
 use walkdir::WalkDir;
 #[cfg(feature = "test-universal")]
@@ -12844,66 +12844,49 @@ fn lock_invalid_hash() -> Result<()> {
     Ok(())
 }
 
-/// Ensure that we can install from a lockfile when the index switches hash algorithms.
-/// First lock and sync with SHA256 hashes, then switch to SHA512 and lock/sync again
-/// without clearing the cache.
+/// Reinstall a cached wheel after an index changes the advertised hash algorithm.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_mixed_hashes() -> Result<()> {
     let context = uv_test::test_context!("3.13");
+    let index_root = context.temp_dir.child("simple-html");
+    let package = index_root.child("basic-package");
+    let wheel_filename = "basic_package-0.1.0-py3-none-any.whl";
+    let sdist_filename = "basic_package-0.1.0.tar.gz";
+    copy_flat_index_fixture(&context, package.path(), wheel_filename)?;
+    copy_flat_index_fixture(&context, package.path(), sdist_filename)?;
 
-    let root = context.temp_dir.child("simple-html");
-    fs_err::create_dir_all(&root)?;
+    let wheel = package.child(wheel_filename);
+    let wheel_bytes = fs_err::read(wheel.path())?;
+    let wheel_sha256 = hex::encode(Sha256::digest(&wheel_bytes));
+    let wheel_sha512 = hex::encode(Sha512::digest(&wheel_bytes));
+    let wheel_url = SafeUrl::from_file_path(wheel.path()).expect("absolute wheel path");
+    let sdist = package.child(sdist_filename);
+    let sdist_sha256 = hex::encode(Sha256::digest(fs_err::read(sdist.path())?));
+    let sdist_url = SafeUrl::from_file_path(sdist.path()).expect("absolute sdist path");
+    let index_page = |algorithm: &str, digest: &str| {
+        formatdoc! {r#"
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta name="pypi:repository-version" content="1.1" />
+              </head>
+              <body>
+                <h1>Links for basic-package</h1>
+                <a href="{wheel_url}#{algorithm}={digest}">{wheel_filename}</a>
+                <a href="{sdist_url}#sha256={sdist_sha256}">{sdist_filename}</a>
+              </body>
+            </html>
+        "#}
+    };
+    let index = package.child("index.html");
+    index.write_str(&index_page("sha256", &wheel_sha256))?;
 
-    let basic_package = root.child("basic-package");
-    fs_err::create_dir_all(&basic_package)?;
-
-    // Copy the wheel and sdist from `test/links`.
-    let wheel = basic_package.child("basic_package-0.1.0-py3-none-any.whl");
-    fs_err::copy(
-        context
-            .workspace_root
-            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
-        &wheel,
-    )?;
-
-    let sdist = basic_package.child("basic_package-0.1.0.tar.gz");
-    fs_err::copy(
-        context
-            .workspace_root
-            .join("test/links/basic_package-0.1.0.tar.gz"),
-        &sdist,
-    )?;
-
-    // Phase 1: Create an `index.html` with SHA256 hashes for both wheel and sdist.
-    let index = basic_package.child("index.html");
-    index.write_str(&formatdoc! {r#"
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta name="pypi:repository-version" content="1.1" />
-          </head>
-          <body>
-            <h1>Links for basic-package</h1>
-            <a
-              href="{}#sha256=7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82"
-            >
-              basic_package-0.1.0-py3-none-any.whl
-            </a>
-            <a
-              href="{}#sha256=af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4"
-            >
-              basic_package-0.1.0.tar.gz
-            </a>
-          </body>
-        </html>
-    "#,
-        SafeUrl::from_file_path(&wheel).unwrap().as_str(),
-        SafeUrl::from_file_path(&sdist).unwrap().as_str(),
-    })?;
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(&formatdoc! { r#"
+    let index_url = SafeUrl::from_file_path(index_root.path()).expect("absolute index path");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -12911,31 +12894,22 @@ fn lock_mixed_hashes() -> Result<()> {
         dependencies = ["basic-package"]
 
         [tool.uv]
-        extra-index-url = ["{}"]
-        "#,
-        SafeUrl::from_file_path(&root).unwrap().as_str()
-    })?;
+        index-url = "{index_url}"
+    "#})?;
 
-    let index_url = SafeUrl::from_file_path(&root).unwrap().to_string();
-    let filters = [(index_url.as_str(), "file://[TMP]")]
-        .into_iter()
-        .chain(context.filters())
-        .collect::<Vec<_>>();
-
-    // Lock with SHA256 hashes.
     uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
+    let sha256_lock = context.read("uv.lock");
 
     insta::with_settings!({
-        filters => filters.clone(),
+        filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            sha256_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.13"
@@ -12963,84 +12937,32 @@ fn lock_mixed_hashes() -> Result<()> {
         );
     });
 
-    // Sync with SHA256 hashes to populate the cache.
-    uv_snapshot!(filters.clone(), context.sync().arg("--frozen"), @"
+    // Populate the cache before changing only the wheel's advertised hash.
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + basic-package==0.1.0
     ");
+    index.write_str(&index_page("sha512", &wheel_sha512))?;
 
-    // Phase 2: Update the index to use a SHA512 hash for the wheel instead.
-    index.write_str(&formatdoc! {r#"
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta name="pypi:repository-version" content="1.1" />
-          </head>
-          <body>
-            <h1>Links for basic-package</h1>
-            <a
-              href="{}#sha512=765bde25938af485e492e25ee0e8cde262462565122c1301213a69bf9ceb2008e3997b652a604092a238c4b1a6a334e697ff3cee3c22f9a617cb14f34e26ef17"
-            >
-              basic_package-0.1.0-py3-none-any.whl
-            </a>
-            <a
-              href="{}#sha256=af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4"
-            >
-              basic_package-0.1.0.tar.gz
-            </a>
-          </body>
-        </html>
-    "#,
-        SafeUrl::from_file_path(&wheel).unwrap().as_str(),
-        SafeUrl::from_file_path(&sdist).unwrap().as_str(),
-    })?;
-
-    // Lock again with `--refresh` to pick up the SHA512 hash from the updated index.
     uv_snapshot!(context.filters(), context.lock().arg("--refresh").env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    assert_eq!(
+        context.read("uv.lock"),
+        sha256_lock.replacen(
+            &format!("sha256:{wheel_sha256}"),
+            &format!("sha512:{wheel_sha512}"),
+            1,
+        ),
+        "the wheel hash should be the only lockfile change"
+    );
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => filters.clone(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.13"
-
-        [[package]]
-        name = "basic-package"
-        version = "0.1.0"
-        source = { registry = "[TEMP_DIR]/simple-html" }
-        sdist = { path = "[TEMP_DIR]/simple-html/basic-package/basic_package-0.1.0.tar.gz", hash = "sha256:af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4" }
-        wheels = [
-            { path = "[TEMP_DIR]/simple-html/basic-package/basic_package-0.1.0-py3-none-any.whl", hash = "sha512:765bde25938af485e492e25ee0e8cde262462565122c1301213a69bf9ceb2008e3997b652a604092a238c4b1a6a334e697ff3cee3c22f9a617cb14f34e26ef17" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "basic-package" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "basic-package" }]
-        "#
-        );
-    });
-
-    // Reinstalling should re-compute the hash for the `basic-package` wheel to reflect SHA512.
-    uv_snapshot!(filters, context.sync().arg("--frozen").arg("--reinstall"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--reinstall"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
