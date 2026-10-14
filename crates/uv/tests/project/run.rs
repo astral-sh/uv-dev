@@ -5582,6 +5582,8 @@ fn run_groups_requires_python() -> Result<()> {
 
 /// Ensures relaxing group requirements reuses a compatible environment, while an explicit Python
 /// request can downgrade it.
+///
+/// See <https://github.com/astral-sh/uv/issues/14160>.
 #[test]
 fn run_groups_requires_python_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);

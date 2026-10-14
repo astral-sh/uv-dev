@@ -959,6 +959,9 @@ fn python_find_managed() {
 }
 
 /// See: <https://github.com/astral-sh/uv/issues/11825>
+///
+/// Homebrew interpreters on macOS may report a canonicalized `sys.executable` rather than the
+/// symlink in the temporary directory, so compare canonical paths.
 #[test]
 #[cfg(unix)]
 fn python_required_python_major_minor() -> Result<()> {

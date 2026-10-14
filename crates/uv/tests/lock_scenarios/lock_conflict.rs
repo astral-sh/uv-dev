@@ -9838,7 +9838,8 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
     assert_eq!(project["version"].as_str(), Some("0.1.0"));
     project["version"] = toml::Value::String("0.1.1".to_owned());
 
-    // Changing only the root version should leave every resolution marker unchanged.
+    // Re-resolving with an existing lockfile previously caused resolution markers to grow
+    // exponentially. Changing only the root version should leave the markers unchanged.
     let pyproject = pyproject.replace(r#"version = "0.1.0""#, r#"version = "0.1.1""#);
     pyproject_toml.write_str(&pyproject)?;
 

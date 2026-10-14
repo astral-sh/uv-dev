@@ -2757,6 +2757,7 @@ fn tool_run_with_dependencies_from_script() -> Result<()> {
 }
 
 /// Windows runnable types select the requested launcher and forward its arguments.
+/// This covers both console scripts and legacy setuptools scripts.
 #[cfg(windows)]
 #[test]
 fn tool_run_windows_runnable_types() -> Result<()> {

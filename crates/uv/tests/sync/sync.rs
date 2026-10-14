@@ -13621,6 +13621,7 @@ fn find_links_relative_in_config_works_from_subdir() -> Result<()> {
     Ok(())
 }
 
+/// See <https://github.com/astral-sh/uv/issues/13744> for a virtual environment replacement flake.
 #[test]
 fn sync_dry_run() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);

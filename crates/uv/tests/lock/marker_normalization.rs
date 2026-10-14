@@ -9,6 +9,9 @@ use uv_redacted::SafeUrl;
 use uv_test::uv_snapshot;
 
 /// Impossible dependency-group requirements remain false when the lock is validated.
+///
+/// False markers are serialized as `python_version < '0'`; reading them back as true would make
+/// `uv lock --check` fail.
 #[test]
 fn normalize_false_marker_dependency_groups() -> Result<()> {
     let context = uv_test::test_context!("3.12");
