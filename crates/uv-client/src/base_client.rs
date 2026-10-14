@@ -447,7 +447,7 @@ impl<'a> BaseClientBuilder<'a> {
     }
 
     /// See [`CredentialsCache::store_credentials`].
-    pub fn store_credentials(&self, url: &DisplaySafeUrl, credentials: Credentials) {
+    fn store_credentials(&self, url: &DisplaySafeUrl, credentials: Credentials) {
         self.credentials_cache.store_credentials(url, credentials);
     }
 
