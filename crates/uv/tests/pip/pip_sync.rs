@@ -6681,7 +6681,7 @@ async fn pep_751_remote() -> Result<()> {
     let server = MockServer::start().await;
     let filename = "ok-1.0.0-py3-none-any.whl";
     let wheel = context.read_bytes(context.workspace_root.join("test/links").join(filename));
-    let sha256 = format!("{:x}", Sha256::digest(&wheel));
+    let sha256 = hex::encode(Sha256::digest(&wheel));
 
     Mock::given(method("GET"))
         .and(path(format!("/{filename}")))
