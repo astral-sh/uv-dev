@@ -1,5 +1,8 @@
 //! Integration tests for uv Python commands.
 
+#[cfg(feature = "test-python-managed")]
+mod build_upgrade;
+
 mod python_dir;
 
 #[cfg(feature = "test-python")]
