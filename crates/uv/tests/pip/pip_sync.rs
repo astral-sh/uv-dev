@@ -1,6 +1,6 @@
 use std::env::consts::EXE_SUFFIX;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
@@ -155,6 +155,36 @@ fn install() -> Result<()> {
     Ok(())
 }
 
+/// Compare the imported module with the corresponding unpacked cache entry.
+fn assert_markupsafe_link_mode(
+    context: &uv_test::TestContext,
+    expected: &'static str,
+) -> Result<()> {
+    let cached = context
+        .cache_files(uv_cache::CacheBucket::Archive)?
+        .into_iter()
+        .find(|path| path.ends_with("markupsafe/__init__.py"))
+        .context("missing cached MarkupSafe module")?;
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            import sys
+            from pathlib import Path
+            import markupsafe
+            from markupsafe import Markup
+
+            installed = Path(markupsafe.__file__)
+            assert not installed.is_symlink(), f"installed module is a symlink: {installed}"
+            print("hardlink" if installed.samefile(sys.argv[1]) else "copy", end="")
+        "#})
+        .arg(cached)
+        .assert()
+        .success()
+        .stdout(expected);
+    Ok(())
+}
+
 /// Install a package into a virtual environment using copy semantics.
 #[test]
 fn install_copy() -> Result<()> {
@@ -177,9 +207,7 @@ fn install_copy() -> Result<()> {
     "
     );
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    assert_markupsafe_link_mode(&context, "copy")?;
 
     // Removing the cache shouldn't invalidate the virtual environment.
     fs::remove_dir_all(context.cache_dir.path())?;
@@ -213,9 +241,7 @@ fn install_hardlink() -> Result<()> {
     "
     );
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    assert_markupsafe_link_mode(&context, "hardlink")?;
 
     // Removing the cache shouldn't invalidate the virtual environment.
     fs::remove_dir_all(context.cache_dir.path())?;
