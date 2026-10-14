@@ -613,14 +613,7 @@ impl Workspace {
             workspace.pyproject_toml = pyproject_toml.clone();
 
             // Refresh the workspace sources.
-            workspace.sources = workspace
-                .pyproject_toml
-                .tool
-                .clone()
-                .and_then(|tool| tool.uv)
-                .and_then(|uv| uv.sources)
-                .map(ToolUvSources::into_inner)
-                .unwrap_or_default();
+            workspace.sources = Self::sources_from_pyproject(&workspace.pyproject_toml);
         }
 
         member.pyproject_toml = pyproject_toml;
@@ -1051,6 +1044,16 @@ impl Workspace {
         }
     }
 
+    fn sources_from_pyproject(pyproject_toml: &PyProjectToml) -> BTreeMap<PackageName, Sources> {
+        pyproject_toml
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.sources.clone())
+            .map(ToolUvSources::into_inner)
+            .unwrap_or_default()
+    }
+
     /// Collect the workspace member projects and build the workspace object.
     async fn build(
         workspace_root: PathBuf,
@@ -1091,19 +1094,13 @@ impl Workspace {
                 .insert(root_member.project.name.clone(), root_member);
         }
 
-        let workspace_sources = workspace_pyproject_toml
-            .tool
-            .clone()
-            .and_then(|tool| tool.uv)
-            .and_then(|uv| uv.sources)
-            .map(ToolUvSources::into_inner)
-            .unwrap_or_default();
+        let workspace_sources = Self::sources_from_pyproject(&workspace_pyproject_toml);
 
         let workspace_indexes = workspace_pyproject_toml
             .tool
-            .clone()
-            .and_then(|tool| tool.uv)
-            .and_then(|uv| uv.index)
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.index.clone())
             .unwrap_or_default();
 
         let required_members = Self::collect_required_members(
