@@ -25,3 +25,10 @@ mod python_upgrade;
 
 #[cfg(feature = "test-python")]
 mod venv;
+
+#[cfg(all(
+    windows,
+    feature = "test-python-managed",
+    feature = "test-windows-registry"
+))]
+mod windows_registry;

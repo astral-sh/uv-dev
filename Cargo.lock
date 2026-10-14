@@ -5765,6 +5765,7 @@ dependencies = [
  "uv-workspace-commands",
  "walkdir",
  "which",
+ "windows-registry",
  "wiremock",
 ]
 

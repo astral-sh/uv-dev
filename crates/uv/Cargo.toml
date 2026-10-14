@@ -147,6 +147,9 @@ toml = { workspace = true }
 toml_edit = { workspace = true }
 wiremock = { workspace = true }
 
+[target.'cfg(windows)'.dev-dependencies]
+windows-registry = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 uv-unix = { workspace = true }
 
