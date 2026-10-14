@@ -570,8 +570,8 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
 
     // Use a fixed timestamp so the test is reproducible.
     // Current time: 2024-05-01
-    // Global: 3 weeks back = 2024-04-10 (before idna 3.7 released 2024-04-11) → idna 3.6
-    // Per-package: 2 weeks back = 2024-04-17 (after typing-extensions 4.11.0 released 2024-04-05) → typing-extensions 4.11.0
+    // The global cutoff, 2024-04-03, excludes both idna 3.7 and typing-extensions 4.11.0.
+    // The package override, 2024-04-17, permits typing-extensions 4.11.0.
     let current_timestamp = "2024-05-01T00:00:00Z";
 
     // Lock with both global exclude-newer and package-specific override using relative durations
@@ -580,7 +580,7 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, current_timestamp)
         .arg("--exclude-newer")
-        .arg("3 weeks")
+        .arg("4 weeks")
         .arg("--exclude-newer-package")
         .arg("typing-extensions=2 weeks"), @"
     exit_code: 0 (success)
@@ -589,7 +589,7 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
-    // idna 3.6 (global cutoff 2024-04-10 is before 3.7 release on 2024-04-11)
+    // idna 3.6 (global cutoff 2024-04-03 is before 3.7 release on 2024-04-11)
     // typing-extensions 4.11.0 (per-package cutoff 2024-04-17 is after 4.11.0 release on 2024-04-05)
     assert_snapshot!(lock, @r#"
     version = 1
@@ -598,7 +598,7 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
 
     [options]
     exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
-    exclude-newer-span = "P3W"
+    exclude-newer-span = "P4W"
 
     [options.exclude-newer-package]
     typing-extensions = { timestamp = "0001-01-01T00:00:00Z", span = "P2W" }
@@ -644,7 +644,7 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .env(EnvVars::UV_INTERNAL__TEST_CURRENT_TIMESTAMP, later_timestamp)
         .arg("--exclude-newer")
-        .arg("3 weeks")
+        .arg("4 weeks")
         .arg("--exclude-newer-package")
         .arg("typing-extensions=2 weeks")
         .arg("--locked"), @"
@@ -652,6 +652,8 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
+
+    assert_eq!(context.read("uv.lock"), lock);
 
     // Changing the global span to 2 weeks should cause a new resolution.
     // 2 weeks before 2024-05-01 is 2024-04-17 (after idna 3.7 released 2024-04-11) → idna 3.7
@@ -666,7 +668,7 @@ fn lock_exclude_newer_relative_global_and_package() -> Result<()> {
         .arg("--upgrade"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolving despite existing lockfile due to change of exclude newer span from `P3W` to `P2W`
+    Resolving despite existing lockfile due to change of exclude newer span from `P4W` to `P2W`
     Resolved 3 packages in [TIME]
     Updated idna v3.6 -> v3.7
     ");
