@@ -2,7 +2,8 @@ use std::fmt::Write;
 use std::path::Path;
 use std::str::FromStr;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
+use itertools::Itertools;
 use owo_colors::OwoColorize;
 use tracing::debug;
 
@@ -177,94 +178,7 @@ pub async fn project_version(
             },
         }
     } else if !bump.is_empty() {
-        // While we can rationalize many of these combinations of operations together,
-        // we want to conservatively refuse to support any of them until users demand it.
-        //
-        // The most complex thing we *do* allow is `--bump major --bump beta --bump dev`
-        // because that makes perfect sense and is reasonable to do.
-        let release_components: Vec<_> = bump
-            .iter()
-            .filter(|spec| {
-                matches!(
-                    spec.bump,
-                    VersionBump::Major | VersionBump::Minor | VersionBump::Patch
-                )
-            })
-            .collect();
-        let prerelease_components: Vec<_> = bump
-            .iter()
-            .filter(|spec| {
-                matches!(
-                    spec.bump,
-                    VersionBump::Alpha | VersionBump::Beta | VersionBump::Rc | VersionBump::Dev
-                )
-            })
-            .collect();
-        let post_count = bump
-            .iter()
-            .filter(|spec| spec.bump == VersionBump::Post)
-            .count();
-        let stable_count = bump
-            .iter()
-            .filter(|spec| spec.bump == VersionBump::Stable)
-            .count();
-
-        // Very little reason to do "bump to stable" and then do other things,
-        // even if we can make sense of it.
-        if stable_count > 0 && bump.len() > 1 {
-            let components = bump
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow!(
-                "`--bump stable` cannot be used with another `--bump` value, got: {components}"
-            ));
-        }
-
-        // Very little reason to "bump to post" and then do other things,
-        // how is it a post-release otherwise?
-        if post_count > 0 && bump.len() > 1 {
-            let components = bump
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow!(
-                "`--bump post` cannot be used with another `--bump` value, got: {components}"
-            ));
-        }
-
-        // `--bump major --bump minor` makes perfect sense (1.2.3 => 2.1.0)
-        // ...but it's weird and probably a mistake?
-        // `--bump major --bump major` perfect sense (1.2.3 => 3.0.0)
-        // ...but it's weird and probably a mistake?
-        if release_components.len() > 1 {
-            let components = release_components
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow!(
-                "Only one release version component can be provided to `--bump`, got: {components}"
-            ));
-        }
-
-        // `--bump alpha --bump beta` is basically completely incoherent
-        // `--bump beta --bump beta` makes perfect sense (1.2.3b4 => 1.2.3b6)
-        // ...but it's weird and probably a mistake?
-        // `--bump beta --bump dev` makes perfect sense (1.2.3 => 1.2.3b1.dev1)
-        // ...but we want to discourage mixing `dev` with pre-releases
-        if prerelease_components.len() > 1 {
-            let components = prerelease_components
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow!(
-                "Only one pre-release version component can be provided to `--bump`, got: {components}"
-            ));
-        }
+        validate_bumps(&bump)?;
 
         // Sort the given commands so the user doesn't have to care about
         // the ordering of `--bump minor --bump beta` (only one ordering is ever useful)
@@ -380,6 +294,49 @@ pub async fn project_version(
     print_version(old_version, new_version, short, output_format, printer)?;
 
     Ok(status)
+}
+
+/// Reject unsupported combinations of version bump operations.
+fn validate_bumps(bumps: &[VersionBumpSpec]) -> Result<()> {
+    if bumps.len() < 2 {
+        return Ok(());
+    }
+
+    for exclusive in [VersionBump::Stable, VersionBump::Post] {
+        if bumps.iter().any(|spec| spec.bump == exclusive) {
+            bail!(
+                "`--bump {exclusive}` cannot be used with another `--bump` value, got: {}",
+                bumps.iter().format(", ")
+            );
+        }
+    }
+
+    let categories: [(&str, &[VersionBump]); 2] = [
+        (
+            "release",
+            &[VersionBump::Major, VersionBump::Minor, VersionBump::Patch],
+        ),
+        (
+            "pre-release",
+            &[
+                VersionBump::Alpha,
+                VersionBump::Beta,
+                VersionBump::Rc,
+                VersionBump::Dev,
+            ],
+        ),
+    ];
+    for (label, kinds) in categories {
+        let components = bumps.iter().filter(|spec| kinds.contains(&spec.bump));
+        if components.clone().nth(1).is_some() {
+            bail!(
+                "Only one {label} version component can be provided to `--bump`, got: {}",
+                components.format(", ")
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// Add hint to use `uv self version` when workspace discovery fails due to missing pyproject.toml
