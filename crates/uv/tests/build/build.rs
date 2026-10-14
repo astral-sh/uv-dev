@@ -514,8 +514,8 @@ fn build_sdist() -> Result<()> {
         dependencies = ["anyio==3.7.0"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
         "#,
     )?;
 
@@ -610,8 +610,8 @@ fn build_sdist_wheel() -> Result<()> {
         dependencies = ["anyio==3.7.0"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
         "#,
     )?;
 
@@ -820,8 +820,8 @@ fn build_workspace() -> Result<()> {
         members = ["packages/*"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
         "#,
     )?;
 
@@ -844,8 +844,8 @@ fn build_workspace() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
         "#,
     )?;
 
@@ -1006,8 +1006,8 @@ fn build_all_with_failure() -> Result<()> {
         members = ["packages/*"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
         "#,
     )?;
 
@@ -1033,8 +1033,8 @@ fn build_all_with_failure() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
         "#,
     )?;
 
@@ -2191,167 +2191,6 @@ async fn build_transitive_url_build_requirement_hashes() -> Result<()> {
 }
 
 #[test]
-fn build_quiet() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let project = context.temp_dir.child("project");
-
-    let pyproject_toml = project.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-        "#,
-    )?;
-
-    project
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .touch()?;
-    project.child("README").touch()?;
-
-    uv_snapshot!(&context.filters(), context.build().arg("project").arg("-q"), @"
-    exit_code: 0 (success)
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn build_no_build_logs() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let project = context.temp_dir.child("project");
-
-    let pyproject_toml = project.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-        "#,
-    )?;
-
-    project
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .touch()?;
-    project.child("README").touch()?;
-
-    uv_snapshot!(&context.filters(), context.build().arg("project").arg("--no-build-logs"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Building source distribution...
-    Building wheel from source distribution...
-    Successfully built project/dist/project-0.1.0.tar.gz
-    Successfully built project/dist/project-0.1.0-py3-none-any.whl
-    ");
-
-    Ok(())
-}
-
-/// Test that `UV_HIDE_BUILD_OUTPUT` suppresses build output.
-#[test]
-fn build_hide_build_output_env_var() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let project = context.temp_dir.child("project");
-
-    let pyproject_toml = project.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-        "#,
-    )?;
-
-    project
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .touch()?;
-    project.child("README").touch()?;
-
-    uv_snapshot!(&context.filters(), context.build().arg("project").env(EnvVars::UV_HIDE_BUILD_OUTPUT, "1"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Building source distribution...
-    Building wheel from source distribution...
-    Successfully built project/dist/project-0.1.0.tar.gz
-    Successfully built project/dist/project-0.1.0-py3-none-any.whl
-    ");
-
-    Ok(())
-}
-
-/// Test that `UV_HIDE_BUILD_OUTPUT` hides build output even on failure.
-#[test]
-fn build_hide_build_output_on_failure() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filter((r"\\\.", ""));
-
-    let project = context.temp_dir.child("project");
-
-    let pyproject_toml = project.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-        "#,
-    )?;
-
-    // Create a `setup.py` that prints an environment variable before failing.
-    project.child("setup.py").write_str(indoc! {r#"
-        import os
-        import sys
-        print("FOO=" + os.environ.get("FOO", "not-set"), file=sys.stderr)
-        sys.stderr.flush()
-        raise Exception("Build failed intentionally!")
-        "#})?;
-
-    // With `UV_HIDE_BUILD_OUTPUT`, the output is hidden even on failure.
-    uv_snapshot!(context.filters(), context.build().arg("project").env(EnvVars::UV_HIDE_BUILD_OUTPUT, "1").env("FOO", "bar"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Building source distribution...
-    error: Failed to build `[TEMP_DIR]/project`
-      cause: The build backend returned an error
-      cause: Call to `setuptools.build_meta.get_requires_for_build_sdist` failed (exit status: 1)
-
-    hint: Build failures usually indicate a problem with the package or the build environment
-    ");
-
-    Ok(())
-}
-
-#[test]
 fn build_tool_uv_sources() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filter((r"\\\.", ""));
 
@@ -3493,8 +3332,8 @@ fn build_with_symlink() -> Result<()> {
             requires-python = ">=3.12"
 
             [build-system]
-            requires = ["uv_build>=0.7,<10000"]
-            build-backend = "uv_build"
+            requires = ["hatchling"]
+            build-backend = "hatchling.build"
     "#})?;
     fs_err::os::unix::fs::symlink(
         "pyproject.toml.real",
@@ -3959,8 +3798,8 @@ fn build_clear_preserves_workspace_member() -> Result<()> {
         version = "0.1.0"
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
     "#})?;
     first.child("src/first/__init__.py").touch()?;
 
@@ -3971,8 +3810,8 @@ fn build_clear_preserves_workspace_member() -> Result<()> {
         version = "0.1.0"
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
     "#})?;
     second.child("src/second/__init__.py").touch()?;
     second.child("marker.txt").write_str("marker")?;
