@@ -125,3 +125,45 @@ fn find_links_uv_env_var() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Offline resolution ignores a live remote find-links page containing the requested wheel.
+#[test]
+fn offline_find_links() -> Result<()> {
+    let (context, server) = setup()?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("tqdm")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--offline", "--find-links"])
+        .arg(server.url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because tqdm was not found in the cache and you require tqdm, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    ");
+    Ok(())
+}
+
+/// Disabling registry lookups does not bypass offline mode for a remote find-links page.
+#[test]
+fn offline_find_links_no_index() -> Result<()> {
+    let (context, server) = setup()?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("tqdm")?;
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["requirements.in", "--offline", "--no-index", "--find-links"])
+        .arg(server.url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because tqdm was not found in the cache and you require tqdm, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
+    ");
+    Ok(())
+}
