@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::path::Path;
 
 use same_file::is_same_file;
@@ -474,44 +474,13 @@ fn generate_dist_compatibility_hint(wheel_tags: &ExpandedTags, tags: &Tags) -> O
         return None;
     };
 
-    match incompatible_tag {
-        IncompatibleTag::Python => {
-            let wheel_tags = wheel_tags.python_tags();
-            let current_tag = tags.python_tag();
-
-            if let Some(current) = current_tag {
-                let message = if let Some(pretty) = current.pretty() {
-                    format!("{pretty} (`{current}`)")
-                } else {
-                    format!("`{current}`")
-                };
-
-                Some(format!(
-                    "The distribution is compatible with {}, but you're using {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    message
-                ))
-            } else {
-                Some(format!(
-                    "The distribution requires {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            }
-        }
+    Some(match incompatible_tag {
+        IncompatibleTag::Python => format_dist_compatibility_hint(
+            wheel_tags.python_tags(),
+            tags.python_tag().as_ref(),
+            "using",
+            |tag| tag.pretty(),
+        ),
         IncompatibleTag::FreethreadedAbi => {
             let wheel_abi = wheel_tags
                 .abi_tags()
@@ -527,90 +496,56 @@ fn generate_dist_compatibility_hint(wheel_tags: &ExpandedTags, tags: &Tags) -> O
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            let current = if let Some(current) = tags.abi_tag() {
-                if let Some(pretty) = current.pretty() {
-                    format!("{pretty} (`{current}`)")
-                } else {
-                    format!("`{current}`")
-                }
-            } else {
-                "free-threaded Python".to_string()
-            };
-            Some(format!(
+            let current = tags.abi_tag().map_or_else(
+                || "free-threaded Python".to_string(),
+                |current| format_tag(&current, current.pretty()),
+            );
+            format!(
                 "You're using {current}, but the distribution was built for {wheel_abi}, which requires a GIL-enabled interpreter"
-            ))
+            )
         }
-        IncompatibleTag::Abi => {
-            let wheel_tags = wheel_tags.abi_tags();
-            let current_tag = tags.abi_tag();
-            if let Some(current) = current_tag {
-                let message = if let Some(pretty) = current.pretty() {
-                    format!("{pretty} (`{current}`)")
-                } else {
-                    format!("`{current}`")
-                };
-                Some(format!(
-                    "The distribution is compatible with {}, but you're using {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    message
-                ))
-            } else {
-                Some(format!(
-                    "The distribution requires {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            }
+        IncompatibleTag::Abi => format_dist_compatibility_hint(
+            wheel_tags.abi_tags(),
+            tags.abi_tag().as_ref(),
+            "using",
+            |tag| tag.pretty(),
+        ),
+        IncompatibleTag::Platform => format_dist_compatibility_hint(
+            wheel_tags.platform_tags(),
+            tags.platform_tag(),
+            "on",
+            |tag| tag.pretty(),
+        ),
+        IncompatibleTag::Variant | IncompatibleTag::Invalid | IncompatibleTag::AbiPythonVersion => {
+            return None;
         }
-        IncompatibleTag::Platform => {
-            let wheel_tags = wheel_tags.platform_tags();
-            let current_tag = tags.platform_tag();
+    })
+}
 
-            if let Some(current) = current_tag {
-                let message = if let Some(pretty) = current.pretty() {
-                    format!("{pretty} (`{current}`)")
-                } else {
-                    format!("`{current}`")
-                };
-                Some(format!(
-                    "The distribution is compatible with {}, but you're on {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    message
-                ))
-            } else {
-                Some(format!(
-                    "The distribution requires {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            }
-        }
-        _ => None,
+fn format_dist_compatibility_hint<'tag, T: Display + 'tag, P: Display>(
+    wheel_tags: impl Iterator<Item = &'tag T>,
+    current: Option<&T>,
+    current_phrase: &str,
+    pretty: impl Fn(&T) -> Option<P>,
+) -> String {
+    let current = current.map(|tag| format_tag(tag, pretty(tag)));
+    let wheel_tags = wheel_tags
+        .map(|tag| format_tag(tag, pretty(tag)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if let Some(current) = current {
+        format!(
+            "The distribution is compatible with {wheel_tags}, but you're {current_phrase} {current}"
+        )
+    } else {
+        format!("The distribution requires {wheel_tags}")
+    }
+}
+
+fn format_tag(tag: &impl Display, pretty: Option<impl Display>) -> String {
+    if let Some(pretty) = pretty {
+        format!("{pretty} (`{tag}`)")
+    } else {
+        format!("`{tag}`")
     }
 }
