@@ -207,13 +207,11 @@ pub(crate) fn derivation_tree_externals(tree: &ErrorTree) -> impl Iterator<Item 
     })
 }
 
-/// Visit each distinct package in a derivation tree without recursive calls.
+/// Collect the distinct packages in a derivation tree without recursive calls.
 ///
 /// The iteration order is unspecified, matching the set semantics of
 /// [`DerivationTree::packages`].
-pub(crate) fn derivation_tree_packages(
-    derivation_tree: &ErrorTree,
-) -> impl Iterator<Item = &PubGrubPackage> {
+pub(crate) fn derivation_tree_packages(derivation_tree: &ErrorTree) -> FxHashSet<&PubGrubPackage> {
     let mut packages = FxHashSet::default();
     let mut trees = vec![derivation_tree];
 
@@ -238,7 +236,7 @@ pub(crate) fn derivation_tree_packages(
         }
     }
 
-    packages.into_iter()
+    packages
 }
 
 /// Drop an exclusively owned derivation tree without recursing through its children.
@@ -765,6 +763,7 @@ impl NoSolutionError {
     /// Get the packages that are involved in this error.
     pub fn packages(&self) -> impl Iterator<Item = &PackageName> {
         derivation_tree_packages(&self.error)
+            .into_iter()
             .filter_map(|p| p.name())
             .unique()
     }
@@ -2125,7 +2124,7 @@ mod tests {
     #[test]
     fn derivation_tree_packages_are_unique() {
         let tree = StackSafeErrorTree::new(deep_derivation_tree());
-        assert_eq!(derivation_tree_packages(&tree).count(), 1);
+        assert_eq!(derivation_tree_packages(&tree).len(), 1);
     }
 
     #[test]
