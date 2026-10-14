@@ -312,20 +312,16 @@ impl CachedEnvironment {
         } else {
             interpreter.to_base_python()?
         };
-        if base_python == interpreter.sys_executable() {
-            debug!(
-                "Caching via base interpreter: {}",
-                interpreter.sys_executable().display()
-            );
-            Ok(interpreter.clone())
+        let base_interpreter = if base_python == interpreter.sys_executable() {
+            interpreter.clone()
         } else {
-            let base_interpreter = Interpreter::query(base_python, cache)?;
-            debug!(
-                "Caching via base interpreter: {}",
-                base_interpreter.sys_executable().display()
-            );
-            Ok(base_interpreter)
-        }
+            Interpreter::query(base_python, cache)?
+        };
+        debug!(
+            "Caching via base interpreter: {}",
+            base_interpreter.sys_executable().display()
+        );
+        Ok(base_interpreter)
     }
 }
 
