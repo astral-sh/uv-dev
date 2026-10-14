@@ -15,5 +15,8 @@ mod legacy_lockfile;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod show_settings;
 
+#[cfg(feature = "test-python")]
+mod source_url;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod sync;
