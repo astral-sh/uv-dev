@@ -199,7 +199,7 @@ pub async fn check(
         .unwrap_or(project_dir);
 
     let check_targets = if let Some(script) = script.as_ref() {
-        vec![script.path.clone()]
+        vec![script.path.as_path()]
     } else if let Some(project) = project.as_ref() {
         if defacto_all_packages {
             // In --all-packages mode, and anything equivalent like virtual workspaces,
@@ -220,7 +220,7 @@ pub async fn check(
                 .workspace()
                 .packages()
                 .values()
-                .map(|member| member.root().clone())
+                .map(|member| member.root().as_path())
                 .collect()
         } else if !package.is_empty() {
             // If the user has specified a list of packages, tell ty to only check those packages.
@@ -231,13 +231,13 @@ pub async fn check(
                         .workspace()
                         .packages()
                         .get(name)
-                        .map(|member| member.root().clone())
+                        .map(|member| member.root().as_path())
                         .ok_or_else(|| anyhow::anyhow!("Package `{name}` not found in workspace"))
                 })
                 .collect::<Result<Vec<_>>>()?
         } else {
             // Otherwise we're checking just this one package (nearest ancestor).
-            vec![project.root().to_owned()]
+            vec![project.root()]
         }
     } else {
         Vec::new()
@@ -269,7 +269,7 @@ pub async fn check(
                         .iter()
                         .any(|target| member.root().starts_with(target))
             })
-            .map(|(_, member)| member.root().clone())
+            .map(|(_, member)| member.root().as_path())
             .collect()
     } else {
         Vec::new()
