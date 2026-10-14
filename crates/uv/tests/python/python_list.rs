@@ -5,6 +5,8 @@ use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 
 use anyhow::Result;
+#[cfg(any(feature = "test-python", feature = "test-python-managed"))]
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use uv_test::uv_snapshot;
@@ -347,10 +349,18 @@ fn python_list_venv() {
         .with_filtered_virtualenv_bin()
         .with_collapsed_whitespace();
 
-    // Create a virtual environment
-    uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.12").arg("-q"), @"
-    exit_code: 0 (success)
-    ");
+    context.venv().args(["--python", "3.12"]).assert().success();
+    // Otherwise, both omission checks could pass because the environment is unusable.
+    context
+        .external_command(context.interpreter())
+        .args([
+            "-I",
+            "-c",
+            "import sys; print(sys.prefix != sys.base_prefix, end='')",
+        ])
+        .assert()
+        .success()
+        .stdout("True");
 
     // An active virtual environment is omitted from the listing.
     uv_snapshot!(context.filters(), context.python_list().env(EnvVars::VIRTUAL_ENV, context.venv.path()), @"
@@ -506,8 +516,6 @@ fn python_list_downloads() {
 #[test]
 #[cfg(feature = "test-python-managed")]
 fn python_list_downloads_installed() {
-    use assert_cmd::assert::OutputAssertExt;
-
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_python_install_bin()
@@ -573,8 +581,6 @@ fn python_list_downloads_installed() {
 #[test]
 #[cfg(all(unix, feature = "test-python-managed"))]
 fn python_list_managed_symlinks() {
-    use assert_cmd::assert::OutputAssertExt;
-
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_python_install_bin()
