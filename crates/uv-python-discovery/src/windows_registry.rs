@@ -1,6 +1,6 @@
 //! Discover Python installations in the Windows registry following PEP 514.
 
-use std::cmp::Ordering;
+use std::cmp::Reverse;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -61,20 +61,12 @@ pub(crate) fn registry_pythons() -> Result<Vec<WindowsPython>, windows::core::Er
         }
     }
 
-    // The registry has no natural ordering, so we're processing the latest version first.
+    // Process entries without a version first, then versioned entries from newest to oldest.
+    // The path provides a stable tie-breaker.
     registry_pythons.sort_by(|a, b| {
-        match (&a.version, &b.version) {
-            // Place entries with a version before those without a version.
-            (Some(_), None) => Ordering::Greater,
-            (None, Some(_)) => Ordering::Less,
-            // We want the highest version on top, which is the inverse from the regular order. The
-            // path is an arbitrary but stable tie-breaker.
-            (Some(version_a), Some(version_b)) => {
-                version_a.cmp(version_b).reverse().then(a.path.cmp(&b.path))
-            }
-            // Sort the entries without a version arbitrarily, but stable (by path).
-            (None, None) => a.path.cmp(&b.path),
-        }
+        let a_version = a.version.as_ref().map(|version| Reverse(version.version()));
+        let b_version = b.version.as_ref().map(|version| Reverse(version.version()));
+        a_version.cmp(&b_version).then_with(|| a.path.cmp(&b.path))
     });
 
     Ok(registry_pythons)
