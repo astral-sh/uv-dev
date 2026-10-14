@@ -17,6 +17,8 @@ mod pip_install;
 mod pylock;
 
 #[cfg(feature = "test-python")]
+mod wheel_cache;
+#[cfg(feature = "test-python")]
 mod wheel_variant_compatibility;
 #[cfg(feature = "test-python")]
 mod wheel_variants;
