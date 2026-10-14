@@ -27,11 +27,11 @@ impl Script {
         //  and after the right square bracket."
         // – https://packaging.python.org/en/latest/specifications/entry-points/#file-format
         let (_, [module, function]) = regex!(
-            r"^(?P<module>[\w\d_\-.]+)\s*:\s*(?P<function>[\w\d_\-.]+)(?:\s*\[\s*(?:[^,]+,?\s*)+\])?\s*$"
+            r"^(?P<module>[\w.-]+)\s*:\s*(?P<function>[\w.-]+)(?:\s*\[\s*(?:[^,]+,?\s*)+\])?\s*$"
         )
-            .captures(value)
-            .ok_or_else(|| Error::InvalidWheel(format!("invalid console script: '{value}'")))?
-            .extract();
+        .captures(value)
+        .ok_or_else(|| Error::InvalidWheel(format!("invalid console script: '{value}'")))?
+        .extract();
         Ok(Self {
             name: script_name.to_string(),
             module: module.to_string(),
