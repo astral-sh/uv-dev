@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use assert_fs::prelude::*;
 use serde_json::json;
@@ -12,7 +14,7 @@ async fn yanked_colorama() -> Result<PackageServer> {
         &name,
         &"0.4.2".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],

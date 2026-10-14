@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
@@ -185,7 +187,7 @@ fn record_uses_forward_slashes() -> Result<()> {
         &"project".parse()?,
         &"0.1.0".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[

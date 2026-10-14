@@ -1,5 +1,6 @@
 //! Cache reuse and eviction for distribution sources.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -45,7 +46,7 @@ async fn require_hashes_re_download() -> Result<()> {
         &name,
         &"4.0.0".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],
@@ -117,7 +118,7 @@ async fn serve_index_wheel(server: &MockServer, package: &str, version: &str) ->
         &package.parse()?,
         &version.parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],
@@ -149,7 +150,7 @@ fn write_tomli_wheel(archive: &Path, payload: &str, mtime: i64) -> Result<()> {
         &"tomli".parse()?,
         &"2.0.1".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[("tomli/payload.txt", payload)],
@@ -417,7 +418,7 @@ async fn install_url_built_dist_cached() -> Result<()> {
         &"tqdm".parse()?,
         &"4.66.1".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],
