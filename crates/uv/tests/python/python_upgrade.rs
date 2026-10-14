@@ -643,6 +643,8 @@ fn python_sync_transparent_patch_upgrade_reuses_environment() -> Result<()> {
         .arg("3.10")
         .assert()
         .success();
+    let marker = context.venv.child("reuse-marker");
+    marker.write_str("pre-upgrade environment\n")?;
 
     // The minor-only `version_info` allows compatibility checks to accept a newer patch.
     let pyvenv_cfg = context.read(".venv/pyvenv.cfg");
@@ -666,6 +668,7 @@ fn python_sync_transparent_patch_upgrade_reuses_environment() -> Result<()> {
     Resolved 1 package in [TIME]
     Checked in [TIME]
     ");
+    assert_eq!(context.read(marker), "pre-upgrade environment\n");
 
     // The reused environment should run the upgraded Python patch.
     uv_snapshot!(context.filters(), context.python_command().arg("--version"), @r"
