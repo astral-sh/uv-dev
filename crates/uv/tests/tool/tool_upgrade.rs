@@ -426,7 +426,7 @@ fn tool_upgrade_all() -> Result<()> {
 /// With `tool-install-locks`, the installed versions are used as resolver preferences, which must
 /// not prevent the upgrade from selecting newer versions.
 #[test]
-fn tool_upgrade_all_tool_install_locks() {
+fn tool_upgrade_all_tool_install_locks() -> Result<()> {
     let old_index = old_tool_index();
     let new_index = new_tool_index();
 
@@ -468,6 +468,16 @@ fn tool_upgrade_all_tool_install_locks() {
      - pytz==2018.5
     Installed 1 executable: pybabel
     ");
+    let lock = uv_lock::Lock::from_canonical_toml(&context.read("tools/babel/uv.lock"))?;
+    let [package] = lock.packages() else {
+        anyhow::bail!(
+            "expected one package in the upgraded tool lock: {:?}",
+            lock.packages()
+        );
+    };
+    assert_eq!(package.name().as_str(), "babel");
+    assert_eq!(package.version(), Some(&"2.14.0".parse()?));
+    Ok(())
 }
 
 #[test]
