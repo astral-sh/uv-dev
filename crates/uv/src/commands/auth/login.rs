@@ -28,23 +28,8 @@ pub(crate) async fn login(
     let url_username = url_credentials.as_ref().and_then(|c| c.username());
     let url_password = url_credentials.as_ref().and_then(|c| c.password());
 
-    let username = match (username, url_username) {
-        (Some(cli), Some(url)) => {
-            bail!(
-                "Cannot specify a username both via the URL and CLI; found `--username {cli}` and `{url}`"
-            );
-        }
-        (Some(cli), None) => Some(cli),
-        (None, Some(url)) => Some(url.to_string()),
-        (None, None) => {
-            // When using `--token`, we'll use a `__token__` placeholder username
-            if token.is_some() {
-                Some(TOKEN_USERNAME.to_string())
-            } else {
-                None
-            }
-        }
-    };
+    let username = super::resolve_username(username, url_username)?
+        .or_else(|| token.as_ref().map(|_| TOKEN_USERNAME.to_owned()));
 
     // Ensure that a username is not provided when using a token
     if token.is_some() {

@@ -27,16 +27,8 @@ pub(crate) async fn logout(
     let url_credentials = Credentials::from_url(url)?;
     let url_username = url_credentials.as_ref().and_then(|c| c.username());
 
-    let username = match (username, url_username) {
-        (Some(cli), Some(url)) => {
-            bail!(
-                "Cannot specify a username both via the URL and CLI; found `--username {cli}` and `{url}`"
-            );
-        }
-        (Some(cli), None) => cli,
-        (None, Some(url)) => url.to_string(),
-        (None, None) => TOKEN_USERNAME.to_string(),
-    };
+    let username = super::resolve_username(username, url_username)?
+        .unwrap_or_else(|| TOKEN_USERNAME.to_owned());
     if username.is_empty() {
         bail!("Username cannot be empty");
     }
