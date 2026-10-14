@@ -1896,14 +1896,12 @@ impl std::fmt::Display for PubGrubHint {
                 )
             }
             Self::BuildPrereleaseRequested { name, range } => {
+                let package = PubGrubPackage::base(name.clone());
                 write!(
                     f,
-                    "`{}` was requested with a pre-release marker (e.g., {}), but build environments can't opt into pre-releases automatically.  Add `{}` to `build-system.requires`, `[tool.uv.extra-build-dependencies]`, or supply it via `uv build --build-constraint`.",
+                    "`{}` was requested with a pre-release marker (e.g., {specifier}), but build environments can't opt into pre-releases automatically.  Add `{specifier}` to `build-system.requires`, `[tool.uv.extra-build-dependencies]`, or supply it via `uv build --build-constraint`.",
                     name.cyan(),
-                    PackageRange::compatibility(&PubGrubPackage::base(name.clone()), range, None)
-                        .cyan(),
-                    PackageRange::compatibility(&PubGrubPackage::base(name.clone()), range, None)
-                        .cyan(),
+                    specifier = PackageRange::compatibility(&package, range, None).cyan(),
                 )
             }
             Self::NoIndex => {
