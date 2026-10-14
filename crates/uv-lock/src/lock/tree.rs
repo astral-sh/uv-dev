@@ -554,21 +554,17 @@ impl<'env> TreeDisplay<'env> {
             marker: self.invert.then_some(cursor.marker()),
         };
 
-        let line = {
-            let mut line = format!("{}", package_id.name);
+        let mut line = {
+            let mut line = package_id.name.to_string();
 
-            if let Some(extras) = edge.and_then(Edge::extras) {
-                if !extras.is_empty() {
-                    line.push('[');
-                    line.push_str(extras.iter().join(", ").as_str());
-                    line.push(']');
-                }
+            if let Some(extras) = edge.and_then(Edge::extras)
+                && !extras.is_empty()
+            {
+                let _ = write!(line, "[{}]", extras.iter().format(", "));
             }
 
             if let Some(version) = package_id.version.as_ref() {
-                line.push(' ');
-                line.push('v');
-                let _ = write!(line, "{version}");
+                let _ = write!(line, " v{version}");
             }
 
             if let Some(edge) = edge {
@@ -585,12 +581,11 @@ impl<'env> TreeDisplay<'env> {
 
             // Append compressed wheel size, if available in the lockfile.
             // Keep it simple: use the first wheel entry that includes a size.
-            if self.show_sizes {
-                if let Some(size_bytes) = package.wheels.iter().find_map(|wheel| wheel.size) {
-                    let bytes = human_readable_bytes(size_bytes);
-                    line.push(' ');
-                    line.push_str(format!("{}", format!("({bytes:.1})").dimmed()).as_str());
-                }
+            if self.show_sizes
+                && let Some(size_bytes) = package.wheels.iter().find_map(|wheel| wheel.size)
+            {
+                let bytes = human_readable_bytes(size_bytes);
+                let _ = write!(line, " {}", format_args!("({bytes:.1})").dimmed());
             }
 
             line
@@ -600,24 +595,26 @@ impl<'env> TreeDisplay<'env> {
         // 1. The package is in the current traversal path (i.e., a dependency cycle).
         // 2. The package has been visited and de-duplication is enabled (default).
         if path.contains(&visited_node) {
-            return vec![format!("{line} (*)")];
+            line.push_str(" (*)");
+            return vec![line];
         }
         if !self.no_dedupe
             && let Some(requirements) = visited.get(&visited_node)
         {
-            return if requirements.is_empty() {
-                vec![line]
-            } else {
-                vec![format!("{line} (*)")]
-            };
+            if !requirements.is_empty() {
+                line.push_str(" (*)");
+            }
+            return vec![line];
         }
 
         // Incorporate the latest version of the package, if known.
-        let line = if let Some(version) = self.latest.get(package_id) {
-            format!("{line} {}", format!("(latest: v{version})").bold().cyan())
-        } else {
-            line
-        };
+        if let Some(version) = self.latest.get(package_id) {
+            let _ = write!(
+                line,
+                " {}",
+                format_args!("(latest: v{version})").bold().cyan()
+            );
+        }
 
         let mut dependencies = if self.invert && edge.is_some_and(Edge::is_dev) {
             // A member's dependency group is activated for the root member. It is not part of the
