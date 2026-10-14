@@ -648,10 +648,9 @@ impl<'lock> InstallTarget<'lock> {
 
         let roots = self.roots().collect::<FxHashSet<_>>();
         // Read only the lockfile so frozen installs cannot select newly declared extras.
-        let known_extras = lock
-            .packages()
-            .iter()
-            .filter(|package| roots.contains(package.name()))
+        let known_extras = roots
+            .into_iter()
+            .flat_map(|name| lock.packages_for_name(name))
             .flat_map(|package| {
                 package
                     .provides_extras()
@@ -730,9 +729,9 @@ impl<'lock> InstallTarget<'lock> {
             .and_then(|_| lock.root())
             .map(Package::name);
         let roots = self.roots().chain(workspace_root).collect::<FxHashSet<_>>();
-        lock.packages()
-            .iter()
-            .filter(move |package| roots.contains(package.name()))
+        roots
+            .into_iter()
+            .flat_map(move |name| lock.packages_for_name(name))
             .flat_map(|package| {
                 package
                     .dependency_groups()
