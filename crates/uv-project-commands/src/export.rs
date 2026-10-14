@@ -612,7 +612,6 @@ async fn render_export<'output>(
                 if let Some(index) = settings.index_locations.default_index() {
                     writeln!(writer, "--index-url {}", index.url().verbatim())?;
                     seen.insert(index.url());
-                    wrote_preamble = true;
                     emitted_explicit_index |= index.explicit;
                 }
                 for index in settings
@@ -622,10 +621,10 @@ async fn render_export<'output>(
                 {
                     if seen.insert(index.url()) {
                         writeln!(writer, "--extra-index-url {}", index.url().verbatim())?;
-                        wrote_preamble = true;
                     }
                     emitted_explicit_index |= index.explicit;
                 }
+                wrote_preamble = !seen.is_empty();
 
                 if emitted_explicit_index {
                     warn_user!(
