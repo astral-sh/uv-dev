@@ -1697,7 +1697,8 @@ fn version_preserves_existing_sources_during_staged_update() -> Result<()> {
     uv_snapshot!(context.filters(), context
         .version()
         .arg("0.2.0")
-        .arg("--no-sync"), @"
+        .arg("--no-sync")
+        .arg("--offline"), @"
     exit_code: 0 (success)
     ----- stdout -----
     project 0.1.0 => 0.2.0
@@ -1705,6 +1706,31 @@ fn version_preserves_existing_sources_during_staged_update() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+
+    assert_snapshot!(context.read("uv.lock"), @r#"
+    version = 1
+    revision = 5
+    requires-python = ">=3.12"
+
+    [options]
+    exclude-newer = "2024-03-25T00:00:00Z"
+
+    [[package]]
+    name = "preserved-source-dependency"
+    version = "0.1.0"
+    source = { directory = "preserved-source-dependency" }
+
+    [[package]]
+    name = "project"
+    version = "0.2.0"
+    source = { virtual = "." }
+    dependencies = [
+        { name = "preserved-source-dependency" },
+    ]
+
+    [package.metadata]
+    requires-dist = [{ name = "preserved-source-dependency", directory = "preserved-source-dependency" }]
+    "#);
 
     Ok(())
 }
