@@ -22,8 +22,8 @@ use uv_distribution_filename::WheelFilename;
 use uv_normalize::PackageName;
 use uv_pep440::VersionSpecifiers;
 
-use crate::http_server::{HttpServer, content_type_for_filename};
-use crate::vendor::{VendorArtifact, vendor_artifacts};
+use crate::http_server::{FileData, HttpServer, content_type_for_filename};
+use crate::vendor::vendor_artifacts;
 
 use super::scenario::{Scenario, WheelTag};
 use super::scenarios_dir;
@@ -43,20 +43,6 @@ struct DistInfo {
 /// All distributions for a given package name, across versions.
 struct PackageEntry {
     dists: Vec<DistInfo>,
-}
-
-enum FileData {
-    Bytes(Arc<[u8]>),
-    Vendor(&'static VendorArtifact),
-}
-
-impl FileData {
-    fn bytes(&self) -> anyhow::Result<Arc<[u8]>> {
-        match self {
-            Self::Bytes(bytes) => Ok(Arc::clone(bytes)),
-            Self::Vendor(artifact) => artifact.bytes(),
-        }
-    }
 }
 
 /// The complete pre-indexed database for a server instance.
