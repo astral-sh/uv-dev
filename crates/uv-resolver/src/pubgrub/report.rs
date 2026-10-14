@@ -1647,97 +1647,95 @@ pub enum PubGrubHint {
     DisjointEnvironment,
 }
 
-/// This private enum mirrors [`PubGrubHint`] but only includes fields that should be
-/// used for `Eq` and `Hash` implementations. It is used to derive `PartialEq` and
-/// `Hash` implementations for [`PubGrubHint`].
+/// The identity of a [`PubGrubHint`] for equality and hashing.
 #[derive(PartialEq, Eq, Hash)]
-enum PubGrubHintCore {
+enum PubGrubHintCore<'a> {
     PrereleaseAvailable {
-        package: PackageName,
+        package: &'a PackageName,
     },
     BuildPrereleaseAvailable {
-        package: PackageName,
+        package: &'a PackageName,
     },
     PrereleaseRequested {
-        package: PackageName,
+        package: &'a PackageName,
     },
     BuildPrereleaseRequested {
-        package: PackageName,
+        package: &'a PackageName,
     },
     NoIndex,
     Offline,
     InvalidPackageMetadata {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InvalidPackageStructure {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InvalidPackageNetwork {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InvalidVersionMetadata {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InconsistentVersionMetadata {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InvalidVersionStructure {
-        package: PackageName,
+        package: &'a PackageName,
     },
     InvalidVersionNetwork {
-        package: PackageName,
+        package: &'a PackageName,
     },
     IncompatibleBuildRequirement {
-        package: PackageName,
+        package: &'a PackageName,
     },
     RequiresPython {
         source: PythonRequirementSource,
-        requires_python: RequiresPython,
+        requires_python: &'a RequiresPython,
     },
     DependsOnWorkspacePackage {
-        package: PackageName,
-        dependency: PackageName,
+        package: &'a PackageName,
+        dependency: &'a PackageName,
         workspace: bool,
     },
     DependsOnItself {
-        package: PackageName,
+        package: &'a PackageName,
         workspace: bool,
     },
     UncheckedIndex {
-        package: PackageName,
+        package: &'a PackageName,
     },
     UnauthorizedIndex {
-        index: IndexUrl,
+        index: &'a IndexUrl,
     },
     ForbiddenIndex {
-        index: IndexUrl,
+        index: &'a IndexUrl,
     },
     NoBuild {
-        package: PackageName,
+        package: &'a PackageName,
     },
     NoBinary {
-        package: PackageName,
+        package: &'a PackageName,
     },
     LanguageTags {
-        package: PackageName,
+        package: &'a PackageName,
     },
     AbiTags {
-        package: PackageName,
+        package: &'a PackageName,
     },
     PlatformTags {
-        package: PackageName,
+        package: &'a PackageName,
     },
     ExcludeNewer {
-        package: PackageName,
+        package: &'a PackageName,
         source: EffectiveExcludeNewerSource,
     },
     DisjointPythonVersion,
     DisjointEnvironment,
 }
 
-impl From<PubGrubHint> for PubGrubHintCore {
+impl<'a> From<&'a PubGrubHint> for PubGrubHintCore<'a> {
     #[inline]
-    fn from(hint: PubGrubHint) -> Self {
+    fn from(hint: &'a PubGrubHint) -> Self {
         match hint {
             PubGrubHint::PrereleaseAvailable { package, .. } => {
                 Self::PrereleaseAvailable { package }
@@ -1782,7 +1780,7 @@ impl From<PubGrubHint> for PubGrubHintCore {
                 requires_python,
                 ..
             } => Self::RequiresPython {
-                source,
+                source: *source,
                 requires_python,
             },
             PubGrubHint::DependsOnWorkspacePackage {
@@ -1792,11 +1790,12 @@ impl From<PubGrubHint> for PubGrubHintCore {
             } => Self::DependsOnWorkspacePackage {
                 package,
                 dependency,
-                workspace,
+                workspace: *workspace,
             },
-            PubGrubHint::DependsOnItself { package, workspace } => {
-                Self::DependsOnItself { package, workspace }
-            }
+            PubGrubHint::DependsOnItself { package, workspace } => Self::DependsOnItself {
+                package,
+                workspace: *workspace,
+            },
             PubGrubHint::UncheckedIndex { name: package, .. } => Self::UncheckedIndex { package },
             PubGrubHint::UnauthorizedIndex { index } => Self::UnauthorizedIndex { index },
             PubGrubHint::ForbiddenIndex { index, .. } => Self::ForbiddenIndex { index },
@@ -1807,7 +1806,10 @@ impl From<PubGrubHint> for PubGrubHintCore {
             PubGrubHint::PlatformTags { package, .. } => Self::PlatformTags { package },
             PubGrubHint::ExcludeNewer {
                 package, source, ..
-            } => Self::ExcludeNewer { package, source },
+            } => Self::ExcludeNewer {
+                package,
+                source: *source,
+            },
             PubGrubHint::DisjointPythonVersion { .. } => Self::DisjointPythonVersion,
             PubGrubHint::DisjointEnvironment => Self::DisjointEnvironment,
         }
@@ -1816,16 +1818,13 @@ impl From<PubGrubHint> for PubGrubHintCore {
 
 impl std::hash::Hash for PubGrubHint {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let core = PubGrubHintCore::from(self.clone());
-        core.hash(state);
+        PubGrubHintCore::from(self).hash(state);
     }
 }
 
 impl PartialEq for PubGrubHint {
     fn eq(&self, other: &Self) -> bool {
-        let core = PubGrubHintCore::from(self.clone());
-        let other_core = PubGrubHintCore::from(other.clone());
-        core == other_core
+        PubGrubHintCore::from(self) == PubGrubHintCore::from(other)
     }
 }
 
