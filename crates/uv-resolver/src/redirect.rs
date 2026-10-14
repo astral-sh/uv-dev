@@ -60,10 +60,10 @@ mod tests {
 
     use crate::redirect::apply_redirect;
 
-    fn assert_redirect(url: &VerbatimUrl, redirect: DisplaySafeUrl, expected: VerbatimUrl) {
+    fn assert_redirect(url: &VerbatimUrl, redirect: DisplaySafeUrl, expected: &VerbatimUrl) {
         let actual = apply_redirect(url, redirect);
         assert_eq!(actual.given(), expected.given());
-        assert_eq!(actual, expected);
+        assert_eq!(&actual, expected);
     }
 
     #[test]
@@ -80,7 +80,7 @@ mod tests {
             "https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe",
         )?
         .with_given("git+https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe");
-        assert_redirect(&verbatim, redirect, expected);
+        assert_redirect(&verbatim, redirect, &expected);
 
         // If there's an `@` in the original representation, and it's stable between the parsed and
         // given representations, we preserve everything that precedes the `@` in the precise
@@ -95,7 +95,7 @@ mod tests {
             "https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe",
         )?
         .with_given("git+https://${DOMAIN}.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe");
-        assert_redirect(&verbatim, redirect, expected);
+        assert_redirect(&verbatim, redirect, &expected);
 
         // If there's a conflict after the `@`, discard the original representation.
         let verbatim = VerbatimUrl::parse_url("https://github.com/flask.git@main")?
@@ -107,7 +107,7 @@ mod tests {
         let expected = VerbatimUrl::parse_url(
             "https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe",
         )?;
-        assert_redirect(&verbatim, redirect, expected);
+        assert_redirect(&verbatim, redirect, &expected);
 
         // We should preserve subdirectory fragments.
         let verbatim = VerbatimUrl::parse_url("https://github.com/flask.git#subdirectory=src")?
@@ -120,7 +120,7 @@ mod tests {
             "https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe#subdirectory=src",
         )?.with_given("git+https://github.com/flask.git@b90a4f1f4a370e92054b9cc9db0efcb864f87ebe#subdirectory=src");
 
-        assert_redirect(&verbatim, redirect, expected);
+        assert_redirect(&verbatim, redirect, &expected);
 
         Ok(())
     }
