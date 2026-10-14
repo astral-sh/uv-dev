@@ -73,14 +73,7 @@ pub fn find_archive_dist_info<'a, T: Copy>(
     files: impl Iterator<Item = (T, &'a str)>,
 ) -> Result<(T, DistInfoStem<'a>), Error> {
     let metadatas: Vec<_> = files
-        .filter_map(|(payload, path)| {
-            let (dist_info_dir, file) = path.split_once('/')?;
-            if file != "METADATA" {
-                return None;
-            }
-            let dist_info_stem = dist_info_dir.strip_suffix(".dist-info")?;
-            Some((payload, dist_info_stem))
-        })
+        .filter_map(|(payload, path)| dist_info_stem(path, "METADATA").map(|stem| (payload, stem)))
         .collect();
 
     // Like `pip`, assert that there is exactly one `.dist-info` directory.
@@ -103,19 +96,22 @@ pub fn find_archive_dist_info<'a, T: Copy>(
     Ok((payload, DistInfoStem::new(dist_info_stem, &filename.name)?))
 }
 
+/// Return the directory stem if `path` identifies the requested `.dist-info` entry.
+fn dist_info_stem<'a>(path: &'a str, entry_name: &str) -> Option<&'a str> {
+    let (directory, file) = path.split_once('/')?;
+    if file != entry_name {
+        return None;
+    }
+    directory.strip_suffix(".dist-info")
+}
+
 /// Return the validated [`DistInfoStem`] if the path is the requested entry.
 fn dist_info_entry<'a>(
     path: &'a str,
     filename: &WheelFilename,
     entry_name: &str,
 ) -> Result<Option<DistInfoStem<'a>>, Error> {
-    let Some((dist_info_dir, file)) = path.split_once('/') else {
-        return Ok(None);
-    };
-    if file != entry_name {
-        return Ok(None);
-    }
-    let Some(dist_info_stem) = dist_info_dir.strip_suffix(".dist-info") else {
+    let Some(dist_info_stem) = dist_info_stem(path, entry_name) else {
         return Ok(None);
     };
 
