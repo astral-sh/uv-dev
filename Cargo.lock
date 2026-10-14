@@ -5855,7 +5855,6 @@ dependencies = [
  "uv-fs",
  "uv-keyring",
  "uv-netrc",
- "uv-once-map",
  "uv-preview",
  "uv-redacted",
  "uv-small-str",
