@@ -601,24 +601,16 @@ impl<'a> Planner<'a> {
                 Dist::Source(SourceDist::DirectUrl(sdist)) => {
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    match built_index.url(sdist) {
-                        Ok(Some(wheel)) => {
-                            if cached_wheel_matches_source(wheel.filename(), sdist) {
-                                let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
-                                    parsed_url: sdist.to_parsed_url(),
-                                    verbatim: sdist.url.clone(),
-                                });
-                                debug!("URL source requirement already cached: {cached_dist}");
-                                cached.push(CachedDist::Url(cached_dist));
-                                continue;
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(err) => {
-                            debug!(
-                                "Failed to deserialize cached wheel filename for: {sdist} ({err})"
-                            );
-                        }
+                    if let Some(wheel) = source_wheel_cache_hit(built_index.url(sdist), sdist)
+                        && cached_wheel_matches_source(wheel.filename(), sdist)
+                    {
+                        let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                            parsed_url: sdist.to_parsed_url(),
+                            verbatim: sdist.url.clone(),
+                        });
+                        debug!("URL source requirement already cached: {cached_dist}");
+                        cached.push(CachedDist::Url(cached_dist));
+                        continue;
                     }
                 }
                 Dist::Source(SourceDist::GitPath(sdist)) => {
@@ -659,24 +651,16 @@ impl<'a> Planner<'a> {
 
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    match built_index.path(sdist) {
-                        Ok(Some(wheel)) => {
-                            if cached_wheel_matches_source(wheel.filename(), sdist) {
-                                let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
-                                    parsed_url: sdist.to_parsed_url(),
-                                    verbatim: sdist.url.clone(),
-                                });
-                                debug!("Path source requirement already cached: {cached_dist}");
-                                cached.push(CachedDist::Url(cached_dist));
-                                continue;
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(err) => {
-                            debug!(
-                                "Failed to deserialize cached wheel filename for: {sdist} ({err})"
-                            );
-                        }
+                    if let Some(wheel) = source_wheel_cache_hit(built_index.path(sdist), sdist)
+                        && cached_wheel_matches_source(wheel.filename(), sdist)
+                    {
+                        let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                            parsed_url: sdist.to_parsed_url(),
+                            verbatim: sdist.url.clone(),
+                        });
+                        debug!("Path source requirement already cached: {cached_dist}");
+                        cached.push(CachedDist::Url(cached_dist));
+                        continue;
                     }
                 }
                 Dist::Source(SourceDist::Directory(sdist)) => {
@@ -687,26 +671,16 @@ impl<'a> Planner<'a> {
 
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    match built_index.directory(sdist) {
-                        Ok(Some(wheel)) => {
-                            if cached_wheel_matches_source(wheel.filename(), sdist) {
-                                let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
-                                    parsed_url: sdist.to_parsed_url(),
-                                    verbatim: sdist.url.clone(),
-                                });
-                                debug!(
-                                    "Directory source requirement already cached: {cached_dist}"
-                                );
-                                cached.push(CachedDist::Url(cached_dist));
-                                continue;
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(err) => {
-                            debug!(
-                                "Failed to deserialize cached wheel filename for: {sdist} ({err})"
-                            );
-                        }
+                    if let Some(wheel) = source_wheel_cache_hit(built_index.directory(sdist), sdist)
+                        && cached_wheel_matches_source(wheel.filename(), sdist)
+                    {
+                        let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                            parsed_url: sdist.to_parsed_url(),
+                            verbatim: sdist.url.clone(),
+                        });
+                        debug!("Directory source requirement already cached: {cached_dist}");
+                        cached.push(CachedDist::Url(cached_dist));
+                        continue;
                     }
                 }
             }
@@ -738,6 +712,17 @@ impl<'a> Planner<'a> {
             extraneous,
         })
     }
+}
+
+/// Treat source-wheel cache lookup failures as cache misses.
+fn source_wheel_cache_hit<T>(
+    result: Result<Option<T>, uv_distribution::Error>,
+    source: &impl fmt::Display,
+) -> Option<T> {
+    result.unwrap_or_else(|err| {
+        debug!("Failed to deserialize cached wheel filename for: {source} ({err})");
+        None
+    })
 }
 
 /// Check that a cached wheel belongs to the requested source distribution, warning on mismatch.
