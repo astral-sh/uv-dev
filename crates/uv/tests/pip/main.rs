@@ -29,6 +29,9 @@ mod pip_sync;
 mod pip_sync_archive;
 
 #[cfg(feature = "test-python")]
+mod pip_sync_archive_size;
+
+#[cfg(feature = "test-python")]
 mod pip_sync_cache;
 
 mod pip_sync_diagnostics;
