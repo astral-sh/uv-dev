@@ -715,11 +715,12 @@ fn tar_extract_policy() -> ExtractPolicy {
     // On Windows, we additionally skip i.e. ignore symbolic link members since Windows lacks
     // an unprivileged symbolic linking mechanism.
     let link_policy = LinkPolicy::default().allow_hard_links(true);
-    if cfg!(windows) {
-        ExtractPolicy::default().link_policy(link_policy.symlink_policy(SymlinkPolicy::Skip))
+    let link_policy = if cfg!(windows) {
+        link_policy.symlink_policy(SymlinkPolicy::Skip)
     } else {
-        ExtractPolicy::default().link_policy(link_policy)
-    }
+        link_policy
+    };
+    ExtractPolicy::default().link_policy(link_policy)
 }
 
 /// Unpack the given tar archive into the destination directory with `astral-tokio-tar`.
