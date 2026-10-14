@@ -8,7 +8,7 @@ use rustc_hash::FxHashSet;
 
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExtrasSpecification,
-    ExtrasSpecificationWithDefaults, InstallOptions, InstallTarget as InstallOptionTarget,
+    ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_types::{Index, RequiresPython, Resolution};
 use uv_lock::{Installable, InstallableRootKind, Lock, LockError, Package};
@@ -99,28 +99,15 @@ impl<'lock> PackageSelection<'lock> {
         project_name: Option<&PackageName>,
         install_options: &InstallOptions,
     ) -> BTreeSet<PackageName> {
-        let members = workspace
-            .packages()
-            .keys()
-            .cloned()
-            .collect::<BTreeSet<_>>();
         let project_name = match self {
             Self::Projects([name]) => Some(name),
             Self::Projects(_) => None,
             Self::Workspace | Self::NonProjectWorkspace => project_name,
         };
-        members
-            .iter()
-            .filter(|name| {
-                !install_options.include_package(
-                    InstallOptionTarget {
-                        name,
-                        is_local: true,
-                    },
-                    project_name,
-                    &members,
-                )
-            })
+        workspace
+            .packages()
+            .keys()
+            .filter(|name| !install_options.include_workspace_member(name, project_name))
             .cloned()
             .collect()
     }
