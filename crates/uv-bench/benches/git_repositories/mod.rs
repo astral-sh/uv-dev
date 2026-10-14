@@ -158,7 +158,7 @@ fn compile_command(cache: &Path, requirements: &Path, partial: bool, worktrees: 
     command
 }
 
-fn compile(command: &mut Command, cache: &Path, worktrees: bool) {
+fn compile(command: &mut Command, cache: &Path, partial: bool, worktrees: bool) {
     let output = command
         .output()
         .expect("Failed to execute benchmark command");
@@ -167,7 +167,12 @@ fn compile(command: &mut Command, cache: &Path, worktrees: bool) {
         "Benchmark command {command:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(cache.join("git-v1/worktrees/checkouts").is_dir(), worktrees);
+    let git_cache = if partial {
+        cache.join("git-v1/partial")
+    } else {
+        cache.join("git-v1")
+    };
+    assert_eq!(git_cache.join("worktrees/checkouts").is_dir(), worktrees);
 }
 
 fn airflow_requirements(repository: &SafeUrl, count: usize) -> tempfile::NamedTempFile {
@@ -213,6 +218,7 @@ pub(super) fn monorepo(criterion: &mut Criterion<WallTime>) {
                                     worktrees,
                                 ),
                                 cache.path(),
+                                partial,
                                 worktrees,
                             );
                             cache
@@ -228,8 +234,8 @@ pub(super) fn monorepo(criterion: &mut Criterion<WallTime>) {
                     let cache = tempfile::tempdir().expect("Failed to create source cache");
                     let mut command =
                         compile_command(cache.path(), requirements.path(), partial, worktrees);
-                    compile(&mut command, cache.path(), worktrees);
-                    bencher.iter(|| compile(&mut command, cache.path(), worktrees));
+                    compile(&mut command, cache.path(), partial, worktrees);
+                    bencher.iter(|| compile(&mut command, cache.path(), partial, worktrees));
                 },
             );
         }
