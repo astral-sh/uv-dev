@@ -1010,10 +1010,6 @@ impl InternerGuard<'_> {
         if let Some(exclusions) = self.state.exclusions {
             return exclusions;
         }
-        let mut tree = NodeId::FALSE;
-        // These operations omit known-incompatibility checks, so their results must not be reused
-        // by regular marker operations.
-        let mut cache = FxHashMap::default();
 
         // Create all nodes upfront.
         let os_name_nt = self.expression(MarkerExpression::String {
@@ -1105,7 +1101,7 @@ impl InternerGuard<'_> {
         // Pairs of `os_name` and `sys_platform` that are known to be incompatible.
         //
         // For example: `os_name == 'nt' and sys_platform == 'darwin'`
-        let mut pairs = vec![
+        let os_name_pairs = [
             (os_name_nt, sys_platform_linux),
             (os_name_nt, sys_platform_darwin),
             (os_name_nt, sys_platform_ios),
@@ -1115,40 +1111,43 @@ impl InternerGuard<'_> {
         // Pairs of `platform_system` and `sys_platform` that are known to be incompatible.
         //
         // For example: `platform_system == 'FreeBSD' and sys_platform == 'aix'`
-        for platform_system in [
+        let platform_system_pairs = [
             platform_system_freebsd,
             platform_system_netbsd,
             platform_system_openbsd,
             platform_system_sunos,
             platform_system_ios,
             platform_system_ipados,
-        ] {
-            for sys_platform in [
-                sys_platform_aix,
-                sys_platform_android,
-                sys_platform_emscripten,
-                sys_platform_ios,
-                sys_platform_linux,
-                sys_platform_darwin,
-                sys_platform_win32,
-                sys_platform_cygwin,
-                sys_platform_wasi,
-            ] {
-                // Some of the above pairs are actually compatible.
-                if sys_platform == sys_platform_ios
-                    && (platform_system == platform_system_ios
-                        || platform_system == platform_system_ipados)
-                {
-                    continue;
-                }
-                pairs.push((platform_system, sys_platform));
-            }
-        }
+        ]
+        .into_iter()
+        .cartesian_product([
+            sys_platform_aix,
+            sys_platform_android,
+            sys_platform_emscripten,
+            sys_platform_ios,
+            sys_platform_linux,
+            sys_platform_darwin,
+            sys_platform_win32,
+            sys_platform_cygwin,
+            sys_platform_wasi,
+        ])
+        .filter(|&(platform_system, sys_platform)| {
+            // iOS and iPadOS are compatible with the `ios` platform.
+            !(sys_platform == sys_platform_ios
+                && (platform_system == platform_system_ios
+                    || platform_system == platform_system_ipados))
+        });
 
-        for (a, b) in pairs {
-            let a_and_b = conjunction(self, &mut cache, a, b);
-            tree = disjunction(self, &mut cache, tree, a_and_b);
-        }
+        // These operations omit known-incompatibility checks, so their results must not be reused
+        // by regular marker operations.
+        let mut cache = FxHashMap::default();
+        let tree = os_name_pairs.into_iter().chain(platform_system_pairs).fold(
+            NodeId::FALSE,
+            |tree, (a, b)| {
+                let a_and_b = conjunction(self, &mut cache, a, b);
+                disjunction(self, &mut cache, tree, a_and_b)
+            },
+        );
 
         self.state.exclusions = Some(tree);
         tree
