@@ -5,9 +5,9 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
-use uv_test::TestContext;
 use uv_test::packse::PackseServer;
 use uv_test::packse::scenario::Scenario;
+use uv_test::{TestContext, uv_snapshot};
 
 struct HashFixture {
     context: TestContext,
@@ -131,5 +131,34 @@ fn preserve_hashes_newer_version() -> Result<()> {
     let previous = expected_requirement("1.0.0", &old_hashes[..2]);
     let contents = fixture.compile("a==2.0.0", &previous, &[])?;
     assert_eq!(contents, expected_requirement("2.0.0", &new_hashes));
+    Ok(())
+}
+
+/// An unsuccessful resolution must leave the existing pinned requirements usable.
+#[test]
+fn preserve_hashes_after_resolution_failure() -> Result<()> {
+    let fixture = HashFixture::new();
+    let hashes = fixture.hashes("1.0.0");
+    let previous = format!(
+        "# Existing lockfile\n{}",
+        expected_requirement("1.0.0", &hashes[..2])
+    );
+    let output = fixture.context.temp_dir.child("requirements.txt");
+    output.write_str(&previous)?;
+    fixture
+        .context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("a==3.0.0\n")?;
+
+    uv_snapshot!(fixture.context.pip_compile()
+        .args(["requirements.in", "--output-file", "requirements.txt", "--generate-hashes", "--index-url"])
+        .arg(fixture.index.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because there is no version of a==3.0.0 and you require a==3.0.0, we can conclude that your requirements are unsatisfiable.
+    ");
+    output.assert(previous);
     Ok(())
 }
