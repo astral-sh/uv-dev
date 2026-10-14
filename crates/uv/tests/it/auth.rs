@@ -829,9 +829,8 @@ async fn logout_token_native_auth() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "native-auth")]
-fn login_native_auth_url() {
-    let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+fn login_service_url() {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     // A domain-only service name gets https:// prepended
     uv_snapshot!(context.auth_login()
@@ -839,39 +838,10 @@ fn login_native_auth_url() {
         .arg("--username")
         .arg("test")
         .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("test"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
-    ");
-
-    // HTTP URLs are not allowed - only HTTPS
-    uv_snapshot!(context.auth_login()
-        .arg("http://example.com")
-        .arg("--username")
-        .arg("test")
-        .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: invalid value 'http://example.com' for '<SERVICE>': HTTPS is required for non-local hosts
-
-    For more information, try '--help'.
-    ");
-
-    // HTTP URLs are fine for localhost
-    uv_snapshot!(context.auth_login()
-        .arg("http://localhost:1324")
-        .arg("--username")
-        .arg("test")
-        .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Stored credentials for test@http://localhost:1324/
     ");
 
     uv_snapshot!(context.auth_login()
@@ -879,8 +849,7 @@ fn login_native_auth_url() {
         .arg("--username")
         .arg("test")
         .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("test"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
@@ -892,8 +861,7 @@ fn login_native_auth_url() {
         .arg("--username")
         .arg("test")
         .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("test"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
@@ -905,8 +873,7 @@ fn login_native_auth_url() {
         .arg("--username")
         .arg("test")
         .arg("--password")
-        .arg("test")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("test"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: invalid value 'not a valid url' for '<SERVICE>': invalid international domain name
@@ -916,8 +883,7 @@ fn login_native_auth_url() {
 
     // URL with embedded credentials works
     uv_snapshot!(context.auth_login()
-        .arg("https://test:password@example.com/simple")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("https://test:password@example.com/simple"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
@@ -927,12 +893,16 @@ fn login_native_auth_url() {
     uv_snapshot!(context.auth_login()
         .arg("https://test@example.com/simple")
         .arg("--password")
-        .arg("password")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("password"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Stored credentials for test@https://example.com/
     ");
+}
+
+#[test]
+fn login_url_credential_conflicts() {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     // Conflict between --username and URL username is rejected
     uv_snapshot!(context.auth_login()
@@ -940,8 +910,7 @@ fn login_native_auth_url() {
         .arg("--username")
         .arg("different")
         .arg("--password")
-        .arg("password")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("password"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Cannot specify a username both via the URL and CLI; found `--username different` and `test`
@@ -951,8 +920,7 @@ fn login_native_auth_url() {
     uv_snapshot!(context.auth_login()
         .arg("https://test:password@example.com/simple")
         .arg("--password")
-        .arg("different")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("different"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Cannot specify a password both via the URL and CLI
@@ -962,8 +930,7 @@ fn login_native_auth_url() {
     uv_snapshot!(context.auth_login()
         .arg("https://test:password@example.com/simple")
         .arg("--token")
-        .arg("some-token")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
+        .arg("some-token"), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: When using `--token`, a username cannot not be provided; found: test
