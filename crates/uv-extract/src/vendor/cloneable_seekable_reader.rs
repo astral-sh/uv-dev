@@ -6,8 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![expect(clippy::cast_sign_loss)]
-
 use std::{
     io::{BufRead, Read, Seek, SeekFrom},
     sync::Arc,
@@ -109,7 +107,6 @@ impl Read for CloneableSeekableReader {
 
         let read_result = read_at(&self.file, buf, self.pos);
         if let Ok(bytes_read) = read_result {
-            // TODO, once stabilised, use checked_add_signed
             self.pos += bytes_read as u64;
         }
         read_result
@@ -118,28 +115,21 @@ impl Read for CloneableSeekableReader {
 
 impl Seek for CloneableSeekableReader {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        let new_pos = match pos {
-            SeekFrom::Start(pos) => pos,
-            SeekFrom::End(offset_from_end) => {
-                let file_len = self.ascertain_file_length()?;
-                if -offset_from_end as u64 > file_len {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Seek too far backwards",
-                    ));
-                }
-                // TODO, once stabilised, use checked_add_signed
-                file_len - (-offset_from_end as u64)
-            }
-            // TODO, once stabilised, use checked_add_signed
-            SeekFrom::Current(offset_from_pos) => {
-                if offset_from_pos > 0 {
-                    self.pos + (offset_from_pos as u64)
-                } else {
-                    self.pos - ((-offset_from_pos) as u64)
-                }
-            }
+        let (base, offset) = match pos {
+            SeekFrom::Start(pos) => (pos, 0),
+            SeekFrom::End(offset) => (self.ascertain_file_length()?, offset),
+            SeekFrom::Current(offset) => (self.pos, offset),
         };
+        let new_pos = base.checked_add_signed(offset).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                if offset < 0 {
+                    "Seek too far backwards"
+                } else {
+                    "Seek position exceeds the maximum file offset"
+                },
+            )
+        })?;
         self.pos = new_pos;
         self.clear_buffer();
         Ok(new_pos)
@@ -165,7 +155,7 @@ impl BufRead for CloneableSeekableReader {
 fn read_at(file: &fs_err::File, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
     // File offsets are signed. On Windows, negative offsets can also select the shared
     // cursor instead of an explicit position, so reject them before calling `seek_read`.
-    if offset > i64::MAX as u64 {
+    if i64::try_from(offset).is_err() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "Seek position exceeds the maximum file offset",
@@ -216,7 +206,7 @@ mod test {
         assert!(reader.read_exact(&mut out).is_err());
 
         // These positions must not become negative Windows file-offset sentinels.
-        for position in [i64::MAX as u64 + 1, u64::MAX - 1, u64::MAX] {
+        for position in [1_u64 << 63, u64::MAX - 1, u64::MAX] {
             reader.seek(SeekFrom::Start(position))?;
             assert_eq!(
                 reader.read(&mut out).unwrap_err().kind(),
@@ -227,6 +217,34 @@ mod test {
                 std::io::ErrorKind::InvalidInput
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_seeks_reject_invalid_positions_without_moving() -> std::io::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let path = temp_dir.path().join("archive.zip");
+        fs_err::write(&path, [1, 2, 3])?;
+        let mut reader = CloneableSeekableReader::new(fs_err::File::open(path)?);
+        assert_eq!(reader.fill_buf()?, [1, 2, 3]);
+
+        for seek in [SeekFrom::Current(-1), SeekFrom::End(i64::MIN)] {
+            assert_eq!(
+                reader.seek(seek).unwrap_err().kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+        }
+        let mut first = [0];
+        reader.read_exact(&mut first)?;
+        assert_eq!(first, [1]);
+
+        assert_eq!(reader.seek(SeekFrom::End(1))?, 4);
+        reader.seek(SeekFrom::Start(u64::MAX))?;
+        assert_eq!(
+            reader.seek(SeekFrom::Current(1)).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(reader.stream_position()?, u64::MAX);
         Ok(())
     }
 
