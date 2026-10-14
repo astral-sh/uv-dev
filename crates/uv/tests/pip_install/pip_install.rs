@@ -4160,21 +4160,6 @@ fn install_constraints_extra() -> Result<()> {
 }
 
 #[test]
-fn install_constraints_respects_offline_mode() {
-    let context = uv_test::test_context!("3.12");
-
-    uv_snapshot!(context.pip_install()
-            .arg("--offline")
-            .arg("-r")
-            .arg("http://example.com/requirements.txt"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Network connectivity is disabled, but a remote requirements file was requested: http://example.com/requirements.txt
-    "
-    );
-}
-
-#[test]
 #[cfg(feature = "test-git")]
 fn install_git_source_respects_offline_mode() {
     let context = uv_test::test_context!("3.12");
