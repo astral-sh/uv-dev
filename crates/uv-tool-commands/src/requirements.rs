@@ -106,18 +106,10 @@ pub(super) async fn resolve_names(
         .build()?;
 
     // Determine whether to enable build isolation.
-    let environment;
-    let build_isolation = match build_isolation {
-        uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-        uv_configuration::BuildIsolation::Shared => {
-            environment = PythonEnvironment::from_interpreter(interpreter.clone());
-            BuildIsolation::Shared(&environment)
-        }
-        uv_configuration::BuildIsolation::SharedPackage(packages) => {
-            environment = PythonEnvironment::from_interpreter(interpreter.clone());
-            BuildIsolation::SharedPackage(&environment, packages)
-        }
-    };
+    let mut environment = None;
+    let build_isolation = BuildIsolation::from_settings(build_isolation, || {
+        environment.insert(PythonEnvironment::from_interpreter(interpreter.clone()))
+    });
 
     // TODO(charlie): These are all default values. We should consider whether we want to make them
     // optional on the downstream APIs.

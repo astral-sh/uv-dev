@@ -1310,20 +1310,6 @@ pub enum EnvironmentResolution {
     Universal,
 }
 
-/// Bind build-isolation settings to an environment, requesting it only for shared builds.
-fn bind_build_isolation<'a>(
-    config: &'a uv_configuration::BuildIsolation,
-    environment: impl FnOnce() -> &'a PythonEnvironment,
-) -> BuildIsolation<'a> {
-    match config {
-        uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-        uv_configuration::BuildIsolation::Shared => BuildIsolation::Shared(environment()),
-        uv_configuration::BuildIsolation::SharedPackage(packages) => {
-            BuildIsolation::SharedPackage(environment(), packages)
-        }
-    }
-}
-
 /// Build resolver options from the environment's resolver settings.
 fn resolver_options(settings: &ResolverSettings) -> Options {
     OptionsBuilder::new()
@@ -1445,7 +1431,7 @@ pub async fn resolve_environment(
 
     // Determine whether to enable build isolation.
     let mut environment = None;
-    let build_isolation = bind_build_isolation(build_isolation, || {
+    let build_isolation = BuildIsolation::from_settings(build_isolation, || {
         environment.insert(PythonEnvironment::from_interpreter(interpreter.clone()))
     });
 
@@ -1630,7 +1616,7 @@ pub async fn sync_environment(
         .build()?;
 
     // Determine whether to enable build isolation.
-    let build_isolation = bind_build_isolation(build_isolation, || &venv);
+    let build_isolation = BuildIsolation::from_settings(build_isolation, || &venv);
 
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
@@ -1866,7 +1852,7 @@ pub async fn update_environment(
         .build()?;
 
     // Determine whether to enable build isolation.
-    let build_isolation = bind_build_isolation(build_isolation, || &venv);
+    let build_isolation = BuildIsolation::from_settings(build_isolation, || &venv);
 
     let options = resolver_options(&settings.resolver);
 

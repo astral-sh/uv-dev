@@ -345,13 +345,8 @@ pub async fn pip_sync(
     let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;
 
     // Determine whether to enable build isolation.
-    let types_build_isolation = match build_isolation {
-        BuildIsolation::Isolate => uv_types::BuildIsolation::Isolated,
-        BuildIsolation::Shared => uv_types::BuildIsolation::Shared(&environment),
-        BuildIsolation::SharedPackage(ref packages) => {
-            uv_types::BuildIsolation::SharedPackage(&environment, packages)
-        }
-    };
+    let types_build_isolation =
+        uv_types::BuildIsolation::from_settings(&build_isolation, || &environment);
 
     let build_hasher = if let Some(build_hash_checking) = build_hash_checking {
         HashStrategy::from_constraints(&build_constraints, Some(&marker_env), build_hash_checking)?
