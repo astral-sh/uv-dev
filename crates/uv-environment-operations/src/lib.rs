@@ -2025,28 +2025,22 @@ pub fn detect_conflicts(
     let packages = target.packages(extras, groups);
     let conflicts = lock.conflicts();
     for set in conflicts.iter() {
-        let mut conflicts: Vec<ConflictItem> = vec![];
-        for item in set.iter() {
-            if !packages.contains(item.package()) {
-                // Ignore items that are not in the install targets
-                continue;
-            }
-            let is_conflicting = match item.kind() {
-                ConflictKind::Project => groups.prod(),
-                ConflictKind::Extra(extra) => extras.contains(extra),
-                ConflictKind::Group(group1) => groups.contains(group1),
-            };
-            if is_conflicting {
-                conflicts.push(item.clone());
-            }
-        }
-        if conflicts.len() >= 2 {
-            return Err(EnvironmentError::Conflict(ConflictError {
-                set: set.clone(),
-                conflicts,
-                groups: groups.clone(),
-            }));
-        }
+        let mut enabled = set.iter().filter(|item| {
+            packages.contains(item.package())
+                && match item.kind() {
+                    ConflictKind::Project => groups.prod(),
+                    ConflictKind::Extra(extra) => extras.contains(extra),
+                    ConflictKind::Group(group) => groups.contains(group),
+                }
+        });
+        let Some(first_two) = enabled.next_array::<2>() else {
+            continue;
+        };
+        return Err(EnvironmentError::Conflict(ConflictError {
+            set: set.clone(),
+            conflicts: first_two.into_iter().chain(enabled).cloned().collect(),
+            groups: groups.clone(),
+        }));
     }
     Ok(())
 }
