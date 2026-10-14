@@ -2,6 +2,7 @@
 #![allow(dead_code, unreachable_pub)]
 
 pub mod archive;
+pub mod audit;
 mod download;
 pub mod find_links;
 mod http_server;
