@@ -7,7 +7,7 @@ use axoupdater::{
     test::helpers::{RuntestArgs, perform_runtest},
 };
 use serde_json::json;
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
@@ -142,6 +142,12 @@ async fn setup_mock_update(
             "prerelease": false,
         })))
         .expect(1..)
+        .mount(&server)
+        .await;
+    // A dry run may inspect release metadata, but it must not fetch an installer.
+    Mock::given(path_regex(r"^/(assets|downloads)/"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&server)
         .await;
 
