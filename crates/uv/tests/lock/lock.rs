@@ -5510,21 +5510,6 @@ fn lock_conditional_dependency_extra() -> Result<()> {
         );
     });
 
-    // TODO(charlie): This test became non-deterministic in https://github.com/astral-sh/uv/pull/6065.
-    // But that fix is correct, and the non-determinism itself is a bug.
-    // // Re-run with `--locked`.
-    // uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r###"
-    // success: false
-    // exit_code: 2
-    // ----- stdout -----
-    //
-    // ----- stderr -----
-    // Resolved 7 packages in [TIME]
-    // error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-    //
-    // hint: To update the lockfile, run `uv lock`.
-    // "###);
-
     // Install from the lockfile.
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 0 (success)
@@ -5538,14 +5523,19 @@ fn lock_conditional_dependency_extra() -> Result<()> {
      + urllib3==2.2.1
     ");
 
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+
     // Validate that the extra is included on relevant Python versions.
     let context_38 = uv_test::test_context!("3.8");
 
     fs_err::copy(pyproject_toml, context_38.temp_dir.join("pyproject.toml"))?;
     fs_err::copy(lockfile, context_38.temp_dir.join("uv.lock"))?;
 
-    // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context_38.filters(), context_38.lock().arg("--locked"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
