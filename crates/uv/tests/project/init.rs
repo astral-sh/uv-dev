@@ -3869,9 +3869,17 @@ fn init_description_escapes_toml() -> Result<()> {
         .assert()
         .success();
 
-    let pyproject = context
-        .read("foo/pyproject.toml")
-        .parse::<toml_edit::DocumentMut>()?;
+    let pyproject = context.read("foo/pyproject.toml");
+    assert_snapshot!(pyproject, @r#"
+    [project]
+    name = "foo"
+    version = "0.1.0"
+    description = 'A "quoted" project at C:\tools'
+    requires-python = ">=3.12"
+    dependencies = []
+    "#);
+
+    let pyproject = pyproject.parse::<toml_edit::DocumentMut>()?;
     assert_eq!(
         pyproject["project"]["description"].as_str(),
         Some(description)
