@@ -126,7 +126,7 @@ fn packse_add_remove_one_package() {
 }
 
 #[test]
-fn packse_add_remove_existing_package_noop() {
+fn packse_add_existing_package_noop() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
     context.copy_ecosystem_project("packse");
 
@@ -137,6 +137,7 @@ fn packse_add_remove_existing_package_noop() {
     Resolved 49 packages in [TIME]
     ");
 
+    let original_project: toml::Value = toml::from_str(&context.read("pyproject.toml"))?;
     let diff = context.diff_lock(|context| {
         let mut add_cmd = context.add();
         add_cmd.arg("--no-sync").arg("pyyaml");
@@ -147,6 +148,10 @@ fn packse_add_remove_existing_package_noop() {
     }, {
         assert_snapshot!(diff, @"");
     });
+    let updated_project: toml::Value = toml::from_str(&context.read("pyproject.toml"))?;
+    assert_eq!(updated_project, original_project);
+
+    Ok(())
 }
 
 /// This test adds a new direct dependency that was already a
