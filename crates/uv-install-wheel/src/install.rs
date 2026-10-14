@@ -93,7 +93,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
 
     let entrypoints = parse_scripts(wheel, &dist_info_prefix, layout.python_version.1)?;
 
-    if entrypoints.console_scripts.is_empty() && entrypoints.gui_scripts.is_empty() {
+    if entrypoints.is_empty() {
         trace!(?name, "No entrypoints");
     } else {
         trace!(?name, "Writing entrypoints");

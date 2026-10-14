@@ -53,6 +53,15 @@ pub(crate) struct EntryPoints {
 }
 
 impl EntryPoints {
+    /// Return all console and GUI scripts.
+    pub(crate) fn scripts(&self) -> impl Iterator<Item = &Script> {
+        self.console_scripts.iter().chain(&self.gui_scripts)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.scripts().next().is_none()
+    }
+
     pub(crate) fn read(path: impl AsRef<Path>, python_minor: u8) -> Result<Self, Error> {
         let ini = match fs_err::read_to_string(path) {
             Ok(ini) => ini,
