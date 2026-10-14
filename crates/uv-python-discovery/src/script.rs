@@ -6,6 +6,7 @@ use crate::ConfigDiscovery;
 use crate::PythonInstallation;
 use crate::PythonVersionFile;
 use crate::VersionFileDiscoveryOptions;
+use crate::virtualenv_discovery::virtualenv_from_env;
 use tracing::{debug, trace, warn};
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
@@ -22,7 +23,6 @@ use uv_python_types::{
 };
 use uv_scripts::Pep723ItemRef;
 use uv_settings::PythonInstallMirrors;
-use uv_static::EnvVars;
 use uv_warnings::{warn_user, warn_user_once};
 
 use crate::PythonDownloadReporter;
@@ -44,22 +44,16 @@ pub async fn init_script_python_requirement(
     reporter: &PythonDownloadReporter,
 ) -> Result<RequiresPython, PythonSelectionError> {
     let python_request = if let Some(request) = python {
-        // (1) Explicit request from user
         Some(PythonRequest::parse(request))
-    } else if let (false, Some(request)) = (
-        no_pin_python,
+    } else if no_pin_python {
+        None
+    } else {
         PythonVersionFile::discover(
             directory,
             &VersionFileDiscoveryOptions::default().with_config_discovery(config_discovery),
         )
         .await?
-        .and_then(PythonVersionFile::into_version),
-    ) {
-        // (2) Request from `.python-version`
-        Some(request)
-    } else {
-        // (3) No explicit request
-        None
+        .and_then(PythonVersionFile::into_version)
     };
 
     let interpreter = PythonInstallation::find_or_download(
@@ -85,33 +79,31 @@ pub async fn init_script_python_requirement(
 /// Returns an error if the [`Interpreter`] does not satisfy the script's `requires-python`.
 fn validate_script_requires_python(
     interpreter: &Interpreter,
-    requires_python: &RequiresPython,
+    requires_python: RequiresPython,
     source: &PythonRequestSource,
 ) -> Result<(), PythonSelectionError> {
     if requires_python.contains(interpreter.python_version()) {
         return Ok(());
     }
-    match source {
+    let version = interpreter.python_version().clone();
+    Err(match source {
         PythonRequestSource::UserRequest => {
-            Err(PythonSelectionError::RequestedPythonScriptIncompatibility(
-                interpreter.python_version().clone(),
-                requires_python.clone(),
-            ))
+            PythonSelectionError::RequestedPythonScriptIncompatibility(version, requires_python)
         }
-        PythonRequestSource::DotPythonVersion(file) => {
-            Err(PythonSelectionError::DotPythonVersionScriptIncompatibility(
-                file.file_name().to_string(),
-                interpreter.python_version().clone(),
-                requires_python.clone(),
-            ))
+        PythonRequestSource::DotPythonVersion(path) => {
+            PythonSelectionError::DotPythonVersionScriptIncompatibility(
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("a discovered Python version file has a valid filename")
+                    .to_owned(),
+                version,
+                requires_python,
+            )
         }
         PythonRequestSource::RequiresPython => {
-            Err(PythonSelectionError::RequiresPythonScriptIncompatibility(
-                interpreter.python_version().clone(),
-                requires_python.clone(),
-            ))
+            PythonSelectionError::RequiresPythonScriptIncompatibility(version, requires_python)
         }
-    }
+    })
 }
 
 /// An interpreter suitable for a PEP 723 script.
@@ -131,23 +123,6 @@ impl ScriptInterpreter {
     ///
     /// See: [`uv_workspace::Workspace::environment_selection`].
     pub fn root(script: Pep723ItemRef<'_>, active: ActiveEnvironment, cache: &Cache) -> PathBuf {
-        /// Resolve the `VIRTUAL_ENV` variable, if any.
-        fn from_virtual_env_variable() -> Option<PathBuf> {
-            let value = std::env::var_os(EnvVars::VIRTUAL_ENV)?;
-
-            if value.is_empty() {
-                return None;
-            }
-
-            let path = PathBuf::from(value);
-            if path.is_absolute() {
-                return Some(path);
-            }
-
-            // Resolve the path relative to current directory.
-            Some(CWD.join(path))
-        }
-
         // Determine the stable path to the script environment in the cache.
         let cache_env = {
             let entry = match script {
@@ -176,34 +151,37 @@ impl ScriptInterpreter {
                 .into_path_buf()
         };
 
-        // If `--active` is set, prefer the active virtual environment.
-        if let Some(from_virtual_env) = from_virtual_env_variable() {
+        let prefer_active = match active {
+            ActiveEnvironment::Prefer => true,
+            ActiveEnvironment::Warn => false,
+            ActiveEnvironment::Ignore => return cache_env,
+        };
+
+        if let Some(from_virtual_env) = virtualenv_from_env() {
+            let from_virtual_env = if from_virtual_env.is_absolute() {
+                from_virtual_env
+            } else {
+                CWD.join(from_virtual_env)
+            };
             if !uv_fs::is_same_file_allow_missing(&from_virtual_env, &cache_env).unwrap_or(false) {
-                match active {
-                    ActiveEnvironment::Prefer => {
-                        debug!(
-                            "Using active virtual environment `{}` instead of script environment `{}`",
-                            from_virtual_env.user_display(),
-                            cache_env.user_display()
-                        );
-                        return from_virtual_env;
-                    }
-                    ActiveEnvironment::Ignore => {}
-                    ActiveEnvironment::Warn => {
-                        warn_user_once!(
-                            "`VIRTUAL_ENV={}` does not match the script environment path `{}` and will be ignored; use `--active` to target the active environment instead",
-                            from_virtual_env.user_display(),
-                            cache_env.user_display()
-                        );
-                    }
+                if prefer_active {
+                    debug!(
+                        "Using active virtual environment `{}` instead of script environment `{}`",
+                        from_virtual_env.user_display(),
+                        cache_env.user_display()
+                    );
+                    return from_virtual_env;
                 }
-            }
-        } else {
-            if active == ActiveEnvironment::Prefer {
-                debug!(
-                    "Use of the active virtual environment was requested, but `VIRTUAL_ENV` is not set"
+                warn_user_once!(
+                    "`VIRTUAL_ENV={}` does not match the script environment path `{}` and will be ignored; use `--active` to target the active environment instead",
+                    from_virtual_env.user_display(),
+                    cache_env.user_display()
                 );
             }
+        } else if prefer_active {
+            debug!(
+                "Use of the active virtual environment was requested, but `VIRTUAL_ENV` is not set"
+            );
         }
 
         // Otherwise, use the cache root.
@@ -291,7 +269,7 @@ impl ScriptInterpreter {
 
         if let Some(requires_python) = requires_python
             && let Err(err) =
-                validate_script_requires_python(&interpreter, &requires_python, &source)
+                validate_script_requires_python(&interpreter, requires_python, &source)
         {
             warn_user!("{err}");
         }
@@ -388,12 +366,11 @@ pub fn check_environment_compatibility(
         }
     }
 
-    if PythonInstallation::new(
+    if PythonInstallation::satisfies_preference_for(
+        environment.interpreter(),
         PythonSource::DiscoveredEnvironment,
-        environment.interpreter().clone(),
-    )
-    .satisfies_preference(&python_preference)
-    {
+        python_preference,
+    ) {
         trace!(
             "The virtual environment's Python interpreter meets the Python preference: `{}`",
             python_preference
@@ -454,10 +431,7 @@ impl ScriptPython {
             }
         }) {
             // (2) Request from `.python-version`
-            (
-                PythonRequestSource::DotPythonVersion(file.clone()),
-                file.version().cloned(),
-            )
+            file.into_sourced_request()
         } else if let Some(specifiers) = script.metadata().requires_python.as_ref() {
             // (3) `requires-python` from script metadata
             let request = PythonRequest::Version(VersionRequest::from_specifiers(

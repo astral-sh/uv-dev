@@ -1,6 +1,6 @@
 //! Project Python requests and compatibility validation.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::ConfigDiscovery;
 use crate::PythonInstallation;
@@ -50,7 +50,7 @@ pub enum PythonRequestSource {
     /// The request was provided by the user.
     UserRequest,
     /// The request was inferred from a `.python-version` or `.python-versions` file.
-    DotPythonVersion(PythonVersionFile),
+    DotPythonVersion(PathBuf),
     /// The request was inferred from a `pyproject.toml` file.
     RequiresPython,
 }
@@ -59,8 +59,8 @@ impl std::fmt::Display for PythonRequestSource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UserRequest => write!(f, "explicit request"),
-            Self::DotPythonVersion(file) => {
-                write!(f, "version file at `{}`", file.path().user_display())
+            Self::DotPythonVersion(path) => {
+                write!(f, "version file at `{}`", path.user_display())
             }
             Self::RequiresPython => write!(f, "`requires-python` metadata"),
         }
@@ -144,9 +144,7 @@ impl ProjectPythonRequest {
             }
         }) {
             // (2) Request from `.python-version`
-            let source = PythonRequestSource::DotPythonVersion(file.clone());
-            let request = file.version().cloned();
-            (source, request)
+            file.into_sourced_request()
         } else {
             // (3) `requires-python` in `pyproject.toml`
             let request = requirement.as_ref().and_then(|requirement| {
@@ -241,7 +239,7 @@ impl ProjectPythonRequest {
 
 /// Compute the `Requires-Python` bound for the [`Workspace`].
 ///
-/// For a [`Workspace`] with multiple packages, the `Requires-Python` bound is the union of the
+/// For a [`Workspace`] with multiple packages, the `Requires-Python` bound is the intersection of the
 /// `Requires-Python` bounds of all the packages.
 pub fn find_requires_python(
     workspace: &Workspace,
@@ -326,38 +324,30 @@ impl std::fmt::Display for PythonRequirementConflicts {
                         format_requires_python_sources(sources)
                     );
                 }
-                if let Some((RequiresPythonDeclaration::Workspace(group), _)) =
-                    sources.iter().next()
-                {
-                    return write!(
+                match sources.keys().next() {
+                    Some(RequiresPythonDeclaration::Workspace(group)) => write!(
                         f,
                         " (from the workspace root's `tool.uv.dependency-groups.{group}.requires-python`)."
-                    );
-                }
-                if let Some((RequiresPythonDeclaration::Member(package, group), _)) =
-                    sources.iter().next()
-                {
-                    if let Some(group) = group {
-                        if *multiple_members {
-                            return write!(
+                    ),
+                    Some(RequiresPythonDeclaration::Member(package, group)) => {
+                        match (group, *multiple_members) {
+                            (Some(group), true) => write!(
                                 f,
                                 " (from workspace member `{package}`'s `tool.uv.dependency-groups.{group}.requires-python`)."
-                            );
+                            ),
+                            (Some(group), false) => write!(
+                                f,
+                                " (from `tool.uv.dependency-groups.{group}.requires-python`)."
+                            ),
+                            (None, true) => write!(
+                                f,
+                                " (from workspace member `{package}`'s `project.requires-python`)."
+                            ),
+                            (None, false) => f.write_str(" (from `project.requires-python`)"),
                         }
-                        return write!(
-                            f,
-                            " (from `tool.uv.dependency-groups.{group}.requires-python`)."
-                        );
                     }
-                    if *multiple_members {
-                        return write!(
-                            f,
-                            " (from workspace member `{package}`'s `project.requires-python`)."
-                        );
-                    }
-                    return f.write_str(" (from `project.requires-python`)");
+                    None => Ok(()),
                 }
-                Ok(())
             }
             Self::Lockfile { locked, groups } => {
                 let count = usize::from(locked.is_some()) + groups.len();
@@ -440,30 +430,33 @@ fn validate_python_requirement(
         }
     };
 
-    match source {
+    let version = interpreter.python_version().clone();
+    let requires_python = requires_python.clone();
+    let requires_python_sources = Box::new(conflicting_requires);
+    Err(match source {
         PythonRequestSource::UserRequest => {
-            Err(PythonSelectionError::RequestedPythonProjectIncompatibility(
-                interpreter.python_version().clone(),
-                requires_python.clone(),
-                Box::new(conflicting_requires),
-            ))
+            PythonSelectionError::RequestedPythonProjectIncompatibility(
+                version,
+                requires_python,
+                requires_python_sources,
+            )
         }
-        PythonRequestSource::DotPythonVersion(file) => Err(
+        PythonRequestSource::DotPythonVersion(path) => {
             PythonSelectionError::DotPythonVersionProjectIncompatibility {
-                python_request: file.path().user_display().to_string(),
-                version: interpreter.python_version().clone(),
-                requires_python: requires_python.clone(),
-                requires_python_sources: Box::new(conflicting_requires),
-            },
-        ),
-        PythonRequestSource::RequiresPython => {
-            Err(PythonSelectionError::RequiresPythonProjectIncompatibility(
-                interpreter.python_version().clone(),
-                requires_python.clone(),
-                Box::new(conflicting_requires),
-            ))
+                python_request: path.user_display().to_string(),
+                version,
+                requires_python,
+                requires_python_sources,
+            }
         }
-    }
+        PythonRequestSource::RequiresPython => {
+            PythonSelectionError::RequiresPythonProjectIncompatibility(
+                version,
+                requires_python,
+                requires_python_sources,
+            )
+        }
+    })
 }
 
 pub fn format_requires_python_sources(conflicts: &RequiresPythonSources) -> String {

@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::str::FromStr;
 
 use uv_platform::{self as platform, Arch, Libc, Os, Platform};
@@ -90,21 +90,17 @@ impl PlatformRequest {
 
         true
     }
+
+    fn fmt_components(&self, output: &mut RequestFormatter<'_, impl fmt::Write>) -> fmt::Result {
+        output.write_component(self.os)?;
+        output.write_component(self.arch)?;
+        output.write_component(self.libc)
+    }
 }
 
 impl Display for PlatformRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut parts = Vec::new();
-        if let Some(os) = &self.os {
-            parts.push(os.to_string());
-        }
-        if let Some(arch) = &self.arch {
-            parts.push(arch.to_string());
-        }
-        if let Some(libc) = &self.libc {
-            parts.push(libc.to_string());
-        }
-        write!(f, "{}", parts.join("-"))
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_components(&mut RequestFormatter::new(f, None))
     }
 }
 
@@ -370,22 +366,16 @@ impl PythonDownloadRequest {
     /// The resulting string only includes explicitly-set pieces of the request and returns
     /// [`None`] when no segments are explicitly set.
     pub fn simplified_display(self) -> Option<String> {
-        let parts = [
-            self.implementation
-                .map(|implementation| implementation.to_string()),
-            self.version.map(|version| version.to_string()),
-            self.os.map(|os| os.to_string()),
-            self.arch.map(|arch| arch.to_string()),
-            self.libc.map(|libc| libc.to_string()),
-        ];
+        let mut output = String::new();
+        self.fmt_components(&mut RequestFormatter::new(&mut output, None))
+            .expect("writing to a String cannot fail");
+        (!output.is_empty()).then_some(output)
+    }
 
-        let joined = parts.into_iter().flatten().collect::<Vec<_>>().join("-");
-
-        if joined.is_empty() {
-            None
-        } else {
-            Some(joined)
-        }
+    fn fmt_components(&self, output: &mut RequestFormatter<'_, impl fmt::Write>) -> fmt::Result {
+        output.write_component(self.implementation)?;
+        output.write_component(self.version.as_ref())?;
+        self.platform().fmt_components(output)
     }
 
     /// Whether this request is satisfied by an installation key.
@@ -483,43 +473,48 @@ impl TryFrom<&PythonInstallationKey> for PythonDownloadRequest {
 }
 
 impl Display for PythonDownloadRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut parts = Vec::new();
-        if let Some(implementation) = self.implementation {
-            parts.push(implementation.to_string());
-        } else {
-            parts.push("any".to_string());
-        }
-        if let Some(version) = &self.version {
-            parts.push(version.to_string());
-        } else {
-            parts.push("any".to_string());
-        }
-        if let Some(os) = &self.os {
-            parts.push(os.to_string());
-        } else {
-            parts.push("any".to_string());
-        }
-        if let Some(arch) = self.arch {
-            parts.push(arch.to_string());
-        } else {
-            parts.push("any".to_string());
-        }
-        if let Some(libc) = self.libc {
-            parts.push(libc.to_string());
-        } else {
-            parts.push("any".to_string());
-        }
-        write!(f, "{}", parts.join("-"))
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_components(&mut RequestFormatter::new(f, Some("any")))
     }
 }
+
+/// Format request components with a shared separator and optional placeholder.
+struct RequestFormatter<'a, W> {
+    output: &'a mut W,
+    missing: Option<&'static str>,
+    separator: &'static str,
+}
+
+impl<'a, W: fmt::Write> RequestFormatter<'a, W> {
+    fn new(output: &'a mut W, missing: Option<&'static str>) -> Self {
+        Self {
+            output,
+            missing,
+            separator: "",
+        }
+    }
+
+    fn write_component(&mut self, component: Option<impl Display>) -> fmt::Result {
+        match (component, self.missing) {
+            (Some(component), _) => self.write_value(component),
+            (None, Some(missing)) => self.write_value(missing),
+            (None, None) => Ok(()),
+        }
+    }
+
+    fn write_value(&mut self, value: impl Display) -> fmt::Result {
+        write!(self.output, "{}{value}", self.separator)?;
+        self.separator = "-";
+        Ok(())
+    }
+}
+
 impl FromStr for PythonDownloadRequest {
     type Err = PythonDownloadRequestError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         #[derive(Debug, Clone)]
         enum Position {
-            Start,
             Implementation,
             Version,
             Os,
@@ -531,7 +526,6 @@ impl FromStr for PythonDownloadRequest {
         impl Position {
             fn next(&self) -> Self {
                 match self {
-                    Self::Start => Self::Implementation,
                     Self::Implementation => Self::Version,
                     Self::Version => Self::Os,
                     Self::Os => Self::Arch,
@@ -552,13 +546,13 @@ impl FromStr for PythonDownloadRequest {
         }
 
         impl<'a, P: Iterator<Item = &'a str>> State<'a, P> {
-            fn new(parts: P) -> Self {
+            fn new(mut parts: P) -> Self {
                 Self {
+                    part: parts.next(),
                     parts,
-                    part: None,
-                    position: Position::Start,
+                    position: Position::Implementation,
                     error: None,
-                    count: 0,
+                    count: 1,
                 }
             }
 
@@ -584,103 +578,15 @@ impl FromStr for PythonDownloadRequest {
             return Err(PythonDownloadRequestError::EmptyRequest);
         }
 
-        let mut parts = s.split('-');
-
         let mut implementation = None;
         let mut version = None;
         let mut os = None;
         let mut arch = None;
         let mut libc = None;
 
-        let mut state = State::new(parts.by_ref());
-        state.next_part();
-
+        let mut state = State::new(s.split('-'));
         while let Some(part) = state.part {
             match state.position {
-                Position::Start => unreachable!("We start before the loop"),
-                Position::Implementation => {
-                    if part.eq_ignore_ascii_case("any") {
-                        state.next_part();
-                        continue;
-                    }
-                    match ImplementationName::from_str(part) {
-                        Ok(val) => {
-                            implementation = Some(val);
-                            state.next_part();
-                        }
-                        Err(err) => {
-                            state.next_position();
-                            state.record_err(err.into());
-                        }
-                    }
-                }
-                Position::Version => {
-                    if part.eq_ignore_ascii_case("any") {
-                        state.next_part();
-                        continue;
-                    }
-                    match VersionRequest::from_str(part).map_err(|_| {
-                        PythonDownloadRequestError::InvalidPythonVersion(part.to_string())
-                    }) {
-                        // Err(err) if !first_part => return Err(err),
-                        Ok(val) => {
-                            version = Some(val);
-                            state.next_part();
-                        }
-                        Err(err) => {
-                            state.next_position();
-                            state.record_err(err);
-                        }
-                    }
-                }
-                Position::Os => {
-                    if part.eq_ignore_ascii_case("any") {
-                        state.next_part();
-                        continue;
-                    }
-                    match Os::from_str(part) {
-                        Ok(val) => {
-                            os = Some(val);
-                            state.next_part();
-                        }
-                        Err(err) => {
-                            state.next_position();
-                            state.record_err(err.into());
-                        }
-                    }
-                }
-                Position::Arch => {
-                    if part.eq_ignore_ascii_case("any") {
-                        state.next_part();
-                        continue;
-                    }
-                    match Arch::from_str(part) {
-                        Ok(val) => {
-                            arch = Some(ArchRequest::Explicit(val));
-                            state.next_part();
-                        }
-                        Err(err) => {
-                            state.next_position();
-                            state.record_err(err.into());
-                        }
-                    }
-                }
-                Position::Libc => {
-                    if part.eq_ignore_ascii_case("any") {
-                        state.next_part();
-                        continue;
-                    }
-                    match Libc::from_str(part) {
-                        Ok(val) => {
-                            libc = Some(val);
-                            state.next_part();
-                        }
-                        Err(err) => {
-                            state.next_position();
-                            state.record_err(err.into());
-                        }
-                    }
-                }
                 Position::End => {
                     if state.count > 5 {
                         return Err(PythonDownloadRequestError::TooManyParts(s.to_string()));
@@ -697,6 +603,61 @@ impl FromStr for PythonDownloadRequest {
                     }
                     state.next_part();
                 }
+                _ if part.eq_ignore_ascii_case("any") => state.next_part(),
+                Position::Implementation => match ImplementationName::from_str(part) {
+                    Ok(val) => {
+                        implementation = Some(val);
+                        state.next_part();
+                    }
+                    Err(err) => {
+                        state.next_position();
+                        state.record_err(err.into());
+                    }
+                },
+                Position::Version => {
+                    match VersionRequest::from_str(part).map_err(|_| {
+                        PythonDownloadRequestError::InvalidPythonVersion(part.to_string())
+                    }) {
+                        Ok(val) => {
+                            version = Some(val);
+                            state.next_part();
+                        }
+                        Err(err) => {
+                            state.next_position();
+                            state.record_err(err);
+                        }
+                    }
+                }
+                Position::Os => match Os::from_str(part) {
+                    Ok(val) => {
+                        os = Some(val);
+                        state.next_part();
+                    }
+                    Err(err) => {
+                        state.next_position();
+                        state.record_err(err.into());
+                    }
+                },
+                Position::Arch => match Arch::from_str(part) {
+                    Ok(val) => {
+                        arch = Some(ArchRequest::Explicit(val));
+                        state.next_part();
+                    }
+                    Err(err) => {
+                        state.next_position();
+                        state.record_err(err.into());
+                    }
+                },
+                Position::Libc => match Libc::from_str(part) {
+                    Ok(val) => {
+                        libc = Some(val);
+                        state.next_part();
+                    }
+                    Err(err) => {
+                        state.next_position();
+                        state.record_err(err.into());
+                    }
+                },
             }
         }
 
@@ -757,6 +718,8 @@ mod tests {
             )))
         );
         assert_eq!(request.libc, None);
+        assert_eq!(request.to_string(), "any-3.11-any-x86_64-any");
+        assert_eq!(request.platform().to_string(), "x86_64");
     }
 
     /// Parse a request with `any` implied by the omission of segments.
