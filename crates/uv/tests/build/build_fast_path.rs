@@ -7,7 +7,7 @@ use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{FileWriteBin, PathChild};
 use predicates::prelude::predicate;
 use uv_test::packse::generate_wheel;
-use uv_test::{assert_path_missing, uv_snapshot};
+use uv_test::{TestContext, assert_path_missing, uv_snapshot};
 
 /// The default plan builds a wheel from the source distribution.
 #[test]
@@ -111,10 +111,7 @@ fn build_sdist_and_wheel_plan() {
         .assert(predicate::path::is_file());
 }
 
-#[test]
-fn require_build_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let built_by_uv = context.workspace_root.join("test/packages/built-by-uv");
+fn write_unhashed_backend_wheel(context: &TestContext) -> Result<()> {
     let (filename, wheel) = generate_wheel(
         &"uv-build".parse()?,
         &uv_version::version().parse()?,
@@ -129,24 +126,27 @@ fn require_build_hashes() -> Result<()> {
         .child("wheels")
         .child(filename)
         .write_binary(&wheel)?;
+    Ok(())
+}
 
-    let build = || {
-        let mut command = context.build();
-        command
-            .arg(&built_by_uv)
-            .arg("--out-dir")
-            .arg(context.temp_dir.join("dist"))
-            .args([
-                "--no-index",
-                "--find-links=wheels",
-                "--no-cache",
-                "--preview-features=build-dependency-hashes",
-                "--require-build-hashes",
-            ]);
-        command
-    };
+#[test]
+fn require_build_hashes_bundled_backend() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let source = context.workspace_root.join("test/packages/built-by-uv");
+    let output = context.temp_dir.child("dist");
+    write_unhashed_backend_wheel(&context)?;
 
-    uv_snapshot!(context.filters(), build(), @"
+    uv_snapshot!(context.filters(), context.build()
+        .arg(&source)
+        .arg("--out-dir")
+        .arg(output.path())
+        .args([
+            "--no-index",
+            "--find-links=wheels",
+            "--no-cache",
+            "--preview-features=build-dependency-hashes",
+            "--require-build-hashes",
+        ]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Building source distribution...
@@ -154,9 +154,34 @@ fn require_build_hashes() -> Result<()> {
     Successfully built dist/built_by_uv-0.1.0.tar.gz
     Successfully built dist/built_by_uv-0.1.0-py3-none-any.whl
     ");
+    output
+        .child("built_by_uv-0.1.0.tar.gz")
+        .assert(predicate::path::is_file());
+    output
+        .child("built_by_uv-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    Ok(())
+}
 
-    // Installing the backend instead of using the bundled version still requires hashes.
-    uv_snapshot!(context.filters(), build().arg("--force-pep517"), @"
+#[test]
+fn require_build_hashes_forced_pep517() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let source = context.workspace_root.join("test/packages/built-by-uv");
+    let output = context.temp_dir.child("dist");
+    write_unhashed_backend_wheel(&context)?;
+
+    uv_snapshot!(context.filters(), context.build()
+        .arg(&source)
+        .arg("--out-dir")
+        .arg(output.path())
+        .args([
+            "--no-index",
+            "--find-links=wheels",
+            "--no-cache",
+            "--preview-features=build-dependency-hashes",
+            "--require-build-hashes",
+            "--force-pep517",
+        ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building source distribution...
@@ -165,7 +190,8 @@ fn require_build_hashes() -> Result<()> {
       cause: No solution found when resolving: `uv-build>=0.8.0, <0.14`
       cause: Hash-checking is required, but no trusted hash was provided for: `uv-build`
     ");
-
+    assert_path_missing(output.child("built_by_uv-0.1.0.tar.gz"));
+    assert_path_missing(output.child("built_by_uv-0.1.0-py3-none-any.whl"));
     Ok(())
 }
 
