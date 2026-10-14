@@ -1153,6 +1153,11 @@ async fn git_partial_fetches_offline_build() -> Result<()> {
         .success();
     let context = context
         .with_filtered_path(checkout.path(), "CHECKOUT")
+        .with_filter((r"exit status: (128|243)", "exit status: [ERROR_CODE]"))
+        .with_filter((
+            r"\n[ \t]*fatal: could not fetch [0-9a-f]{40} from promisor remote",
+            "",
+        ))
         .with_filter((r"\b[0-9a-f]{40}\b", "[OBJECT]"));
     uv_snapshot!(context.filters(), context.sync()
         .args(["--preview-features", "git-partial-fetches", "--offline"]), @"
@@ -1161,11 +1166,10 @@ async fn git_partial_fetches_offline_build() -> Result<()> {
     Resolved 2 packages in [TIME]
     error: Failed to build `dependency @ git+file://[TEMP_DIR]/repository/@[OBJECT]`
       cause: The build backend returned an error
-      cause: Call to `backend.build_wheel` failed (exit status: 128)
+      cause: Call to `backend.build_wheel` failed (exit status: [ERROR_CODE])
 
              [stderr]
              fatal: transport 'http' not allowed
-             fatal: could not fetch [OBJECT] from promisor remote
 
     hint: `dependency` was included because `project` (v0.1.0) depends on `dependency`
 

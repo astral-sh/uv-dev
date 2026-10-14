@@ -509,10 +509,6 @@ impl GitCheckout {
     ) -> Result<Self> {
         Self::invalidate_ready(into)?;
 
-        // Local clones copy promisor packs without retaining the source's remote
-        // configuration. They still need that remote to retrieve missing objects.
-        let settings = settings
-            .with_partial_fetches(settings.partial_fetches || database.repo.has_promisor_remote()?);
         let dirname = into.parent().unwrap();
         fs_err::create_dir_all(dirname)?;
         match fs_err::remove_dir_all(into) {
@@ -624,9 +620,7 @@ impl GitCheckout {
     ) -> Result<Option<bool>> {
         Self::invalidate_ready(&self.repo.path)?;
 
-        // A cache populated with partial fetches can still require missing objects
-        // after the feature is disabled. Use the original remote for those objects.
-        if settings.partial_fetches || self.repo.has_promisor_remote()? {
+        if settings.partial_fetches {
             self.repo
                 .configure_promisor_remote(CHECKOUT_REMOTE, original_remote_url)?;
         }
@@ -1025,10 +1019,6 @@ fn fetch_refspecs(
         cmd.arg(format!("--filter={PARTIAL_CLONE_FILTER}"))
             .arg(CHECKOUT_REMOTE);
     } else {
-        // A partial repository can retain a remote filter when preview is disabled.
-        if repo.has_promisor_remote()? {
-            cmd.arg("--no-filter");
-        }
         cmd.arg(url.as_str());
     }
     cmd.args(refspecs).cwd(&repo.path);
