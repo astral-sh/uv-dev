@@ -37,7 +37,7 @@ fn prune_no_op() -> Result<()> {
 
 /// `cache prune` should remove all cached environments from the cache.
 #[test]
-fn prune_cached_env() {
+fn prune_cached_env() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_counts()
         .with_filtered_sizes_and_units()
@@ -68,6 +68,17 @@ fn prune_cached_env() {
      + pytest==8.0.0
     ");
 
+    let environments = fs_err::read_dir(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::Environments),
+    )?
+    .map(|entry| entry.map(|entry| entry.path()))
+    .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(
+        environments.len(),
+        1,
+        "cached environments: {environments:?}"
+    );
+
     uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -78,6 +89,8 @@ fn prune_cached_env() {
     DEBUG Removing dangling cache archive: [CACHE_DIR]/archive-v0/[ENTRY]
     Removed [N] files ([SIZE])
     ");
+    assert_path_missing(&environments[0]);
+    Ok(())
 }
 
 /// `cache prune` should remove cached wheel archives that no longer have a reference.
