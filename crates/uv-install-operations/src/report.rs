@@ -24,18 +24,20 @@ pub struct PackageChangesReport(Vec<PackageChangeReport>);
 
 impl PackageChangesReport {
     pub fn from_changelog(changelog: &Changelog) -> Self {
-        let mut changes: Vec<_> =
-            changelog
-                .uninstalled
-                .iter()
-                .map(|dist| PackageChangeReport::from_dist(dist, PackageChangeAction::Uninstalled))
-                .chain(changelog.installed.iter().map(|dist| {
-                    PackageChangeReport::from_dist(dist, PackageChangeAction::Installed)
-                }))
-                .chain(changelog.reinstalled.iter().map(|dist| {
-                    PackageChangeReport::from_dist(dist, PackageChangeAction::Reinstalled)
-                }))
-                .collect();
+        let change_groups = [
+            (&changelog.uninstalled, PackageChangeAction::Uninstalled),
+            (&changelog.installed, PackageChangeAction::Installed),
+            (&changelog.reinstalled, PackageChangeAction::Reinstalled),
+        ];
+        let mut changes =
+            Vec::with_capacity(change_groups.iter().map(|(dists, _)| dists.len()).sum());
+        for (dists, action) in change_groups {
+            changes.extend(
+                dists
+                    .iter()
+                    .map(|dist| PackageChangeReport::from_dist(dist, action)),
+            );
+        }
 
         changes.sort_by(|a, b| {
             a.name
