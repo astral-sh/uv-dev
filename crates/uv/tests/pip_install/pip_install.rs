@@ -2512,31 +2512,27 @@ fn install_git_checkout_marker_symlink() -> Result<()> {
         .write_str(r#"__version__ = "0.1.0""#)?;
     symlink(victim.path(), repository.child(".ok").path())?;
 
-    Command::new("git")
-        .arg("init")
-        .arg(repository.path())
+    let git = || {
+        let mut command = context.external_command("git");
+        command.arg("-C").arg(repository.path());
+        command
+    };
+    git().arg("init").assert().success();
+    git()
+        .args(["add", "--force", ".ok", "pyproject.toml", "src/example"])
         .assert()
         .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
-        .args(["add", "."])
-        .assert()
-        .success();
-    Command::new("git")
-        .arg("-C")
-        .arg(repository.path())
+    git()
         .args([
             "-c",
             "user.name=ferris",
             "-c",
             "user.email=ferris@example.com",
             "commit",
+            "--no-gpg-sign",
             "-m",
             "Initial commit",
         ])
-        .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
         .assert()
         .success();
 
@@ -2555,9 +2551,17 @@ fn install_git_checkout_marker_symlink() -> Result<()> {
      + example==0.1.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
     ");
 
+    let checkout_project = context
+        .cache_files(uv_cache::CacheBucket::Git)?
+        .into_iter()
+        .find(|path| path.ends_with("pyproject.toml"))
+        .ok_or_else(|| anyhow!("missing Git checkout project"))?;
+    let checkout_marker = checkout_project.with_file_name(".ok");
+    assert_eq!(fs::read_link(&checkout_marker)?, victim.path());
+
     // A repository-controlled checkout marker must not truncate an external file; see
     // astral-sh/uv#21857.
-    assert_snapshot!(context.read("victim"), @"external contents");
+    victim.assert("external contents");
 
     Ok(())
 }
