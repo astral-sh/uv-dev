@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 use predicates::prelude::predicate;
@@ -933,8 +934,7 @@ fn universal_lock_excludes_variant_wheels() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn registry_variant_wheels_are_not_selectable() -> Result<()> {
+async fn variant_only_index() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/simple/ok/"))
@@ -942,9 +942,16 @@ async fn registry_variant_wheels_are_not_selectable() -> Result<()> {
             r#"<a href="../../files/ok-2.0.0-py3-none-any-null.whl">ok-2.0.0-py3-none-any-null.whl</a>"#,
             "text/html",
         ))
+        .expect(1..)
         .mount(&server)
         .await;
-    let context = uv_test::test_context!("3.12").with_filter((server.uri(), "http://[LOCALHOST]"));
+    server
+}
+
+#[tokio::test]
+async fn registry_variant_wheels_are_not_selectable() {
+    let server = variant_only_index().await;
+    let context = uv_test::test_context!("3.12");
 
     uv_snapshot!(
         context.filters(),
@@ -964,15 +971,21 @@ async fn registry_variant_wheels_are_not_selectable() -> Result<()> {
              And because you require ok, we can conclude that your requirements are unsatisfiable.
     "
     );
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg(context.workspace_root.join("test/links/ok-1.0.0-py3-none-any.whl")), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + ok==1.0.0 (from file://[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl)
-    ");
+}
+
+#[tokio::test]
+async fn registry_variant_wheels_are_not_outdated_candidates() {
+    let server = variant_only_index().await;
+    let context = uv_test::test_context!("3.12");
+    let installed_wheel = context
+        .workspace_root
+        .join("test/links/ok-1.0.0-py3-none-any.whl");
+    context
+        .pip_install()
+        .arg(installed_wheel)
+        .assert()
+        .success();
+
     uv_snapshot!(context.filters(), context.pip_list()
         .arg("--outdated")
         .arg("--format")
@@ -986,5 +999,4 @@ async fn registry_variant_wheels_are_not_selectable() -> Result<()> {
     ----- stdout -----
     []
     ");
-    Ok(())
 }
