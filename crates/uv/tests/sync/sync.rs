@@ -16025,10 +16025,8 @@ fn sync_config_settings_package() -> Result<()> {
         build-backend = "setuptools.build_meta"
         "#,
     )?;
-    dependency
-        .child("dependency")
-        .child("__init__.py")
-        .touch()?;
+    let module = dependency.child("dependency/__init__.py");
+    module.write_str("VALUE = 'before'\n")?;
 
     // Install the `dependency` without `editable_mode=compat`.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -16100,6 +16098,15 @@ fn sync_config_settings_package() -> Result<()> {
         .site_packages()
         .join("__editable___dependency_0_1_0_finder.py");
     assert!(!finder.exists());
+
+    // Compatibility mode must still expose source changes without reinstalling the package.
+    module.write_str("VALUE = 'after'\n")?;
+    context
+        .python_command()
+        .args(["-I", "-c", "import dependency; print(dependency.VALUE)"])
+        .assert()
+        .success()
+        .stdout(predicate::eq("after").trim());
 
     // Remove the virtual environment.
     fs_err::remove_dir_all(&context.venv)?;
