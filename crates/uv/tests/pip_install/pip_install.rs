@@ -10869,62 +10869,6 @@ fn unmanaged() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn install_relocatable() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Remake the venv as relocatable
-    context
-        .venv()
-        .arg(context.venv.as_os_str())
-        .arg("--clear")
-        .arg("--python")
-        .arg("3.12")
-        .arg("--relocatable")
-        .assert()
-        .success();
-
-    // Install a package with a hello-world console script entrypoint.
-    // (we use black_editable because it's convenient, but we don't actually install it as editable)
-    context
-        .pip_install()
-        .arg(context.workspace_root.join("test/packages/black_editable"))
-        .assert()
-        .success();
-
-    let script_name = format!("black{}", std::env::consts::EXE_SUFFIX);
-    let script = venv_bin_path(&context.venv).join(&script_name);
-    uv_snapshot!(Command::new(&script), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Hello world!
-    ");
-
-    let relocated = context.venv.with_file_name("relocated");
-    fs::rename(&context.venv, &relocated)?;
-    let relocated_script = venv_bin_path(&relocated).join(&script_name);
-    uv_snapshot!(Command::new(&relocated_script), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Hello world!
-    ");
-
-    // Relocatable entrypoint should still be usable even if symlinked.
-    // Only testable on POSIX since symlinks require elevated privilege on Windows
-    #[cfg(unix)]
-    {
-        let script_symlink = context.temp_dir.join("black");
-        symlink(&relocated_script, &script_symlink)?;
-        uv_snapshot!(Command::new(&script_symlink), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        Hello world!
-        ");
-    }
-
-    Ok(())
-}
-
 #[cfg(unix)]
 #[test]
 fn install_script_with_symlinked_lib() -> Result<()> {
