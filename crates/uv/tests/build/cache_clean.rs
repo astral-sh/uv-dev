@@ -186,6 +186,7 @@ fn clean_all_physical_space_unsupported_fs() -> Result<()> {
     Removed [N] files (1.0MiB)
     ");
 
+    assert_cache_cleared(&context)?;
     Ok(())
 }
 
@@ -202,7 +203,8 @@ fn clean_all_cloned_file() -> Result<()> {
     let retained = context.cache_dir.path().with_file_name("retained");
     fs_err::create_dir_all(&retained)?;
     let original = retained.join("original.bin");
-    fs_err::write(&original, vec![42; 1024 * 1024])?;
+    let contents = vec![42; 1024 * 1024];
+    fs_err::write(&original, &contents)?;
 
     let cached = context.cache_dir.child("cloned");
     let link_mode = link_dir(&retained, &cached, &LinkOptions::new(LinkMode::Clone))?;
@@ -219,7 +221,8 @@ fn clean_all_cloned_file() -> Result<()> {
     Removed [N] files (0B)
     ");
 
-    assert!(original.is_file());
+    assert_cache_cleared(&context)?;
+    assert_eq!(fs_err::read(&original)?, contents);
 
     Ok(())
 }
@@ -255,6 +258,7 @@ fn clean_all_cached_clones() -> Result<()> {
     Removed [N] files (1.0MiB)
     ");
 
+    assert_cache_cleared(&context)?;
     Ok(())
 }
 
@@ -296,6 +300,7 @@ fn clean_all_compressed_file() -> Result<()> {
     Removed [N] files (at least 1.0MiB)
     ");
 
+    assert_cache_cleared(&context)?;
     Ok(())
 }
 
