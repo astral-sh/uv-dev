@@ -273,7 +273,8 @@ impl TextCredentialStore {
         let credentials: FxHashMap<(Service, Username), Credentials> = credentials
             .credentials
             .into_iter()
-            .map(|credential| {
+            .map(|mut credential| {
+                credential.service.remove_credentials();
                 let username = credential.credentials.to_username();
                 ((credential.service, username), credential.credentials)
             })
@@ -548,6 +549,83 @@ mod tests {
             .credentials
             .insert((service.clone(), username.clone()), credentials);
         assert!(store.remove(service, username).is_some());
+    }
+
+    #[test]
+    fn credential_store_normalizes_legacy_keys_before_relogin() {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(
+            file.path(),
+            "[[credential]]\nservice = 'https://user:old@example.com/repository'\nusername = 'user'\npassword = 'old'\n",
+        )
+        .unwrap();
+        let mut store = TextCredentialStore::from_file(file.path()).unwrap();
+        let service = Service::from_str("https://example.com/repository").unwrap();
+        let credentials = Credentials::basic(Some("user".to_owned()), Some("new".to_owned()));
+
+        let previous = store.insert(service, credentials).unwrap();
+        assert_eq!(previous.password(), Some("old"));
+        assert_eq!(store.credentials.len(), 1);
+        let exact = DisplaySafeUrl::parse("https://user:old@example.com/repository").unwrap();
+        let prefix = DisplaySafeUrl::parse("https://example.com/repository/package").unwrap();
+        assert_eq!(
+            store
+                .get_credentials(&exact, Some("user"))
+                .unwrap()
+                .unwrap()
+                .password(),
+            Some("new")
+        );
+        assert_eq!(
+            store
+                .get_credentials(&prefix, None)
+                .unwrap()
+                .unwrap()
+                .password(),
+            Some("new")
+        );
+    }
+
+    #[test]
+    fn credential_store_removes_legacy_entries_with_a_clean_service() {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(
+            file.path(),
+            "[[credential]]\nservice = 'https://user:old@example.com/repository'\nusername = 'user'\npassword = 'old'\n",
+        )
+        .unwrap();
+        let mut store = TextCredentialStore::from_file(file.path()).unwrap();
+        let service = Service::from_str("https://example.com/repository").unwrap();
+
+        let removed = store
+            .remove(service, Username::new(Some("user".to_owned())))
+            .unwrap();
+        assert_eq!(removed.password(), Some("old"));
+        assert!(store.credentials.is_empty());
+    }
+
+    #[test]
+    fn credential_store_uses_the_last_equivalent_service_entry() {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(
+            file.path(),
+            "[[credential]]\nservice = 'https://user:first@example.com/repository'\nusername = 'user'\npassword = 'first'\n\n\
+             [[credential]]\nservice = 'https://example.com/repository'\nusername = 'user'\npassword = 'second'\n\n\
+             [[credential]]\nservice = 'https://user:last@example.com/repository'\nusername = 'user'\npassword = 'last'\n",
+        )
+        .unwrap();
+        let store = TextCredentialStore::from_file(file.path()).unwrap();
+        let url = DisplaySafeUrl::parse("https://example.com/repository").unwrap();
+
+        assert_eq!(store.credentials.len(), 1);
+        assert_eq!(
+            store
+                .get_credentials(&url, Some("user"))
+                .unwrap()
+                .unwrap()
+                .password(),
+            Some("last")
+        );
     }
 
     #[tokio::test]
