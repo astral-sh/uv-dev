@@ -88,8 +88,8 @@ impl TryFrom<CacheArgs> for Cache {
 
 /// Migrate the Windows cache from `C:\Users\User\AppData\Local\uv` to `C:\Users\User\AppData\Local\uv\cache`.
 fn migrate_windows_cache(source: &Path, destination: &Path) -> Result<(), io::Error> {
-    // The list of expected cache buckets in v0.3.0.
-    for directory in [
+    // Cache buckets and marker files present in v0.3.0.
+    const BUCKETS: &[&str] = &[
         "built-wheels-v3",
         "flat-index-v0",
         "git-v0",
@@ -99,33 +99,19 @@ fn migrate_windows_cache(source: &Path, destination: &Path) -> Result<(), io::Er
         "archive-v0",
         "builds-v0",
         "environments-v1",
-    ] {
-        let source = source.join(directory);
-        let destination = destination.join(directory);
+    ];
+    const FILES: &[&str] = &[".gitignore", "CACHEDIR.TAG"];
 
-        // Migrate the cache bucket.
-        if source.exists() {
-            debug!(
-                "Migrating cache bucket from `{}` to `{}`",
-                source.display(),
-                destination.display()
-            );
-            if let Some(parent) = destination.parent() {
-                fs_err::create_dir_all(parent)?;
+    for (kind, entries) in [("bucket", BUCKETS), ("file", FILES)] {
+        for entry in entries {
+            let source = source.join(entry);
+            let destination = destination.join(entry);
+            if !source.exists() {
+                continue;
             }
-            fs_err::rename(&source, &destination)?;
-        }
-    }
 
-    // The list of expected cache files in v0.3.0.
-    for file in [".gitignore", "CACHEDIR.TAG"] {
-        let source = source.join(file);
-        let destination = destination.join(file);
-
-        // Migrate the cache file.
-        if source.exists() {
             debug!(
-                "Migrating cache file from `{}` to `{}`",
+                "Migrating cache {kind} from `{}` to `{}`",
                 source.display(),
                 destination.display()
             );
@@ -137,4 +123,35 @@ fn migrate_windows_cache(source: &Path, destination: &Path) -> Result<(), io::Er
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::migrate_windows_cache;
+
+    #[test]
+    fn migrate_expected_windows_cache_entries() -> std::io::Result<()> {
+        let source = tempfile::tempdir()?;
+        let destination = source.path().join("cache");
+        fs_err::create_dir(source.path().join("wheels-v1"))?;
+        fs_err::write(source.path().join("wheels-v1").join("entry"), "wheel")?;
+        fs_err::write(source.path().join("CACHEDIR.TAG"), "tag")?;
+        fs_err::write(source.path().join("unrelated"), "untouched")?;
+
+        migrate_windows_cache(source.path(), &destination)?;
+
+        assert_eq!(
+            fs_err::read_to_string(destination.join("wheels-v1").join("entry"))?,
+            "wheel"
+        );
+        assert_eq!(
+            fs_err::read_to_string(destination.join("CACHEDIR.TAG"))?,
+            "tag"
+        );
+        assert_eq!(
+            fs_err::read_to_string(source.path().join("unrelated"))?,
+            "untouched"
+        );
+        Ok(())
+    }
 }
