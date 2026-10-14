@@ -17632,11 +17632,31 @@ fn toggle_workspace_editable() -> Result<()> {
         build-backend = "uv_build"
         "#,
     )?;
-    child
-        .child("src")
-        .child("child")
-        .child("__init__.py")
-        .touch()?;
+    let child_module = child.child("src").child("child").child("__init__.py");
+    child_module.touch()?;
+    let assert_install_mode = |expected: &str| {
+        context
+            .python_command()
+            .args([
+                "-I",
+                "-c",
+                indoc! {r#"
+                    from pathlib import Path
+                    import sys
+
+                    import child
+
+                    installed = Path(child.__file__).resolve()
+                    source = Path(sys.argv[1]).resolve()
+                    print("editable" if installed == source else "non-editable")
+                    print(installed)
+                "#},
+            ])
+            .arg(child_module.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::starts_with(format!("{expected}\n")));
+    };
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -17664,6 +17684,7 @@ fn toggle_workspace_editable() -> Result<()> {
      + child==0.1.0 (from file://[TEMP_DIR]/child)
      + iniconfig==2.0.0
     ");
+    assert_install_mode("editable");
 
     let lock = context.read("uv.lock");
 
@@ -17730,7 +17751,7 @@ fn toggle_workspace_editable() -> Result<()> {
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    assert!(!context.site_packages().join("child.pth").exists());
+    assert_install_mode("non-editable");
 
     uv_snapshot!(context.filters(), context.sync().arg("--editable"), @"
     exit_code: 0 (success)
@@ -17741,7 +17762,7 @@ fn toggle_workspace_editable() -> Result<()> {
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    assert!(context.site_packages().join("child.pth").exists());
+    assert_install_mode("editable");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -17771,7 +17792,7 @@ fn toggle_workspace_editable() -> Result<()> {
 
     let lock = context.read("uv.lock");
 
-    // Setting `--no-editable` should make the child non-editable.
+    // The manifest source records the child as a regular directory.
     insta::with_settings!({
         filters => context.filters(),
     }, {
@@ -17824,8 +17845,7 @@ fn toggle_workspace_editable() -> Result<()> {
         );
     });
 
-    // Verify that `child.pth` does not exist in the site-packages directory.
-    assert!(!context.site_packages().join("child.pth").exists());
+    assert_install_mode("non-editable");
 
     // But `--editable` on the command line should override the lockfile.
     uv_snapshot!(context.filters(), context.sync().arg("--editable"), @"
@@ -17837,8 +17857,7 @@ fn toggle_workspace_editable() -> Result<()> {
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    // Verify that `child.pth` exists in the site-packages directory.
-    assert!(context.site_packages().join("child.pth").exists());
+    assert_install_mode("editable");
 
     Ok(())
 }
