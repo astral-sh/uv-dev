@@ -786,7 +786,7 @@ pub(super) fn finalize_tool_install(
             return Err(err.into());
         }
 
-        // Determine the entry points targets. Use a sorted collection for deterministic output.
+        // Sort entrypoint targets by name for deterministic installation and reporting.
         let target_entrypoints = dist_entrypoints
             .into_iter()
             .map(|(name, source_path)| {
@@ -846,11 +846,11 @@ pub(super) fn finalize_tool_install(
             installed_entrypoints.push(ToolEntrypoint::new(name, target, package.to_string()));
         }
 
-        let names = installed_entrypoints[first_entrypoint..]
+        let entrypoints = installed_entrypoints[first_entrypoint..]
             .iter()
-            .map(|entrypoint| entrypoint.name.as_str())
-            .collect::<BTreeSet<_>>();
-        let s = if names.len() == 1 { "" } else { "s" };
+            .dedup_by(|left, right| left.name == right.name);
+        let count = entrypoints.clone().count();
+        let s = if count == 1 { "" } else { "s" };
         let from_pkg = if name == package {
             String::new()
         } else {
@@ -858,9 +858,10 @@ pub(super) fn finalize_tool_install(
         };
         writeln!(
             printer.stderr(),
-            "Installed {} executable{s}{from_pkg}: {}",
-            names.len(),
-            names.iter().map(|name| name.bold()).join(", ")
+            "Installed {count} executable{s}{from_pkg}: {}",
+            entrypoints
+                .map(|entrypoint| entrypoint.name.bold())
+                .join(", ")
         )?;
     }
 
