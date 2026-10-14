@@ -744,6 +744,9 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
     let with_editable_bin_dir = context.temp_dir.child("bin-with-editable");
     let with_tool_dir = context.temp_dir.child("tools-with");
     let with_bin_dir = context.temp_dir.child("bin-with");
+    let with_editable_executable =
+        with_editable_bin_dir.child(format!("root_cli{}", std::env::consts::EXE_SUFFIX));
+    let with_executable = with_bin_dir.child(format!("root_cli{}", std::env::consts::EXE_SUFFIX));
 
     let root_pyproject = context.temp_dir.child("pyproject.toml");
     root_pyproject.write_str(indoc! {
@@ -794,7 +797,7 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
         .child("__init__.py")
         .write_str("MESSAGE = 'OK'\n")?;
 
-    let status = context
+    context
         .tool_install()
         .arg("--with-editable")
         .arg(child.path())
@@ -802,11 +805,10 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
         .env(EnvVars::UV_TOOL_DIR, with_editable_tool_dir.as_os_str())
         .env(EnvVars::XDG_BIN_HOME, with_editable_bin_dir.as_os_str())
         .env(EnvVars::PATH, with_editable_bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool install with --with-editable");
-    assert!(status.success());
+        .assert()
+        .success();
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, with_editable_bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command(with_editable_executable.path()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -816,7 +818,7 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
         .child("__init__.py")
         .write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, with_editable_bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command(with_editable_executable.path()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     CHANGED
@@ -826,7 +828,7 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
         .child("__init__.py")
         .write_str("MESSAGE = 'OK'\n")?;
 
-    let status = context
+    context
         .tool_install()
         .arg("--editable")
         .arg("--with")
@@ -835,11 +837,10 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
         .env(EnvVars::UV_TOOL_DIR, with_tool_dir.as_os_str())
         .env(EnvVars::XDG_BIN_HOME, with_bin_dir.as_os_str())
         .env(EnvVars::PATH, with_bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool install with --with");
-    assert!(status.success());
+        .assert()
+        .success();
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, with_bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command(with_executable.path()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
@@ -849,7 +850,7 @@ fn tool_install_workspace_members_do_not_override_explicit_with_requirements() -
         .child("__init__.py")
         .write_str("MESSAGE = 'CHANGED'\n")?;
 
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, with_bin_dir.as_os_str()), @r"
+    uv_snapshot!(context.filters(), context.external_command(with_executable.path()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     OK
