@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use itertools::Itertools;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
@@ -117,15 +117,11 @@ enum ProposeRequirementError {
 }
 
 impl DeclarationOutcome {
-    fn package(&self) -> &PackageName {
+    fn lock_event_package(&self) -> Option<&PackageName> {
         match self {
-            Self::Changed(package) | Self::Unchanged(package) => package,
-            Self::Blocked { declaration, .. } => &declaration.package,
+            Self::Changed(package) | Self::Unchanged(package) => Some(package),
+            Self::Blocked { .. } => None,
         }
-    }
-
-    fn supports_lock_event(&self) -> bool {
-        matches!(self, Self::Changed(_) | Self::Unchanged(_))
     }
 
     fn invalidates_relaxed_solve(&self) -> bool {
@@ -508,29 +504,23 @@ pub async fn upgrade(
         None
     };
 
-    let events = match &result {
-        LockResult::Changed(previous, lock) => {
-            LockEvent::detect_changes(previous.as_ref(), lock, DryRun::Enabled)
-                .filter(|event| {
-                    selected_packages
-                        .iter()
-                        .any(|package| event.package() == package)
-                })
-                .collect::<Vec<_>>()
+    let mut lock_events = declaration_outcomes
+        .iter()
+        .filter_map(DeclarationOutcome::lock_event_package)
+        .map(|package| (package, None))
+        .collect::<FxHashMap<_, _>>();
+    if let LockResult::Changed(previous, lock) = &result {
+        for event in LockEvent::detect_changes(previous.as_ref(), lock, DryRun::Enabled) {
+            if let Some(slot) = lock_events.get_mut(event.package()) {
+                slot.get_or_insert(event);
+            }
         }
-        LockResult::Unchanged(_) => Vec::new(),
-    };
+    }
     for package in &selected_packages {
-        if !declaration_outcomes
-            .iter()
-            .any(|outcome| outcome.package() == package && outcome.supports_lock_event())
-        {
-            continue;
-        }
-        if let Some(event) = events.iter().find(|event| event.package() == package) {
-            writeln!(printer.stderr(), "{event}")?;
-        } else {
-            writeln!(printer.stderr(), "No version change for {package}")?;
+        match lock_events.get(package) {
+            Some(Some(event)) => writeln!(printer.stderr(), "{event}")?,
+            Some(None) => writeln!(printer.stderr(), "No version change for {package}")?,
+            None => {}
         }
     }
     render_declaration_outcomes(&declaration_outcomes, printer)?;
