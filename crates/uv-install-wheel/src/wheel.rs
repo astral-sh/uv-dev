@@ -362,6 +362,19 @@ fn relative_install_path(path: &Path, base: &Path) -> Result<PathBuf, Error> {
     })
 }
 
+/// Set executable bits on a newly created script.
+#[cfg(unix)]
+fn make_executable(path: &Path) -> io::Result<()> {
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    let permissions = fs::metadata(path)?.permissions();
+    if permissions.mode() & 0o111 != 0o111 {
+        fs::set_permissions(path, Permissions::from_mode(permissions.mode() | 0o111))?;
+    }
+    Ok(())
+}
+
 /// Create the wrapper scripts in the bin folder of the venv for launching console scripts.
 pub(crate) fn write_script_entrypoints(
     layout: &Layout,
@@ -400,18 +413,8 @@ pub(crate) fn write_script_entrypoints(
                 record,
             )?;
 
-            // Make the launcher executable.
             #[cfg(unix)]
-            {
-                use std::fs::Permissions;
-                use std::os::unix::fs::PermissionsExt;
-
-                let path = script.as_path();
-                let permissions = fs::metadata(path)?.permissions();
-                if permissions.mode() & 0o111 != 0o111 {
-                    fs::set_permissions(path, Permissions::from_mode(permissions.mode() | 0o111))?;
-                }
-            }
+            make_executable(script.as_path())?;
         }
     }
     Ok(())
@@ -676,18 +679,7 @@ fn install_script(
 
         // Make the script executable. We just created the file, so we can set permissions directly.
         #[cfg(unix)]
-        {
-            use std::fs::Permissions;
-            use std::os::unix::fs::PermissionsExt;
-
-            let permissions = fs::metadata(&script_absolute)?.permissions();
-            if permissions.mode() & 0o111 != 0o111 {
-                fs::set_permissions(
-                    script_absolute,
-                    Permissions::from_mode(permissions.mode() | 0o111),
-                )?;
-            }
-        }
+        make_executable(&script_absolute)?;
 
         Some(size_and_encoded_hash)
     } else {
