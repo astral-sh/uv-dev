@@ -22323,6 +22323,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     ----- stderr -----
     Resolved 9 packages in [TIME]
     ");
+    let original_lock = context.read("uv.lock");
 
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features")
@@ -22337,6 +22338,12 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     Resolved 9 packages in [TIME]
     ");
 
+    // The root and dev requirements are both superseded by the scoped override.
+    assert_eq!(
+        original_pyproject.matches("six>=2").count(),
+        2,
+        "expected the overridden requirement in both root and dev dependencies"
+    );
     pyproject_toml.write_str(&original_pyproject.replace("six>=2", "six>=3"))?;
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features")
@@ -22350,6 +22357,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     ----- stderr -----
     Resolved 9 packages in [TIME]
     ");
+    assert_eq!(context.read("uv.lock"), original_lock);
 
     pyproject_toml.write_str(&original_pyproject.replace("urllib3==1.0.0", "urllib3>=2"))?;
     uv_snapshot!(context.filters(), context.lock()
