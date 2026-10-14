@@ -19,6 +19,7 @@ use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
+use uv_test::subdirectory_archive::SubdirectoryArchive;
 
 use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
 
@@ -14737,9 +14738,10 @@ fn transitive_group_conflicts_cycle() -> Result<()> {
 #[test]
 fn prune_cache_url_subdirectory() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let archive = SubdirectoryArchive::start()?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -14749,8 +14751,8 @@ fn prune_cache_url_subdirectory() -> Result<()> {
         ]
 
         [tool.uv.sources]
-        root = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
-    "#})?;
+        root = {{ url = "{}", subdirectory = "packages/root" }}
+    "#, archive.url()})?;
 
     // Lock the project.
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -14771,7 +14773,7 @@ fn prune_cache_url_subdirectory() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root==0.0.1 (from http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root)
      + sniffio==1.3.1
     ");
 
