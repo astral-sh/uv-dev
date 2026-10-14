@@ -6,6 +6,8 @@ use uv_test::pypi_proxy;
 #[cfg(feature = "test-python")]
 mod binary_policy;
 #[cfg(feature = "test-python")]
+mod bytecode;
+#[cfg(feature = "test-python")]
 mod cross_device;
 #[cfg(feature = "test-python")]
 mod direct_url_hashes;
