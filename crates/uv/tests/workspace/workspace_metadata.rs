@@ -92,6 +92,15 @@ fn workspace_metadata_simple() {
     context.init().arg("foo").assert().success();
 
     let workspace = context.temp_dir.child("foo");
+    let lockfile = workspace.child("uv.lock");
+    let quiet = context
+        .workspace_metadata()
+        .current_dir(&workspace)
+        .arg("--quiet")
+        .assert()
+        .success()
+        .stderr("");
+    assert!(!lockfile.exists(), "quiet metadata persisted a lockfile");
 
     let metadata = uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)
@@ -142,19 +151,8 @@ fn workspace_metadata_simple() {
     );
 
     assert!(!workspace.child(".venv").exists());
-
-    let lockfile = workspace.child("uv.lock");
     assert!(!lockfile.exists(), "metadata persisted a lockfile");
-
-    let quiet = context
-        .workspace_metadata()
-        .current_dir(&workspace)
-        .arg("--quiet")
-        .assert()
-        .success()
-        .stderr("");
     assert_eq!(quiet.get_output().stdout, metadata.stdout);
-    assert!(!lockfile.exists(), "quiet metadata persisted a lockfile");
 }
 #[test]
 fn workspace_metadata_extra_quiet() {
