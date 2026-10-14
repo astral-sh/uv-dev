@@ -11,8 +11,9 @@ mismatch with uv 0.12.24 and CPython 3.12.15 on Ubuntu 24.04.5 x86_64. Selecting
 Python through a test-harness-style executable symlink is sufficient; Gentoo is
 not required. The same fixture produces consistent metadata with uv 0.12.23 and
 the installed uv 0.12.13. Cache warming was introduced by astral-sh/uv#21304 in
-uv 0.12.24. The direct fix is open in astral-sh/uv#22394, following proposals in
-astral-sh/uv-dev#2548 and astral-sh/uv-dev#2549.
+uv 0.12.24. The merged resolution is astral-sh/uv#22520, which reverts cache
+warming. The earlier targeted proposal astral-sh/uv#22394 was closed without
+merging in favor of astral-sh/uv#22494, which remains open.
 
 The reporter runs uv 0.12.24's tests on Gentoo Linux amd64 with CPython 3.12.15.
 The assertion at `crates/uv/tests/python/venv.rs:118` compares the environment loaded
@@ -22,17 +23,29 @@ harness path ending in `python/3.12/python3`, while the freshly queried environm
 contains `/usr/bin/python3.12`. The expected result is identical interpreter
 metadata regardless of whether the cache is used.
 
-## Draft response
+## Resolution and maintainer decision
 
-Reproduced with uv 0.12.24 and CPython 3.12.15 on Ubuntu using a `python3`
-symlink, matching the test harness setup. The warmed cache records that symlink
-as the base executable; querying the venv's Python reports the real `python3.12`
-path. Child venvs consequently select different executable targets on cache hits
-and misses. The same setup produces matching metadata and child-venv targets
-with uv 0.12.23. Cache warming and this test were introduced in
-astral-sh/uv#21304, released in 0.12.24.
+The maintainer's October 14 comment on astral-sh/uv#22383 points to
+astral-sh/uv#22520, “Revert interpreter cache warming,” merged on October 13,
+2026 at 18:47:57 UTC. Its description explicitly identifies this issue and reverts
+astral-sh/uv#21304 so newly created environments query Python on their next use
+instead of relying on inferred venv metadata. The inspected diff removes
+`cache_virtualenv` and its call from `uv venv`; the PR also removes the four
+cache-warming tests introduced with that optimization, including the reported
+failing test.
 
-A fix is open in astral-sh/uv#22394. It skips cache warming for symlinked base executables and invalidates affected cached metadata. Please rerun the failing test with that patch on Gentoo and let us know whether it passes.
+The author explicitly chose not to bump the interpreter cache bucket, considering
+that excessive for the impact. Consequently, this resolution does not provide
+the automatic invalidation of existing inferred metadata proposed by the earlier
+fixes. Validation should distinguish newly created environments using a fresh
+cache from environments with metadata cached by an affected version. Recovery
+of existing affected cache entries has not been established by this update.
+A release containing the revert has not been verified.
+
+astral-sh/uv#22394 is closed without merging; its maintainer closure comment
+redirects to astral-sh/uv#22494. That open proposal retains cache warming while
+correcting base-executable paths and bumping the cache version. It is a separate,
+unmerged approach, not the change delivered by the revert.
 
 ## Classification
 
@@ -168,12 +181,18 @@ boundary; it does not validate the proposed fix.
 
 ## Related
 
-- astral-sh/uv#22394 — Skip venv cache warming for symlinked base executables (open). Direct proposed fix for astral-sh/uv#22383. Skips cache warming for symlinked Unix base executables, clears stale destination entries, and advances the interpreter cache to v5. Adds coverage for matching cached and queried base paths and child-venv targets. Opened after this report, so it does not make the issue a duplicate.
+- astral-sh/uv#22520 — Revert interpreter cache warming (merged October 13, 2026). The resolution linked by the maintainer on the issue. Reverts astral-sh/uv#21304, removes inferred venv-cache warming and its tests, and deliberately does not bump the cache bucket.
+- astral-sh/uv#22494 — Fix base executable paths in the venv interpreter cache (open as of October 14). The successor identified when astral-sh/uv#22394 was closed. Proposes matching CPython executable-symlink resolution on supported versions and platforms, querying Python for other cases, and invalidating old inferred metadata with a cache-version bump. This proposal has not merged and differs from the merged revert.
+- astral-sh/uv#22394 — Skip venv cache warming for symlinked base executables (closed without merging). Earlier proposed fix for astral-sh/uv#22383; closed in favor of astral-sh/uv#22494. Skips cache warming for symlinked Unix base executables, clears stale destination entries, and advances the interpreter cache to v5. Adds coverage for matching cached and queried base paths and child-venv targets. Opened after this report, so it does not make the issue a duplicate.
 - astral-sh/uv#21304 — Warm the interpreter cache when syncing workspace metadata (merged). Introduced venv interpreter-cache warming and the exact failing test. Merged on October 7, 2026, and included in uv 0.12.24 on October 8. Its inferred metadata retains the selected base-executable path, explaining the release timing and the discrepancy exposed by the test.
 - astral-sh/uv-dev#2548 — Resolve executable symlinks when warming venv interpreter caches (open). Initial proposed fix explicitly targeting astral-sh/uv#22383, resolving executable symlinks while retaining parent-directory links. A maintainer points to astral-sh/uv-dev#2549 as a simpler alternative.
 - astral-sh/uv-dev#2549 — Skip venv cache warming for symlinked base executables (closed). Alternative fix linked from astral-sh/uv-dev#2548. Closed without merging after promotion to astral-sh/uv#22394; documents the same symlink mismatch and reports targeted regression tests passing.
 
 ## Supporting evidence
+
+The source locations below describe the affected checkout inspected during the
+original investigation. They are evidence for the regression, not a description
+of the source after the merged revert.
 
 - `crates/uv/tests/python/venv.rs:78` defines the failing test. It creates a venv,
   uses a `sitecustomize.py` marker to distinguish cached metadata from a Python
@@ -204,8 +223,13 @@ boundary; it does not validate the proposed fix.
   three venv-cache tests and two interpreter-cache tests passing, plus targeted
   Clippy and formatting checks. These are PR-reported results, not tests run
   during this handoff.
-- The only comment on astral-sh/uv#22383 suggests using a snapshot to improve the
-  assertion's readability; it does not establish a separate root cause or fix.
+- The initial comment on astral-sh/uv#22383 suggests using a snapshot to improve
+  assertion readability. The October 14 maintainer comment instead identifies
+  astral-sh/uv#22520 as the relevant resolution; its merge status, description,
+  changed files, and removal of `cache_virtualenv` were verified through GitHub.
+- The existing `fix.json` records successful focused tests and checks for the
+  candidate in astral-sh/uv-dev#2548. Those results concern that earlier proposed
+  fix, not the subsequently merged revert or downstream Gentoo validation.
 
 ## Search scope and exclusions
 
@@ -226,12 +250,19 @@ Neither is evidence that this previously fixed bug returned.
 
 ## Status and next step
 
-As inspected on October 9, 2026, astral-sh/uv#22394 remains open and unmerged.
-Review and validate that patch against the reported Gentoo test invocation and
-the reproduced executable-symlink case. The uv 0.12.24 behavior is independently
-confirmed, with uv 0.12.23 providing a passing behavior control. Testing the
-proposed fix downstream remains the useful next step.
+As inspected on October 14, 2026, astral-sh/uv#22520 is merged,
+astral-sh/uv#22394 is closed without merging, and astral-sh/uv#22494 remains
+open. The bug classification and independent uv 0.12.24 reproduction remain
+valid; uv 0.12.23 provides a passing behavior control.
 
-This temporary handoff was updated and isolated CLI reproductions were run. No
-checkout files, existing user state, or GitHub objects were modified. No Rust
-builds or repository test binaries were run.
+Validate the merged revert with the recorded CLI reproduction and the downstream
+Gentoo suite. The exact failing Rust test was removed by the revert, so its
+absence alone does not demonstrate that cached and freshly queried metadata
+agree. Check a fresh cache and an existing affected cache separately, because
+the merged change does not bump the cache bucket. Confirm the first release
+containing the revert before recommending a released version as fixed.
+
+The previous reproduction used isolated CLI fixtures; its commands, observations,
+and limitations are preserved above. This context update inspected supplied
+artifacts and GitHub metadata/diffs and changed only this README. It did not run
+new reproductions, builds, or tests, or modify checkout files or GitHub objects.
