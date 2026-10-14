@@ -519,7 +519,6 @@ impl FromStr for PythonDownloadRequest {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         #[derive(Debug, Clone)]
         enum Position {
-            Start,
             Implementation,
             Version,
             Os,
@@ -531,7 +530,6 @@ impl FromStr for PythonDownloadRequest {
         impl Position {
             fn next(&self) -> Self {
                 match self {
-                    Self::Start => Self::Implementation,
                     Self::Implementation => Self::Version,
                     Self::Version => Self::Os,
                     Self::Os => Self::Arch,
@@ -552,13 +550,13 @@ impl FromStr for PythonDownloadRequest {
         }
 
         impl<'a, P: Iterator<Item = &'a str>> State<'a, P> {
-            fn new(parts: P) -> Self {
+            fn new(mut parts: P) -> Self {
                 Self {
+                    part: parts.next(),
                     parts,
-                    part: None,
-                    position: Position::Start,
+                    position: Position::Implementation,
                     error: None,
-                    count: 0,
+                    count: 1,
                 }
             }
 
@@ -584,103 +582,15 @@ impl FromStr for PythonDownloadRequest {
             return Err(PythonDownloadRequestError::EmptyRequest);
         }
 
-        let mut parts = s.split('-');
-
         let mut implementation = None;
         let mut version = None;
         let mut os = None;
         let mut arch = None;
         let mut libc = None;
 
-        let mut state = State::new(parts.by_ref());
-        state.next_part();
-
+        let mut state = State::new(s.split('-'));
         while let Some(part) = state.part {
             match state.position {
-                Position::Start => unreachable!("We start before the loop"),
-                Position::Implementation => {
-                    if part.eq_ignore_ascii_case("any") {
-                        state.next_part();
-                        continue;
-                    }
-                    match ImplementationName::from_str(part) {
-                        Ok(val) => {
-                            implementation = Some(val);
-                            state.next_part();
-                        }
-                        Err(err) => {
-                            state.next_position();
-                            state.record_err(err.into());
-                        }
-                    }
-                }
-                Position::Version => {
-                    if part.eq_ignore_ascii_case("any") {
-                        state.next_part();
-                        continue;
-                    }
-                    match VersionRequest::from_str(part).map_err(|_| {
-                        PythonDownloadRequestError::InvalidPythonVersion(part.to_string())
-                    }) {
-                        // Err(err) if !first_part => return Err(err),
-                        Ok(val) => {
-                            version = Some(val);
-                            state.next_part();
-                        }
-                        Err(err) => {
-                            state.next_position();
-                            state.record_err(err);
-                        }
-                    }
-                }
-                Position::Os => {
-                    if part.eq_ignore_ascii_case("any") {
-                        state.next_part();
-                        continue;
-                    }
-                    match Os::from_str(part) {
-                        Ok(val) => {
-                            os = Some(val);
-                            state.next_part();
-                        }
-                        Err(err) => {
-                            state.next_position();
-                            state.record_err(err.into());
-                        }
-                    }
-                }
-                Position::Arch => {
-                    if part.eq_ignore_ascii_case("any") {
-                        state.next_part();
-                        continue;
-                    }
-                    match Arch::from_str(part) {
-                        Ok(val) => {
-                            arch = Some(ArchRequest::Explicit(val));
-                            state.next_part();
-                        }
-                        Err(err) => {
-                            state.next_position();
-                            state.record_err(err.into());
-                        }
-                    }
-                }
-                Position::Libc => {
-                    if part.eq_ignore_ascii_case("any") {
-                        state.next_part();
-                        continue;
-                    }
-                    match Libc::from_str(part) {
-                        Ok(val) => {
-                            libc = Some(val);
-                            state.next_part();
-                        }
-                        Err(err) => {
-                            state.next_position();
-                            state.record_err(err.into());
-                        }
-                    }
-                }
                 Position::End => {
                     if state.count > 5 {
                         return Err(PythonDownloadRequestError::TooManyParts(s.to_string()));
@@ -697,6 +607,61 @@ impl FromStr for PythonDownloadRequest {
                     }
                     state.next_part();
                 }
+                _ if part.eq_ignore_ascii_case("any") => state.next_part(),
+                Position::Implementation => match ImplementationName::from_str(part) {
+                    Ok(val) => {
+                        implementation = Some(val);
+                        state.next_part();
+                    }
+                    Err(err) => {
+                        state.next_position();
+                        state.record_err(err.into());
+                    }
+                },
+                Position::Version => {
+                    match VersionRequest::from_str(part).map_err(|_| {
+                        PythonDownloadRequestError::InvalidPythonVersion(part.to_string())
+                    }) {
+                        Ok(val) => {
+                            version = Some(val);
+                            state.next_part();
+                        }
+                        Err(err) => {
+                            state.next_position();
+                            state.record_err(err);
+                        }
+                    }
+                }
+                Position::Os => match Os::from_str(part) {
+                    Ok(val) => {
+                        os = Some(val);
+                        state.next_part();
+                    }
+                    Err(err) => {
+                        state.next_position();
+                        state.record_err(err.into());
+                    }
+                },
+                Position::Arch => match Arch::from_str(part) {
+                    Ok(val) => {
+                        arch = Some(ArchRequest::Explicit(val));
+                        state.next_part();
+                    }
+                    Err(err) => {
+                        state.next_position();
+                        state.record_err(err.into());
+                    }
+                },
+                Position::Libc => match Libc::from_str(part) {
+                    Ok(val) => {
+                        libc = Some(val);
+                        state.next_part();
+                    }
+                    Err(err) => {
+                        state.next_position();
+                        state.record_err(err.into());
+                    }
+                },
             }
         }
 
