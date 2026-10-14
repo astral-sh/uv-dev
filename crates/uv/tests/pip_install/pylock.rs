@@ -1,13 +1,15 @@
 //! Installation from PEP 751 lockfiles (`pylock.toml`).
 
 use anyhow::Result;
+#[cfg(feature = "test-pypi")]
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use fs_err as fs;
-use indoc::{formatdoc, indoc};
+use indoc::indoc;
 
-use uv_test::packse::PackseServer;
-use uv_test::{download_to_disk, uv_snapshot};
+#[cfg(feature = "test-pypi")]
+use uv_test::download_to_disk;
+use uv_test::uv_snapshot;
 
 #[test]
 fn invalid_toml_filename() -> Result<()> {
@@ -54,6 +56,7 @@ fn invalid_pylock_toml_filename() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn pep_751_install_registry_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -106,6 +109,7 @@ fn pep_751_install_registry_wheel() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn pep_751_install_registry_sdist() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-29T00:00:00Z");
@@ -249,6 +253,7 @@ fn pep_751_install_invalid_hashes() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn pep_751_install_directory() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -364,6 +369,7 @@ fn pep_751_install_require_hashes_directory() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
+        .arg("--offline")
         .arg("-r")
         .arg("pylock.toml")
         .arg("--require-hashes"), @"
@@ -422,7 +428,7 @@ fn pep_751_install_git_rejects_mismatched_exact_revision() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-git")]
+#[cfg(all(feature = "test-git", feature = "test-pypi"))]
 fn pep_751_install_git() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -469,6 +475,7 @@ fn pep_751_install_git() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn pep_751_install_url_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -518,13 +525,14 @@ fn pep_751_install_url_wheel() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn pep_751_install_url_sdist() -> Result<()> {
-    let server = PackseServer::new("simple/single-package.toml");
+    let server = uv_test::packse::PackseServer::new("simple/single-package.toml");
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(&formatdoc! {
+    pyproject_toml.write_str(&indoc::formatdoc! {
         r#"
         [project]
         name = "project"
@@ -573,6 +581,7 @@ fn pep_751_install_url_sdist() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn pep_751_install_path_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -698,6 +707,7 @@ fn pep_751_prefers_path_over_url() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn pep_751_install_path_sdist() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -972,6 +982,7 @@ fn pep_751_unsupported_hashes() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn pep_751_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1054,6 +1065,7 @@ fn pep_751_rejects_mismatched_wheel_identity() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
+        .arg("--offline")
         .arg("-r")
         .arg("pylock.toml"), @r#"
     exit_code: 2 (failure)
@@ -1075,6 +1087,7 @@ fn pep_751_rejects_mismatched_wheel_identity() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
+        .arg("--offline")
         .arg("-r")
         .arg("pylock.toml"), @r#"
     exit_code: 2 (failure)
@@ -1098,6 +1111,7 @@ fn pep_751_rejects_mismatched_wheel_identity() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
+        .arg("--offline")
         .arg("-r")
         .arg("pylock.toml"), @r#"
     exit_code: 2 (failure)
@@ -1121,6 +1135,7 @@ fn pep_751_rejects_mismatched_wheel_identity() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
+        .arg("--offline")
         .arg("-r")
         .arg("pylock.toml"), @r#"
     exit_code: 2 (failure)
@@ -1209,6 +1224,7 @@ fn pep_751_multiple_sources() -> Result<()> {
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--preview")
+        .arg("--offline")
         .arg("-r")
         .arg("pylock.toml"), @"
     exit_code: 2 (failure)
@@ -1465,6 +1481,7 @@ fn pep_751_default_groups_absent() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn pep_751_groups() -> Result<()> {
     let context = uv_test::test_context!("3.13");
@@ -1798,6 +1815,7 @@ fn pep_751_requires_python() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-pypi")]
 #[test]
 fn pep_751_dependency() -> Result<()> {
     let context = uv_test::test_context!("3.12");
