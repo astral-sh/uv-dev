@@ -119,7 +119,7 @@ fn freeze_url() -> Result<()> {
         .success();
 
     // Run `pip freeze`.
-    uv_snapshot!(context.pip_freeze()
+    uv_snapshot!(context.filters(), context.pip_freeze()
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stdout -----
