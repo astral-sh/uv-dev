@@ -187,7 +187,7 @@ pub async fn resolve(
                 .filter(|extra| {
                     !resolutions
                         .iter()
-                        .any(|resolution| resolution.extras().contains(extra))
+                        .any(|resolution| resolution.provided_extras().contains(extra))
                 })
                 .collect::<Vec<_>>();
             if !unused_extras.is_empty() {
