@@ -80,10 +80,10 @@ fn tool_install() {
     tool_dir
         .child("black")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -150,11 +150,9 @@ fn tool_install() {
     ");
 
     tool_dir.child("flask").assert(predicate::path::is_dir());
-    assert!(
-        bin_dir
-            .child(format!("flask{}", std::env::consts::EXE_SUFFIX))
-            .exists()
-    );
+    bin_dir
+        .child(format!("flask{}", std::env::consts::EXE_SUFFIX))
+        .assert(predicate::path::is_file());
 
     #[cfg(not(windows))]
     insta::with_settings!({
@@ -1508,7 +1506,7 @@ fn tool_install_with_compatible_build_constraints() -> Result<()> {
     tool_dir
         .child("black")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     insta::with_settings!({
         filters => context.filters(),
@@ -1661,10 +1659,10 @@ fn tool_install_version() {
     tool_dir
         .child("black")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -1739,10 +1737,10 @@ fn tool_install_editable() {
     tool_dir
         .child("black")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -2342,10 +2340,10 @@ fn tool_install_editable_from() {
     tool_dir
         .child("black")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -2474,10 +2472,10 @@ fn tool_install_already_installed() {
     tool_dir
         .child("black")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -3185,10 +3183,10 @@ fn tool_install_unnamed_package() {
     tool_dir
         .child("black")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -3266,13 +3264,13 @@ fn tool_install_git() {
     tool_dir
         .child("static-requires-python-tool")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!(
         "static-requires-python-tool{}",
         std::env::consts::EXE_SUFFIX
     ));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     fs_err::remove_dir_all(&bin_dir).expect("Failed to remove bin dir.");
     fs_err::remove_dir_all(&tool_dir).expect("Failed to remove tool dir.");
@@ -3295,13 +3293,13 @@ fn tool_install_git() {
     tool_dir
         .child("static-requires-python-tool")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!(
         "static-requires-python-tool{}",
         std::env::consts::EXE_SUFFIX
     ));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 }
 
 /// Test that installing a tool from Git uses statically available `requires-python` metadata
@@ -3433,10 +3431,10 @@ fn tool_install_git_lfs() {
     tool_dir
         .child("test-lfs-repo")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("test-lfs-repo{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     insta::with_settings!({
         filters => context.filters(),
@@ -3599,10 +3597,10 @@ fn tool_install_unnamed_from() {
     tool_dir
         .child("black")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -3684,10 +3682,10 @@ fn tool_install_unnamed_with() {
     tool_dir
         .child("black")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("black{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -4491,7 +4489,7 @@ fn tool_install_bad_receipt() -> Result<()> {
     tool_dir
         .child("black")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     // Override the `uv-receipt.toml` file with an invalid receipt.
     tool_dir
@@ -4551,10 +4549,10 @@ fn tool_install_malformed_dist_info() {
     tool_dir
         .child("executable-application")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("app{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -4628,10 +4626,10 @@ fn tool_install_settings() {
     tool_dir
         .child("flask")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("flask{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -5271,10 +5269,10 @@ async fn tool_install_credentials() {
     tool_dir
         .child("executable-application")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("app{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -5361,10 +5359,10 @@ async fn tool_install_default_credentials() -> Result<()> {
     tool_dir
         .child("executable-application")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("app{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
@@ -5709,10 +5707,10 @@ fn tool_install_find_links() {
     tool_dir
         .child("basic-app")
         .child("uv-receipt.toml")
-        .assert(predicate::path::exists());
+        .assert(predicate::path::is_file());
 
     let executable = bin_dir.child(format!("basic-app{}", std::env::consts::EXE_SUFFIX));
-    assert!(executable.exists());
+    executable.assert(predicate::path::is_file());
 
     // On Windows, we can't snapshot an executable file.
     #[cfg(not(windows))]
