@@ -3875,6 +3875,18 @@ fn find_environments(id: Id<PubGrubPackage>, state: &State<UvDependencyProvider>
         return MarkerTree::TRUE;
     }
 
+    let dependency_edges = |package| {
+        state
+            .incompatibilities
+            .get(&package)
+            .into_iter()
+            .flatten()
+            .filter_map(|index| match &state.incompatibility_store[*index].kind {
+                Kind::FromDependencyOf(parent, child) => Some((*parent, *child)),
+                _ => None,
+            })
+    };
+
     // First, collect the reverse-dependency closure for the package. We limit the propagation
     // below to this subgraph so cycles in unrelated packages don't matter here.
     let mut ancestors = FxHashSet::default();
@@ -3883,23 +3895,14 @@ fn find_environments(id: Id<PubGrubPackage>, state: &State<UvDependencyProvider>
     ancestors.insert(id);
 
     while let Some(current) = stack.pop() {
-        let Some(incompatibilities) = state.incompatibilities.get(&current) else {
-            continue;
-        };
-
-        for index in incompatibilities {
-            let incompat = &state.incompatibility_store[*index];
-            if let Kind::FromDependencyOf(parent, child) = &incompat.kind {
-                if current != *child {
-                    continue;
-                }
-                if ancestors.insert(*parent) {
-                    if state.package_store[*parent].is_root() {
-                        root = Some(*parent);
-                    }
-                    stack.push(*parent);
-                }
+        for (parent, child) in dependency_edges(current) {
+            if current != child || !ancestors.insert(parent) {
+                continue;
             }
+            if state.package_store[parent].is_root() {
+                root = Some(parent);
+            }
+            stack.push(parent);
         }
     }
 
@@ -3917,28 +3920,20 @@ fn find_environments(id: Id<PubGrubPackage>, state: &State<UvDependencyProvider>
         let Some(current_environment) = environments.get(&current).copied() else {
             continue;
         };
-        let Some(incompatibilities) = state.incompatibilities.get(&current) else {
-            continue;
-        };
-
-        for index in incompatibilities {
-            let incompat = &state.incompatibility_store[*index];
-            let Kind::FromDependencyOf(parent, child) = &incompat.kind else {
-                continue;
-            };
-            if current != *parent || !ancestors.contains(child) {
+        for (parent, child) in dependency_edges(current) {
+            if current != parent || !ancestors.contains(&child) {
                 continue;
             }
 
-            let mut next_environment = state.package_store[*child].marker();
+            let mut next_environment = state.package_store[child].marker();
             next_environment = next_environment.and(current_environment);
 
-            let entry = environments.entry(*child).or_insert(MarkerTree::FALSE);
+            let entry = environments.entry(child).or_insert(MarkerTree::FALSE);
             let mut combined = *entry;
             combined = combined.or(next_environment);
             if combined != *entry {
                 *entry = combined;
-                queue.push_back(*child);
+                queue.push_back(child);
             }
         }
     }
