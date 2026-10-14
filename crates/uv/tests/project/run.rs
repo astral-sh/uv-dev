@@ -6249,31 +6249,50 @@ fn run_python_preference_no_project() {
         uv_test::test_context_with_versions!(&["3.12", "3.11"]).with_versions_as_managed(&["3.12"]);
 
     context.venv().assert().success();
+    let run = |preference: &[&str]| {
+        let mut command = context.run();
+        command
+            .args(preference)
+            .args([
+                "python",
+                "-c",
+                concat!(
+                    "import os, sys; print('Python', sys.version.split()[0]); ",
+                    "print('Active environment:', os.path.samefile(sys.prefix, sys.argv[1]))"
+                ),
+            ])
+            .arg(context.venv.path());
+        command
+    };
 
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), run(&[]), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
+    Active environment: True
     ");
 
-    uv_snapshot!(context.filters(), context.run().arg("--managed-python").arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), run(&["--managed-python"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
+    Active environment: True
     ");
 
     // `VIRTUAL_ENV` is set here, so we'll ignore the flag
-    uv_snapshot!(context.filters(), context.run().arg("--no-managed-python").arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), run(&["--no-managed-python"]), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[X]
+    Active environment: True
     ");
 
     // If we remove the `VIRTUAL_ENV` variable, we should get the unmanaged Python
-    uv_snapshot!(context.filters(), context.run().arg("--no-managed-python").arg("python").arg("--version").env_remove(EnvVars::VIRTUAL_ENV), @"
+    uv_snapshot!(context.filters(), run(&["--no-managed-python"]).env_remove(EnvVars::VIRTUAL_ENV), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.11.[X]
+    Active environment: False
     ");
 }
 
