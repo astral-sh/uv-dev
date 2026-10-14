@@ -5,13 +5,14 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::FileWriteStr;
 use assert_fs::prelude::PathChild;
 use insta::assert_snapshot;
-use uv_test::{TestContext, uv_snapshot, venv_bin_path};
+use uv_python_managed::platform_key_from_env;
+use uv_test::{TestContext, assert_path_missing, uv_snapshot, venv_bin_path};
 
 use crate::build_upgrade::OutdatedPythonBuild;
 use crate::managed_venv::{create_stdlib_venv, venv_version};
 
 #[test]
-fn python_upgrade() {
+fn python_upgrade() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -41,12 +42,22 @@ fn python_upgrade() {
      + cpython-3.10.[LATEST]-[PLATFORM] (python3.10)
     ");
 
+    let installation = dunce::canonicalize(
+        context
+            .temp_dir
+            .join("managed")
+            .join(format!("cpython-3.10-{}", platform_key_from_env()?)),
+    )?;
+    let marker = installation.join("before-reinstall");
+    fs_err::write(&marker, "original installation\n")?;
+
     // Should be a no-op when already upgraded
     uv_snapshot!(context.filters(), context.python_upgrade().arg("3.10"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Python 3.10 is already on the latest supported patch release
     ");
+    assert_eq!(context.read(&marker), "original installation\n");
 
     // Should reinstall on `--reinstall`
     uv_snapshot!(context.filters(), context.python_upgrade().arg("3.10").arg("--reinstall"), @"
@@ -55,6 +66,12 @@ fn python_upgrade() {
     Installed Python 3.10.[LATEST] in [TIME]
      ~ cpython-3.10.[LATEST]-[PLATFORM] (python3.10)
     ");
+    assert!(
+        installation.is_dir(),
+        "reinstalled Python is missing: {}",
+        installation.display()
+    );
+    assert_path_missing(marker);
 
     // Install an earlier pre-release version
     uv_snapshot!(context.filters(), context.python_install().arg("3.14.0rc2"), @"
@@ -71,6 +88,7 @@ fn python_upgrade() {
     Installed Python 3.14.[LATEST] in [TIME]
      + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
     ");
+    Ok(())
 }
 
 #[test]
