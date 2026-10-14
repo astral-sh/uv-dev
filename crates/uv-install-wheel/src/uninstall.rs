@@ -61,12 +61,7 @@ pub fn uninstall_wheel(
                 if same_file::is_same_file(itself, &path).unwrap_or(false) {
                     tracing::debug!("Detected self-delete of executable: {}", path.display());
                     match self_replace::self_delete_outside_path(site_packages) {
-                        Ok(()) => {
-                            uninstall.record_removed_file(&path);
-                            if let Some(parent) = path.parent() {
-                                visited.insert(normalize_path(parent));
-                            }
-                        }
+                        Ok(()) => uninstall.record_removed_wheel_file(&path, &mut visited),
                         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
                         Err(err) => return Err(err.into()),
                     }
@@ -76,12 +71,7 @@ pub fn uninstall_wheel(
         }
 
         match fs_err::remove_file(&path) {
-            Ok(()) => {
-                uninstall.record_removed_file(&path);
-                if let Some(parent) = path.parent() {
-                    visited.insert(normalize_path(parent));
-                }
-            }
+            Ok(()) => uninstall.record_removed_wheel_file(&path, &mut visited),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => match fs_err::remove_dir_all(&path) {
                 Ok(()) => uninstall.record_removed_directory(&path),
@@ -370,6 +360,14 @@ pub struct Uninstall {
 }
 
 impl Uninstall {
+    /// Record a removed wheel file and its parent for empty-directory cleanup.
+    fn record_removed_wheel_file(&mut self, path: &Path, visited: &mut BTreeSet<PathBuf>) {
+        self.record_removed_file(path);
+        if let Some(parent) = path.parent() {
+            visited.insert(normalize_path(parent));
+        }
+    }
+
     fn record_removed_file(&mut self, path: &Path) {
         trace!("Removed file: {}", path.display());
         self.file_count += 1;
