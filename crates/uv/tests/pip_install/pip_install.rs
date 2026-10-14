@@ -6269,10 +6269,9 @@ fn config_settings_path() -> Result<()> {
     );
 
     // When installed without `editable_mode=compat`, the `finder.py` file should be present.
-    let finder = context
-        .site_packages()
-        .join("__editable___setuptools_editable_0_1_0_finder.py");
-    assert!(finder.exists());
+    let finder = ChildPath::new(context.site_packages())
+        .child("__editable___setuptools_editable_0_1_0_finder.py");
+    finder.assert(predicates::path::is_file());
 
     // Reinstalling with `editable_mode=compat` should force a reinstall.
     uv_snapshot!(context.filters(), context.pip_install()
@@ -6291,11 +6290,8 @@ fn config_settings_path() -> Result<()> {
     "
     );
 
-    // When installed without `editable_mode=compat`, the `finder.py` file should _not_ be present.
-    let finder = context
-        .site_packages()
-        .join("__editable___setuptools_editable_0_1_0_finder.py");
-    assert!(!finder.exists());
+    // Compatibility mode must remove the finder installed by the default mode.
+    finder.assert(predicates::path::missing());
 
     Ok(())
 }
@@ -15209,10 +15205,9 @@ fn config_settings_package() -> Result<()> {
     );
 
     // When installed without `editable_mode=compat`, the `finder.py` file should be present.
-    let finder = context
-        .site_packages()
-        .join("__editable___setuptools_editable_0_1_0_finder.py");
-    assert!(finder.exists());
+    let finder = ChildPath::new(context.site_packages())
+        .child("__editable___setuptools_editable_0_1_0_finder.py");
+    finder.assert(predicates::path::is_file());
 
     // Uninstall the package.
     uv_snapshot!(context.filters(), context.pip_uninstall()
@@ -15239,10 +15234,7 @@ fn config_settings_package() -> Result<()> {
     );
 
     // When installed with `editable_mode=compat`, the `finder.py` file should _not_ be present.
-    let finder = context
-        .site_packages()
-        .join("__editable___setuptools_editable_0_1_0_finder.py");
-    assert!(!finder.exists());
+    finder.assert(predicates::path::missing());
 
     // Uninstall the package.
     uv_snapshot!(context.filters(), context.pip_uninstall()
@@ -15269,10 +15261,7 @@ fn config_settings_package() -> Result<()> {
     );
 
     // When installed without `editable_mode=compat`, the `finder.py` file should be present.
-    let finder = context
-        .site_packages()
-        .join("__editable___setuptools_editable_0_1_0_finder.py");
-    assert!(finder.exists());
+    finder.assert(predicates::path::is_file());
 
     Ok(())
 }
