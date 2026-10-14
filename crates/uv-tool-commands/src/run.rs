@@ -31,7 +31,7 @@ use uv_normalize::PackageName;
 use uv_preview::Preview;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
-use uv_python_interpreter::PythonEnvironment;
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
@@ -1065,97 +1065,74 @@ async fn get_or_create_environment(
     // TODO(zanieb): When implementing project-level tools, discover the project and check if it has the tool.
     // TODO(zanieb): Determine if we should layer on top of the project environment if it is present.
 
-    let result = CachedEnvironment::from_spec(
-        spec.clone(),
-        build_constraints.clone(),
-        &interpreter,
-        python_platform.as_ref(),
-        settings,
-        client_builder,
-        &state,
-        if show_resolution {
-            Box::new(DefaultResolveLogger)
-        } else {
-            Box::new(SummaryResolveLogger)
-        },
-        if show_resolution {
-            Box::new(DefaultInstallLogger)
-        } else {
-            Box::new(SummaryInstallLogger)
-        },
-        installer_metadata,
-        concurrency,
-        cache,
-        workspace_cache,
-        printer,
-        preview,
-    )
-    .await;
+    let get_cached_environment = async |spec, constraints, interpreter: &Interpreter| {
+        CachedEnvironment::from_spec(
+            spec,
+            constraints,
+            interpreter,
+            python_platform.as_ref(),
+            settings,
+            client_builder,
+            &state,
+            if show_resolution {
+                Box::new(DefaultResolveLogger)
+            } else {
+                Box::new(SummaryResolveLogger)
+            },
+            if show_resolution {
+                Box::new(DefaultInstallLogger)
+            } else {
+                Box::new(SummaryInstallLogger)
+            },
+            installer_metadata,
+            concurrency,
+            cache,
+            workspace_cache,
+            printer,
+            preview,
+        )
+        .await
+    };
+    let result =
+        get_cached_environment(spec.clone(), build_constraints.clone(), &interpreter).await;
 
     let environment = match result {
         Ok(environment) => environment,
-        Err(err) => match err {
-            EnvironmentError::Resolve(err) => {
-                let err = *err;
-                // If the resolution failed due to the discovered interpreter not satisfying the
-                // `requires-python` constraint, we can try to refine the interpreter.
-                //
-                // For example, if we discovered a Python 3.8 interpreter on the user's machine,
-                // but the tool requires Python 3.10 or later, we can try to download a
-                // Python 3.10 interpreter and re-resolve.
-                let Some(interpreter) = refine_interpreter(
-                    &interpreter,
-                    python_request.as_ref(),
-                    &err,
-                    client_builder,
-                    &reporter,
-                    &install_mirrors,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    cache,
-                )
-                .await
-                .ok()
-                .flatten() else {
-                    return Err(err.into());
-                };
+        Err(EnvironmentError::Resolve(err)) => {
+            let err = *err;
+            // If the resolution failed due to the discovered interpreter not satisfying the
+            // `requires-python` constraint, we can try to refine the interpreter.
+            //
+            // For example, if we discovered a Python 3.8 interpreter on the user's machine,
+            // but the tool requires Python 3.10 or later, we can try to download a
+            // Python 3.10 interpreter and re-resolve.
+            let Some(interpreter) = refine_interpreter(
+                &interpreter,
+                python_request.as_ref(),
+                &err,
+                client_builder,
+                &reporter,
+                &install_mirrors,
+                python_preference,
+                python_arch,
+                python_downloads,
+                cache,
+            )
+            .await
+            .ok()
+            .flatten() else {
+                return Err(err.into());
+            };
 
-                debug!(
-                    "Re-resolving with Python {} (`{}`)",
-                    interpreter.python_version(),
-                    interpreter.sys_executable().display()
-                );
+            debug!(
+                "Re-resolving with Python {} (`{}`)",
+                interpreter.python_version(),
+                interpreter.sys_executable().display()
+            );
 
-                CachedEnvironment::from_spec(
-                    spec,
-                    build_constraints,
-                    &interpreter,
-                    python_platform.as_ref(),
-                    settings,
-                    client_builder,
-                    &state,
-                    if show_resolution {
-                        Box::new(DefaultResolveLogger)
-                    } else {
-                        Box::new(SummaryResolveLogger)
-                    },
-                    if show_resolution {
-                        Box::new(DefaultInstallLogger)
-                    } else {
-                        Box::new(SummaryInstallLogger)
-                    },
-                    installer_metadata,
-                    concurrency,
-                    cache,
-                    workspace_cache,
-                    printer,
-                    preview,
-                )
-                .await?
-            }
-            err => return Err(err.into()),
-        },
+            get_cached_environment(spec, build_constraints, &interpreter).await?
+        }
+        Err(err) => return Err(err.into()),
     };
 
     Ok((from, environment.into()))
