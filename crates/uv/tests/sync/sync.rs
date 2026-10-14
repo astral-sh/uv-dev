@@ -1052,7 +1052,12 @@ fn sync_no_lock_flags_override_environment() -> Result<()> {
     Resolved 1 package in [TIME]
     Checked in [TIME]
     ");
-    assert_ne!(context.read("uv.lock"), lock);
+    let expected_lock = lock.replacen("version = \"0.1.0\"", "version = \"0.2.0\"", 1);
+    assert_ne!(
+        expected_lock, lock,
+        "initial lock lacks the old project version"
+    );
+    assert_eq!(context.read("uv.lock"), expected_lock);
 
     Ok(())
 }
