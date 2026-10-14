@@ -176,7 +176,7 @@ pub async fn install(
             executable,
             target: Target::Unspecified(from),
         } => {
-            let requirements = unresolved_target_requirements.clone().ok_or_else(|| {
+            let requirements = unresolved_target_requirements.ok_or_else(|| {
                 anyhow::anyhow!("Expected parsed requirements for unresolved target `{from}`")
             })?;
 
