@@ -459,45 +459,53 @@ impl SourceBuild {
             }
         };
 
+        let build = Self {
+            temp_dir,
+            source_tree,
+            pep517_backend,
+            extra_build_dependencies,
+            isolated,
+            skip_metadata_hook,
+            venv,
+            build_kind,
+            level,
+            config_settings,
+            metadata_directory: None,
+            package_name,
+            package_version,
+            version_id: version_id.map(ToString::to_string),
+            environment_variables,
+            modified_path,
+            runner: PythonRunner::new(source_build_context.concurrent_build_slots, level),
+        };
+
         // Create the PEP 517 build environment. If build isolation is disabled, we assume the build
         // environment is already set up.
-        let runner = PythonRunner::new(source_build_context.concurrent_build_slots, level);
         if let Some(resolved_requirements) = resolved_requirements {
             debug!("Creating PEP 517 build environment");
 
-            let extra_requires = get_pep517_build_requirements(
-                &runner,
-                &source_tree,
-                install_path,
-                &venv,
-                &pep517_backend,
-                build_context,
-                package_name.as_ref(),
-                package_version.as_ref(),
-                version_id,
-                locations,
-                no_sources,
-                stop_discovery_at,
-                workspace_cache,
-                build_kind,
-                level,
-                &config_settings,
-                &environment_variables,
-                &modified_path,
-                &temp_dir,
-                credentials_cache,
-            )
-            .await?;
+            let extra_requires = build
+                .get_pep517_build_requirements(
+                    build_context,
+                    install_path,
+                    locations,
+                    no_sources,
+                    stop_discovery_at,
+                    workspace_cache,
+                    credentials_cache,
+                )
+                .await?;
             // Some packages (such as tqdm 4.66.1) list only extra requires that have already been part of
             // the pyproject.toml requires (in this case, `wheel`). We can skip doing the whole resolution
             // and installation again.
             // TODO(konstin): Do we still need this when we have a fast resolver?
             if extra_requires
                 .iter()
-                .any(|req| !pep517_backend.requirements.contains(req))
+                .any(|req| !build.pep517_backend.requirements.contains(req))
             {
                 debug!("Installing extra requirements for build backend");
-                let requirements: Vec<_> = pep517_backend
+                let requirements: Vec<_> = build
+                    .pep517_backend
                     .requirements
                     .iter()
                     .cloned()
@@ -518,7 +526,7 @@ impl SourceBuild {
                     })?;
 
                 build_context
-                    .install(&resolution, &venv, build_stack)
+                    .install(&resolution, &build.venv, build_stack)
                     .await
                     .map_err(|err| {
                         Error::RequirementsInstall(
@@ -529,25 +537,7 @@ impl SourceBuild {
             }
         }
 
-        Ok(Self {
-            temp_dir,
-            source_tree,
-            pep517_backend,
-            extra_build_dependencies,
-            isolated,
-            skip_metadata_hook,
-            venv,
-            build_kind,
-            level,
-            config_settings,
-            metadata_directory: None,
-            package_name,
-            package_version,
-            version_id: version_id.map(ToString::to_string),
-            environment_variables,
-            modified_path,
-            runner,
-        })
+        Ok(build)
     }
 
     /// Return the caller-provided environment when build isolation is disabled for this package.
@@ -572,26 +562,13 @@ impl SourceBuild {
         credentials_cache: &CredentialsCache,
     ) -> Result<Vec<Requirement>, Error> {
         let _lock = self.acquire_lock().await?;
-        get_pep517_build_requirements(
-            &self.runner,
-            &self.source_tree,
-            install_path,
-            &self.venv,
-            &self.pep517_backend,
+        self.get_pep517_build_requirements(
             build_context,
-            self.package_name.as_ref(),
-            self.package_version.as_ref(),
-            self.version_id.as_deref(),
+            install_path,
             build_context.locations(),
             sources,
             None,
             build_context.workspace_cache(),
-            self.build_kind,
-            self.level,
-            &self.config_settings,
-            &self.environment_variables,
-            &self.modified_path,
-            &self.temp_dir,
             credentials_cache,
         )
         .await
@@ -1041,53 +1018,31 @@ impl SourceBuild {
 
         Err(self.build_hook_failure(hook_prefix, output))
     }
-}
 
-impl SourceBuildTrait for SourceBuild {
-    async fn metadata(&mut self) -> Result<Option<PathBuf>, AnyErrorBuild> {
-        Ok(self.get_metadata_without_build().await?)
-    }
+    /// Discover and lower additional requirements declared by the build backend.
+    async fn get_pep517_build_requirements(
+        &self,
+        build_context: &impl BuildContext,
+        install_path: &Path,
+        locations: &IndexLocations,
+        no_sources: NoSources,
+        stop_discovery_at: Option<&Path>,
+        workspace_cache: &WorkspaceCache,
+        credentials_cache: &CredentialsCache,
+    ) -> Result<Vec<Requirement>, Error> {
+        // Write the hook output to a file so that we can read it back reliably.
+        let outfile = self
+            .temp_dir
+            .path()
+            .join(format!("get_requires_for_build_{}.txt", self.build_kind));
 
-    async fn wheel<'a>(&'a self, wheel_dir: &'a Path) -> Result<String, AnyErrorBuild> {
-        Ok(self.build(wheel_dir).await?)
-    }
-}
+        debug!(
+            "Calling `{}.get_requires_for_build_{}()`",
+            self.pep517_backend.backend, self.build_kind
+        );
 
-/// Discover additional requirements before completing build environment setup.
-async fn get_pep517_build_requirements(
-    runner: &PythonRunner,
-    source_tree: &Path,
-    install_path: &Path,
-    venv: &PythonEnvironment,
-    pep517_backend: &Pep517Backend,
-    build_context: &impl BuildContext,
-    package_name: Option<&PackageName>,
-    package_version: Option<&Version>,
-    version_id: Option<&str>,
-    locations: &IndexLocations,
-    no_sources: NoSources,
-    stop_discovery_at: Option<&Path>,
-    workspace_cache: &WorkspaceCache,
-    build_kind: BuildKind,
-    level: BuildOutput,
-    config_settings: &ConfigSettings,
-    environment_variables: &FxHashMap<OsString, OsString>,
-    modified_path: &OsString,
-    temp_dir: &TempDir,
-    credentials_cache: &CredentialsCache,
-) -> Result<Vec<Requirement>, Error> {
-    // Write the hook output to a file so that we can read it back reliably.
-    let outfile = temp_dir
-        .path()
-        .join(format!("get_requires_for_build_{build_kind}.txt"));
-
-    debug!(
-        "Calling `{}.get_requires_for_build_{}()`",
-        pep517_backend.backend, build_kind
-    );
-
-    let script = formatdoc! {
-        r#"
+        let script = formatdoc! {
+            r#"
             {}
             import json
 
@@ -1100,85 +1055,71 @@ async fn get_pep517_build_requirements(
             with open({}, "w") as fp:
                 json.dump(requires, fp)
         "#,
-        pep517_backend.backend_import(),
-        build_kind,
-        config_settings.escape_for_python(),
-        outfile.escape_for_python()
-    };
-    let span = info_span!(
-        "run_python_script",
-        script = format!("get_requires_for_build_{}", build_kind),
-        version_id = version_id,
-    );
-    let output = runner
-        .run_script(
-            venv,
-            &script,
-            source_tree,
-            environment_variables,
-            modified_path,
-        )
-        .instrument(span)
-        .await?;
-    if !output.status.success() {
-        return Err(Error::from_command_output(
-            format!(
-                "Call to `{}.get_requires_for_build_{}` failed",
-                pep517_backend.backend, build_kind
-            ),
-            &output,
-            level,
-            package_name,
-            package_version,
-            version_id,
-        ));
+            self.pep517_backend.backend_import(),
+            self.build_kind,
+            self.config_settings.escape_for_python(),
+            outfile.escape_for_python()
+        };
+        let output = self
+            .run_build_hook("get_requires_for_build", &script)
+            .await?;
+
+        // Read and deserialize the requirements from the output file.
+        let extra_requires: Vec<uv_pep508::Requirement<VerbatimParsedUrl>> = fs_err::read(&outfile)
+            .map_err(|err| err.to_string())
+            .and_then(|contents| serde_json::from_slice(&contents).map_err(|err| err.to_string()))
+            .map_err(|err| {
+                Error::from_command_output(
+                    format!(
+                        "Call to `{}.get_requires_for_build_{}` failed: {}",
+                        self.pep517_backend.backend, self.build_kind, err
+                    ),
+                    &output,
+                    self.level,
+                    self.package_name.as_ref(),
+                    self.package_version.as_ref(),
+                    self.version_id.as_deref(),
+                )
+            })?;
+
+        // If necessary, lower the requirements.
+        let extra_requires = if no_sources.all() {
+            extra_requires.into_iter().map(Requirement::from).collect()
+        } else {
+            let build_requires = uv_pypi_types::BuildRequires {
+                name: self.package_name.clone(),
+                requires_dist: extra_requires,
+            };
+            let build_requires = BuildRequires::from_project_maybe_workspace(
+                build_requires,
+                install_path,
+                locations,
+                &no_sources,
+                build_context
+                    .source_tree_editable_policy()
+                    .workspace_member_editable(None),
+                stop_discovery_at,
+                build_context.cache(),
+                workspace_cache,
+                credentials_cache,
+            )
+            .await
+            .map_err(Error::Lowering)?;
+            build_requires.requires_dist
+        };
+
+        Ok(extra_requires)
+    }
+}
+
+impl SourceBuildTrait for SourceBuild {
+    async fn metadata(&mut self) -> Result<Option<PathBuf>, AnyErrorBuild> {
+        Ok(self.get_metadata_without_build().await?)
     }
 
-    // Read and deserialize the requirements from the output file.
-    let extra_requires: Vec<uv_pep508::Requirement<VerbatimParsedUrl>> = fs_err::read(&outfile)
-        .map_err(|err| err.to_string())
-        .and_then(|contents| serde_json::from_slice(&contents).map_err(|err| err.to_string()))
-        .map_err(|err| {
-            Error::from_command_output(
-                format!(
-                    "Call to `{}.get_requires_for_build_{}` failed: {}",
-                    pep517_backend.backend, build_kind, err
-                ),
-                &output,
-                level,
-                package_name,
-                package_version,
-                version_id,
-            )
-        })?;
-
-    // If necessary, lower the requirements.
-    let extra_requires = if no_sources.all() {
-        extra_requires.into_iter().map(Requirement::from).collect()
-    } else {
-        let build_requires = uv_pypi_types::BuildRequires {
-            name: package_name.cloned(),
-            requires_dist: extra_requires,
-        };
-        let build_requires = BuildRequires::from_project_maybe_workspace(
-            build_requires,
-            install_path,
-            locations,
-            &no_sources,
-            build_context
-                .source_tree_editable_policy()
-                .workspace_member_editable(None),
-            stop_discovery_at,
-            build_context.cache(),
-            workspace_cache,
-            credentials_cache,
-        )
-        .await
-        .map_err(Error::Lowering)?;
-        build_requires.requires_dist
-    };
-
-    Ok(extra_requires)
+    async fn wheel<'a>(&'a self, wheel_dir: &'a Path) -> Result<String, AnyErrorBuild> {
+        Ok(self.build(wheel_dir).await?)
+    }
 }
 
 /// A runner that manages the execution of external python processes with a
