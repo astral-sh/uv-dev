@@ -5,8 +5,6 @@ use console::Term;
 use owo_colors::OwoColorize;
 use uv_auth::{AuthBackend, Credentials, Service, TextCredentialStore};
 use uv_command_support::{ExitStatus, Printer};
-use uv_distribution_types::IndexUrl;
-use uv_pep508::VerbatimUrl;
 use uv_preview::Preview;
 
 /// Login to a service.
@@ -20,16 +18,11 @@ pub(crate) async fn login(
 ) -> Result<ExitStatus> {
     let backend = AuthBackend::from_settings(preview).await?;
 
-    // If the URL includes a known index URL suffix, strip it
-    // TODO(zanieb): Use a shared abstraction across `login` and `logout`?
-    let url = service.url().clone();
-    let (service, url) = match IndexUrl::from(VerbatimUrl::from_url(url.clone())).root() {
-        Some(root) => (Service::try_from(root.clone())?, root),
-        None => (service, url),
-    };
+    let service = super::service_root(service)?;
+    let url = service.url();
 
     // Extract credentials from URL if present
-    let url_credentials = Credentials::from_url(&url)?;
+    let url_credentials = Credentials::from_url(url)?;
     let url_username = url_credentials.as_ref().and_then(|c| c.username());
     let url_password = url_credentials.as_ref().and_then(|c| c.password());
 
@@ -119,10 +112,10 @@ pub(crate) async fn login(
     let credentials = Credentials::basic(Some(username), Some(password));
     match backend {
         AuthBackend::System(provider) => {
-            provider.store(&url, &credentials).await?;
+            provider.store(url, &credentials).await?;
         }
         AuthBackend::TextStore(mut store, _lock) => {
-            store.insert(service.clone(), credentials);
+            store.insert(service, credentials);
             store.write(TextCredentialStore::default_file()?, _lock)?;
         }
     }
