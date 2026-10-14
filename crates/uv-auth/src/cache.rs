@@ -126,17 +126,16 @@ impl CredentialsCache {
         username: &Username,
     ) -> Option<Arc<Authentication>> {
         let urls = self.urls.read().unwrap();
-        let credentials = urls.get(url);
-        if let Some(credentials) = credentials {
-            if username.is_none() || username.as_deref() == credentials.username() {
-                if username.is_some() && credentials.password().is_none() {
-                    // If given a username, don't return password-less credentials
-                    trace!("No password in cache for URL `{url}`");
-                    return None;
-                }
-                trace!("Found cached credentials for URL `{url}`");
-                return Some(credentials.clone());
+        if let Some(credentials) = urls.get(url)
+            && (username.is_none() || username.as_deref() == credentials.username())
+        {
+            if username.is_some() && credentials.password().is_none() {
+                // If given a username, don't return password-less credentials
+                trace!("No password in cache for URL `{url}`");
+                return None;
             }
+            trace!("Found cached credentials for URL `{url}`");
+            return Some(credentials.clone());
         }
         trace!("No credentials in cache for URL `{url}`");
         None
