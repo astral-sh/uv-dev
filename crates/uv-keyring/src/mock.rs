@@ -50,6 +50,16 @@ struct MockData {
     error: Option<Error>,
 }
 
+impl MockData {
+    /// Consume the error configured for the next credential operation, if any.
+    fn check_error(&mut self) -> Result<()> {
+        match self.error.take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl CredentialApi for MockCredential {
     /// Set a password on a mock credential.
@@ -59,14 +69,9 @@ impl CredentialApi for MockCredential {
     /// be cleared, so calling again will set the password.
     async fn set_secret(&self, secret: &[u8]) -> Result<()> {
         let mut data = self.inner.lock().expect("Can't access mock data for set");
-        let err = data.error.take();
-        match err {
-            None => {
-                data.secret = Some(secret.to_vec());
-                Ok(())
-            }
-            Some(err) => Err(err),
-        }
+        data.check_error()?;
+        data.secret = Some(secret.to_vec());
+        Ok(())
     }
 
     /// Get the password from a mock credential, if any.
@@ -75,14 +80,8 @@ impl CredentialApi for MockCredential {
     /// be returned instead of a password.
     async fn get_secret(&self) -> Result<Vec<u8>> {
         let mut data = self.inner.lock().expect("Can't access mock data for get");
-        let err = data.error.take();
-        match err {
-            None => match &data.secret {
-                None => Err(Error::NoEntry),
-                Some(val) => Ok(val.clone()),
-            },
-            Some(err) => Err(err),
-        }
+        data.check_error()?;
+        data.secret.clone().ok_or(Error::NoEntry)
     }
 
     /// Delete the password in a mock credential
@@ -97,17 +96,9 @@ impl CredentialApi for MockCredential {
             .inner
             .lock()
             .expect("Can't access mock data for delete");
-        let err = data.error.take();
-        match err {
-            None => match data.secret {
-                Some(_) => {
-                    data.secret = None;
-                    Ok(())
-                }
-                None => Err(Error::NoEntry),
-            },
-            Some(err) => Err(err),
-        }
+        data.check_error()?;
+        data.secret.take().ok_or(Error::NoEntry)?;
+        Ok(())
     }
 
     /// Return this mock credential concrete object
