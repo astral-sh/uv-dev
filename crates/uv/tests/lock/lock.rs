@@ -14061,7 +14061,15 @@ fn lock_exclusion() -> Result<()> {
         );
     });
 
-    // Re-run with `--locked`.
+    // The excluded project owns its lockfile, even though it depends on the parent.
+    uv_snapshot!(context.filters(), context.lock().current_dir(&child).arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    ");
+
+    // The parent workspace does not inherit the excluded project's lockfile.
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
     exit_code: 1 (failure)
     ----- stderr -----
