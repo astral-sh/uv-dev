@@ -609,93 +609,31 @@ fn python_pin_resolve() -> Result<()> {
         assert_snapshot!(python_version, @"[PYTHON-3.12]");
     });
 
-    // Request Python 3.13
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("3.13"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Updated `.python-version` from `[PYTHON-3.12]` -> `[PYTHON-3.13]`
-    ");
-
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
-
-    // Request Python 3.13
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("3.13"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Pinned `.python-version` to `[PYTHON-3.13]`
-    ");
-
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
-
-    // Request CPython
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("cpython"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Updated `.python-version` from `[PYTHON-3.13]` -> `[PYTHON-3.12]`
-    ");
-
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.12]");
-    });
-
-    // Request CPython 3.13
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("cpython@3.13"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Updated `.python-version` from `[PYTHON-3.12]` -> `[PYTHON-3.13]`
-    ");
-
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
-
-    // Request CPython 3.13 via partial key syntax
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("cpython-3.13"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Pinned `.python-version` to `[PYTHON-3.13]`
-    ");
-
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
-
-    // Request CPython 3.13 for the fixture interpreter's platform.
+    // A platform-qualified request must replace the first interpreter with the matching one.
     let (_, python) = &context.python_versions[1];
     let (os, arch) = interpreter_platform(&context, python)?;
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved")
-    .arg(format!("cpython-3.13-{os}-{arch}"))
-    , @"
+    uv_snapshot!(context.filters(), context.python_pin()
+        .arg("--resolved")
+        .arg(format!("cpython-3.13-{os}-{arch}")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `[PYTHON-3.12]` -> `[PYTHON-3.13]`
+    ");
+
+    let resolved_pin = context.read(PYTHON_VERSION_FILENAME);
+    insta::with_settings!({
+        filters => context.filters(),
+    }, {
+        assert_snapshot!(resolved_pin.as_str(), @"[PYTHON-3.13]");
+    });
+
+    // Resolving another request to the same interpreter is idempotent.
+    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("3.13"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Pinned `.python-version` to `[PYTHON-3.13]`
     ");
-
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
+    assert_eq!(context.read(PYTHON_VERSION_FILENAME), resolved_pin);
 
     // Missing PyPy also reports a download hint on platforms where one is available.
     #[cfg(unix)]
@@ -708,12 +646,7 @@ fn python_pin_resolve() -> Result<()> {
         hint: A managed Python download is available for PyPy, but Python downloads are set to 'never'
         ");
 
-        let python_version = context.read(PYTHON_VERSION_FILENAME);
-        insta::with_settings!({
-            filters => context.filters(),
-        }, {
-            assert_snapshot!(python_version, @"[PYTHON-3.13]");
-        });
+        assert_eq!(context.read(PYTHON_VERSION_FILENAME), resolved_pin);
     }
 
     // A failed resolved request must leave the existing pin unchanged.
@@ -723,12 +656,7 @@ fn python_pin_resolve() -> Result<()> {
     error: No interpreter found for Python 3.7 in [PYTHON SOURCES]
     ");
 
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
+    assert_eq!(context.read(PYTHON_VERSION_FILENAME), resolved_pin);
     Ok(())
 }
 
