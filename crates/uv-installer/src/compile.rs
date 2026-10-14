@@ -439,7 +439,7 @@ async fn worker_main_loop(
     let mut input_line = String::new();
     let mut out_line = String::new();
     while let Ok(source_file) = receiver.recv().await {
-        let source_file = source_file.display().to_string();
+        let source_file = source_file.to_string_lossy();
         if source_file.contains(['\r', '\n']) {
             warn_user!("Path contains newline, skipping: {source_file:?}");
             continue;
@@ -474,7 +474,7 @@ async fn worker_main_loop(
             let Ok(result) = tokio::time::timeout(duration, python_handle).await else {
                 return Err(CompileError::CompileTimeout {
                     elapsed: duration,
-                    source_file,
+                    source_file: source_file.into_owned(),
                 });
             };
             result?;
@@ -485,8 +485,11 @@ async fn worker_main_loop(
         // This is a sanity check, if we don't get the path back something has gone wrong, e.g.
         // we're not actually running a python interpreter.
         let actual = out_line.trim_end_matches(['\n', '\r']);
-        if actual != source_file {
-            return Err(CompileError::WrongPath(source_file, actual.to_string()));
+        if actual != source_file.as_ref() {
+            return Err(CompileError::WrongPath(
+                source_file.into_owned(),
+                actual.to_string(),
+            ));
         }
     }
     Ok(())
