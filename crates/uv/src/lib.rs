@@ -1847,7 +1847,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             let args = settings::ToolDirSettings::resolve(args, filesystem);
             show_settings!(args);
 
-            commands::tool_dir(args.bin, globals.preview, printer)?;
+            commands::tool_dir(args.bin, printer)?;
             Ok(ExitStatus::Success)
         }
         Commands::Python(PythonNamespace {
