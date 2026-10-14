@@ -987,45 +987,44 @@ fn python_find_managed() {
 }
 
 /// See: <https://github.com/astral-sh/uv/issues/11825>
-///
-/// This test will not succeed on macOS if using a Homebrew provided interpreter. The interpreter
-/// reports `sys.executable` as the canonicalized path instead of `[TEMP_DIR]/...`. For this reason,
-/// it's marked as requiring our `python-managed` feature — but it does not enforce that these are
-/// used in the test context.
 #[test]
 #[cfg(unix)]
 #[cfg(feature = "test-python-managed")]
-fn python_required_python_major_minor() {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+fn python_required_python_major_minor() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11"]);
 
     // Find the Python 3.11 executable.
     let path = &context.python_versions.first().unwrap().1;
 
     // Symlink it to `python3.11`.
-    fs_err::create_dir_all(context.temp_dir.child("child")).unwrap();
-    fs_err::os::unix::fs::symlink(path, context.temp_dir.child("child").join("python3.11"))
-        .unwrap();
+    let search_path = context.temp_dir.child("child");
+    search_path.create_dir_all()?;
+    fs_err::os::unix::fs::symlink(path, search_path.child("python3.11"))?;
 
-    // Find `python3.11`, which is `>=3.11.4`.
-    uv_snapshot!(context.filters(), context.python_find().arg(">=3.11.4, <3.12").env(EnvVars::UV_PYTHON_SEARCH_PATH, context.temp_dir.child("child").path()), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [TEMP_DIR]/child/python3.11
-    ");
-
-    // Find `python3.11`, which is `>3.11.4`.
-    uv_snapshot!(context.filters(), context.python_find().arg(">3.11.4, <3.12").env(EnvVars::UV_PYTHON_SEARCH_PATH, context.temp_dir.child("child").path()), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    [TEMP_DIR]/child/python3.11
-    ");
+    // Some Python installations report their canonical path as `sys.executable`.
+    let expected = fs_err::canonicalize(path)?;
+    for request in [">=3.11.4, <3.12", ">3.11.4, <3.12"] {
+        let output = context
+            .python_find()
+            .arg(request)
+            .env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path.path())
+            .assert()
+            .success()
+            .stderr("");
+        let found = std::str::from_utf8(&output.get_output().stdout)?
+            .strip_suffix('\n')
+            .expect("interpreter path should end with a newline");
+        assert_eq!(fs_err::canonicalize(found)?, expected, "{request}");
+    }
 
     // Fail to find any matching Python interpreter.
-    uv_snapshot!(context.filters(), context.python_find().arg(">3.11.255, <3.12").env(EnvVars::UV_PYTHON_SEARCH_PATH, context.temp_dir.child("child").path()), @"
+    uv_snapshot!(context.filters(), context.python_find().arg(">3.11.255, <3.12").env(EnvVars::UV_PYTHON_SEARCH_PATH, search_path.path()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python >3.11.[X], <3.12 in virtual environments, managed installations, or search path
     ");
+
+    Ok(())
 }
 
 #[test]
