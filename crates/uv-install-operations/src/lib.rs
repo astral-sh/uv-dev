@@ -823,10 +823,7 @@ pub fn diagnose_environment<'a>(
     let relevant_packages = relevant_packages.collect::<HashSet<_>>();
     for diagnostic in site_packages.diagnostics(markers, tags, dependency_metadata)? {
         // Only surface diagnostics that are "relevant" to the current resolution.
-        if relevant_packages
-            .iter()
-            .any(|name| diagnostic.includes(name))
-        {
+        if diagnostic.includes_any(|name| relevant_packages.contains(name)) {
             writeln!(
                 printer.stderr(),
                 "{}{} {}",
