@@ -2032,19 +2032,20 @@ fn verify_nested_pyvenv_cfg() {
 #[test]
 #[cfg(windows)]
 fn path_with_trailing_space_gives_proper_error() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let context = uv_test::test_context_with_versions!(&[]);
 
     // Set a custom cache directory with a trailing space
-    let path_with_trailing_slash = format!("{} ", context.cache_dir.path().display());
+    let mut cache_dir = context.cache_dir.as_os_str().to_owned();
+    cache_dir.push(" ");
     // Windows translates error messages, for example i get:
     // ": Das System kann den angegebenen Pfad nicht finden. (os error 3)"
     let context = context.with_filter((
         r"\.lock`: .* \(os error 3\)",
         ".lock`: The system cannot find the path specified. (os error 3)",
     ));
-    uv_snapshot!(context.filters(), std::process::Command::new(uv_test::get_bin!())
+    uv_snapshot!(context.filters(), context.external_command(uv_test::get_bin!())
         .arg("venv")
-        .env(EnvVars::UV_CACHE_DIR, path_with_trailing_slash), @r###"
+        .env(EnvVars::UV_CACHE_DIR, cache_dir), @r###"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Could not acquire lock
