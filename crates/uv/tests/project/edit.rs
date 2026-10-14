@@ -898,7 +898,7 @@ fn git_partial_fetches_preview() -> Result<()> {
     git(repository.path(), &["add", "."])?;
     git(repository.path(), &["commit", "-m", "Replace module"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     let repository_url = RepositoryUrl::parse(url.as_str())?;
     context
@@ -996,7 +996,7 @@ async fn git_partial_fetches_offline_revision_probe() -> Result<()> {
     git(repository.path(), &["add", "."])?;
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let first_revision = git(repository.path(), &["rev-parse", "HEAD"])?;
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     context
         .temp_dir
@@ -1121,7 +1121,7 @@ async fn git_partial_fetches_offline_build() -> Result<()> {
     git(repository.path(), &["commit", "-m", "Add build backend"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     context
         .temp_dir
@@ -1313,7 +1313,7 @@ fn add_git_cache_compat_downgrade() -> Result<()> {
     git(repository.path(), &["add", "."])?;
     git(repository.path(), &["commit", "-m", "Replace module"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     context
         .temp_dir
@@ -1432,7 +1432,7 @@ fn add_git_cache_recovery_lfs() -> Result<()> {
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     context
         .temp_dir
@@ -1595,7 +1595,7 @@ fn add_git_cache_recovery_partial_lfs() -> Result<()> {
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     // LFS and non-LFS sources share a database. Prime a partial cache without LFS objects.
     context
