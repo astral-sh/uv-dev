@@ -35,9 +35,9 @@ use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, WheelBuilder, scenario::Scenario};
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
-use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
-use uv_test::{download_to_disk, venv_bin_path};
+use uv_test::{capture_uv_snapshot, diff_uv_snapshot, download_to_disk, venv_bin_path};
+use uv_test::{diff_snapshot, uv_snapshot};
 
 #[cfg(feature = "test-universal")]
 fn assert_cache_missing_files(cache: &Path, filenames: &[&str]) -> Result<()> {
@@ -2709,51 +2709,63 @@ async fn lock_sdist_url_relock_hash_mismatch() -> Result<()> {
     );
     assert_eq!(context.read("uv.lock"), locked);
 
-    insta::allow_duplicates! {
-        for args in [
-            vec![],
-            vec!["--refresh"],
-            vec!["--upgrade-package", "project"],
-            vec!["--upgrade-group", "empty"],
-            vec!["--locked", "--upgrade-package", "demo-pkg"],
-            vec!["--locked", "--upgrade-group", "dev"],
-        ] {
-            uv_snapshot!(context.filters(), context.lock().args(args).arg("--no-cache"), @"
-            exit_code: 1 (failure)
-            ----- stderr -----
-            error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
-              cause: Hash mismatch for `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
+    let hash_mismatch = capture_uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
+      cause: Hash mismatch for `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
 
-                     Expected:
-                       sha256:[TRUSTED_HASH]
+             Expected:
+               sha256:[TRUSTED_HASH]
 
-                     Computed:
-                       sha256:[REPLACEMENT_HASH]
-            ");
-            assert!(!sentinel.exists(), "relocking executed the replacement");
-            assert_eq!(context.read("uv.lock"), locked);
-        }
-    }
+             Computed:
+               sha256:[REPLACEMENT_HASH]
+    ");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    diff_uv_snapshot!(context.filters(), &hash_mismatch, context.lock().arg("--refresh").arg("--no-cache"), @"");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    diff_uv_snapshot!(context.filters(), &hash_mismatch, context.lock().args(["--upgrade-package", "project"]).arg("--no-cache"), @"");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    diff_uv_snapshot!(context.filters(), &hash_mismatch, context.lock().args(["--upgrade-group", "empty"]).arg("--no-cache"), @"");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    diff_uv_snapshot!(context.filters(), &hash_mismatch, context.lock().args(["--locked", "--upgrade-package", "demo-pkg"]).arg("--no-cache"), @"");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    diff_uv_snapshot!(context.filters(), &hash_mismatch, context.lock().args(["--locked", "--upgrade-group", "dev"]).arg("--no-cache"), @"");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
 
     // Each explicit upgrade mode releases the selected package's recorded hash.
-    insta::allow_duplicates! {
-        for args in [
-            vec!["--upgrade-package", "demo-pkg"],
-            vec!["--upgrade-group", "dev"],
-            vec!["--upgrade"],
-        ] {
-            uv_snapshot!(context.filters(), context.lock().args(args).arg("--no-cache"), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Resolved 2 packages in [TIME]
-            ");
-            assert!(sentinel.exists());
-            assert_ne!(context.read("uv.lock"), locked);
-            context.temp_dir.child("uv.lock").write_str(&locked)?;
-            fs_err::remove_file(&sentinel)?;
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
+    let upgrade_output = capture_uv_snapshot!(context.filters(), context.lock().args(["--upgrade-package", "demo-pkg"]).arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert!(sentinel.exists());
+    assert_ne!(context.read("uv.lock"), locked);
+    context.temp_dir.child("uv.lock").write_str(&locked)?;
+    fs_err::remove_file(&sentinel)?;
+
+    diff_uv_snapshot!(context.filters(), &upgrade_output, context.lock().args(["--upgrade-group", "dev"]).arg("--no-cache"), @"");
+    assert!(sentinel.exists());
+    assert_ne!(context.read("uv.lock"), locked);
+    context.temp_dir.child("uv.lock").write_str(&locked)?;
+    fs_err::remove_file(&sentinel)?;
+
+    diff_uv_snapshot!(context.filters(), &upgrade_output, context.lock().arg("--upgrade").arg("--no-cache"), @"");
+    assert!(sentinel.exists());
+    assert_ne!(context.read("uv.lock"), locked);
+    context.temp_dir.child("uv.lock").write_str(&locked)?;
+    fs_err::remove_file(&sentinel)?;
 
     // A new direct URL is a new identity and does not require an upgrade flag.
     let replacement_server = PackageServer::new(&name).await;
