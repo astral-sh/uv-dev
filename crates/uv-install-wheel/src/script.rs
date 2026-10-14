@@ -8,7 +8,7 @@ use crate::Error;
 
 /// A script defining the name of the runnable entrypoint and the module and function that should be
 /// run.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) struct Script {
     pub(crate) name: String,
     pub(crate) module: String,
@@ -109,7 +109,8 @@ impl EntryPoints {
         if let Some(pip_script) = console_scripts.iter().find(|script| script.name == "pip3") {
             console_scripts.push(Script {
                 name: format!("pip3.{python_minor}"),
-                ..pip_script.clone()
+                module: pip_script.module.clone(),
+                function: pip_script.function.clone(),
             });
         }
 
