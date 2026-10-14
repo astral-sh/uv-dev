@@ -501,21 +501,24 @@ fn move_folder_recorded(
     fs::create_dir_all(dest_dir)?;
     for entry in WalkDir::new(src_dir) {
         let entry = entry?;
+        // The walk root maps to the destination directory, which was created above.
+        if entry.depth() == 0 && entry.file_type().is_dir() {
+            continue;
+        }
         let src = entry.path();
         // This is the base path for moving to the actual target for the data
         // e.g. for data it's without <..>.data/data/
         let relative_to_data = src
             .strip_prefix(src_dir)
             .expect("walkdir prefix must not change");
-        // This is the path stored in RECORD
-        // e.g. for data it's with .data/data/
-        let relative_to_site_packages = src
-            .strip_prefix(site_packages)
-            .expect("prefix must not change");
         let target = dest_dir.join(relative_to_data);
         if entry.file_type().is_dir() {
             fs::create_dir_all(&target)?;
         } else {
+            // This is the path stored in RECORD, e.g. with .data/data/.
+            let relative_to_site_packages = src
+                .strip_prefix(site_packages)
+                .expect("prefix must not change");
             validate_data_script_destination(&target, scripts)?;
             rename_or_copy.rename_or_copy(src, &target)?;
             let entry = find_record_entry(record, relative_to_site_packages, src)?;
