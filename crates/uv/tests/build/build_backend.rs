@@ -784,14 +784,17 @@ fn build_sdist_with_long_path() -> Result<()> {
             import gzip
             import sys
             import tarfile
+            from unittest import TestCase
 
+            checks = TestCase()
             with gzip.open(sys.argv[1], mode="rb") as archive:
                 header = archive.read(512)
-                assert header[257:265] == b"ustar  \x00"
+                checks.assertEqual(header[257:265], b"ustar  \x00")
 
             with tarfile.open(sys.argv[1], mode="r:gz") as archive:
                 members = archive.getmembers()
-                assert all(not member.pax_headers for member in members)
+                for member in members:
+                    checks.assertFalse(member.pax_headers, member.name)
                 print(f"GNU members: {len(members)}")
         "#})
         .arg(legacy_dir.path().join("foo-1.0.0.tar.gz")), @"
@@ -815,25 +818,25 @@ fn build_sdist_with_long_path() -> Result<()> {
         .arg(indoc! {r#"
             import sys
             import tarfile
+            from unittest import TestCase
 
+            checks = TestCase()
             with tarfile.open(sys.argv[1], mode="r:gz") as archive:
                 members = archive.getmembers()
-                assert all("path" in member.pax_headers for member in members)
-                assert all(
-                    member.mode == (0o755 if member.isdir() else 0o644)
-                    for member in members
-                )
+                for member in members:
+                    checks.assertIn("path", member.pax_headers, member.name)
+                    checks.assertEqual(member.mode, 0o755 if member.isdir() else 0o644, member.name)
 
                 long_member = archive.getmember(sys.argv[2])
-                assert long_member.isfile()
+                checks.assertTrue(long_member.isfile(), long_member.name)
 
                 large_member = archive.getmember(sys.argv[3])
                 with archive.extractfile(large_member) as payload:
                     streamed = 0
                     while chunk := payload.read(64 * 1024):
-                        assert not any(chunk)
+                        checks.assertFalse(any(chunk), f"nonzero byte in chunk at offset {streamed}")
                         streamed += len(chunk)
-                assert streamed == large_member.size
+                checks.assertEqual(streamed, large_member.size)
 
                 print(f"PAX members: {len(members)}")
                 print(f"Long path bytes: {len(long_member.name.encode())}")
