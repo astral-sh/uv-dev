@@ -157,7 +157,7 @@ impl FlatDistributions {
                     build_options,
                 );
                 let dist = RegistrySourceDist {
-                    name: filename.name.clone(),
+                    name: filename.name,
                     version: filename.version.clone(),
                     ext: filename.extension,
                     file: Box::new(file),
