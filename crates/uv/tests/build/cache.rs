@@ -749,12 +749,15 @@ fn binary_payloads_use_archive_file_store() -> Result<()> {
     ");
 
     let objects = context.cache_files(CacheBucket::Files)?;
-    let archive = fs_err::read_dir(context.cache_dir.child("archive-v0").path())?
-        .next()
-        .transpose()?
-        .context("missing cached archive")?
-        .path();
-    let archive_binary = archive.join("binary_payload/native.so");
+    let archive_binary = context
+        .cache_files(CacheBucket::Archive)?
+        .into_iter()
+        .find(|path| path.ends_with("binary_payload/native.so"))
+        .context("missing cached binary payload")?;
+    let archive = archive_binary
+        .parent()
+        .and_then(|path| path.parent())
+        .context("binary payload should be inside a cached archive")?;
     let object = objects
         .iter()
         .find(|object| uv_fs::is_same_file_allow_missing(&archive_binary, object) == Some(true))
@@ -797,7 +800,7 @@ fn binary_payloads_use_archive_file_store() -> Result<()> {
     ----- stderr -----
     Removed [N] files ([SIZE])
     ");
-    assert_path_missing(&archive);
+    assert_path_missing(archive);
     assert_eq!(
         context.cache_files(CacheBucket::Files)?,
         vec![object.clone()]
