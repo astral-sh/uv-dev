@@ -2134,7 +2134,13 @@ impl TestContext {
             EnvVars::UV_SYSTEM_CERTS,
         ];
 
-        for name in EnvVars::all_names().iter().copied() {
+        // Python can redirect bytecode writes outside the fixture even though uv does not read
+        // this variable itself.
+        for name in EnvVars::all_names()
+            .iter()
+            .copied()
+            .chain(["PYTHONPYCACHEPREFIX"])
+        {
             if !passthrough.contains(&name) && !is_explicit(name) {
                 command.env_remove(name);
             }
@@ -2387,11 +2393,14 @@ mod command_environment_tests {
 
         context.add_shared_env(&mut command, false);
 
-        assert!(
-            command
-                .get_envs()
-                .any(|(name, value)| name == EnvVars::UV_INDEX_URL && value.is_none())
-        );
+        for isolated in [EnvVars::UV_INDEX_URL, "PYTHONPYCACHEPREFIX"] {
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(name, value)| name == isolated && value.is_none()),
+                "{isolated} was not isolated from the host"
+            );
+        }
         assert!(
             command.get_envs().any(|(name, value)| {
                 name == offline && value.is_some_and(|value| value == "1")
