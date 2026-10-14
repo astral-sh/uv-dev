@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: binary-size-${{ github.event.pull_request.number || github.sha }}-${{ github.event.action == 'labeled' && github.event.label.name != 'build:binary-size' && github.run_id || 'measurement' }}
+  cancel-in-progress: true
+
 env:
   AWS_LC_SYS_USE_SYSTEM: "0"
   CARGO_INCREMENTAL: 0
@@ -57,9 +61,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    concurrency:
-      group: binary-size-${{ github.event.pull_request.number || github.sha }}-${{ matrix.name }}
-      cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
