@@ -1394,8 +1394,8 @@ pub async fn resolve_environment(
 
     let client_builder = client_builder.clone().keyring(*keyring_provider);
 
-    // Determine the tags and marker environment to use for resolution.
-    let (tags, resolver_environment) = match resolution_scope {
+    // Determine the target constraints for resolution.
+    let (tags, resolver_environment, python_requirement, python_platform) = match resolution_scope {
         EnvironmentResolution::Specific => {
             let tags = uv_resolve_operations::resolution_tags(None, python_platform, interpreter)?;
             let marker_environment =
@@ -1403,21 +1403,19 @@ pub async fn resolve_environment(
             (
                 Some(tags),
                 ResolverEnvironment::specific(marker_environment),
+                PythonRequirement::from_interpreter(interpreter),
+                python_platform,
             )
         }
-        EnvironmentResolution::Universal => (None, ResolverEnvironment::universal(Vec::new())),
-    };
-    let python_requirement = match resolution_scope {
-        EnvironmentResolution::Specific => PythonRequirement::from_interpreter(interpreter),
-        EnvironmentResolution::Universal => PythonRequirement::from_requires_python(
-            interpreter,
-            RequiresPython::greater_than_equal_version(&interpreter.python_minor_version()),
+        EnvironmentResolution::Universal => (
+            None,
+            ResolverEnvironment::universal(Vec::new()),
+            PythonRequirement::from_requires_python(
+                interpreter,
+                RequiresPython::greater_than_equal_version(&interpreter.python_minor_version()),
+            ),
+            None,
         ),
-    };
-
-    let python_platform = match resolution_scope {
-        EnvironmentResolution::Specific => python_platform,
-        EnvironmentResolution::Universal => None,
     };
 
     // Determine the PyTorch backend.
