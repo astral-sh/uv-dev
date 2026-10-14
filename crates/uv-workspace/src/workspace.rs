@@ -1695,7 +1695,7 @@ impl ProjectWorkspace {
             workspace = find_workspace(&project_path, options, cache).await?;
         }
 
-        let current_project = WorkspaceMember {
+        let current_project = || WorkspaceMember {
             root: project_path.to_path_buf(),
             project: project.clone(),
             pyproject_toml: project_pyproject_toml.clone(),
@@ -1709,7 +1709,7 @@ impl ProjectWorkspace {
 
             let current_project_as_members = Arc::new(BTreeMap::from_iter([(
                 project.name.clone(),
-                current_project,
+                current_project(),
             )]));
             let workspace_sources = BTreeMap::default();
             let required_members = Workspace::collect_required_members(
@@ -1745,7 +1745,7 @@ impl ProjectWorkspace {
                     workspace_root,
                     workspace_definition,
                     workspace_pyproject_toml,
-                    Some(current_project),
+                    Some(current_project()),
                     options,
                     cache,
                 )
