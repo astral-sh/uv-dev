@@ -46717,7 +46717,7 @@ fn lock_resolution_inputs_empty_scopes() -> Result<()> {
     Ok(())
 }
 
-/// Settings already stored in older locks remain relevant even for packages outside the graph.
+/// Resolution-input tracking can ignore an unused constraint stored by an older lock.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_legacy_locks() -> Result<()> {
@@ -46743,8 +46743,9 @@ fn lock_resolution_inputs_legacy_locks() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+    let legacy_lock = context.read("uv.lock");
 
-    // The preview can ignore a changed constraint for a package absent from the lock.
+    // The stored constraint changes, but its package remains absent from the graph.
     pyproject.write_str(indoc! {r#"
         [project]
         name = "project"
@@ -46759,11 +46760,24 @@ fn lock_resolution_inputs_legacy_locks() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock()
         .arg("--locked")
         .arg("--offline")
+        .arg("--no-preview"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
         .arg("--preview-features=resolution-inputs"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+    assert_eq!(context.read("uv.lock"), legacy_lock);
 
     Ok(())
 }
