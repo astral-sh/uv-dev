@@ -349,19 +349,19 @@ impl<'script> ValidatedScript<'script> {
     fn inner(&self) -> &Script {
         self.script
     }
+}
 
-    /// Return the script destination relative to `site_packages` for use in `RECORD`.
-    ///
-    /// Entry points are installed in the scripts directory, which may sit outside
-    /// `site_packages`, so we use a lexical diff rather than stripping a prefix.
-    fn relative_to_site_package(&self, site_packages: &Path) -> Result<PathBuf, Error> {
-        pathdiff::diff_paths(self.as_path(), site_packages).ok_or_else(|| {
-            Error::Io(io::Error::other(format!(
-                "Could not find relative path for: {}",
-                self.as_path().simplified_display()
-            )))
-        })
-    }
+/// Return the script destination relative to `site_packages` for use in `RECORD`.
+///
+/// The scripts directory may sit outside `site_packages`, so use a lexical diff rather than
+/// stripping a prefix.
+fn script_relative_to_site_packages(script: &Path, site_packages: &Path) -> Result<PathBuf, Error> {
+    pathdiff::diff_paths(script, site_packages).ok_or_else(|| {
+        Error::Io(io::Error::other(format!(
+            "Could not find relative path for: {}",
+            script.simplified_display()
+        )))
+    })
 }
 
 /// Create the wrapper scripts in the bin folder of the venv for launching console scripts.
@@ -375,7 +375,8 @@ pub(crate) fn write_script_entrypoints(
 ) -> Result<(), Error> {
     for script in entrypoints {
         let script = ValidatedScript::try_from_script(script, layout)?;
-        let entrypoint_relative = script.relative_to_site_package(site_packages)?;
+        let entrypoint_relative =
+            script_relative_to_site_packages(script.as_path(), site_packages)?;
 
         // Generate the launcher script.
         let launcher_executable = get_script_executable(&layout.sys_executable, is_gui);
@@ -584,13 +585,7 @@ fn install_script(
 
     let script_absolute = layout.scheme.scripts.join(file.file_name());
     validate_data_script_destination(&script_absolute, &layout.scheme.scripts)?;
-    let script_relative =
-        pathdiff::diff_paths(&script_absolute, site_packages).ok_or_else(|| {
-            Error::Io(io::Error::other(format!(
-                "Could not find relative path for: {}",
-                script_absolute.simplified_display()
-            )))
-        })?;
+    let script_relative = script_relative_to_site_packages(&script_absolute, site_packages)?;
 
     let path = file.path();
     let mut script = BufReader::new(File::open(&path)?);
