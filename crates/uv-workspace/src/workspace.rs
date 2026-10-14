@@ -31,7 +31,7 @@ use uv_warnings::warn_user_once;
 use crate::dependency_groups::{DependencyGroupError, FlatDependencyGroup, FlatDependencyGroups};
 use crate::pyproject::{
     BuildConstraintDependency, OverrideDependency, Project, PyProjectToml, PyprojectTomlError,
-    Source, Sources, ToolUvSources, ToolUvWorkspace, WorkspaceReference,
+    Source, Sources, ToolUv, ToolUvSources, ToolUvWorkspace, WorkspaceReference,
 };
 
 /// The workspace project environment selected by configuration and command-line options.
@@ -809,30 +809,26 @@ impl Workspace {
         })
     }
 
+    /// Return the `[tool.uv]` settings from the workspace root.
+    fn root_uv_settings(&self) -> Option<&ToolUv> {
+        self.pyproject_toml.tool.as_ref()?.uv.as_ref()
+    }
+
     /// Returns the set of supported environments for the workspace.
     pub fn environments(&self) -> Option<&SupportedEnvironments> {
-        self.pyproject_toml
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
+        self.root_uv_settings()
             .and_then(|uv| uv.environments.as_ref())
     }
 
     /// Returns the set of required platforms for the workspace.
     pub fn required_environments(&self) -> Option<&SupportedEnvironments> {
-        self.pyproject_toml
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
+        self.root_uv_settings()
             .and_then(|uv| uv.required_environments.as_ref())
     }
 
     /// Returns the workspace's libc baselines and exclusions.
     pub fn minimum_libc_version(&self) -> Option<MinimumLibcVersion> {
-        self.pyproject_toml
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
+        self.root_uv_settings()
             .and_then(|uv| uv.minimum_libc_version)
     }
 
@@ -840,12 +836,8 @@ impl Workspace {
     pub fn conflicts(&self) -> Result<Conflicts, WorkspaceError> {
         let mut conflicting = Conflicts::empty();
         if self.is_non_project()
-            && let Some(root_conflicts) = self
-                .pyproject_toml
-                .tool
-                .as_ref()
-                .and_then(|tool| tool.uv.as_ref())
-                .and_then(|uv| uv.conflicts.as_ref())
+            && let Some(root_conflicts) =
+                self.root_uv_settings().and_then(|uv| uv.conflicts.as_ref())
         {
             let mut root_conflicts = root_conflicts.to_conflicts()?;
             conflicting.append(&mut root_conflicts);
@@ -944,58 +936,30 @@ impl Workspace {
 
     /// Returns the set of overrides for the workspace.
     pub fn overrides(&self) -> Vec<OverrideDependency> {
-        let Some(overrides) = self
-            .pyproject_toml
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.override_dependencies.as_ref())
-        else {
-            return vec![];
-        };
-        overrides.clone()
+        self.root_uv_settings()
+            .and_then(|uv| uv.override_dependencies.clone())
+            .unwrap_or_default()
     }
 
     /// Returns the set of dependency exclusions for the workspace.
     pub fn exclude_dependencies(&self) -> Vec<ExcludeDependency> {
-        let Some(excludes) = self
-            .pyproject_toml
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.exclude_dependencies.as_ref())
-        else {
-            return vec![];
-        };
-        excludes.clone()
+        self.root_uv_settings()
+            .and_then(|uv| uv.exclude_dependencies.clone())
+            .unwrap_or_default()
     }
 
     /// Returns the set of constraints for the workspace.
     pub fn constraints(&self) -> Vec<uv_pep508::Requirement<VerbatimParsedUrl>> {
-        let Some(constraints) = self
-            .pyproject_toml
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.constraint_dependencies.as_ref())
-        else {
-            return vec![];
-        };
-        constraints.clone()
+        self.root_uv_settings()
+            .and_then(|uv| uv.constraint_dependencies.clone())
+            .unwrap_or_default()
     }
 
     /// Returns the set of build constraints for the workspace.
     pub fn build_constraints(&self) -> Vec<BuildConstraintDependency> {
-        let Some(build_constraints) = self
-            .pyproject_toml
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.build_constraint_dependencies.as_ref())
-        else {
-            return vec![];
-        };
-        build_constraints.clone()
+        self.root_uv_settings()
+            .and_then(|uv| uv.build_constraint_dependencies.clone())
+            .unwrap_or_default()
     }
 
     /// The path to the workspace root, the directory containing the top level `pyproject.toml` with
@@ -1043,13 +1007,7 @@ impl Workspace {
 
     /// Returns `true` if the path is excluded by the workspace.
     pub fn excludes(&self, project_path: &Path) -> Result<bool, WorkspaceError> {
-        if let Some(workspace) = self
-            .pyproject_toml
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.workspace.as_ref())
-        {
+        if let Some(workspace) = self.root_uv_settings().and_then(|uv| uv.workspace.as_ref()) {
             is_excluded_from_workspace(project_path, &self.install_path, workspace)
         } else {
             Ok(false)
@@ -1058,13 +1016,7 @@ impl Workspace {
 
     /// Returns `true` if the path is included by the workspace.
     pub fn includes(&self, project_path: &Path) -> Result<bool, WorkspaceError> {
-        if let Some(workspace) = self
-            .pyproject_toml
-            .tool
-            .as_ref()
-            .and_then(|tool| tool.uv.as_ref())
-            .and_then(|uv| uv.workspace.as_ref())
-        {
+        if let Some(workspace) = self.root_uv_settings().and_then(|uv| uv.workspace.as_ref()) {
             is_included_in_workspace(project_path, &self.install_path, workspace)
         } else {
             Ok(false)
