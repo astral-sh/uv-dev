@@ -9,11 +9,14 @@ use uv_static::EnvVars;
 ///
 /// Supports `VIRTUAL_ENV`.
 pub(crate) fn virtualenv_from_env() -> Option<PathBuf> {
-    if let Some(dir) = env::var_os(EnvVars::VIRTUAL_ENV).filter(|value| !value.is_empty()) {
-        return Some(PathBuf::from(dir));
-    }
+    active_environment_path(EnvVars::VIRTUAL_ENV)
+}
 
-    None
+/// Read a non-empty active-environment path from an environment variable.
+fn active_environment_path(variable: &str) -> Option<PathBuf> {
+    env::var_os(variable)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -83,8 +86,7 @@ fn is_pixi_environment(path: &Path) -> bool {
 /// If `base` is true, the active environment must be the base environment or `None` is returned,
 /// and vice-versa.
 pub(crate) fn conda_environment_from_env(kind: CondaEnvironmentKind) -> Option<PathBuf> {
-    let dir = env::var_os(EnvVars::CONDA_PREFIX).filter(|value| !value.is_empty())?;
-    let path = PathBuf::from(dir);
+    let path = active_environment_path(EnvVars::CONDA_PREFIX)?;
 
     if kind != CondaEnvironmentKind::from_prefix_path(&path) {
         return None;
