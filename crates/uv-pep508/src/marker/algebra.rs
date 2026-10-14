@@ -144,16 +144,11 @@ impl InternerGuard<'_> {
         let node = Node { var, children };
         let node = if flipped { node.not() } else { node };
 
-        // Insert the node.
-        // Probing before inserting keeps the clone off the common path where an isomorphic node
-        // has already been interned. Cloning a [`Node`] copies every outgoing edge range.
-        let id = if let Some(&id) = self.state.unique.get(&node) {
-            id
-        } else {
-            let id = NodeId::new(self.shared.nodes.push(node.clone()), false);
-            self.state.unique.insert(node, id);
-            id
-        };
+        // Cloning a node copies every outgoing edge range, so only clone newly interned nodes.
+        let id =
+            *self.state.unique.entry(node).or_insert_with_key(|node| {
+                NodeId::new(self.shared.nodes.push(node.clone()), false)
+            });
 
         if flipped { id.not() } else { id }
     }
