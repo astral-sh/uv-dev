@@ -5396,8 +5396,7 @@ fn target_built_distribution() -> Result<()> {
     let target = context.temp_dir.child("target");
     target.child("iniconfig").assert(predicates::path::is_dir());
 
-    // Ensure that we can't import the package.
-    context.assert_command("import iniconfig").failure();
+    context.assert_not_installed("iniconfig");
 
     // Ensure that we can import the package by augmenting the `PYTHONPATH`.
     context
@@ -5496,8 +5495,7 @@ fn target_source_distribution() -> Result<()> {
     // Ensure that the package is present in the target directory.
     assert!(context.temp_dir.child("target").child("iniconfig").is_dir());
 
-    // Ensure that we can't import the package.
-    context.assert_command("import iniconfig").failure();
+    context.assert_not_installed("iniconfig");
 
     // Ensure that we can import the package by augmenting the `PYTHONPATH`.
     context
@@ -5560,8 +5558,7 @@ fn target_no_build_isolation() -> Result<()> {
     // Ensure that the package is present in the target directory.
     assert!(context.temp_dir.child("target").child("wheel").is_dir());
 
-    // Ensure that we can't import the package.
-    context.assert_command("import wheel").failure();
+    context.assert_not_installed("wheel");
 
     // Ensure that we can import the package by augmenting the `PYTHONPATH`.
     context
@@ -5630,8 +5627,7 @@ fn prefix() -> Result<()> {
      + iniconfig==2.0.0
     ");
 
-    // Ensure that we can't import the package.
-    context.assert_command("import iniconfig").failure();
+    context.assert_not_installed("iniconfig");
 
     // Ensure that we can import the package by augmenting the `PYTHONPATH`.
     context
