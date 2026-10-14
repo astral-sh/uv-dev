@@ -17,6 +17,9 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_types::AnyErrorBuild;
 
+/// Number of stderr lines examined when classifying a build backend failure.
+pub(super) const HINT_LINES: usize = 10;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error(transparent)]
@@ -155,7 +158,7 @@ impl MissingLibrary {
         let module_not_found = regex!(r#"ModuleNotFoundError: No module named ['"]([^'"]+)['"]"#);
 
         // Build tools can append summary lines after a diagnostic, so inspect the last ten lines.
-        stderr.iter().rev().take(10).find_map(|line| {
+        stderr.iter().rev().take(HINT_LINES).find_map(|line| {
             let line = line.trim();
             if let Some((_, [header])) = missing_header_re_gcc
                 .captures(line)
