@@ -4,8 +4,8 @@ use std::process::Stdio;
 use std::time::Duration;
 use std::{env, io, panic};
 
-use async_channel::{Receiver, SendError};
-use tempfile::tempdir_in;
+use async_channel::{Receiver, SendError, Sender};
+use tempfile::{TempDir, tempdir_in};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
@@ -24,6 +24,13 @@ const DEFAULT_COMPILE_TIMEOUT: Duration = Duration::from_mins(1);
 
 type WorkerOutcome = std::thread::Result<Result<(), CompileError>>;
 type WorkerHandle = oneshot::Receiver<WorkerOutcome>;
+
+/// Bytecode workers and the resources needed until they exit.
+struct BytecodeWorkers {
+    handles: Vec<WorkerHandle>,
+    _script_directory: TempDir,
+    sender: Sender<PathBuf>,
+}
 
 /// A ready Python bytecode compiler and its communication streams.
 struct BytecodeCompiler {
@@ -97,11 +104,16 @@ fn compile_timeout() -> Result<Option<Duration>, CompileError> {
 fn spawn_workers(
     dir: &Path,
     python_executable: &Path,
-    pip_compileall_py: &Path,
-    receiver: &Receiver<PathBuf>,
+    cache: &Path,
     worker_count: usize,
-    timeout: Option<Duration>,
-) -> Vec<WorkerHandle> {
+) -> Result<BytecodeWorkers, CompileError> {
+    // A larger buffer is significantly faster than just 1 or the worker count.
+    let (sender, receiver) = async_channel::bounded::<PathBuf>(worker_count * 10);
+
+    // Running Python with an actual file will produce better error messages.
+    let script_directory = tempdir_in(cache).map_err(CompileError::TempFile)?;
+    let pip_compileall_py = script_directory.path().join("pip_compileall.py");
+    let timeout = compile_timeout()?;
     debug!("Starting {} bytecode compilation workers", worker_count);
     let mut worker_handles = Vec::with_capacity(worker_count);
     for _ in 0..worker_count {
@@ -135,15 +147,28 @@ fn spawn_workers(
 
         worker_handles.push(rx);
     }
-    worker_handles
+    // Make sure the channel gets closed when all workers exit.
+    drop(receiver);
+    Ok(BytecodeWorkers {
+        handles: worker_handles,
+        _script_directory: script_directory,
+        sender,
+    })
 }
 
 /// Wait for all workers to exit, prioritizing worker failures over producer failures.
 async fn wait_for_workers(
-    worker_handles: Vec<WorkerHandle>,
+    workers: BytecodeWorkers,
     producer_result: Result<(), CompileError>,
 ) -> Result<(), CompileError> {
-    for result in futures::future::join_all(worker_handles).await {
+    let BytecodeWorkers {
+        handles,
+        _script_directory,
+        sender,
+    } = workers;
+    // Closing the channel lets workers exit after consuming the remaining queued files.
+    drop(sender);
+    for result in futures::future::join_all(handles).await {
         match result {
             // A worker thread panicked or exited without reporting its result.
             Err(_) | Ok(Err(_)) => return Err(CompileError::Join),
@@ -178,25 +203,7 @@ pub async fn compile_tree(
         "compileall doesn't work with relative paths: `{}`",
         dir.display()
     );
-    let worker_count = concurrency.installs;
-
-    // A larger buffer is significantly faster than just 1 or the worker count.
-    let (sender, receiver) = async_channel::bounded::<PathBuf>(worker_count * 10);
-
-    // Running Python with an actual file will produce better error messages.
-    let tempdir = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let pip_compileall_py = tempdir.path().join("pip_compileall.py");
-    let timeout = compile_timeout()?;
-    let worker_handles = spawn_workers(
-        dir,
-        python_executable,
-        &pip_compileall_py,
-        &receiver,
-        worker_count,
-        timeout,
-    );
-    // Make sure the channel gets closed when all workers exit.
-    drop(receiver);
+    let workers = spawn_workers(dir, python_executable, cache, concurrency.installs)?;
 
     // Start the producer, sending all `.py` files to workers.
     let mut source_files = 0;
@@ -222,7 +229,7 @@ pub async fn compile_tree(
         // https://github.com/pypa/pip/blob/3820b0e52c7fed2b2c43ba731b718f316e6816d1/src/pip/_internal/operations/install/wheel.py#L593-L604
         if entry.file_type().is_file() && entry.path().extension().is_some_and(|ext| ext == "py") {
             source_files += 1;
-            if let Err(err) = sender.send(entry.into_path()).await {
+            if let Err(err) = workers.sender.send(entry.into_path()).await {
                 // The workers exited.
                 // If e.g. something with the Python interpreter is wrong, the workers have exited
                 // with an error. We try to report this informative error and only if that fails,
@@ -233,11 +240,7 @@ pub async fn compile_tree(
         }
     }
 
-    // All workers will receive an error after the last item. Note that there are still
-    // up to worker_count * 10 items in the queue.
-    drop(sender);
-
-    wait_for_workers(worker_handles, producer_result).await?;
+    wait_for_workers(workers, producer_result).await?;
 
     Ok(source_files)
 }
@@ -262,22 +265,7 @@ pub async fn compile_files(
         return Ok(0);
     }
 
-    let worker_count = initial_files.len();
-    let (sender, receiver) = async_channel::bounded::<PathBuf>(worker_count * 10);
-
-    // Running Python with an actual file will produce better error messages.
-    let tempdir = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let pip_compileall_py = tempdir.path().join("pip_compileall.py");
-    let timeout = compile_timeout()?;
-    let worker_handles = spawn_workers(
-        cache,
-        python_executable,
-        &pip_compileall_py,
-        &receiver,
-        worker_count,
-        timeout,
-    );
-    drop(receiver);
+    let workers = spawn_workers(cache, python_executable, cache, initial_files.len())?;
 
     let mut producer_result = Ok(());
     let mut source_files = 0;
@@ -295,14 +283,12 @@ pub async fn compile_files(
             file.display()
         );
         source_files += 1;
-        if let Err(err) = sender.send(file).await {
+        if let Err(err) = workers.sender.send(file).await {
             producer_result = Err(CompileError::WorkerDisappeared(err));
             break;
         }
     }
-    drop(sender);
-
-    wait_for_workers(worker_handles, producer_result).await?;
+    wait_for_workers(workers, producer_result).await?;
 
     Ok(source_files)
 }
