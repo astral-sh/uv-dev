@@ -15623,9 +15623,7 @@ exclude-newer-package = { tqdm = "2022-09-04T00:00:00Z" }
 
 #[test]
 #[cfg(unix)]
-fn read_only() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
+fn sync_read_only_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -15650,11 +15648,12 @@ fn read_only() -> Result<()> {
 
     assert!(context.temp_dir.child("uv.lock").exists());
 
-    // Remove the flock.
-    fs_err::remove_file(context.venv.child(".lock"))?;
-
-    // Make the virtual environment read and execute (but not write).
-    fs_err::set_permissions(&context.venv, std::fs::Permissions::from_mode(0o555))?;
+    let lock = context.venv.child(".lock");
+    fs_err::remove_file(lock.path())?;
+    let _read_only = uv_test::ReadOnlyDirectoryGuard::new(context.venv.path())?;
+    let error = fs_err::File::create(lock.path())
+        .expect_err("the virtual environment must reject lock creation");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -15662,6 +15661,7 @@ fn read_only() -> Result<()> {
     Resolved 2 packages in [TIME]
     Checked 1 package in [TIME]
     ");
+    lock.assert(predicate::path::missing());
 
     Ok(())
 }
