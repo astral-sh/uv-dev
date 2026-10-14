@@ -850,22 +850,6 @@ enum LockAction {
     Create,
 }
 
-impl LockAction {
-    fn message(&self, dry_run: bool) -> Option<&'static str> {
-        let message = if dry_run {
-            match self {
-                Self::Use => return None,
-                Self::Check => "Found up-to-date",
-                Self::Update => "Would update",
-                Self::Create => "Would create",
-            }
-        } else {
-            return None;
-        };
-        Some(message)
-    }
-}
-
 #[derive(Serialize, Debug)]
 struct EnvironmentReport {
     /// The path to the environment.
@@ -1010,23 +994,23 @@ impl LockReport {
     }
 
     fn to_human_readable_string(&self) -> Option<String> {
-        let Self {
-            path,
-            action,
-            dry_run,
-        } = self;
-
-        let action = action.message(*dry_run)?;
-
-        let message = format!(
-            "{action} lockfile at: {path}",
-            path = path.user_display().cyan(),
-        );
-        if *dry_run {
-            return Some(message.dimmed().to_string());
+        if !self.dry_run {
+            return None;
         }
-
-        Some(message)
+        let action = match self.action {
+            LockAction::Use => return None,
+            LockAction::Check => "Found up-to-date",
+            LockAction::Update => "Would update",
+            LockAction::Create => "Would create",
+        };
+        Some(
+            format!(
+                "{action} lockfile at: {path}",
+                path = self.path.user_display().cyan(),
+            )
+            .dimmed()
+            .to_string(),
+        )
     }
 }
 
