@@ -192,12 +192,7 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
         };
 
         // Validate and sanitize the file name to prevent directory traversal attacks.
-        let relpath = match SanitizedArchivePath::from_archive_member(path) {
-            Ok(path) => path,
-            Err(_) if skip_validation => None,
-            Err(err) => return Err(err),
-        };
-        let Some(relpath) = relpath else {
+        let Some(relpath) = SanitizedArchivePath::for_extraction(path, skip_validation)? else {
             warn!("Skipping unsafe file name: {path}");
 
             // Close current file prior to proceeding, as per:
@@ -501,12 +496,8 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
                 };
 
                 // Validate and sanitize the file name to prevent directory traversal attacks.
-                let relpath = match SanitizedArchivePath::from_archive_member(path) {
-                    Ok(path) => path,
-                    Err(_) if skip_validation => None,
-                    Err(err) => return Err(err),
-                };
-                let Some(relpath) = relpath else {
+                let Some(relpath) = SanitizedArchivePath::for_extraction(path, skip_validation)?
+                else {
                     continue;
                 };
                 let is_dir = entry.dir()?;
