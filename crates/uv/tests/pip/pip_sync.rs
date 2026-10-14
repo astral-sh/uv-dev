@@ -4279,7 +4279,7 @@ fn assert_target_distributions(context: &TestContext, target: &Path, expected: &
 /// Include a `build_constraints.txt` file with an incompatible constraint.
 #[test]
 fn incompatible_build_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==1.2")?;
 
@@ -4304,6 +4304,7 @@ fn incompatible_build_constraint() -> Result<()> {
 }
 
 /// Include a `build_constraints.txt` file with a compatible constraint.
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn compatible_build_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -4343,6 +4344,7 @@ fn compatible_build_constraint() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn sync_seed() -> Result<()> {
     let context = uv_test::test_context!("3.9");

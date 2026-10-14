@@ -13707,6 +13707,7 @@ fn incompatible_build_constraint() -> Result<()> {
 }
 
 /// Include a `build_constraints.txt` file with a compatible constraint.
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn compatible_build_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -13904,6 +13905,7 @@ build-constraint-dependencies = [
 }
 
 /// Merge CLI args `build_constraints.txt` with `build-constraint-dependencies` in pyproject.toml with a compatible constraint.
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn compatible_build_constraint_merged_with_pyproject_toml() -> Result<()> {
     let context = uv_test::test_context!("3.9");
