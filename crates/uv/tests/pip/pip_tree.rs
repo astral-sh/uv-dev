@@ -399,7 +399,8 @@ fn cycle() {
     );
 }
 
-/// Both `pendulum` and `boto3` depend on `python-dateutil`.
+/// Both `pendulum` and `time-machine` depend on `python-dateutil`.
+/// The graph includes `tzdata` on every platform, so keep it in the install snapshot.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn multiple_packages_shared_descendant() {
@@ -415,7 +416,7 @@ fn multiple_packages_shared_descendant() {
         )
         .unwrap();
 
-    uv_snapshot!(context
+    uv_snapshot!(context.filters(), windows_filters=false, context
         .pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -463,7 +464,7 @@ fn no_dedupe_and_invert() {
         )
         .unwrap();
 
-    uv_snapshot!(context
+    uv_snapshot!(context.filters(), windows_filters=false, context
         .pip_install()
         .arg("-r")
         .arg("requirements.txt")
@@ -510,7 +511,7 @@ fn no_dedupe() {
         )
         .unwrap();
 
-    uv_snapshot!(context
+    uv_snapshot!(context.filters(), windows_filters=false, context
         .pip_install()
         .arg("-r")
         .arg("requirements.txt")
