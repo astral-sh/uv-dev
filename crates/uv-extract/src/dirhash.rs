@@ -276,9 +276,7 @@ fn dirhash_path_inner_resolved(
             // Recurse back to `dirhash_path_inner` for symlink handling.
             .map(|(name, path)| dirhash_path_inner(&path, seen_symlinks).map(|hash| (name, hash)))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(hash_dir_entries(
-            entries.iter().map(|(name, hash)| (name.as_str(), *hash)),
-        ))
+        Ok(hash_dir_entries(entries))
     } else {
         // This is not a directory, so treat it like a file and hash it. `update_mmap_rayon` shares
         // the same thread pool as the parallel traversal above.
@@ -432,7 +430,7 @@ impl DirhashTree {
                 DirhashEntry::File(hash) => *hash,
                 DirhashEntry::Directory(child) => child.hash(),
             };
-            (name.as_str(), hash)
+            (name, hash)
         }))
     }
 }
@@ -474,16 +472,15 @@ fn normalize_dirhash_path(mut path: &str) -> Result<Cow<'_, str>, DirhashError> 
     Ok(Cow::Owned(components.join("/")))
 }
 
-fn hash_dir_entries<'a, Iter>(entries: Iter) -> blake3::Hash
-where
-    Iter: IntoIterator<Item = (&'a str, blake3::Hash)>,
-{
+fn hash_dir_entries<Name: AsRef<str>>(
+    entries: impl IntoIterator<Item = (Name, blake3::Hash)>,
+) -> blake3::Hash {
     // File hashes are the normal BLAKE3 hash of the file's contents. A directory hash shouldn't
     // collide with a file hash, no matter what bytes the file happens contain. BLAKE3's derive-key
     // mode with a context string guarantees that.
     let mut hasher = blake3::Hasher::new_derive_key("directory");
     for (name, hash) in entries {
-        hasher.update(name.as_bytes());
+        hasher.update(name.as_ref().as_bytes());
         hasher.update(&[0xff]);
         hasher.update(hash.as_bytes());
     }
