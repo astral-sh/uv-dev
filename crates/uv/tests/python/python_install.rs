@@ -1557,12 +1557,24 @@ fn python_install_invalid_request() {
     error: No download found for request: cpython-3.8.0-[PLATFORM]
     ");
 
-    // Request a version we don't have a download for mixed with one we do
-    uv_snapshot!(context.filters(), context.python_install().arg("3.8.0").arg("3.12"), @"
+    // Resolve every request before installing; an unavailable later request must not leave the
+    // earlier valid request installed.
+    uv_snapshot!(context.filters(), context.python_install().arg("3.12").arg("3.8.0"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No download found for request: cpython-3.8.0-[PLATFORM]
     ");
+    context
+        .python_list()
+        .args(["3.12", "--only-installed", "--managed-python"])
+        .assert()
+        .success()
+        .stdout("");
+    assert_path_missing(
+        context
+            .bin_dir
+            .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX)),
+    );
 }
 
 /// Check the default, major-version, and minor-version launchers against their direct target.
