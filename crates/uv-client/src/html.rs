@@ -88,12 +88,7 @@ impl SimpleDetailHTML {
         let mut files: Vec<PypiFile> = dom
             .elements()
             .filter(|link| link.is("a"))
-            .map(|link| Self::parse_anchor(&link, &mut interner))
-            .filter_map(|result| match result {
-                Ok(None) => None,
-                Ok(Some(file)) => Some(Ok(file)),
-                Err(err) => Some(Err(err)),
-            })
+            .filter_map(|link| Self::parse_anchor(&link, &mut interner).transpose())
             .collect::<Result<Vec<_>, _>>()?;
         // While it has not been positively observed, we sort the files
         // to ensure we have a defined ordering. Otherwise, if we rely on
