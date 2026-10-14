@@ -731,10 +731,18 @@ struct SourceLock {
 
 impl SourceLock {
     fn sources(&self) -> BTreeMap<String, toml::Value> {
-        self.package
+        let sources = self
+            .package
             .iter()
             .map(|package| (package.name.clone(), package.source.clone()))
-            .collect()
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            sources.len(),
+            self.package.len(),
+            "a source map cannot represent multiple lockfile packages with the same name: {:#?}",
+            self.package
+        );
+        sources
     }
 }
 
