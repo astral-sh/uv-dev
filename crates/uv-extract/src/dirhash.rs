@@ -397,17 +397,15 @@ impl DirhashTree {
     pub fn add_empty_dir(&mut self, path: &str) -> Result<(), DirhashError> {
         let normalized_path = normalize_dirhash_path(path)?;
         let (parent, name) = self.parent_and_name(&normalized_path, path, true)?;
-        match parent.children.entry(name.to_owned()) {
-            Entry::Vacant(vacant) => {
-                vacant.insert(DirhashEntry::Directory(Self::default()));
-                Ok(())
-            }
-            Entry::Occupied(occupied) => match occupied.get() {
-                DirhashEntry::Directory(_) => Ok(()),
-                DirhashEntry::File(_) => Err(DirhashError::FileDirectoryConflict {
-                    path: PathBuf::from(path),
-                }),
-            },
+        match parent
+            .children
+            .entry(name.to_owned())
+            .or_insert_with(|| DirhashEntry::Directory(Self::default()))
+        {
+            DirhashEntry::Directory(_) => Ok(()),
+            DirhashEntry::File(_) => Err(DirhashError::FileDirectoryConflict {
+                path: PathBuf::from(path),
+            }),
         }
     }
 
