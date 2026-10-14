@@ -16638,12 +16638,12 @@ fn sync_git_lfs() -> Result<()> {
     exit_code: 0 (success)
     ");
 
-    let lock = context.read("uv.lock");
+    let with_lfs_lock = context.read("uv.lock");
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            with_lfs_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.13"
@@ -16727,7 +16727,7 @@ fn sync_git_lfs() -> Result<()> {
     SyntaxError: invalid syntax
     "#);
 
-    // `UV_GIT_lfs=true` should not override `lfs = false`
+    // `UV_GIT_LFS=true` should not override `lfs = false`
     uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_GIT_LFS, "true").arg("--reinstall"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -16752,12 +16752,12 @@ fn sync_git_lfs() -> Result<()> {
     SyntaxError: invalid syntax
     "#);
 
-    let lock = context.read("uv.lock");
+    let without_lfs_lock = context.read("uv.lock");
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            without_lfs_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.13"
@@ -16864,8 +16864,8 @@ fn sync_git_lfs() -> Result<()> {
     LFS module imported via env var
     ");
 
-    // Cache should hit non-LFS sources
-    uv_snapshot!(context.filters(), context.sync().arg("--reinstall"), @"
+    // Reuse the non-LFS checkout without network access.
+    uv_snapshot!(context.filters(), context.sync().arg("--reinstall").arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -16890,40 +16890,10 @@ fn sync_git_lfs() -> Result<()> {
     SyntaxError: invalid syntax
     "#);
 
-    let lock = context.read("uv.lock");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.13"
+    assert_eq!(context.read("uv.lock"), without_lfs_lock);
 
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "test-lfs-repo"
-        version = "0.1.0"
-        source = { git = "https://github.com/astral-sh/test-lfs-repo.git?rev=261c828b8e05251f3a3e4f6b47b149d691c7efbb#261c828b8e05251f3a3e4f6b47b149d691c7efbb" }
-
-        [[package]]
-        name = "test-project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "test-lfs-repo" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "test-lfs-repo", git = "https://github.com/astral-sh/test-lfs-repo.git?rev=261c828b8e05251f3a3e4f6b47b149d691c7efbb" }]
-        "#
-        );
-    });
-
-    // Cache should hit LFS sources
-    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_GIT_LFS, "true").arg("--reinstall"), @"
+    // Reuse the LFS checkout without network access.
+    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_GIT_LFS, "true").arg("--reinstall").arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -16942,37 +16912,7 @@ fn sync_git_lfs() -> Result<()> {
     LFS module imported via env var
     ");
 
-    let lock = context.read("uv.lock");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.13"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "test-lfs-repo"
-        version = "0.1.0"
-        source = { git = "https://github.com/astral-sh/test-lfs-repo.git?lfs=true&rev=261c828b8e05251f3a3e4f6b47b149d691c7efbb#261c828b8e05251f3a3e4f6b47b149d691c7efbb" }
-
-        [[package]]
-        name = "test-project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "test-lfs-repo" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "test-lfs-repo", git = "https://github.com/astral-sh/test-lfs-repo.git?lfs=true&rev=261c828b8e05251f3a3e4f6b47b149d691c7efbb" }]
-        "#
-        );
-    });
+    assert_eq!(context.read("uv.lock"), with_lfs_lock);
 
     Ok(())
 }
