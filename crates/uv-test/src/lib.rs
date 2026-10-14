@@ -2514,9 +2514,10 @@ mod python_discovery_tests {
     fn python_command_uses_base_only_without_fixture_environment() -> anyhow::Result<()> {
         let mut context = TestContext::new_with_versions_and_bin(&[], PathBuf::from("uv"));
         let base_python = context.temp_dir.join("base-python");
-        context
-            .python_versions
-            .push(("3.12".parse()?, base_python.clone()));
+        context.python_versions.push((
+            "3.12".parse().expect("valid fixture Python version"),
+            base_python.clone(),
+        ));
 
         assert_eq!(context.python_command().get_program(), base_python);
 
