@@ -359,23 +359,18 @@ pub async fn install(
     // Explicit local directory requirements should always be rebuilt and reinstalled, matching
     // `uv pip install`. At this point, all unnamed requirements have been resolved to package names,
     // including any requirements provided via `--with`.
-    let explicit_local_packages = requirements
+    let local_reinstall = requirements
         .iter()
         .filter(|requirement| {
             requirement.origin.is_none()
                 && matches!(requirement.source, RequirementSource::Directory { .. })
         })
         .map(|requirement| requirement.name.clone())
-        .collect::<Vec<_>>();
-    let (settings, cache) = if explicit_local_packages.is_empty() {
+        .fold(Reinstall::None, Reinstall::with_package);
+    let (settings, cache) = if local_reinstall.is_none() {
         (settings, cache)
     } else {
-        let reinstall = explicit_local_packages
-            .into_iter()
-            .fold(Reinstall::None, |reinstall, package_name| {
-                reinstall.with_package(package_name)
-            })
-            .combine(settings.reinstall);
+        let reinstall = local_reinstall.combine(settings.reinstall);
         let cache = cache.with_refresh(refresh.clone().combine(Refresh::from(reinstall.clone())));
         (
             ResolverInstallerSettings {
