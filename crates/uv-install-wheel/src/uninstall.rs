@@ -385,30 +385,19 @@ impl Uninstall {
 ///
 /// Source: <https://github.com/rust-lang/cargo/blob/b48c41aedbd69ee3990d62a0e2006edbb506a480/crates/cargo-util/src/paths.rs#L76C1-L109C2>
 fn normalize_path(path: &Path) -> PathBuf {
-    let mut components = path.components().peekable();
-    let mut ret = components
-        .next_if_map_mut(|component| match component {
-            Component::Prefix(..) => Some(PathBuf::from(component.as_os_str())),
-            _ => None,
-        })
-        .unwrap_or_default();
-
-    for component in components {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
         match component {
-            Component::Prefix(..) => unreachable!(),
-            Component::RootDir => {
-                ret.push(component.as_os_str());
-            }
             Component::CurDir => {}
             Component::ParentDir => {
-                ret.pop();
+                normalized.pop();
             }
-            Component::Normal(c) => {
-                ret.push(c);
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
             }
         }
     }
-    ret
+    normalized
 }
 
 #[cfg(test)]
