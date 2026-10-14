@@ -10138,10 +10138,8 @@ fn sync_wheel_path_source_error() -> Result<()> {
 fn sync_override_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Create a dependency.
-    let pyproject_toml = context.temp_dir.child("core").child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let core_manifest = context.temp_dir.child("core/pyproject.toml");
+    let core_base = indoc! {r#"
         [project]
         name = "core"
         version = "0.1.0"
@@ -10150,24 +10148,16 @@ fn sync_override_package() -> Result<()> {
         [build-system]
         requires = ["hatchling"]
         build-backend = "hatchling.build"
-
-        [tool.uv]
-        package = false
-        "#,
-    )?;
-
+    "#};
+    core_manifest.write_str(&format!("{core_base}\n[tool.uv]\npackage = false\n"))?;
     context
         .temp_dir
-        .child("core")
-        .child("src")
-        .child("core")
-        .child("__init__.py")
-        .touch()?;
+        .child("core/src/core/__init__.py")
+        .write_str("__version__ = '0.1.0'\n")?;
 
-    // Create a package that depends on it.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let project_manifest = context.temp_dir.child("pyproject.toml");
+    let project_with_source = |source: &str| {
+        formatdoc! {r#"
         [project]
         name = "project"
         version = "0.0.0"
@@ -10179,16 +10169,12 @@ fn sync_override_package() -> Result<()> {
         build-backend = "hatchling.build"
 
         [tool.uv.sources]
-        core = { path = "./core" }
-        "#,
-    )?;
-
-    context
-        .temp_dir
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .touch()?;
+        core = {source}
+        "#}
+    };
+    let no_override = project_with_source(r#"{ path = "./core" }"#);
+    project_manifest.write_str(&no_override)?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
 
     // Syncing the project should _not_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -10199,25 +10185,12 @@ fn sync_override_package() -> Result<()> {
     Installed 1 package in [TIME]
      + project==0.0.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_not_installed("core");
 
-    // Mark the source as `package = true`.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.0.0"
-        requires-python = ">=3.12"
-        dependencies = ["core"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.uv.sources]
-        core = { path = "./core", package = true }
-        "#,
-    )?;
+    // The root's source mapping overrides the child's `package = false`.
+    project_manifest.write_str(&project_with_source(
+        r#"{ path = "./core", package = true }"#,
+    ))?;
 
     // Syncing the project _should_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -10230,21 +10203,9 @@ fn sync_override_package() -> Result<()> {
      + core==0.1.0 (from file://[TEMP_DIR]/core)
      ~ project==0.0.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_installed("core", "0.1.0");
 
-    // Remove `package = false`.
-    let pyproject_toml = context.temp_dir.child("core").child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "core"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-        "#,
-    )?;
+    core_manifest.write_str(core_base)?;
 
     // Syncing the project _should_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -10257,24 +10218,9 @@ fn sync_override_package() -> Result<()> {
      ~ core==0.1.0 (from file://[TEMP_DIR]/core)
     ");
 
-    // Mark the source as `package = false`.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.0.0"
-        requires-python = ">=3.12"
-        dependencies = ["core"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.uv.sources]
-        core = { path = "./core", package = false }
-        "#,
-    )?;
+    project_manifest.write_str(&project_with_source(
+        r#"{ path = "./core", package = false }"#,
+    ))?;
 
     // Syncing the project should _not_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -10288,72 +10234,19 @@ fn sync_override_package() -> Result<()> {
      ~ project==0.0.0 (from file://[TEMP_DIR]/)
     ");
 
-    // Update the source `tool.uv` to `package = true`
-    let pyproject_toml = context.temp_dir.child("core").child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "core"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.uv]
-        package = true
-        "#,
-    )?;
-
-    // Mark the source as `package = false`.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.0.0"
-        requires-python = ">=3.12"
-        dependencies = ["core"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.uv.sources]
-        core = { path = "./core", package = false }
-        "#,
-    )?;
+    // The root's source mapping also overrides the child's `package = true`.
+    core_manifest.write_str(&format!("{core_base}\n[tool.uv]\npackage = true\n"))?;
 
     // Syncing the project should _not_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     ~ project==0.0.0 (from file://[TEMP_DIR]/)
+    Checked 1 package in [TIME]
     ");
+    context.assert_not_installed("core");
 
-    // Remove the `package = false` mark.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.0.0"
-        requires-python = ">=3.12"
-        dependencies = ["core"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.uv.sources]
-        core = { path = "./core" }
-        "#,
-    )?;
+    project_manifest.write_str(&no_override)?;
 
     // Syncing the project _should_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -10366,6 +10259,7 @@ fn sync_override_package() -> Result<()> {
      + core==0.1.0 (from file://[TEMP_DIR]/core)
      ~ project==0.0.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_installed("core", "0.1.0");
 
     Ok(())
 }
