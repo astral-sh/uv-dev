@@ -1342,23 +1342,14 @@ impl CacheBucket {
             Self::SourceDistributions => {
                 summary += self.remove_registry_entries(cache, name.as_str())?;
 
-                // For direct URLs, we expect a directory for every URL, followed by a
-                // directory per version. To determine whether the URL is relevant, we need to
-                // search for a wheel matching the package name.
-                let root = cache.bucket(self).join(WheelCacheKind::Url);
-                for url in directories(root)? {
-                    if directories(&url)?.any(|version| is_match(&version, name)) {
-                        summary += cache.remove_path(url)?;
-                    }
-                }
-
-                // For local dependencies, we expect a directory for every path, followed by a
-                // directory per version. To determine whether the path is relevant, we need to
-                // search for a wheel matching the package name.
-                let root = cache.bucket(self).join(WheelCacheKind::Path);
-                for path in directories(root)? {
-                    if directories(&path)?.any(|version| is_match(&version, name)) {
-                        summary += cache.remove_path(path)?;
+                // Direct URL and local path shards contain a directory per version. Search its
+                // wheel metadata to identify the package.
+                for kind in [WheelCacheKind::Url, WheelCacheKind::Path] {
+                    let root = cache.bucket(self).join(kind);
+                    for shard in directories(root)? {
+                        if directories(&shard)?.any(|version| is_match(&version, name)) {
+                            summary += cache.remove_path(shard)?;
+                        }
                     }
                 }
 
