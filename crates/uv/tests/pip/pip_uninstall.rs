@@ -341,12 +341,17 @@ fn uninstall_egg_info() -> Result<()> {
 fn uninstall_versionless_egg_info_file() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    let egg_info = ChildPath::new(context.site_packages()).child("demo.egg-info");
-    egg_info.write_str(indoc! {"
+    let site_packages = ChildPath::new(context.site_packages());
+    let egg_info = site_packages.child("demo.egg-info");
+    let metadata = indoc! {"
         Metadata-Version: 1.1
         Name: demo
         Version: 1.0
-    "})?;
+    "};
+    egg_info.write_str(metadata)?;
+    let module = site_packages.child("demo.py");
+    let source = "VALUE = 42\n";
+    module.write_str(source)?;
 
     uv_snapshot!(context.pip_uninstall().arg("demo"), @"
     exit_code: 2 (failure)
@@ -355,7 +360,8 @@ fn uninstall_versionless_egg_info_file() -> Result<()> {
     "
     );
 
-    assert!(egg_info.exists());
+    egg_info.assert(metadata);
+    module.assert(source);
 
     Ok(())
 }
