@@ -1355,7 +1355,7 @@ fn workspace_inherit_sources() -> Result<()> {
         [tool.uv.workspace]
         members = ["packages/*"]
     "#})?;
-    workspace.child("src/__init__.py").touch()?;
+    workspace.child("src/workspace/__init__.py").touch()?;
 
     // Create a package.
     let leaf = workspace.child("packages").child("leaf");
@@ -1369,7 +1369,7 @@ fn workspace_inherit_sources() -> Result<()> {
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
-    leaf.child("src/__init__.py").touch()?;
+    leaf.child("src/leaf/__init__.py").touch()?;
 
     // Create a peripheral library.
     let library = context.temp_dir.child("library");
@@ -1383,7 +1383,7 @@ fn workspace_inherit_sources() -> Result<()> {
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
-    library.child("src/__init__.py").touch()?;
+    library.child("src/library/__init__.py").touch()?;
 
     // As-is, resolving should fail.
     uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&workspace), @"
@@ -1412,7 +1412,6 @@ fn workspace_inherit_sources() -> Result<()> {
         [tool.uv.sources]
         library = { path = "../../../library", editable = true }
     "#})?;
-    leaf.child("src/__init__.py").touch()?;
 
     // Resolving should succeed.
     uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&workspace), @"
@@ -1508,25 +1507,6 @@ fn workspace_inherit_sources() -> Result<()> {
         );
     });
 
-    // Update the root to include the source again.
-    workspace.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "workspace"
-        version = "0.1.0"
-        dependencies = []
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.sources]
-        library = { path = "../library", editable = true }
-
-        [tool.uv.workspace]
-        members = ["packages/*"]
-    "#})?;
-
     // Update the member to include a _different_ source.
     leaf.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -1542,8 +1522,8 @@ fn workspace_inherit_sources() -> Result<()> {
         application = { path = "../application", editable = true }
     "#})?;
 
-    // Resolving should succeed; the member should still use the root's source, despite defining
-    // some of its own
+    // Resolve from scratch so the existing lockfile cannot supply the inherited source.
+    fs_err::remove_file(workspace.child("uv.lock"))?;
     uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -1551,6 +1531,7 @@ fn workspace_inherit_sources() -> Result<()> {
     Resolved 3 packages in [TIME]
     "
     );
+    assert_eq!(context.read("workspace/uv.lock"), lock);
 
     Ok(())
 }
