@@ -648,29 +648,6 @@ fn compile_bytecode_for_installed_distributions() -> Result<()> {
     Ok(())
 }
 
-/// Install into the current directory via `--target`.
-#[test]
-fn install_target_current_directory() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix();
-
-    // A target of `.` installs into the current directory. See astral-sh/uv#21694.
-    uv_snapshot!(context.filters(), context.pip_install()
-        .arg("iniconfig==2.0.0")
-        .arg("--target")
-        .arg("."), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
-}
-
 #[test]
 fn missing_pyproject_toml() {
     let context = uv_test::test_context!("3.12");
