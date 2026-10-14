@@ -749,13 +749,11 @@ fn run_pythonw_script() -> Result<()> {
     Ok(())
 }
 
-/// Run a PEP 723-compatible script with `tool.uv` metadata.
+/// A script's inline `tool.uv` resolution setting controls its dependencies.
 #[test]
-#[cfg(feature = "test-git")]
-fn run_pep723_script_metadata() -> Result<()> {
+fn run_pep723_script_resolution_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // If the script contains a PEP 723 tag, we should install its requirements.
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
         # /// script
@@ -772,7 +770,6 @@ fn run_pep723_script_metadata() -> Result<()> {
        "#
     })?;
 
-    // Running the script should honor its inline resolution setting.
     uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -782,7 +779,15 @@ fn run_pep723_script_metadata() -> Result<()> {
      + iniconfig==1.0.1
     ");
 
-    // Respect `tool.uv.sources`.
+    Ok(())
+}
+
+/// A script's inline Git source is reused without resolution when pinned to a full commit.
+#[test]
+#[cfg(feature = "test-git")]
+fn run_pep723_script_git_source_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
     let test_script = context.temp_dir.child("main.py");
     test_script.write_str(indoc! { r#"
         # /// script
