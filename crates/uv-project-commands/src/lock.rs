@@ -26,6 +26,7 @@ use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::init_script_python_requirement;
+use uv_python_interpreter::Interpreter;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -34,6 +35,19 @@ use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::ScriptPath;
+
+/// Select the resolution policy for a lockfile that is not frozen.
+pub(crate) fn resolve_lock_mode(
+    interpreter: &Interpreter,
+    lock_check: LockCheck,
+    dry_run: bool,
+) -> LockMode<'_> {
+    match lock_check {
+        LockCheck::Enabled(source) => LockMode::Locked(interpreter, source),
+        LockCheck::Disabled if dry_run => LockMode::DryRun(interpreter),
+        LockCheck::Disabled => LockMode::Write(interpreter),
+    }
+}
 
 /// Resolve the project requirements into a lockfile.
 pub async fn lock(
@@ -147,13 +161,7 @@ pub async fn lock(
             .into_interpreter(),
         };
 
-        if let LockCheck::Enabled(lock_check) = lock_check {
-            LockMode::Locked(&interpreter, lock_check)
-        } else if dry_run.enabled() {
-            LockMode::DryRun(&interpreter)
-        } else {
-            LockMode::Write(&interpreter)
-        }
+        resolve_lock_mode(&interpreter, lock_check, dry_run.enabled())
     };
 
     // Initialize any shared state.

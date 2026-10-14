@@ -35,7 +35,7 @@ use uv_errors::HintOrdering;
 use uv_fs::Simplified;
 use uv_git::store_credentials;
 use uv_install_operations::loggers::DefaultInstallLogger;
-use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockError, LockOperation, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, ExtraName, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
@@ -65,6 +65,7 @@ use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 use crate::ProjectError;
 use crate::ScriptPath;
 use crate::edit::{EditTarget, ProjectEdit, PythonTarget};
+use crate::lock::resolve_lock_mode;
 use uv_resolve_operations::reporters::ResolverReporter;
 
 /// A failed dependency addition, with `uv add`-specific recovery context.
@@ -1126,15 +1127,10 @@ async fn lock_and_sync(
         }
         EditTarget::Script(..) => BTreeSet::new(),
     };
+    let mode = resolve_lock_mode(python_target.interpreter(), lock_check, dry_run);
     let mut lock = Box::pin(
         LockOperation::new(
-            if let LockCheck::Enabled(lock_check) = lock_check {
-                LockMode::Locked(python_target.interpreter(), lock_check)
-            } else if dry_run {
-                LockMode::DryRun(python_target.interpreter())
-            } else {
-                LockMode::Write(python_target.interpreter())
-            },
+            mode,
             &settings.resolver,
             client_builder,
             &lock_state,
@@ -1258,13 +1254,7 @@ async fn lock_and_sync(
             // the addition of the minimum version specifiers.
             lock = Box::pin(
                 LockOperation::new(
-                    if let LockCheck::Enabled(lock_check) = lock_check {
-                        LockMode::Locked(python_target.interpreter(), lock_check)
-                    } else if dry_run {
-                        LockMode::DryRun(python_target.interpreter())
-                    } else {
-                        LockMode::Write(python_target.interpreter())
-                    },
+                    mode,
                     &settings.resolver,
                     client_builder,
                     &lock_state,
