@@ -2,7 +2,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use owo_colors::OwoColorize;
+use rustc_hash::FxHashSet;
 use tracing::{debug, warn};
 
 use uv_cache::{Cache, CacheBucket, WheelCache};
@@ -26,6 +26,7 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_redacted::DisplaySafeUrl;
 use uv_types::HashStrategy;
 
+use crate::compatibility::CompatibilitySubject;
 use crate::satisfies::{BuildSettings, RequirementSatisfaction};
 use crate::{InstallationStrategy, SitePackages};
 
@@ -113,133 +114,30 @@ enum IncompatibleWheelHint {
 
 impl fmt::Display for IncompatibleWheelHint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let subject = CompatibilitySubject::Wheel;
         match self {
             Self::Python {
                 wheel_tags,
                 current,
             } => {
-                if let Some(current) = current {
-                    write!(
-                        f,
-                        "The wheel is compatible with {}, but you're using {}",
-                        format_language_tags(wheel_tags),
-                        format_language_tag(*current),
-                    )
-                } else {
-                    write!(f, "The wheel requires {}", format_language_tags(wheel_tags))
-                }
+                subject.write_tag_hint(f, wheel_tags, current.as_ref(), "using", |tag| tag.pretty())
             }
             Self::Abi {
                 wheel_tags,
                 current,
             } => {
-                if let Some(current) = current {
-                    write!(
-                        f,
-                        "The wheel is compatible with {}, but you're using {}",
-                        format_abi_tags(wheel_tags),
-                        format_abi_tag(*current),
-                    )
-                } else {
-                    write!(f, "The wheel requires {}", format_abi_tags(wheel_tags))
-                }
+                subject.write_tag_hint(f, wheel_tags, current.as_ref(), "using", |tag| tag.pretty())
             }
             Self::FreethreadedAbi {
                 wheel_tags,
                 current,
-            } => {
-                let current_display = if let Some(current) = current {
-                    format_abi_tag(*current)
-                } else {
-                    "free-threaded Python".to_string()
-                };
-                let wheel_display = wheel_tags
-                    .iter()
-                    .map(|tag| match tag {
-                        AbiTag::Abi3 => format!("the stable ABI (`{}`)", tag.cyan()),
-                        _ => {
-                            if let Some(pretty) = tag.pretty() {
-                                format!("the {} ABI (`{}`)", pretty.cyan(), tag.cyan())
-                            } else {
-                                format!("`{}`", tag.cyan())
-                            }
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                write!(
-                    f,
-                    "You're using {current_display}, but the wheel was built for {wheel_display}, which requires a GIL-enabled interpreter"
-                )
-            }
+            } => subject.write_freethreaded_hint(f, wheel_tags, current.as_ref()),
             Self::Platform {
                 wheel_tags,
                 current,
-            } => {
-                if let Some(current) = current {
-                    write!(
-                        f,
-                        "The wheel is compatible with {}, but you're on {}",
-                        format_platform_tags(wheel_tags),
-                        format_platform_tag(current),
-                    )
-                } else {
-                    write!(f, "The wheel requires {}", format_platform_tags(wheel_tags))
-                }
-            }
+            } => subject.write_tag_hint(f, wheel_tags, current.as_ref(), "on", PlatformTag::pretty),
         }
     }
-}
-
-/// Format a single language tag with optional pretty name and cyan coloring.
-fn format_language_tag(tag: LanguageTag) -> String {
-    if let Some(pretty) = tag.pretty() {
-        format!("{} (`{}`)", pretty.cyan(), tag.cyan())
-    } else {
-        format!("`{}`", tag.cyan())
-    }
-}
-
-/// Format a list of language tags as a comma-separated string.
-fn format_language_tags(tags: &[LanguageTag]) -> String {
-    tags.iter()
-        .map(|tag| format_language_tag(*tag))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Format a single ABI tag with optional pretty name and cyan coloring.
-fn format_abi_tag(tag: AbiTag) -> String {
-    if let Some(pretty) = tag.pretty() {
-        format!("{} (`{}`)", pretty.cyan(), tag.cyan())
-    } else {
-        format!("`{}`", tag.cyan())
-    }
-}
-
-/// Format a list of ABI tags as a comma-separated string.
-fn format_abi_tags(tags: &[AbiTag]) -> String {
-    tags.iter()
-        .map(|tag| format_abi_tag(*tag))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Format a single platform tag with optional pretty name and cyan coloring.
-fn format_platform_tag(tag: &PlatformTag) -> String {
-    if let Some(pretty) = tag.pretty() {
-        format!("{} (`{}`)", pretty.cyan(), tag.cyan())
-    } else {
-        format!("`{}`", tag.cyan())
-    }
-}
-
-/// Format a list of platform tags as a comma-separated string.
-fn format_platform_tags(tags: &[PlatformTag]) -> String {
-    tags.iter()
-        .map(format_platform_tag)
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 impl fmt::Display for IncompatibleWheelError {
@@ -276,13 +174,12 @@ impl<'a> Planner<'a> {
         Self { resolution }
     }
 
-    /// Partition a set of requirements into those that should be linked from the cache, those that
-    /// need to be downloaded, and those that should be removed.
+    /// Partition a set of requirements into distributions to install from the cache, prepare
+    /// before installation, or remove.
     ///
-    /// The install plan will respect cache [`Freshness`]. Specifically, if refresh is enabled, the
-    /// plan will respect cache entries created after the current time (as per the [`Refresh`]
-    /// policy). Otherwise, entries will be ignored. The downstream distribution database may still
-    /// read those entries from the cache after revalidating them.
+    /// Distributions selected for cache refresh are sent for preparation instead of being linked
+    /// directly from the cache. The distribution database may still reuse cached entries after
+    /// revalidating them.
     ///
     /// The install plan will also respect the required hashes, such that it will never return a
     /// cached distribution that does not match the required hash. Like pip, though, it _will_
@@ -362,69 +259,60 @@ impl<'a> Planner<'a> {
 
             // Determine whether the distribution is already installed.
             let installed_dists = site_packages.remove_packages(dist.name());
-            if reinstall {
-                reinstalls.extend(installed_dists);
-            } else {
-                match installed_dists.as_slice() {
-                    [] => {}
-                    [installed] => {
-                        let source = RequirementSource::from(dist);
-                        match RequirementSatisfaction::check(
-                            dist.name(),
-                            installed,
-                            &source,
-                            dist.version(),
-                            installation,
-                            tags,
-                            Some(BuildSettings {
-                                config_settings,
-                                config_settings_package,
-                                extra_build_requires,
-                                extra_build_variables,
-                            }),
-                        ) {
-                            RequirementSatisfaction::Mismatch => {
-                                debug!(
-                                    "Requirement installed, but mismatched:\n  Installed: {installed:?}\n  Requested: {source:?}"
-                                );
-                            }
-                            RequirementSatisfaction::Satisfied => {
-                                debug!("Requirement already installed: {installed}");
-                                continue;
-                            }
-                            RequirementSatisfaction::OutOfDate => {
-                                debug!("Requirement installed, but not fresh: {installed}");
-
-                                // If we made it here, something went wrong in the resolver, because it returned an
-                                // already-installed distribution that we "shouldn't" use. Typically, this means the
-                                // distribution was considered out-of-date, but in a way that the resolver didn't
-                                // detect, and is indicative of drift between the resolver's candidate selector and
-                                // the install plan. For example, at present, the resolver doesn't check that an
-                                // installed distribution was built with the expected build settings. Treat it as
-                                // up-to-date for now; it's just means we may not rebuild a package when we otherwise
-                                // should. This is a known issue, but should only affect the `uv pip` CLI, as the
-                                // project APIs never return installed distributions during resolution (i.e., the
-                                // resolver is stateless).
-                                // TODO(charlie): Incorporate these checks into the resolver.
-                                if matches!(dist, ResolvedDist::Installed { .. }) {
-                                    warn!(
-                                        "Installed distribution was considered out-of-date, but returned by the resolver: {dist}"
-                                    );
-                                    continue;
-                                }
-                            }
-                            RequirementSatisfaction::CacheInvalid => {
-                                // Already logged
-                            }
-                        }
-                        reinstalls.push(installed.clone());
+            if !reinstall && let [installed] = installed_dists.as_slice() {
+                let source = RequirementSource::from(dist);
+                match RequirementSatisfaction::check(
+                    dist.name(),
+                    installed,
+                    &source,
+                    dist.version(),
+                    installation,
+                    tags,
+                    Some(BuildSettings {
+                        config_settings,
+                        config_settings_package,
+                        extra_build_requires,
+                        extra_build_variables,
+                    }),
+                ) {
+                    RequirementSatisfaction::Mismatch => {
+                        debug!(
+                            "Requirement installed, but mismatched:\n  Installed: {installed:?}\n  Requested: {source:?}"
+                        );
                     }
-                    // We reinstall installed distributions with multiple versions because
-                    // we do not want to keep multiple incompatible versions but removing
-                    // one version is likely to break another.
-                    _ => reinstalls.extend(installed_dists),
+                    RequirementSatisfaction::Satisfied => {
+                        debug!("Requirement already installed: {installed}");
+                        continue;
+                    }
+                    RequirementSatisfaction::OutOfDate => {
+                        debug!("Requirement installed, but not fresh: {installed}");
+
+                        // If we made it here, something went wrong in the resolver, because it returned an
+                        // already-installed distribution that we "shouldn't" use. Typically, this means the
+                        // distribution was considered out-of-date, but in a way that the resolver didn't
+                        // detect, and is indicative of drift between the resolver's candidate selector and
+                        // the install plan. For example, at present, the resolver doesn't check that an
+                        // installed distribution was built with the expected build settings. Treat it as
+                        // up-to-date for now; it's just means we may not rebuild a package when we otherwise
+                        // should. This is a known issue, but should only affect the `uv pip` CLI, as the
+                        // project APIs never return installed distributions during resolution (i.e., the
+                        // resolver is stateless).
+                        // TODO(charlie): Incorporate these checks into the resolver.
+                        if matches!(dist, ResolvedDist::Installed { .. }) {
+                            warn!(
+                                "Installed distribution was considered out-of-date, but returned by the resolver: {dist}"
+                            );
+                            continue;
+                        }
+                    }
+                    RequirementSatisfaction::CacheInvalid => {
+                        // Already logged
+                    }
                 }
             }
+            // Multiple installed versions must be removed together because removing one can break
+            // another.
+            reinstalls.extend(installed_dists);
 
             let ResolvedDist::Installable { dist, .. } = dist else {
                 unreachable!("Installed distribution could not be found in site-packages: {dist}");
@@ -450,17 +338,9 @@ impl<'a> Planner<'a> {
                     }
                 }
                 Dist::Built(BuiltDist::DirectUrl(wheel)) => {
-                    if !wheel.filename.is_compatible(tags) {
-                        return Err(PlanError::IncompatibleWheel(Box::new(
-                            IncompatibleWheelError {
-                                kind: IncompatibleWheelKind::Url(wheel.url.to_url()),
-                                compatibility_hint: generate_wheel_compatibility_hint(
-                                    &wheel.filename,
-                                    tags,
-                                ),
-                            },
-                        )));
-                    }
+                    validate_wheel_compatibility(&wheel.filename, tags, || {
+                        IncompatibleWheelKind::Url(wheel.url.to_url())
+                    })?;
 
                     if no_binary {
                         return Err(PlanError::NoBinaryUrl(wheel.url.clone()));
@@ -521,17 +401,9 @@ impl<'a> Planner<'a> {
                         return Err(Error::NotFound(wheel.url.to_url()).into());
                     }
 
-                    if !wheel.filename.is_compatible(tags) {
-                        return Err(PlanError::IncompatibleWheel(Box::new(
-                            IncompatibleWheelError {
-                                kind: IncompatibleWheelKind::Path(wheel.install_path.to_path_buf()),
-                                compatibility_hint: generate_wheel_compatibility_hint(
-                                    &wheel.filename,
-                                    tags,
-                                ),
-                            },
-                        )));
-                    }
+                    validate_wheel_compatibility(&wheel.filename, tags, || {
+                        IncompatibleWheelKind::Path(wheel.install_path.to_path_buf())
+                    })?;
 
                     if no_binary {
                         return Err(PlanError::NoBinaryPath(wheel.url.clone()));
@@ -644,72 +516,40 @@ impl<'a> Planner<'a> {
                 Dist::Source(SourceDist::DirectUrl(sdist)) => {
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    match built_index.url(sdist) {
-                        Ok(Some(wheel)) => {
-                            if wheel.filename().name == sdist.name {
-                                let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
-                                    parsed_url: sdist.to_parsed_url(),
-                                    verbatim: sdist.url.clone(),
-                                });
-                                debug!("URL source requirement already cached: {cached_dist}");
-                                cached.push(CachedDist::Url(cached_dist));
-                                continue;
-                            }
-
-                            warn!(
-                                "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
-                                sdist,
-                                wheel.filename()
-                            );
-                        }
-                        Ok(None) => {}
-                        Err(err) => {
-                            debug!(
-                                "Failed to deserialize cached wheel filename for: {sdist} ({err})"
-                            );
-                        }
+                    if let Some(wheel) = source_wheel_cache_hit(built_index.url(sdist), sdist) {
+                        let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                            parsed_url: sdist.to_parsed_url(),
+                            verbatim: sdist.url.clone(),
+                        });
+                        debug!("URL source requirement already cached: {cached_dist}");
+                        cached.push(CachedDist::Url(cached_dist));
+                        continue;
                     }
                 }
                 Dist::Source(SourceDist::GitPath(sdist)) => {
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
                     if let Some(wheel) = built_index.git_path(sdist)? {
-                        if wheel.filename().name == sdist.name {
-                            let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
-                                parsed_url: sdist.to_parsed_url(),
-                                verbatim: sdist.url.clone(),
-                            });
-                            debug!("Git source requirement already cached: {cached_dist}");
-                            cached.push(CachedDist::Url(cached_dist));
-                            continue;
-                        }
-
-                        warn!(
-                            "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
-                            sdist,
-                            wheel.filename()
-                        );
+                        let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                            parsed_url: sdist.to_parsed_url(),
+                            verbatim: sdist.url.clone(),
+                        });
+                        debug!("Git source requirement already cached: {cached_dist}");
+                        cached.push(CachedDist::Url(cached_dist));
+                        continue;
                     }
                 }
                 Dist::Source(SourceDist::GitDirectory(sdist)) => {
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
                     if let Some(wheel) = built_index.git_directory(sdist) {
-                        if wheel.filename().name == sdist.name {
-                            let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
-                                parsed_url: sdist.to_parsed_url(),
-                                verbatim: sdist.url.clone(),
-                            });
-                            debug!("Git source requirement already cached: {cached_dist}");
-                            cached.push(CachedDist::Url(cached_dist));
-                            continue;
-                        }
-
-                        warn!(
-                            "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
-                            sdist,
-                            wheel.filename()
-                        );
+                        let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                            parsed_url: sdist.to_parsed_url(),
+                            verbatim: sdist.url.clone(),
+                        });
+                        debug!("Git source requirement already cached: {cached_dist}");
+                        cached.push(CachedDist::Url(cached_dist));
+                        continue;
                     }
                 }
                 Dist::Source(SourceDist::Path(sdist)) => {
@@ -720,30 +560,14 @@ impl<'a> Planner<'a> {
 
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    match built_index.path(sdist) {
-                        Ok(Some(wheel)) => {
-                            if wheel.filename().name == sdist.name {
-                                let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
-                                    parsed_url: sdist.to_parsed_url(),
-                                    verbatim: sdist.url.clone(),
-                                });
-                                debug!("Path source requirement already cached: {cached_dist}");
-                                cached.push(CachedDist::Url(cached_dist));
-                                continue;
-                            }
-
-                            warn!(
-                                "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
-                                sdist,
-                                wheel.filename()
-                            );
-                        }
-                        Ok(None) => {}
-                        Err(err) => {
-                            debug!(
-                                "Failed to deserialize cached wheel filename for: {sdist} ({err})"
-                            );
-                        }
+                    if let Some(wheel) = source_wheel_cache_hit(built_index.path(sdist), sdist) {
+                        let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                            parsed_url: sdist.to_parsed_url(),
+                            verbatim: sdist.url.clone(),
+                        });
+                        debug!("Path source requirement already cached: {cached_dist}");
+                        cached.push(CachedDist::Url(cached_dist));
+                        continue;
                     }
                 }
                 Dist::Source(SourceDist::Directory(sdist)) => {
@@ -754,32 +578,15 @@ impl<'a> Planner<'a> {
 
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    match built_index.directory(sdist) {
-                        Ok(Some(wheel)) => {
-                            if wheel.filename().name == sdist.name {
-                                let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
-                                    parsed_url: sdist.to_parsed_url(),
-                                    verbatim: sdist.url.clone(),
-                                });
-                                debug!(
-                                    "Directory source requirement already cached: {cached_dist}"
-                                );
-                                cached.push(CachedDist::Url(cached_dist));
-                                continue;
-                            }
-
-                            warn!(
-                                "Cached wheel filename does not match requested distribution `{}` (found `{}`)",
-                                sdist,
-                                wheel.filename()
-                            );
-                        }
-                        Ok(None) => {}
-                        Err(err) => {
-                            debug!(
-                                "Failed to deserialize cached wheel filename for: {sdist} ({err})"
-                            );
-                        }
+                    if let Some(wheel) = source_wheel_cache_hit(built_index.directory(sdist), sdist)
+                    {
+                        let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
+                            parsed_url: sdist.to_parsed_url(),
+                            verbatim: sdist.url.clone(),
+                        });
+                        debug!("Directory source requirement already cached: {cached_dist}");
+                        cached.push(CachedDist::Url(cached_dist));
+                        continue;
                     }
                 }
             }
@@ -813,17 +620,40 @@ impl<'a> Planner<'a> {
     }
 }
 
+/// Treat source-wheel cache lookup failures as cache misses.
+fn source_wheel_cache_hit<T>(
+    result: Result<Option<T>, uv_distribution::Error>,
+    source: &impl fmt::Display,
+) -> Option<T> {
+    result.unwrap_or_else(|err| {
+        debug!("Failed to deserialize cached wheel filename for: {source} ({err})");
+        None
+    })
+}
+
 /// Returns `true` if the given distribution is a seed package.
 fn is_seed_package(dist_info: &InstalledDist, venv: &PythonEnvironment) -> bool {
-    if venv.interpreter().python_tuple() >= (3, 12) {
-        matches!(dist_info.name().as_ref(), "uv" | "pip")
-    } else {
-        // Include `setuptools` and `wheel` on Python <3.12.
-        matches!(
-            dist_info.name().as_ref(),
-            "pip" | "setuptools" | "wheel" | "uv"
-        )
+    let python_version = venv.interpreter().python_tuple();
+    match dist_info.name().as_ref() {
+        "uv" | "pip" => true,
+        "setuptools" | "wheel" => python_version < (3, 12),
+        _ => false,
     }
+}
+
+/// Check a URL or local wheel against the platform tags, constructing a diagnostic on mismatch.
+fn validate_wheel_compatibility(
+    filename: &WheelFilename,
+    tags: &Tags,
+    kind: impl FnOnce() -> IncompatibleWheelKind,
+) -> Result<(), Box<IncompatibleWheelError>> {
+    if filename.is_compatible(tags) {
+        return Ok(());
+    }
+    Err(Box::new(IncompatibleWheelError {
+        kind: kind(),
+        compatibility_hint: generate_wheel_compatibility_hint(filename, tags),
+    }))
 }
 
 /// Generate a hint for explaining wheel compatibility issues.
@@ -862,8 +692,8 @@ pub struct Plan {
     /// available in the local cache.
     pub cached: Vec<CachedDist>,
 
-    /// The distributions that are not already installed in the current environment, and are
-    /// not available in the local cache.
+    /// The distributions that require preparation before installation. Cache entries may still
+    /// exist but require revalidation.
     pub remote: Vec<Arc<Dist>>,
 
     /// Any distributions that are already installed in the current environment, but will be
@@ -884,14 +714,31 @@ impl Plan {
             && self.extraneous.is_empty()
     }
 
+    /// Return whether the plan schedules an installation or removal for the package.
+    pub fn contains_package(&self, name: &PackageName) -> bool {
+        let Self {
+            cached,
+            remote,
+            reinstalls,
+            extraneous,
+        } = self;
+
+        cached.iter().any(|dist| dist.name() == name)
+            || remote.iter().any(|dist| dist.name() == name)
+            || reinstalls
+                .iter()
+                .chain(extraneous)
+                .any(|dist| dist.name() == name)
+    }
+
     /// Partition the remote distributions based on a predicate function.
     ///
     /// Returns a tuple of plans, where the first plan contains the remote distributions that match
     /// the predicate, and the second plan contains those that do not.
     ///
-    /// Any extraneous and cached distributions will be returned in the first plan, while the second
-    /// plan will contain any `false` matches from the remote distributions, along with any
-    /// reinstalls for those distributions.
+    /// Cached distributions are included in the first plan. Extraneous distributions are included
+    /// in the second plan if it has any remote distributions, so they remain installed until the
+    /// last phase; otherwise, they are included in the first plan.
     pub fn partition<F>(self, mut f: F) -> (Self, Self)
     where
         F: FnMut(&PackageName) -> bool,
@@ -911,9 +758,18 @@ impl Plan {
         // If any remote distributions are not matched, but are already installed, ensure that
         // they're uninstalled as part of the right plan. (Uninstalling them as part of the left
         // plan risks uninstalling them from the environment _prior_ to the replacement being built.)
-        let (left_reinstalls, right_reinstalls) = reinstalls
-            .into_iter()
-            .partition::<Vec<_>, _>(|dist| !right_remote.iter().any(|d| d.name() == dist.name()));
+        let (left_reinstalls, right_reinstalls) =
+            if right_remote.is_empty() || reinstalls.is_empty() {
+                (reinstalls, Vec::new())
+            } else {
+                let right_names = right_remote
+                    .iter()
+                    .map(|dist| dist.name())
+                    .collect::<FxHashSet<_>>();
+                reinstalls
+                    .into_iter()
+                    .partition::<Vec<_>, _>(|dist| !right_names.contains(dist.name()))
+            };
 
         // If the right plan is non-empty, then remove extraneous distributions as part of the
         // right plan, so they're present until the very end. Otherwise, we risk removing extraneous
@@ -924,27 +780,20 @@ impl Plan {
             (vec![], extraneous)
         };
 
-        // Always include the cached distributions in the left plan.
-        let (left_cached, right_cached) = (cached, vec![]);
-
-        // Include all cached and extraneous distributions in the left plan.
-        let left_plan = Self {
-            cached: left_cached,
-            remote: left_remote,
-            reinstalls: left_reinstalls,
-            extraneous: left_extraneous,
-        };
-
-        // The right plan will only contain the remote distributions that did not match the predicate,
-        // along with any reinstalls for those distributions.
-        let right_plan = Self {
-            cached: right_cached,
-            remote: right_remote,
-            reinstalls: right_reinstalls,
-            extraneous: right_extraneous,
-        };
-
-        (left_plan, right_plan)
+        (
+            Self {
+                cached,
+                remote: left_remote,
+                reinstalls: left_reinstalls,
+                extraneous: left_extraneous,
+            },
+            Self {
+                cached: Vec::new(),
+                remote: right_remote,
+                reinstalls: right_reinstalls,
+                extraneous: right_extraneous,
+            },
+        )
     }
 }
 

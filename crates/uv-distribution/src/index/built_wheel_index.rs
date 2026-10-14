@@ -1,11 +1,14 @@
 use std::borrow::Cow;
+use std::fmt;
+
+use tracing::warn;
 
 use uv_cache::{Cache, CacheBucket, CacheShard, WheelCache};
 use uv_cache_info::CacheInfo;
 use uv_distribution_types::{
     BuildInfo, BuildVariables, ConfigSettings, DirectUrlSourceDist, DirectorySourceDist,
     ExtraBuildRequirement, ExtraBuildRequires, ExtraBuildVariables, GitDirectorySourceDist,
-    GitPathSourceDist, Hashed, PackageConfigSettings, PathSourceDist,
+    GitPathSourceDist, Hashed, Name, PackageConfigSettings, PathSourceDist,
 };
 use uv_normalize::PackageName;
 use uv_platform_tags::Tags;
@@ -96,7 +99,7 @@ impl<'a> BuiltWheelIndex<'a> {
             .map(|digest| cache_shard.shard(digest))
             .unwrap_or(cache_shard);
 
-        Ok(self.find(&cache_shard).map(|wheel| {
+        Ok(self.find(&cache_shard, source_dist).map(|wheel| {
             CachedWheel::from_entry(
                 wheel,
                 revision.into_hashes(),
@@ -148,7 +151,7 @@ impl<'a> BuiltWheelIndex<'a> {
             .map(|digest| cache_shard.shard(digest))
             .unwrap_or(cache_shard);
 
-        Ok(self.find(&cache_shard).map(|wheel| {
+        Ok(self.find(&cache_shard, source_dist).map(|wheel| {
             CachedWheel::from_entry(wheel, revision.into_hashes(), cache_info, build_info)
         }))
     }
@@ -202,7 +205,7 @@ impl<'a> BuiltWheelIndex<'a> {
             .map(|digest| cache_shard.shard(digest))
             .unwrap_or(cache_shard);
 
-        Ok(self.find(&cache_shard).map(|wheel| {
+        Ok(self.find(&cache_shard, source_dist).map(|wheel| {
             CachedWheel::from_entry(wheel, revision.into_hashes(), cache_info, build_info)
         }))
     }
@@ -239,7 +242,7 @@ impl<'a> BuiltWheelIndex<'a> {
             .map(|digest| cache_shard.shard(digest))
             .unwrap_or(cache_shard);
 
-        self.find(&cache_shard).map(|wheel| {
+        self.find(&cache_shard, source_dist).map(|wheel| {
             CachedWheel::from_entry(
                 wheel,
                 HashDigests::empty(),
@@ -284,7 +287,7 @@ impl<'a> BuiltWheelIndex<'a> {
             .map(|digest| cache_shard.shard(digest))
             .unwrap_or(cache_shard);
 
-        Ok(self.find(&cache_shard).map(|wheel| {
+        Ok(self.find(&cache_shard, source_dist).map(|wheel| {
             CachedWheel::from_entry(
                 wheel,
                 revision.into_hashes(),
@@ -310,7 +313,11 @@ impl<'a> BuiltWheelIndex<'a> {
     /// ```
     ///
     /// The `shard` should be `built-wheels-v0/pypi/django-allauth-0.51.0.tar.gz`.
-    fn find(&self, shard: &CacheShard) -> Option<ResolvedWheel> {
+    fn find(
+        &self,
+        shard: &CacheShard,
+        source: &(impl Name + fmt::Display),
+    ) -> Option<ResolvedWheel> {
         let mut candidate: Option<ResolvedWheel> = None;
 
         // Unzipped wheels are stored as symlinks into the archive directory.
@@ -348,7 +355,15 @@ impl<'a> BuiltWheelIndex<'a> {
             }
         }
 
-        candidate
+        let wheel = candidate?;
+        if &wheel.filename.name != source.name() {
+            warn!(
+                "Cached wheel filename does not match requested distribution `{source}` (found `{}`)",
+                wheel.filename
+            );
+            return None;
+        }
+        Some(wheel)
     }
 
     /// Determine the [`ConfigSettings`] for the given package name.

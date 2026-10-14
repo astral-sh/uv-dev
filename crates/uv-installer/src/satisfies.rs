@@ -1,5 +1,4 @@
-use std::borrow::Cow;
-use std::fmt::Debug;
+use std::path::Path;
 
 use same_file::is_same_file;
 use tracing::{debug, trace};
@@ -9,17 +8,17 @@ use uv_cache_info::CacheInfo;
 use uv_cache_key::{CanonicalUrl, RepositoryUrl};
 use uv_distribution_filename::ExpandedTags;
 use uv_distribution_types::{
-    BuildInfo, BuildVariables, ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires,
-    ExtraBuildVariables, InstalledDirectUrlDist, InstalledDist, InstalledDistKind,
-    PackageConfigSettings, RequirementSource,
+    BuildInfo, ConfigSettings, ExtraBuildRequires, ExtraBuildVariables, InstalledDirectUrlDist,
+    InstalledDist, InstalledDistKind, PackageConfigSettings, RequirementSource,
 };
-use uv_git_types::GitLfs;
+use uv_git_types::{GitLfs, GitUrl};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
-use uv_platform_tags::{AbiTag, IncompatibleTag, TagCompatibility, Tags};
+use uv_platform_tags::{IncompatibleTag, PlatformTag, TagCompatibility, Tags};
 use uv_pypi_types::{DirInfo, DirectUrl, VcsInfo, VcsKind};
 
 use crate::InstallationStrategy;
+use crate::compatibility::CompatibilitySubject;
 
 /// Expected build settings when deciding whether to reuse an installed distribution.
 #[derive(Debug, Clone, Copy)]
@@ -28,6 +27,25 @@ pub struct BuildSettings<'a> {
     pub config_settings_package: &'a PackageConfigSettings,
     pub extra_build_requires: &'a ExtraBuildRequires,
     pub extra_build_variables: &'a ExtraBuildVariables,
+}
+
+impl BuildSettings<'_> {
+    /// Construct the expected build info for a package.
+    fn build_info_for(&self, name: &PackageName) -> BuildInfo {
+        let config_settings = self.config_settings.clone();
+        let config_settings = match self.config_settings_package.get(name) {
+            Some(package_settings) => package_settings.clone().merge(config_settings),
+            None => config_settings,
+        };
+        BuildInfo::from_settings(
+            config_settings,
+            self.extra_build_requires
+                .get(name)
+                .cloned()
+                .unwrap_or_default(),
+            self.extra_build_variables.get(name).cloned(),
+        )
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -39,9 +57,7 @@ pub(crate) enum RequirementSatisfaction {
 }
 
 impl RequirementSatisfaction {
-    /// Returns true if a requirement is satisfied by an installed distribution.
-    ///
-    /// Returns an error if IO fails during a freshness check for a local path.
+    /// Determine whether a requirement is satisfied by an installed distribution.
     pub(crate) fn check(
         name: &PackageName,
         distribution: &InstalledDist,
@@ -59,29 +75,15 @@ impl RequirementSatisfaction {
         // If the distribution was built with other settings, it is out of date.
         if let Some(build_settings) = build_settings
             && distribution.build_info().is_some_and(|dist_build_info| {
-                let config_settings = config_settings_for(
-                    name,
-                    build_settings.config_settings,
-                    build_settings.config_settings_package,
-                );
-                let extra_build_requires =
-                    extra_build_requires_for(name, build_settings.extra_build_requires);
-                let extra_build_variables =
-                    extra_build_variables_for(name, build_settings.extra_build_variables);
-                let build_info = BuildInfo::from_settings(
-                    config_settings.into_owned(),
-                    extra_build_requires.to_vec(),
-                    extra_build_variables.cloned(),
-                );
-                dist_build_info != &build_info
+                dist_build_info != &build_settings.build_info_for(name)
             })
         {
             debug!("Build info mismatch for {name}: {distribution}");
             return Self::OutOfDate;
         }
 
-        // Filter out already-installed packages.
-        match source {
+        // Check that the installed distribution matches the requested source.
+        let source_satisfaction = match source {
             // If the requirement comes from a registry, check by name.
             RequirementSource::Registry { specifier, .. } => {
                 // If the installed distribution is _not_ from a registry, reject it if and only if
@@ -97,16 +99,17 @@ impl RequirementSatisfaction {
                 // declaratively ahead-of-time. So if you `uv sync` to install `./path/to/idna` and
                 // later `uv sync` to install `anyio`, we'll know (during that second sync) if the
                 // already-installed `idna` should come from the registry or not.
-                if installation == InstallationStrategy::Strict {
-                    if !matches!(distribution.kind, InstalledDistKind::Registry { .. }) {
-                        debug!("Distribution type mismatch for {name}: {distribution:?}");
-                        return Self::Mismatch;
-                    }
+                if installation == InstallationStrategy::Strict
+                    && !matches!(distribution.kind, InstalledDistKind::Registry { .. })
+                {
+                    debug!("Distribution type mismatch for {name}: {distribution:?}");
+                    return Self::Mismatch;
                 }
 
                 if !specifier.contains(distribution.version()) {
                     return Self::Mismatch;
                 }
+                Self::Satisfied
             }
             RequirementSource::Url {
                 // We use the location since `direct_url.json` also stores this URL, e.g.
@@ -150,25 +153,12 @@ impl RequirementSatisfaction {
                 }
 
                 // If the requirement came from a local path, check freshness.
-                if requested_url.scheme() == "file" {
-                    if let Ok(archive) = requested_url.to_file_path() {
-                        let Some(cache_info) = cache_info.as_ref() else {
-                            return Self::OutOfDate;
-                        };
-                        match CacheInfo::from_path(&archive) {
-                            Ok(read_cache_info) => {
-                                if *cache_info != read_cache_info {
-                                    return Self::OutOfDate;
-                                }
-                            }
-                            Err(err) => {
-                                debug!(
-                                    "Failed to read cached requirement for: {distribution} ({err})"
-                                );
-                                return Self::CacheInvalid;
-                            }
-                        }
-                    }
+                if requested_url.scheme() == "file"
+                    && let Ok(archive) = requested_url.to_file_path()
+                {
+                    Self::check_cache_info(distribution, &archive, cache_info.as_ref())
+                } else {
+                    Self::Satisfied
                 }
             }
             RequirementSource::GitDirectory {
@@ -184,11 +174,8 @@ impl RequirementSatisfaction {
                 let DirectUrl::VcsUrl {
                     url: installed_url,
                     vcs_info:
-                        VcsInfo {
-                            vcs: VcsKind::Git,
-                            requested_revision: _,
-                            commit_id: installed_precise,
-                            git_lfs: installed_git_lfs,
+                        installed_vcs @ VcsInfo {
+                            vcs: VcsKind::Git, ..
                         },
                     subdirectory: installed_subdirectory,
                     path: None,
@@ -205,41 +192,7 @@ impl RequirementSatisfaction {
                     return Self::Mismatch;
                 }
 
-                let requested_git_lfs = requested_git.lfs();
-                let installed_git_lfs = installed_git_lfs.map(GitLfs::from).unwrap_or_default();
-                if requested_git_lfs != installed_git_lfs {
-                    debug!(
-                        "Git LFS mismatch: {} (installed) vs. {} (requested)",
-                        installed_git_lfs, requested_git_lfs,
-                    );
-                    return Self::Mismatch;
-                }
-
-                if !RepositoryUrl::parse(installed_url)
-                    .is_ok_and(|installed_url| installed_url == *requested_git.repository())
-                {
-                    debug!(
-                        "Repository mismatch: {:?} vs. {:?}",
-                        installed_url,
-                        requested_git.url()
-                    );
-                    return Self::Mismatch;
-                }
-
-                if !installed_precise
-                    .as_deref()
-                    .zip(requested_git.precise())
-                    .is_some_and(|(installed, requested)| {
-                        installed.eq_ignore_ascii_case(requested.as_str())
-                    })
-                {
-                    debug!(
-                        "Precise mismatch: {:?} vs. {:?}",
-                        installed_precise,
-                        requested_git.precise()
-                    );
-                    return Self::OutOfDate;
-                }
+                Self::check_git(requested_git, installed_url, installed_vcs)
             }
             RequirementSource::GitPath {
                 url: _,
@@ -255,11 +208,8 @@ impl RequirementSatisfaction {
                 let DirectUrl::VcsUrl {
                     url: installed_url,
                     vcs_info:
-                        VcsInfo {
-                            vcs: VcsKind::Git,
-                            requested_revision: _,
-                            commit_id: installed_precise,
-                            git_lfs: installed_git_lfs,
+                        installed_vcs @ VcsInfo {
+                            vcs: VcsKind::Git, ..
                         },
                     subdirectory: None,
                     path: Some(installed_path),
@@ -276,41 +226,7 @@ impl RequirementSatisfaction {
                     return Self::Mismatch;
                 }
 
-                let requested_git_lfs = requested_git.lfs();
-                let installed_git_lfs = installed_git_lfs.map(GitLfs::from).unwrap_or_default();
-                if requested_git_lfs != installed_git_lfs {
-                    debug!(
-                        "Git LFS mismatch: {} (installed) vs. {} (requested)",
-                        installed_git_lfs, requested_git_lfs,
-                    );
-                    return Self::Mismatch;
-                }
-
-                if !RepositoryUrl::parse(installed_url)
-                    .is_ok_and(|installed_url| installed_url == *requested_git.repository())
-                {
-                    debug!(
-                        "Repository mismatch: {:?} vs. {:?}",
-                        installed_url,
-                        requested_git.url()
-                    );
-                    return Self::Mismatch;
-                }
-
-                if !installed_precise
-                    .as_deref()
-                    .zip(requested_git.precise())
-                    .is_some_and(|(installed, requested)| {
-                        installed.eq_ignore_ascii_case(requested.as_str())
-                    })
-                {
-                    debug!(
-                        "Precise mismatch: {:?} vs. {:?}",
-                        installed_precise,
-                        requested_git.precise()
-                    );
-                    return Self::OutOfDate;
-                }
+                Self::check_git(requested_git, installed_url, installed_vcs)
             }
             RequirementSource::Path {
                 install_path: requested_path,
@@ -334,37 +250,12 @@ impl RequirementSatisfaction {
                     return Self::Mismatch;
                 };
 
-                let Some(installed_path) = Url::parse(installed_url)
-                    .ok()
-                    .and_then(|url| url.to_file_path().ok())
-                else {
-                    return Self::Mismatch;
-                };
-
-                if !(**requested_path == installed_path
-                    || is_same_file(requested_path, &installed_path).unwrap_or(false))
-                {
-                    trace!(
-                        "Path mismatch: {:?} vs. {:?}",
-                        requested_path, installed_path,
-                    );
-                    return Self::Mismatch;
-                }
-
-                let Some(cache_info) = cache_info.as_ref() else {
-                    return Self::OutOfDate;
-                };
-                match CacheInfo::from_path(requested_path) {
-                    Ok(read_cache_info) => {
-                        if *cache_info != read_cache_info {
-                            return Self::OutOfDate;
-                        }
-                    }
-                    Err(err) => {
-                        debug!("Failed to read cached requirement for: {distribution} ({err})");
-                        return Self::CacheInvalid;
-                    }
-                }
+                Self::check_local_path(
+                    distribution,
+                    requested_path,
+                    installed_url,
+                    cache_info.as_ref(),
+                )
             }
             RequirementSource::Directory {
                 install_path: requested_path,
@@ -401,50 +292,30 @@ impl RequirementSatisfaction {
                     return Self::Mismatch;
                 }
 
-                let Some(installed_path) = Url::parse(installed_url)
-                    .ok()
-                    .and_then(|url| url.to_file_path().ok())
-                else {
-                    return Self::Mismatch;
-                };
-
-                if !(**requested_path == installed_path
-                    || is_same_file(requested_path, &installed_path).unwrap_or(false))
-                {
-                    trace!(
-                        "Path mismatch: {:?} vs. {:?}",
-                        requested_path, installed_path,
-                    );
-                    return Self::Mismatch;
-                }
-
-                let Some(cache_info) = cache_info.as_ref() else {
-                    return Self::OutOfDate;
-                };
-                match CacheInfo::from_path(requested_path) {
-                    Ok(read_cache_info) => {
-                        if *cache_info != read_cache_info {
-                            return Self::OutOfDate;
-                        }
-                    }
-                    Err(err) => {
-                        debug!("Failed to read cached requirement for: {distribution} ({err})");
-                        return Self::CacheInvalid;
-                    }
-                }
+                Self::check_local_path(
+                    distribution,
+                    requested_path,
+                    installed_url,
+                    cache_info.as_ref(),
+                )
             }
+        };
+        if !matches!(source_satisfaction, Self::Satisfied) {
+            return source_satisfaction;
         }
 
         // If the distribution isn't compatible with the current platform, it is a mismatch.
-        if let Ok(Some(wheel_tags)) = distribution.read_tags() {
-            if !wheel_tags.is_compatible(tags) {
+        if let Ok(Some(wheel_tags)) = distribution.read_tags()
+            && !wheel_tags.is_compatible(tags)
+        {
+            let hint = std::fmt::from_fn(|f| {
                 if let Some(hint) = generate_dist_compatibility_hint(wheel_tags, tags) {
-                    debug!("Platform tags mismatch for `{distribution}`: {hint}");
-                } else {
-                    debug!("Platform tags mismatch for `{distribution}`");
+                    write!(f, ": {hint}")?;
                 }
-                return Self::Mismatch;
-            }
+                Ok(())
+            });
+            debug!("Platform tags mismatch for `{distribution}`{hint}");
+            return Self::Mismatch;
         }
 
         // If a resolved version is provided, check that it matches the installed version.
@@ -465,184 +336,136 @@ impl RequirementSatisfaction {
         // Otherwise, assume the requirement is up-to-date.
         Self::Satisfied
     }
-}
 
-/// Determine the [`ConfigSettings`] for the given package name.
-fn config_settings_for<'settings>(
-    name: &PackageName,
-    config_settings: &'settings ConfigSettings,
-    config_settings_package: &PackageConfigSettings,
-) -> Cow<'settings, ConfigSettings> {
-    if let Some(package_settings) = config_settings_package.get(name) {
-        Cow::Owned(package_settings.clone().merge(config_settings.clone()))
-    } else {
-        Cow::Borrowed(config_settings)
+    /// Compare the Git details common to repository and in-repository path requirements.
+    fn check_git(requested_git: &GitUrl, installed_url: &str, installed_vcs: &VcsInfo) -> Self {
+        let requested_git_lfs = requested_git.lfs();
+        let installed_git_lfs = installed_vcs.git_lfs.map(GitLfs::from).unwrap_or_default();
+        if requested_git_lfs != installed_git_lfs {
+            debug!(
+                "Git LFS mismatch: {} (installed) vs. {} (requested)",
+                installed_git_lfs, requested_git_lfs,
+            );
+            return Self::Mismatch;
+        }
+
+        if !RepositoryUrl::parse(installed_url)
+            .is_ok_and(|installed_url| installed_url == *requested_git.repository())
+        {
+            debug!(
+                "Repository mismatch: {:?} vs. {:?}",
+                installed_url,
+                requested_git.url()
+            );
+            return Self::Mismatch;
+        }
+
+        if !git_commit_matches(installed_vcs.commit_id.as_deref(), requested_git) {
+            debug!(
+                "Precise mismatch: {:?} vs. {:?}",
+                installed_vcs.commit_id,
+                requested_git.precise()
+            );
+            return Self::OutOfDate;
+        }
+
+        Self::Satisfied
+    }
+
+    /// Compare a local path requirement to an installed archive or directory.
+    fn check_local_path(
+        distribution: &InstalledDist,
+        requested_path: &Path,
+        installed_url: &str,
+        cache_info: Option<&CacheInfo>,
+    ) -> Self {
+        let Some(installed_path) = Url::parse(installed_url)
+            .ok()
+            .and_then(|url| url.to_file_path().ok())
+        else {
+            return Self::Mismatch;
+        };
+
+        if !(requested_path == installed_path.as_path()
+            || is_same_file(requested_path, &installed_path).unwrap_or(false))
+        {
+            trace!(
+                "Path mismatch: {:?} vs. {:?}",
+                requested_path, installed_path,
+            );
+            return Self::Mismatch;
+        }
+
+        Self::check_cache_info(distribution, requested_path, cache_info)
+    }
+
+    /// Compare the installed source's cache information to the current local path.
+    fn check_cache_info(
+        distribution: &InstalledDist,
+        requested_path: &Path,
+        cache_info: Option<&CacheInfo>,
+    ) -> Self {
+        let Some(cache_info) = cache_info else {
+            return Self::OutOfDate;
+        };
+        match CacheInfo::from_path(requested_path) {
+            Ok(current) if cache_info == &current => Self::Satisfied,
+            Ok(_) => Self::OutOfDate,
+            Err(err) => {
+                debug!("Failed to read cached requirement for: {distribution} ({err})");
+                Self::CacheInvalid
+            }
+        }
     }
 }
 
-/// Determine the extra build requirements for the given package name.
-fn extra_build_requires_for<'settings>(
-    name: &PackageName,
-    extra_build_requires: &'settings ExtraBuildRequires,
-) -> &'settings [ExtraBuildRequirement] {
-    extra_build_requires
-        .get(name)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-}
-
-/// Determine the extra build variables for the given package name.
-fn extra_build_variables_for<'settings>(
-    name: &PackageName,
-    extra_build_variables: &'settings ExtraBuildVariables,
-) -> Option<&'settings BuildVariables> {
-    extra_build_variables.get(name)
+/// Check an installed Git commit against a resolved commit or a full commit revision.
+/// Branches, tags, and abbreviated revisions require resolution before they can be compared.
+fn git_commit_matches(installed_commit: Option<&str>, requested_git: &GitUrl) -> bool {
+    installed_commit
+        .zip(requested_git.precise())
+        .is_some_and(|(installed, requested)| installed.eq_ignore_ascii_case(requested.as_str()))
 }
 
 /// Generate a hint for explaining tag compatibility issues.
-// TODO(zanieb): We should refactor this to share logic with `generate_wheel_compatibility_hint`
 fn generate_dist_compatibility_hint(wheel_tags: &ExpandedTags, tags: &Tags) -> Option<String> {
     let TagCompatibility::Incompatible(incompatible_tag) = wheel_tags.compatibility(tags) else {
         return None;
     };
 
+    let subject = CompatibilitySubject::Distribution;
+    let mut hint = String::new();
     match incompatible_tag {
-        IncompatibleTag::Python => {
-            let wheel_tags = wheel_tags.python_tags();
-            let current_tag = tags.python_tag();
-
-            if let Some(current) = current_tag {
-                let message = if let Some(pretty) = current.pretty() {
-                    format!("{pretty} (`{current}`)")
-                } else {
-                    format!("`{current}`")
-                };
-
-                Some(format!(
-                    "The distribution is compatible with {}, but you're using {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    message
-                ))
-            } else {
-                Some(format!(
-                    "The distribution requires {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            }
+        IncompatibleTag::Python => subject.write_tag_hint(
+            &mut hint,
+            wheel_tags.python_tags(),
+            tags.python_tag().as_ref(),
+            "using",
+            |tag| tag.pretty(),
+        ),
+        IncompatibleTag::FreethreadedAbi => subject.write_freethreaded_hint(
+            &mut hint,
+            wheel_tags.abi_tags(),
+            tags.abi_tag().as_ref(),
+        ),
+        IncompatibleTag::Abi => subject.write_tag_hint(
+            &mut hint,
+            wheel_tags.abi_tags(),
+            tags.abi_tag().as_ref(),
+            "using",
+            |tag| tag.pretty(),
+        ),
+        IncompatibleTag::Platform => subject.write_tag_hint(
+            &mut hint,
+            wheel_tags.platform_tags(),
+            tags.platform_tag(),
+            "on",
+            PlatformTag::pretty,
+        ),
+        IncompatibleTag::Variant | IncompatibleTag::Invalid | IncompatibleTag::AbiPythonVersion => {
+            return None;
         }
-        IncompatibleTag::FreethreadedAbi => {
-            let wheel_abi = wheel_tags
-                .abi_tags()
-                .map(|tag| match tag {
-                    AbiTag::Abi3 => format!("the stable ABI (`{tag}`)"),
-                    _ => {
-                        if let Some(pretty) = tag.pretty() {
-                            format!("the {pretty} ABI (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        }
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let current = if let Some(current) = tags.abi_tag() {
-                if let Some(pretty) = current.pretty() {
-                    format!("{pretty} (`{current}`)")
-                } else {
-                    format!("`{current}`")
-                }
-            } else {
-                "free-threaded Python".to_string()
-            };
-            Some(format!(
-                "You're using {current}, but the distribution was built for {wheel_abi}, which requires a GIL-enabled interpreter"
-            ))
-        }
-        IncompatibleTag::Abi => {
-            let wheel_tags = wheel_tags.abi_tags();
-            let current_tag = tags.abi_tag();
-            if let Some(current) = current_tag {
-                let message = if let Some(pretty) = current.pretty() {
-                    format!("{pretty} (`{current}`)")
-                } else {
-                    format!("`{current}`")
-                };
-                Some(format!(
-                    "The distribution is compatible with {}, but you're using {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    message
-                ))
-            } else {
-                Some(format!(
-                    "The distribution requires {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            }
-        }
-        IncompatibleTag::Platform => {
-            let wheel_tags = wheel_tags.platform_tags();
-            let current_tag = tags.platform_tag();
-
-            if let Some(current) = current_tag {
-                let message = if let Some(pretty) = current.pretty() {
-                    format!("{pretty} (`{current}`)")
-                } else {
-                    format!("`{current}`")
-                };
-                Some(format!(
-                    "The distribution is compatible with {}, but you're on {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    message
-                ))
-            } else {
-                Some(format!(
-                    "The distribution requires {}",
-                    wheel_tags
-                        .map(|tag| if let Some(pretty) = tag.pretty() {
-                            format!("{pretty} (`{tag}`)")
-                        } else {
-                            format!("`{tag}`")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            }
-        }
-        _ => None,
     }
+    .expect("writing to a String cannot fail");
+    Some(hint)
 }
