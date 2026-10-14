@@ -308,46 +308,78 @@ fn install_http_wheel_hashes_trailing_bytes() -> Result<()> {
     Ok(())
 }
 
+/// Cache entries written by the current uv must remain usable by uv 0.11.1. See astral-sh/uv#20949.
 #[test]
-fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
-    allow_duplicates! {
-        for version in ["0.11.1", "0.12.0"] {
-            let context = uv_test::test_context!("3.12")
-                .with_filter((r" \+ uv==0\.(?:11\.1|12\.0)", " + uv==[VERSION]"));
-            let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
-            write_many_files_wheel(&wheel, 1)?;
+fn install_wheel_cache_compatible_with_uv_0_11_1() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
+    write_many_files_wheel(&wheel, 1)?;
 
-            context.pip_install().arg(&wheel).assert().success();
-            context.venv().arg("--clear").assert().success();
+    context.pip_install().arg(&wheel).assert().success();
+    context.venv().arg("--clear").assert().success();
 
-            // New cache entries should not make older uv versions fail; see astral-sh/uv#20949.
-            uv_snapshot!(context.filters(), context.tool_run()
-                .arg("--from")
-                .arg(format!("uv=={version}"))
-                .arg("uv")
-                .arg("pip")
-                .arg("install")
-                .arg("--python")
-                .arg(context.venv.path())
-                .arg(&wheel)
-                .arg("--cache-dir")
-                .arg(context.cache_dir.path())
-                .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-                .env_remove(EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Installed 1 package in [TIME]
-             + uv==[VERSION]
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Installed 1 package in [TIME]
-             + large-wheel==1.0.0 (from file://[TEMP_DIR]/large_wheel-1.0.0-py3-none-any.whl)
-            ");
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--from")
+        .arg("uv==0.11.1")
+        .arg("uv")
+        .arg("pip")
+        .arg("install")
+        .arg("--python")
+        .arg(context.venv.path())
+        .arg(&wheel)
+        .arg("--cache-dir")
+        .arg(context.cache_dir.path())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env_remove(EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + uv==0.11.1
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + large-wheel==1.0.0 (from file://[TEMP_DIR]/large_wheel-1.0.0-py3-none-any.whl)
+    ");
+
+    Ok(())
+}
+
+/// Cache entries written by the current uv must remain usable by uv 0.12.0. See astral-sh/uv#20949.
+#[test]
+fn install_wheel_cache_compatible_with_uv_0_12_0() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.join("large_wheel-1.0.0-py3-none-any.whl");
+    write_many_files_wheel(&wheel, 1)?;
+
+    context.pip_install().arg(&wheel).assert().success();
+    context.venv().arg("--clear").assert().success();
+
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--from")
+        .arg("uv==0.12.0")
+        .arg("uv")
+        .arg("pip")
+        .arg("install")
+        .arg("--python")
+        .arg(context.venv.path())
+        .arg(&wheel)
+        .arg("--cache-dir")
+        .arg(context.cache_dir.path())
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env_remove(EnvVars::UV_INTERNAL__TEST_AVAILABLE_VERSION_CUTOFF), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + uv==0.12.0
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + large-wheel==1.0.0 (from file://[TEMP_DIR]/large_wheel-1.0.0-py3-none-any.whl)
+    ");
 
     Ok(())
 }
