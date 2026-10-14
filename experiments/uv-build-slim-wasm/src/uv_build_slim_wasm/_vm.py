@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import struct
+import sys
 import zlib
 from collections import OrderedDict
 from pathlib import Path
@@ -155,12 +156,18 @@ class Memory:
 
 
 class Program:
-    def __init__(self, directory=None, package=__package__):
+    def __init__(self, directory=None, package=None):
         if directory is None:
             from importlib import resources
 
+            if package is None:
+                package = __package__
+
             def read(name):
-                if hasattr(resources, "files"):
+                # Python 3.9's Traversable ZIP reader uses Windows separators
+                # for nested packages. Its legacy resource reader handles them.
+                legacy_windows = sys.platform == "win32" and sys.version_info < (3, 10)
+                if hasattr(resources, "files") and not legacy_windows:
                     return resources.files(package).joinpath(name).read_bytes()
                 return resources.read_binary(package, name)
         else:

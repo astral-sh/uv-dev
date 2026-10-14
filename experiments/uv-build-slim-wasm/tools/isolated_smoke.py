@@ -89,8 +89,17 @@ def main():
             cwd=root,
             text=True,
             capture_output=True,
-            check=True,
+            check=False,
         )
+        if result.returncode:
+            raise AssertionError(
+                "Isolated backend exited with status "
+                + str(result.returncode)
+                + "\nstdout:\n"
+                + result.stdout
+                + "\nstderr:\n"
+                + result.stderr
+            )
         if result.stderr:
             raise AssertionError(result.stderr)
         actual = json.loads(result.stdout)

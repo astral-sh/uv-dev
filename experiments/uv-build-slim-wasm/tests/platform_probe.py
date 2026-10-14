@@ -58,7 +58,9 @@ def main():
     run("artifacts", "tests/runtime_smoke.py", ["--source", source])
     run("concurrent", "tests/concurrent_probe.py", [])
     run("isolated", "tools/isolated_smoke.py", ["--source", source, "--wheel", wheel])
-    for module_name in ["test_edges"] + (["test_host"] if os.name != "nt" else []):
+    for module_name in ["test_edges"] + (
+        ["test_host", "test_terminal"] if os.name != "nt" else ["test_terminal_windows"]
+    ):
         module = importlib.import_module(module_name)
         with (report / (module_name + ".log")).open("w", encoding="utf-8") as log:
             tests = unittest.TextTestRunner(stream=log, verbosity=2).run(

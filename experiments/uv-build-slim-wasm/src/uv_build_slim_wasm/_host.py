@@ -30,7 +30,12 @@ class Host:
         self.wasi.fd[1].pipe = self.stdout
         self.wasi.fd[2].pipe = self.stderr
         self.wasi.fd[1].wasm_type = self.wasi.FILETYPE_UNKNOWN
-        self.wasi.fd[2].wasm_type = self.wasi.FILETYPE_UNKNOWN
+        for descriptor in [0, 2]:
+            self.wasi.fd[descriptor].wasm_type = (
+                self.wasi.FILETYPE_CHARACTER_DEVICE
+                if os.isatty(descriptor)
+                else self.wasi.FILETYPE_UNKNOWN
+            )
         self.native_errors = {}
         for name in dir(self.wasi):
             if name.startswith("ERRNO_"):

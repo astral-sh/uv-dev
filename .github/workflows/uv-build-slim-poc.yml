@@ -183,3 +183,56 @@ jobs:
           name: parity-${{ matrix.runtime }}
           path: parity-results
           if-no-files-found: warn
+
+  windows-upstream:
+    name: Upstream differential suite (${{ matrix.arch }})
+    runs-on: namespace-profile-windows-2022-x86-64-16x32
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+          - arch: x86
+            target: i686-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: astral-sh/uv
+          ref: bd39416351244f273aeff89d495d4b0804b765a5
+          path: reference-source
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.15.0"
+          architecture: ${{ matrix.arch }}
+      - name: Compare every original backend test with generated Python
+        shell: pwsh
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          REFERENCE_TARGET: ${{ matrix.target }}
+        run: |
+          $scratch = Join-Path $HOME "code/tmp/uv-build-slim-upstream"
+          New-Item -ItemType Directory -Force -Path $scratch | Out-Null
+          $env:TMP = $scratch
+          $env:TEMP = $scratch
+          $env:TMPDIR = $scratch
+          $env:UV_SLIM_PYTHON = (Get-Command python).Source
+          $env:UV_SLIM_PARITY_SERVER = Join-Path $env:GITHUB_WORKSPACE "experiments/uv-build-slim-wasm/tests/upstream_server.py"
+          $env:UV_SLIM_PARITY_REPORT = Join-Path $env:GITHUB_WORKSPACE "upstream-parity.ndjson"
+          rustup toolchain install 1.99.0 --profile minimal --target $env:REFERENCE_TARGET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python experiments/uv-build-slim-wasm/tests/instrument_upstream.py reference-source
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.99.0 test --locked --manifest-path reference-source/Cargo.toml --package uv-build-backend --lib --target $env:REFERENCE_TARGET -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: upstream-parity-${{ matrix.arch }}
+          path: upstream-parity.ndjson
+          if-no-files-found: warn

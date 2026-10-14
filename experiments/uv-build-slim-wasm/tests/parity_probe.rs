@@ -1,4 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
+#[cfg(windows)]
+use std::os::windows::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -20,20 +22,26 @@ fn copy_tree(source: &Path, destination: &Path) -> std::io::Result<()> {
     if !source.exists() {
         return Ok(());
     }
-    std::fs::create_dir_all(destination)?;
-    for entry in std::fs::read_dir(source)? {
+    fs_err::create_dir_all(destination)?;
+    for entry in fs_err::read_dir(source)? {
         let entry = entry?;
         let target = destination.join(entry.file_name());
         if entry.file_type()?.is_dir() {
             copy_tree(&entry.path(), &target)?;
         } else if entry.file_type()?.is_symlink() {
             #[cfg(unix)]
-            std::os::unix::fs::symlink(std::fs::read_link(entry.path())?, target)?;
+            fs_err::os::unix::fs::symlink(fs_err::read_link(entry.path())?, target)?;
+            #[cfg(windows)]
+            if entry.file_type()?.is_symlink_dir() {
+                fs_err::os::windows::fs::symlink_dir(fs_err::read_link(entry.path())?, target)?;
+            } else {
+                fs_err::os::windows::fs::symlink_file(fs_err::read_link(entry.path())?, target)?;
+            }
         } else {
-            std::fs::copy(entry.path(), target)?;
+            fs_err::copy(entry.path(), target)?;
         }
     }
-    std::fs::set_permissions(destination, std::fs::metadata(source)?.permissions())?;
+    fs_err::set_permissions(destination, fs_err::metadata(source)?.permissions())?;
     Ok(())
 }
 
@@ -71,7 +79,8 @@ impl Probe {
         let mut guard = mutex.lock().expect("lock parity server");
         if guard.is_none() {
             let script = std::env::var_os("UV_SLIM_PARITY_SERVER").expect("parity server path");
-            let mut child = Command::new("python3")
+            let python = std::env::var_os("UV_SLIM_PYTHON").unwrap_or_else(|| "python3".into());
+            let mut child = Command::new(python)
                 .arg(script)
                 .env("PYTHONDONTWRITEBYTECODE", "1")
                 .stdin(Stdio::piped())
@@ -97,11 +106,8 @@ impl Probe {
             .expect("read parity response");
         let response: serde_json::Value =
             serde_json::from_str(&line).expect("parse parity response");
-        if response["equal"] != true {
-            eprintln!("PARITY MISMATCH: {response}");
-        }
         let path = std::env::var_os("UV_SLIM_PARITY_REPORT").expect("parity report path");
-        let mut report = std::fs::OpenOptions::new()
+        let mut report = fs_err::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)

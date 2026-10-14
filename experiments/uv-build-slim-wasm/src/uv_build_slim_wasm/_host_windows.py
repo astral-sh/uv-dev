@@ -119,6 +119,19 @@ class Host:
         self.retained = []
         self.machine = None
         self.closed = False
+        standard_error = self.native(
+            "kernel32.dll", "GetStdHandle", [127], [self.pointer_kind]
+        )(0xFFFFFFF4)
+        console_mode = ctypes.c_uint32()
+        is_console = self.native(
+            "kernel32.dll",
+            "GetConsoleMode",
+            [self.pointer_kind, self.pointer_kind],
+            [127],
+        )(standard_error, ctypes.addressof(console_mode))
+        # Console writes must remain live so Win32 color attributes and cursor
+        # operations apply to the corresponding text, including legacy consoles.
+        self.stderr_console = standard_error if is_console else None
         self.heap = self.native(
             "kernel32.dll",
             "HeapCreate",
@@ -292,6 +305,8 @@ class Host:
         if name == "GetCommandLineW":
             return [self.command_line]
         if name == "GetStdHandle":
+            if args[0] == 0xFFFFFFF4 and self.stderr_console is not None:
+                return [self.stderr_console]
             return [
                 {
                     0xFFFFFFF6: 0x7FFF0001,

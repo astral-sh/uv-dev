@@ -23,6 +23,9 @@ def main():
     source = wheel.read_text()
     for name in ("build_wheel", "build_editable", "metadata"):
         source = source.replace("pub fn " + name + "(", "fn native_" + name + "(", 1)
+    source, test_marker, tests = source.partition("\n#[cfg(test)]\nmod test {")
+    if not test_marker:
+        raise ValueError("The pinned wheel test module was not found")
     for name, operation in [
         ("build_wheel", "build-wheel"),
         ("build_editable", "build-editable"),
@@ -47,7 +50,7 @@ pub fn metadata(source_tree: &Path, metadata_directory: &Path, uv_version: &str)
     result
 }
 """
-    wheel.write_text(source)
+    wheel.write_text(source + test_marker + tests)
     sdist = root / "source_dist.rs"
     source = sdist.read_text().replace(
         "pub fn build_source_dist(", "fn native_build_source_dist(", 1
