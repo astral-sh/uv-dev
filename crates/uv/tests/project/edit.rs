@@ -20,7 +20,7 @@ use std::path::Path;
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{basic_auth, method, path},
 };
 
 #[cfg(feature = "test-git-lfs")]
@@ -13924,11 +13924,22 @@ async fn add_redirect_cross_origin() -> Result<()> {
     let redirect_server = MockServer::start().await;
     let proxy_base = proxy.url("/basic-auth/simple/");
 
+    // Only an authenticated origin request can exercise credential stripping on the redirect.
     Mock::given(method("GET"))
+        .and(path("/anyio/"))
+        .and(basic_auth("public", "heron"))
         .respond_with(move |req: &wiremock::Request| {
             let redirect_url = redirect_url_to_base(req, &proxy_base);
             ResponseTemplate::new(302).insert_header("Location", &redirect_url)
         })
+        .with_priority(1)
+        .expect(1..)
+        .mount(&redirect_server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(401).insert_header("WWW-Authenticate", "Basic realm=\"origin\""),
+        )
         .mount(&redirect_server)
         .await;
 
