@@ -1,5 +1,6 @@
 use crate::{AnnotatedDist, DistributionMetadataIndex, MetadataResponse, Options, UniversalMarker};
 use indexmap::IndexSet;
+use itertools::Itertools;
 use petgraph::{
     Directed,
     graph::{Graph, NodeIndex},
@@ -335,34 +336,26 @@ impl ResolverOutput {
     /// an installation in that marker environment could wind up trying to
     /// install different versions of the same package, which is not allowed.
     pub fn find_conflicting_distributions(&self) -> Vec<ConflictingDistributionError> {
-        let mut name_to_markers: BTreeMap<&PackageName, Vec<(&Version, &UniversalMarker)>> =
-            BTreeMap::new();
-        for annotated_dist in self.dists() {
-            name_to_markers
-                .entry(&annotated_dist.name)
-                .or_default()
-                .push((&annotated_dist.version, &annotated_dist.marker));
+        let mut by_name: BTreeMap<&PackageName, Vec<&AnnotatedDist>> = BTreeMap::new();
+        for dist in self.dists() {
+            by_name.entry(&dist.name).or_default().push(dist);
         }
-        let mut dupes = vec![];
-        for (name, marker_trees) in name_to_markers {
-            for (i, (version1, marker1)) in marker_trees.iter().enumerate() {
-                for (version2, marker2) in &marker_trees[i + 1..] {
-                    if version1 == version2 {
-                        continue;
-                    }
-                    if !marker1.is_disjoint(**marker2) {
-                        dupes.push(ConflictingDistributionError {
-                            name: name.clone(),
-                            version1: (*version1).clone(),
-                            version2: (*version2).clone(),
-                            marker1: **marker1,
-                            marker2: **marker2,
-                        });
-                    }
+        let mut conflicts = Vec::new();
+        for (name, dists) in by_name {
+            for (dist1, dist2) in dists.iter().copied().tuple_combinations() {
+                if dist1.version == dist2.version || dist1.marker.is_disjoint(dist2.marker) {
+                    continue;
                 }
+                conflicts.push(ConflictingDistributionError {
+                    name: name.clone(),
+                    version1: dist1.version.clone(),
+                    version2: dist2.version.clone(),
+                    marker1: dist1.marker,
+                    marker2: dist2.marker,
+                });
             }
         }
-        dupes
+        conflicts
     }
 }
 
