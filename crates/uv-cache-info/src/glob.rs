@@ -63,15 +63,12 @@ struct Trie<'a> {
 }
 
 impl<'a> Trie<'a> {
-    fn insert(&mut self, mut components: Components<'a>, pattern: &'a Path) {
-        if let Some(part) = components.next() {
-            self.children
-                .entry(part)
-                .or_default()
-                .insert(components, pattern);
-        } else {
-            self.patterns.push(pattern);
+    fn insert(&mut self, components: Components<'a>, pattern: &'a Path) {
+        let mut node = self;
+        for part in components {
+            node = node.children.entry(part).or_default();
         }
+        node.patterns.push(pattern);
     }
 
     fn collect_patterns(
