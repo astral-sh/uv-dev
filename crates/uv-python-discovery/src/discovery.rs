@@ -1180,8 +1180,8 @@ pub fn find_all_python_installations(
 
 /// Find a Python installation that satisfies the given request.
 ///
-/// If an error is encountered while locating or inspecting a candidate installation,
-/// the error will raised instead of attempting further candidates.
+/// Critical discovery errors stop the search. The first noncritical error is returned if the
+/// search finds no usable installation.
 pub(crate) fn find_python_installation(
     request: &PythonRequest,
     environments: EnvironmentPreference,
@@ -1195,20 +1195,13 @@ pub(crate) fn find_python_installation(
     let mut first_managed = None;
     let mut first_error = None;
     for result in installations {
-        // Iterate until the first critical error or happy result
-        if !result.as_ref().err().is_none_or(Error::is_critical) {
-            // Track the first non-critical error
-            if first_error.is_none()
-                && let Err(err) = result
-            {
-                first_error = Some(err);
+        let installation = match result {
+            Ok(Ok(installation)) => installation,
+            Err(err) if !err.is_critical() => {
+                first_error.get_or_insert(err);
+                continue;
             }
-            continue;
-        }
-
-        // If it's an error, we're done.
-        let Ok(Ok(ref installation)) = result else {
-            return result;
+            result => return result,
         };
 
         // Check if we need to skip the interpreter because it is "not allowed", e.g., if it is a
@@ -1230,9 +1223,7 @@ pub(crate) fn find_python_installation(
             && !has_default_executable_name
         {
             debug!("Skipping pre-release installation {}", installation.key());
-            if first_prerelease.is_none() {
-                first_prerelease = Some(installation.clone());
-            }
+            first_prerelease.get_or_insert(installation);
             continue;
         }
 
@@ -1244,9 +1235,7 @@ pub(crate) fn find_python_installation(
             && !has_default_executable_name
         {
             debug!("Skipping debug installation {}", installation.key());
-            if first_debug.is_none() {
-                first_debug = Some(installation.clone());
-            }
+            first_debug.get_or_insert(installation);
             continue;
         }
 
@@ -1270,14 +1259,12 @@ pub(crate) fn find_python_installation(
                 "Skipping managed installation {}: system installation preferred",
                 installation.key()
             );
-            if first_managed.is_none() {
-                first_managed = Some(installation.clone());
-            }
+            first_managed.get_or_insert(installation);
             continue;
         }
 
         // If we didn't skip it, this is the installation to use
-        return result;
+        return Ok(Ok(installation));
     }
 
     // If we only found managed installations, and the preference allows them, we should return
