@@ -27,22 +27,11 @@ impl WheelCache<'_> {
     pub fn root(&self) -> PathBuf {
         match self {
             Self::Index(IndexUrl::Pypi(_)) => WheelCacheKind::Pypi.root(),
-            Self::Index(url) => WheelCacheKind::Index
-                .root()
-                .join(cache_digest(&CanonicalUrl::new(url.url().clone()))),
-            Self::Url(url) => WheelCacheKind::Url
-                .root()
-                .join(cache_digest(&CanonicalUrl::new((*url).clone()))),
-            Self::Path(url) => WheelCacheKind::Path
-                .root()
-                .join(cache_digest(&CanonicalUrl::new((*url).clone()))),
-            Self::Editable(url) => WheelCacheKind::Editable
-                .root()
-                .join(cache_digest(&CanonicalUrl::new((*url).clone()))),
-            Self::Git(url, sha) => WheelCacheKind::Git
-                .root()
-                .join(cache_digest(&CanonicalUrl::new((*url).clone())))
-                .join(sha),
+            Self::Index(url) => WheelCacheKind::Index.root_for_url(url.url()),
+            Self::Url(url) => WheelCacheKind::Url.root_for_url(url),
+            Self::Path(url) => WheelCacheKind::Path.root_for_url(url),
+            Self::Editable(url) => WheelCacheKind::Editable.root_for_url(url),
+            Self::Git(url, sha) => WheelCacheKind::Git.root_for_url(url).join(sha),
         }
     }
 
@@ -81,7 +70,12 @@ impl WheelCacheKind {
     }
 
     fn root(self) -> PathBuf {
-        Path::new(self.to_str()).to_path_buf()
+        PathBuf::from(self.to_str())
+    }
+
+    fn root_for_url(self, url: &DisplaySafeUrl) -> PathBuf {
+        self.root()
+            .join(cache_digest(&CanonicalUrl::new(url.clone())))
     }
 }
 
