@@ -54,7 +54,7 @@ impl InstallState {
     ///
     /// The first non-self argument is the target path relative to site-packages, the second is the
     /// source path in the unpacked wheel.
-    fn register_installed_path(&self, relative: &Path, absolute: &Path, wheel: &WheelFilename) {
+    fn register_installed_path(&self, relative: PathBuf, absolute: PathBuf, wheel: &WheelFilename) {
         debug_assert!(!relative.is_absolute());
         debug_assert!(absolute.is_absolute());
 
@@ -67,9 +67,9 @@ impl InstallState {
         self.site_packages_paths
             .lock()
             .unwrap()
-            .entry(relative.to_path_buf())
+            .entry(relative)
             .or_default()
-            .insert((wheel.clone(), absolute.to_path_buf()));
+            .insert((wheel.clone(), absolute));
     }
 
     /// Warn when the same file with different contents exists in multiple packages.
@@ -310,7 +310,7 @@ fn register_installed_paths(
         let entry = entry?;
         let path = entry.path();
         let relative = PathBuf::from(entry.file_name());
-        state.register_installed_path(&relative, &path, filename);
+        state.register_installed_path(relative, path, filename);
     }
     Ok(())
 }
