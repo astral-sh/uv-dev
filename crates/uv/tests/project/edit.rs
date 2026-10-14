@@ -13379,6 +13379,77 @@ async fn add_ignore_error_codes() -> Result<()> {
     Ok(())
 }
 
+/// An ignored metadata error skips one version without excluding the entire package.
+#[tokio::test]
+async fn add_ignore_error_codes_tries_older_version() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let files = [("2.0.0", true), ("1.0.0", false)].map(|(version, core_metadata)| {
+        let filename = format!("ok-{version}-py3-none-any.whl");
+        let url = format!("{}/files/{filename}", server.uri());
+        json!({
+            "filename": filename,
+            "url": url,
+            "hashes": {},
+            "upload-time": "2024-01-01T00:00:00Z",
+            "core-metadata": core_metadata,
+        })
+    });
+    Mock::given(method("GET"))
+        .and(path("/simple/ok/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            json!({ "meta": { "api-version": "1.0" }, "name": "ok", "files": files }).to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/ok-2.0.0-py3-none-any.whl.metadata"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1..)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/files/ok-1.0.0-py3-none-any.whl"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_bytes(fs_err::read(
+                context
+                    .workspace_root
+                    .join("test/links/ok-1.0.0-py3-none-any.whl"),
+            )?),
+        )
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+
+            [[tool.uv.index]]
+            name = "test-index"
+            url = "{index_url}/simple"
+            default = true
+            ignore-error-codes = [403]
+        "#, index_url = server.uri()})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("ok"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+    context
+        .assert_command("import ok; assert ok.__version__ == '1.0.0'")
+        .success();
+    Ok(())
+}
+
 /// uv should only fall through on 404s if an empty list is specified
 /// in `ignore-error-codes`, even for indexes that normally ignore 403s.
 #[tokio::test]
