@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
@@ -6,7 +5,6 @@ use std::sync::Arc;
 use reqwest::StatusCode;
 
 use uv_distribution::Error as DistributionError;
-use uv_distribution_types::{Requirement, RequirementSource};
 use uv_metadata::Error as WheelMetadataError;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
@@ -14,7 +12,6 @@ use uv_platform_tags::{AbiTag, Tags};
 use uv_pypi_types::MetadataError;
 
 use crate::prioritized_distribution::IncompatibleDist;
-use crate::pubgrub::Range;
 use crate::resolver::{MetadataUnavailable, VersionFork};
 
 /// The reason why a package or a version cannot be used.
@@ -48,15 +45,16 @@ impl UnsatisfiableRequirement {
     ///
     /// PubGrub ranges do not retain the specifiers that produced them, but the original
     /// requirement is needed to explain the conflict in the resolution report.
-    pub(crate) fn from_requirement(requirement: &Requirement) -> Option<Self> {
-        let RequirementSource::Registry { specifier, .. } = &requirement.source else {
-            return None;
-        };
-        (Range::from(specifier.clone()) == Range::empty()).then(|| Self {
-            name: requirement.name.clone(),
-            extras: requirement.extras.clone(),
-            version_specifiers: specifier.clone(),
-        })
+    pub(crate) fn new(
+        name: PackageName,
+        extras: Box<[ExtraName]>,
+        version_specifiers: VersionSpecifiers,
+    ) -> Self {
+        Self {
+            name,
+            extras,
+            version_specifiers,
+        }
     }
 
     fn fmt_package(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -119,47 +117,29 @@ pub enum UnavailableVersion {
 }
 
 impl UnavailableVersion {
-    fn message(&self) -> Cow<'static, str> {
-        match self {
-            Self::UnsatisfiableDependency(requirement) => Cow::Owned(requirement.to_string()),
-            Self::IncompatibleDist(invalid_dist) => Cow::Owned(format!("{invalid_dist}")),
-            Self::InvalidMetadata => Cow::Borrowed("invalid metadata"),
-            Self::InconsistentMetadata => Cow::Borrowed("inconsistent metadata"),
-            Self::InvalidStructure => Cow::Borrowed("an invalid package format"),
-            Self::Offline => Cow::Borrowed("to be downloaded from a registry"),
-            Self::RequiresPython(requires_python) => {
-                Cow::Owned(format!("Python {requires_python}"))
-            }
-            Self::Network(status) => Cow::Owned(status.to_string()),
-        }
-    }
-
     pub(crate) fn singular_message(&self) -> String {
-        match self {
-            Self::UnsatisfiableDependency(requirement) => {
-                format!("depends on {requirement}")
-            }
-            Self::IncompatibleDist(invalid_dist) => invalid_dist.singular_message(),
-            Self::InvalidMetadata => format!("has {self}"),
-            Self::InconsistentMetadata => format!("has {self}"),
-            Self::InvalidStructure => format!("has {self}"),
-            Self::Offline => format!("needs {self}"),
-            Self::RequiresPython(..) => format!("requires {self}"),
-            Self::Network(..) => format!("could not be fetched from the network (`{self}`)"),
-        }
+        self.inflected_message(false)
     }
 
     pub(crate) fn plural_message(&self) -> String {
-        match self {
-            Self::UnsatisfiableDependency(requirement) => format!("depend on {requirement}"),
-            Self::IncompatibleDist(invalid_dist) => invalid_dist.plural_message(),
-            Self::InvalidMetadata => format!("have {self}"),
-            Self::InconsistentMetadata => format!("have {self}"),
-            Self::InvalidStructure => format!("have {self}"),
-            Self::Offline => format!("need {self}"),
-            Self::RequiresPython(..) => format!("require {self}"),
-            Self::Network(..) => format!("could not be fetched from the network (`{self}`)"),
-        }
+        self.inflected_message(true)
+    }
+
+    fn inflected_message(&self, plural: bool) -> String {
+        let (singular_verb, plural_verb) = match self {
+            Self::UnsatisfiableDependency(_) => ("depends on", "depend on"),
+            Self::IncompatibleDist(invalid_dist) => invalid_dist.message_verbs(),
+            Self::InvalidMetadata | Self::InconsistentMetadata | Self::InvalidStructure => {
+                ("has", "have")
+            }
+            Self::Offline => ("needs", "need"),
+            Self::RequiresPython(..) => ("requires", "require"),
+            Self::Network(..) => {
+                return format!("could not be fetched from the network (`{self}`)");
+            }
+        };
+        let verb = if plural { plural_verb } else { singular_verb };
+        format!("{verb} {self}")
     }
 
     pub(crate) fn context_message(
@@ -184,7 +164,16 @@ impl UnavailableVersion {
 
 impl Display for UnavailableVersion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.message().as_ref())
+        match self {
+            Self::UnsatisfiableDependency(requirement) => write!(f, "{requirement}"),
+            Self::IncompatibleDist(invalid_dist) => write!(f, "{invalid_dist}"),
+            Self::InvalidMetadata => f.write_str("invalid metadata"),
+            Self::InconsistentMetadata => f.write_str("inconsistent metadata"),
+            Self::InvalidStructure => f.write_str("an invalid package format"),
+            Self::Offline => f.write_str("to be downloaded from a registry"),
+            Self::RequiresPython(requires_python) => write!(f, "Python {requires_python}"),
+            Self::Network(status) => write!(f, "{status}"),
+        }
     }
 }
 
@@ -223,18 +212,6 @@ pub enum UnavailablePackage {
 }
 
 impl UnavailablePackage {
-    fn message(&self) -> Cow<'static, str> {
-        match self {
-            Self::NoIndex => Cow::Borrowed("not found in the provided package locations"),
-            Self::Offline => Cow::Borrowed("not found in the cache"),
-            Self::NotFound => Cow::Borrowed("not found in the package registry"),
-            Self::InvalidMetadata(_) => Cow::Borrowed("invalid metadata"),
-            Self::InconsistentMetadata(_) => Cow::Borrowed("invalid metadata"),
-            Self::InvalidStructure(_) => Cow::Borrowed("an invalid package format"),
-            Self::Network(status) => Cow::Owned(status.to_string()),
-        }
-    }
-
     pub(crate) fn singular_message(&self) -> String {
         match self {
             Self::NoIndex => format!("was {self}"),
@@ -250,14 +227,23 @@ impl UnavailablePackage {
 
 impl Display for UnavailablePackage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.message().as_ref())
+        match self {
+            Self::NoIndex => f.write_str("not found in the provided package locations"),
+            Self::Offline => f.write_str("not found in the cache"),
+            Self::NotFound => f.write_str("not found in the package registry"),
+            Self::InvalidMetadata(_) | Self::InconsistentMetadata(_) => {
+                f.write_str("invalid metadata")
+            }
+            Self::InvalidStructure(_) => f.write_str("an invalid package format"),
+            Self::Network(status) => write!(f, "{status}"),
+        }
     }
 }
 
 impl PartialEq for UnavailablePackage {
     /// Collapse reasons with the same category and cause messages.
     fn eq(&self, other: &Self) -> bool {
-        if self.message() != other.message() {
+        if self.to_string() != other.to_string() {
             return false;
         }
 
