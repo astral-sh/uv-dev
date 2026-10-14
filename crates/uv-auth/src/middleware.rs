@@ -4,7 +4,7 @@ use anyhow::{anyhow, format_err};
 use http::{Extensions, StatusCode};
 use reqwest::{Request, Response};
 use reqwest_middleware::{Error, Middleware, Next};
-use tokio::sync::Mutex;
+use tokio::sync::OnceCell;
 use tracing::{debug, trace, warn};
 
 use uv_netrc::Netrc;
@@ -82,7 +82,7 @@ impl NetrcMode {
 
 /// Strategy for loading text-based credential files.
 enum TextStoreMode {
-    Automatic(tokio::sync::OnceCell<Option<TextCredentialStore>>),
+    Automatic(OnceCell<Option<TextCredentialStore>>),
     #[cfg(test)]
     Enabled(TextCredentialStore),
     #[cfg(test)]
@@ -91,7 +91,7 @@ enum TextStoreMode {
 
 impl Default for TextStoreMode {
     fn default() -> Self {
-        Self::Automatic(tokio::sync::OnceCell::new())
+        Self::Automatic(OnceCell::new())
     }
 }
 
@@ -141,33 +141,6 @@ impl TextStoreMode {
     }
 }
 
-#[derive(Clone)]
-enum S3CredentialState {
-    /// The S3 credential state has not yet been initialized.
-    Uninitialized,
-    /// The S3 credential state has been initialized, with either a signer or `None` if
-    /// no S3 endpoint is configured.
-    Initialized(Option<Arc<Authentication>>),
-}
-
-#[derive(Clone)]
-enum GcsCredentialState {
-    /// The GCS credential state has not yet been initialized.
-    Uninitialized,
-    /// The GCS credential state has been initialized, with either a signer or `None` if
-    /// no GCS endpoint is configured.
-    Initialized(Option<Arc<Authentication>>),
-}
-
-#[derive(Clone)]
-enum AzureCredentialState {
-    /// The Azure credential state has not yet been initialized.
-    Uninitialized,
-    /// The Azure credential state has been initialized, with either a signer or `None` if
-    /// no Azure endpoint is configured.
-    Initialized(Option<Arc<Authentication>>),
-}
-
 /// A middleware that adds basic authentication to requests.
 ///
 /// Uses a cache to propagate credentials from previously seen requests and
@@ -184,33 +157,27 @@ pub struct AuthMiddleware {
     /// unauthenticated request, avoiding cloning an uncloneable request.
     only_authenticated: bool,
     /// Cached S3 credentials to avoid running the credential helper multiple times.
-    s3_credential_state: Mutex<S3CredentialState>,
+    s3_credentials: OnceCell<Arc<Authentication>>,
     /// Cached GCS credentials to avoid running the credential helper multiple times.
-    gcs_credential_state: Mutex<GcsCredentialState>,
+    gcs_credentials: OnceCell<Arc<Authentication>>,
     /// Cached Azure credentials to avoid running the credential helper multiple times.
-    azure_credential_state: Mutex<AzureCredentialState>,
+    azure_credentials: OnceCell<Arc<Authentication>>,
     preview: Preview,
 }
 
-impl Default for AuthMiddleware {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl AuthMiddleware {
-    pub fn new() -> Self {
+    /// Create middleware using the credential cache shared across clients.
+    pub fn new(cache: Arc<CredentialsCache>) -> Self {
         Self {
             netrc: NetrcMode::default(),
             text_store: TextStoreMode::default(),
             keyring: None,
-            // TODO(konsti): There shouldn't be a credential cache without that in the initializer.
-            cache: Arc::new(CredentialsCache::default()),
+            cache,
             indexes: Indexes::new(),
             only_authenticated: false,
-            s3_credential_state: Mutex::new(S3CredentialState::Uninitialized),
-            gcs_credential_state: Mutex::new(GcsCredentialState::Uninitialized),
-            azure_credential_state: Mutex::new(AzureCredentialState::Uninitialized),
+            s3_credentials: OnceCell::new(),
+            gcs_credentials: OnceCell::new(),
+            azure_credentials: OnceCell::new(),
             preview: Preview::default(),
         }
     }
@@ -254,21 +221,6 @@ impl AuthMiddleware {
     #[must_use]
     pub fn with_preview(mut self, preview: Preview) -> Self {
         self.preview = preview;
-        self
-    }
-
-    /// Configure the [`CredentialsCache`] to use.
-    #[must_use]
-    #[cfg(test)]
-    fn with_cache(mut self, cache: CredentialsCache) -> Self {
-        self.cache = Arc::new(cache);
-        self
-    }
-
-    /// Configure the [`CredentialsCache`] to use from an existing [`Arc`].
-    #[must_use]
-    pub fn with_cache_arc(mut self, cache: Arc<CredentialsCache>) -> Self {
-        self.cache = cache;
         self
     }
 
@@ -344,7 +296,7 @@ impl Middleware for AuthMiddleware {
         // to the headers so for display purposes we restore some information
         let url = tracing_url(&request, request_credentials.as_ref());
         let index = self.indexes.index_for(request.url());
-        let auth_policy = self.indexes.auth_policy_for(request.url());
+        let auth_policy = index.map_or(AuthPolicy::Auto, |index| index.auth_policy);
         trace!("Handling request for `{url}` with authentication policy {auth_policy}");
 
         let credentials: Option<Arc<Authentication>> = if matches!(auth_policy, AuthPolicy::Never) {
@@ -448,27 +400,22 @@ impl Middleware for AuthMiddleware {
             .as_ref()
             .map(|credentials| credentials.to_username())
             .unwrap_or(Username::none());
-        let credentials = if let Some(index) = index {
-            self.cache().get_url(&index.url, &username).or_else(|| {
+        let credentials = index
+            .and_then(|index| self.cache().get_url(&index.url, &username))
+            .or_else(|| {
                 self.cache()
                     .get_realm(Realm::from(&**retry_request_url), username)
             })
-        } else {
-            // Since there is no known index for this URL, check if there are credentials in
-            // the realm-level cache.
-            self.cache()
-                .get_realm(Realm::from(&**retry_request_url), username)
-        }
-        .or(credentials);
+            .or(credentials);
 
-        if let Some(credentials) = credentials.as_ref() {
-            if credentials.is_authenticated() {
-                trace!("Retrying request for `{url}` with credentials from cache {credentials:?}");
-                retry_request = credentials.authenticate(retry_request).await?;
-                return self
-                    .complete_request(None, retry_request, extensions, next, auth_policy)
-                    .await;
-            }
+        if let Some(credentials) = credentials.as_ref()
+            && credentials.is_authenticated()
+        {
+            trace!("Retrying request for `{url}` with credentials from cache {credentials:?}");
+            retry_request = credentials.authenticate(retry_request).await?;
+            return self
+                .complete_request(None, retry_request, extensions, next, auth_policy)
+                .await;
         }
 
         // Then, fetch from external services.
@@ -495,23 +442,17 @@ impl Middleware for AuthMiddleware {
                 .await;
         }
 
-        if let Some(credentials) = credentials.as_ref() {
-            if !attempt_has_username {
-                trace!("Retrying request for `{url}` with username from cache {credentials:?}");
-                retry_request = credentials.authenticate(retry_request).await?;
-                return self
-                    .complete_request(None, retry_request, extensions, next, auth_policy)
-                    .await;
-            }
+        if let Some(credentials) = credentials.as_ref()
+            && !attempt_has_username
+        {
+            trace!("Retrying request for `{url}` with username from cache {credentials:?}");
+            retry_request = credentials.authenticate(retry_request).await?;
+            return self
+                .complete_request(None, retry_request, extensions, next, auth_policy)
+                .await;
         }
 
-        if let Some(response) = response {
-            Ok(response)
-        } else {
-            Err(Error::Middleware(format_err!(
-                "Missing credentials for: {url}"
-            )))
-        }
+        response.ok_or_else(|| Error::Middleware(format_err!("Missing credentials for: {url}")))
     }
 }
 
@@ -653,7 +594,9 @@ impl AuthMiddleware {
         let is_azure_endpoint = AzureEndpointProvider::is_azure_endpoint(url, self.preview)
             .map_err(Error::Middleware)?;
         let username = Username::from(
-            credentials.map(|credentials| credentials.username().unwrap_or_default().to_string()),
+            credentials
+                .and_then(Authentication::username)
+                .map(str::to_owned),
         );
 
         // Fetches can be expensive, so we will only run them _once_ per realm or index URL and username combination
@@ -677,91 +620,59 @@ impl AuthMiddleware {
         }
 
         // Support for known providers, like Hugging Face and S3.
-        if let Some(credentials) = HuggingFaceProvider::credentials_for(url)
-            .map(Authentication::from)
-            .map(Arc::new)
-        {
+        if let Some(credentials) = HuggingFaceProvider::authentication_for(url) {
             debug!("Found Hugging Face credentials for `{url}`");
             self.cache().fetches.done(key, Some(credentials.clone()));
             return Ok(Some(credentials));
         }
 
-        if is_s3_endpoint {
-            let mut s3_state = self.s3_credential_state.lock().await;
-
-            // If the S3 credential state is uninitialized, initialize it.
-            let credentials = match &*s3_state {
-                S3CredentialState::Uninitialized => {
-                    trace!("Initializing S3 credentials for `{url}`");
-                    let signer = S3EndpointProvider::create_signer();
-                    let credentials = Arc::new(Authentication::from(signer));
-                    *s3_state = S3CredentialState::Initialized(Some(credentials.clone()));
-                    Some(credentials)
-                }
-                S3CredentialState::Initialized(credentials) => credentials.clone(),
-            };
-
-            if let Some(credentials) = credentials {
-                debug!("Found S3 credentials for `{url}`");
-                self.cache().fetches.done(key, Some(credentials.clone()));
-                return Ok(Some(credentials));
-            }
+        let cloud_credentials = if is_s3_endpoint {
+            Some((
+                "S3",
+                self.s3_credentials
+                    .get_or_init(|| async {
+                        trace!("Initializing S3 credentials for `{url}`");
+                        Arc::new(Authentication::from(S3EndpointProvider::create_signer()))
+                    })
+                    .await,
+            ))
+        } else if is_gcs_endpoint {
+            Some((
+                "GCS",
+                self.gcs_credentials
+                    .get_or_init(|| async {
+                        trace!("Initializing GCS credentials for `{url}`");
+                        Arc::new(Authentication::from(GcsEndpointProvider::create_signer()))
+                    })
+                    .await,
+            ))
+        } else if is_azure_endpoint {
+            Some((
+                "Azure",
+                self.azure_credentials
+                    .get_or_init(|| async {
+                        trace!("Initializing Azure credentials for `{url}`");
+                        Arc::new(Authentication::from(AzureEndpointProvider::create_signer()))
+                    })
+                    .await,
+            ))
+        } else {
+            None
+        };
+        if let Some((provider, credentials)) = cloud_credentials {
+            debug!("Found {provider} credentials for `{url}`");
+            self.cache()
+                .fetches
+                .done(key, Some(Arc::clone(credentials)));
+            return Ok(Some(Arc::clone(credentials)));
         }
 
-        if is_gcs_endpoint {
-            let mut gcs_state = self.gcs_credential_state.lock().await;
-
-            // If the GCS credential state is uninitialized, initialize it.
-            let credentials = match &*gcs_state {
-                GcsCredentialState::Uninitialized => {
-                    trace!("Initializing GCS credentials for `{url}`");
-                    let signer = GcsEndpointProvider::create_signer();
-                    let credentials = Arc::new(Authentication::from(signer));
-                    *gcs_state = GcsCredentialState::Initialized(Some(credentials.clone()));
-                    Some(credentials)
-                }
-                GcsCredentialState::Initialized(credentials) => credentials.clone(),
-            };
-
-            if let Some(credentials) = credentials {
-                debug!("Found GCS credentials for `{url}`");
-                self.cache().fetches.done(key, Some(credentials.clone()));
-                return Ok(Some(credentials));
-            }
-        }
-
-        if is_azure_endpoint {
-            let mut azure_state = self.azure_credential_state.lock().await;
-
-            // If the Azure credential state is uninitialized, initialize it.
-            let credentials = match &*azure_state {
-                AzureCredentialState::Uninitialized => {
-                    trace!("Initializing Azure credentials for `{url}`");
-                    let signer = AzureEndpointProvider::create_signer();
-                    let credentials = Arc::new(Authentication::from(signer));
-                    *azure_state = AzureCredentialState::Initialized(Some(credentials.clone()));
-                    Some(credentials)
-                }
-                AzureCredentialState::Initialized(credentials) => credentials.clone(),
-            };
-
-            if let Some(credentials) = credentials {
-                debug!("Found Azure credentials for `{url}`");
-                self.cache().fetches.done(key, Some(credentials.clone()));
-                return Ok(Some(credentials));
-            }
-        }
+        let username = credentials.and_then(Authentication::username);
 
         // Netrc support based on: <https://github.com/gribouille/netrc>.
         let credentials = if let Some(credentials) = self.netrc.get().and_then(|netrc| {
             debug!("Checking netrc for credentials for `{url}`");
-            Credentials::from_netrc(
-                netrc,
-                url,
-                credentials
-                    .as_ref()
-                    .and_then(|credentials| credentials.username()),
-            )
+            Credentials::from_netrc(netrc, url, username)
         }) {
             debug!("Found credentials in netrc file for `{url}`");
             Some(credentials)
@@ -769,12 +680,7 @@ impl AuthMiddleware {
         // Text credential store support.
         } else if let Some(credentials) = self.text_store.get().await.and_then(|text_store| {
             debug!("Checking text store for credentials for `{url}`");
-            match text_store.get_credentials(
-                url,
-                credentials
-                    .as_ref()
-                    .and_then(|credentials| credentials.username()),
-            ) {
+            match text_store.get_credentials(url, username) {
                 Ok(credentials) => credentials.cloned(),
                 Err(err) => {
                     debug!("Failed to get credentials from text store: {err}");
@@ -787,28 +693,27 @@ impl AuthMiddleware {
         } else if let Some(credentials) = {
             if self.preview.is_enabled(PreviewFeature::NativeAuth) {
                 let native_store = KeyringProvider::native();
-                let username = credentials.and_then(|credentials| credentials.username());
-                let display_username = if let Some(username) = username {
-                    format!("{username}@")
-                } else {
-                    String::new()
-                };
-                if let Some(index) = index {
+                let display_username = std::fmt::from_fn(|f| match username {
+                    Some(username) => write!(f, "{username}@"),
+                    None => Ok(()),
+                });
+                let lookup_url = if let Some(index) = index {
                     // N.B. The native store performs an exact look up right now, so we use the root
                     // URL of the index instead of relying on prefix-matching.
                     debug!(
                         "Checking native store for credentials for index URL {}{}",
                         display_username, index.root_url
                     );
-                    native_store.fetch(&index.root_url, username).await
+                    &index.root_url
                 } else {
                     debug!(
                         "Checking native store for credentials for URL `{}{}`",
                         display_username, url
                     );
-                    native_store.fetch(url, username).await
-                }
+                    url
+                };
                 // TODO(zanieb): We should have a realm fallback here too
+                native_store.fetch(lookup_url, username).await
             } else {
                 None
             }
@@ -824,22 +729,21 @@ impl AuthMiddleware {
                 // The subprocess keyring provider is _slow_ so we do not perform fetches for all
                 // URLs; instead, we fetch if there's a username or if the user has requested to
                 // always authenticate.
-                if let Some(username) = credentials.and_then(|credentials| credentials.username()) {
-                    if let Some(index) = index {
+                if let Some(username) = username {
+                    let lookup_url = if let Some(index) = index {
                         debug!(
                             "Checking keyring for credentials for index URL `{}@{}`",
                             username, index.url
                         );
-                        keyring
-                            .fetch(DisplaySafeUrl::ref_cast(&index.url), Some(username))
-                            .await
+                        DisplaySafeUrl::ref_cast(&index.url)
                     } else {
                         debug!(
                             "Checking keyring for credentials for full URL `{}@{}`",
                             username, url
                         );
-                        keyring.fetch(url, Some(username)).await
-                    }
+                        url
+                    };
+                    keyring.fetch(lookup_url, Some(username)).await
                 } else if matches!(auth_policy, AuthPolicy::Always) {
                     if let Some(index) = index {
                         debug!(
@@ -939,7 +843,7 @@ mod tests {
     async fn test_no_credentials() -> Result<(), Error> {
         let server = start_test_server("user", "password").await;
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(CredentialsCache::new()))
+            .with(AuthMiddleware::new(Arc::default()))
             .build();
 
         assert_eq!(
@@ -963,6 +867,61 @@ mod tests {
         Ok(())
     }
 
+    #[test(tokio::test)]
+    async fn test_cached_credentials_prefer_specific_url() -> Result<(), Error> {
+        let server = start_test_server("user", "specific").await;
+        let root = Url::parse(&server.uri())?;
+        let specific = root.join("private/")?;
+        let cache = CredentialsCache::new();
+        for (url, password) in [(&root, "general"), (&specific, "specific")] {
+            cache.store_credentials(
+                DisplaySafeUrl::ref_cast(url),
+                Credentials::basic(Some("user".into()), Some(password.into())),
+            );
+        }
+        let client = test_client_builder()
+            .with(AuthMiddleware::new(Arc::new(cache)))
+            .build();
+
+        assert_eq!(
+            client.get(specific.join("package")?).send().await?.status(),
+            200
+        );
+        Ok(())
+    }
+
+    #[test(tokio::test)]
+    async fn test_cached_credentials_distinguish_empty_path_segments() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let root = Url::parse(&server.uri())?;
+        let cache = CredentialsCache::new();
+        cache.store_credentials(
+            DisplaySafeUrl::ref_cast(&root.join("private//index")?),
+            Credentials::basic(Some("user".into()), Some("password".into())),
+        );
+        let client = test_client_builder()
+            .with(AuthMiddleware::new(Arc::new(cache)))
+            .build();
+        client
+            .get(root.join("private/index/package")?)
+            .send()
+            .await?;
+
+        let requests = server.received_requests().await.unwrap();
+        assert!(
+            !requests[0]
+                .headers
+                .contains_key(reqwest::header::AUTHORIZATION)
+        );
+        Ok(())
+    }
+
     /// Without seeding the cache, authenticated requests are not cached
     #[test(tokio::test)]
     async fn test_credentials_in_url_no_seed() -> Result<(), Error> {
@@ -971,7 +930,7 @@ mod tests {
 
         let server = start_test_server(username, password).await;
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(CredentialsCache::new()))
+            .with(AuthMiddleware::new(Arc::default()))
             .build();
 
         let base_url = Url::parse(&server.uri())?;
@@ -1027,7 +986,7 @@ mod tests {
         );
 
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache))
+            .with(AuthMiddleware::new(Arc::new(cache)))
             .build();
 
         let mut url = base_url.clone();
@@ -1081,7 +1040,7 @@ mod tests {
         );
 
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache))
+            .with(AuthMiddleware::new(Arc::new(cache)))
             .build();
 
         let mut url = base_url.clone();
@@ -1135,8 +1094,7 @@ mod tests {
         let server = start_test_server(username, password).await;
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
+                AuthMiddleware::new(Arc::default())
                     .with_netrc(Netrc::from_file(netrc_file.path()).ok()),
             )
             .build();
@@ -1180,13 +1138,9 @@ mod tests {
         )?;
 
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_netrc(Some(
-                        Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
-                    )),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_netrc(Some(
+                Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
+            )))
             .build();
 
         assert_eq!(
@@ -1226,13 +1180,9 @@ mod tests {
         )?;
 
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_netrc(Some(
-                        Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
-                    )),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_netrc(Some(
+                Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
+            )))
             .build();
 
         assert_eq!(
@@ -1268,13 +1218,9 @@ mod tests {
         )?;
 
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_netrc(Some(
-                        Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
-                    )),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_netrc(Some(
+                Netrc::from_file(netrc_file.path()).expect("Test has valid netrc file"),
+            )))
             .build();
 
         let mut url = base_url.clone();
@@ -1305,17 +1251,15 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_keyring(Some(KeyringProvider::dummy([(
-                        format!(
-                            "{}:{}",
-                            base_url.host_str().unwrap(),
-                            base_url.port().unwrap()
-                        ),
-                        username,
-                        password,
-                    )]))),
+                AuthMiddleware::new(Arc::default()).with_keyring(Some(KeyringProvider::dummy([(
+                    format!(
+                        "{}:{}",
+                        base_url.host_str().unwrap(),
+                        base_url.port().unwrap()
+                    ),
+                    username,
+                    password,
+                )]))),
             )
             .build();
 
@@ -1371,8 +1315,7 @@ mod tests {
         let indexes = indexes_for(&base_url, AuthPolicy::Always);
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
+                AuthMiddleware::new(Arc::default())
                     .with_keyring(Some(KeyringProvider::dummy([(
                         format!(
                             "{}:{}",
@@ -1433,14 +1376,12 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_keyring(Some(KeyringProvider::dummy([(
-                        // Omit the port from the keyring entry
-                        base_url.host_str().unwrap(),
-                        username,
-                        password,
-                    )]))),
+                AuthMiddleware::new(Arc::default()).with_keyring(Some(KeyringProvider::dummy([(
+                    // Omit the port from the keyring entry
+                    base_url.host_str().unwrap(),
+                    username,
+                    password,
+                )]))),
             )
             .build();
 
@@ -1473,19 +1414,20 @@ mod tests {
                 None,
             ))),
         );
-        let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache).with_keyring(Some(
-                KeyringProvider::dummy([(
-                    format!(
-                        "{}:{}",
-                        base_url.host_str().unwrap(),
-                        base_url.port().unwrap()
-                    ),
-                    username,
-                    password,
-                )]),
-            )))
-            .build();
+        let client =
+            test_client_builder()
+                .with(AuthMiddleware::new(Arc::new(cache)).with_keyring(Some(
+                    KeyringProvider::dummy([(
+                        format!(
+                            "{}:{}",
+                            base_url.host_str().unwrap(),
+                            base_url.port().unwrap()
+                        ),
+                        username,
+                        password,
+                    )]),
+                )))
+                .build();
 
         assert_eq!(
             client.get(server.uri()).send().await?.status(),
@@ -1534,7 +1476,7 @@ mod tests {
         );
 
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache))
+            .with(AuthMiddleware::new(Arc::new(cache)))
             .build();
 
         // Both servers should work
@@ -1585,28 +1527,26 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_keyring(Some(KeyringProvider::dummy([
-                        (
-                            format!(
-                                "{}:{}",
-                                base_url_1.host_str().unwrap(),
-                                base_url_1.port().unwrap()
-                            ),
-                            username_1,
-                            password_1,
+                AuthMiddleware::new(Arc::default()).with_keyring(Some(KeyringProvider::dummy([
+                    (
+                        format!(
+                            "{}:{}",
+                            base_url_1.host_str().unwrap(),
+                            base_url_1.port().unwrap()
                         ),
-                        (
-                            format!(
-                                "{}:{}",
-                                base_url_2.host_str().unwrap(),
-                                base_url_2.port().unwrap()
-                            ),
-                            username_2,
-                            password_2,
+                        username_1,
+                        password_1,
+                    ),
+                    (
+                        format!(
+                            "{}:{}",
+                            base_url_2.host_str().unwrap(),
+                            base_url_2.port().unwrap()
                         ),
-                    ]))),
+                        username_2,
+                        password_2,
+                    ),
+                ]))),
             )
             .build();
 
@@ -1729,7 +1669,7 @@ mod tests {
         );
 
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(cache))
+            .with(AuthMiddleware::new(Arc::new(cache)))
             .build();
 
         // Both servers should work
@@ -1835,28 +1775,26 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_keyring(Some(KeyringProvider::dummy([
-                        (
-                            format!(
-                                "{}:{}",
-                                base_url_1.host_str().unwrap(),
-                                base_url_1.port().unwrap()
-                            ),
-                            username_1,
-                            password_1,
+                AuthMiddleware::new(Arc::default()).with_keyring(Some(KeyringProvider::dummy([
+                    (
+                        format!(
+                            "{}:{}",
+                            base_url_1.host_str().unwrap(),
+                            base_url_1.port().unwrap()
                         ),
-                        (
-                            format!(
-                                "{}:{}",
-                                base_url_2.host_str().unwrap(),
-                                base_url_2.port().unwrap()
-                            ),
-                            username_2,
-                            password_2,
+                        username_1,
+                        password_1,
+                    ),
+                    (
+                        format!(
+                            "{}:{}",
+                            base_url_2.host_str().unwrap(),
+                            base_url_2.port().unwrap()
                         ),
-                    ]))),
+                        username_2,
+                        password_2,
+                    ),
+                ]))),
             )
             .build();
 
@@ -1966,12 +1904,10 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_keyring(Some(KeyringProvider::dummy([
-                        (base_url_1.clone(), username, password_1),
-                        (base_url_2.clone(), username, password_2),
-                    ]))),
+                AuthMiddleware::new(Arc::default()).with_keyring(Some(KeyringProvider::dummy([
+                    (base_url_1.clone(), username, password_1),
+                    (base_url_2.clone(), username, password_2),
+                ]))),
             )
             .build();
 
@@ -2078,8 +2014,7 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
+                AuthMiddleware::new(Arc::default())
                     .with_keyring(Some(KeyringProvider::dummy([
                         (base_url_1.clone(), username, password_1),
                         (base_url_2.clone(), username, password_2),
@@ -2180,8 +2115,7 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
+                AuthMiddleware::new(Arc::default())
                     .with_keyring(Some(KeyringProvider::dummy([(
                         base_url.clone(),
                         username,
@@ -2238,6 +2172,44 @@ mod tests {
         }])
     }
 
+    /// A nested index can prohibit credentials even when the host-level index permits them.
+    #[test(tokio::test)]
+    async fn test_auth_policy_prefers_specific_index() -> Result<(), Error> {
+        let server = start_test_server("user", "password").await;
+        let root = DisplaySafeUrl::parse(&server.uri())?;
+        let specific = root.join("private/")?;
+        let cache = CredentialsCache::new();
+        cache.store_credentials(
+            &root,
+            Credentials::basic(Some("user".into()), Some("password".into())),
+        );
+        let indexes = Indexes::from_indexes([
+            Index {
+                url: root.clone(),
+                root_url: root,
+                auth_policy: AuthPolicy::Auto,
+            },
+            Index {
+                url: specific.clone(),
+                root_url: specific.clone(),
+                auth_policy: AuthPolicy::Never,
+            },
+        ]);
+        let client = test_client_builder()
+            .with(AuthMiddleware::new(Arc::new(cache)).with_indexes(indexes))
+            .build();
+
+        assert_eq!(
+            client
+                .get(Url::from(specific.join("package")?))
+                .send()
+                .await?
+                .status(),
+            401
+        );
+        Ok(())
+    }
+
     /// With the "always" auth policy, requests should succeed on
     /// authenticated requests with the correct credentials.
     #[test(tokio::test)]
@@ -2251,11 +2223,7 @@ mod tests {
 
         let indexes = indexes_for(&base_url, AuthPolicy::Always);
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_indexes(indexes),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_indexes(indexes))
             .build();
 
         Mock::given(method("GET"))
@@ -2318,11 +2286,7 @@ mod tests {
 
         let indexes = indexes_for(&base_url, AuthPolicy::Always);
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_indexes(indexes),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_indexes(indexes))
             .build();
 
         // Unauthenticated requests are not allowed.
@@ -2358,11 +2322,7 @@ mod tests {
 
         let indexes = indexes_for(&base_url, AuthPolicy::Never);
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_indexes(indexes),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_indexes(indexes))
             .build();
 
         let mut url = base_url.clone();
@@ -2403,11 +2363,7 @@ mod tests {
 
         let indexes = indexes_for(&base_url, AuthPolicy::Never);
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_indexes(indexes),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_indexes(indexes))
             .build();
 
         assert_eq!(
@@ -2466,11 +2422,7 @@ mod tests {
         store.insert(service.clone(), credentials);
 
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_text_store(Some(store)),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_text_store(Some(store)))
             .build();
 
         assert_eq!(
@@ -2490,9 +2442,7 @@ mod tests {
 
         let client = test_client_builder()
             .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_text_store(None), // Explicitly disable text store
+                AuthMiddleware::new(Arc::default()).with_text_store(None), // Explicitly disable text store
             )
             .build();
 
@@ -2521,11 +2471,7 @@ mod tests {
         store.insert(service.clone(), credentials);
 
         let client = test_client_builder()
-            .with(
-                AuthMiddleware::new()
-                    .with_cache(CredentialsCache::new())
-                    .with_text_store(Some(store)),
-            )
+            .with(AuthMiddleware::new(Arc::default()).with_text_store(Some(store)))
             .build();
 
         // Request with matching username should succeed
@@ -2603,7 +2549,7 @@ mod tests {
             .await;
 
         let client = test_client_builder()
-            .with(AuthMiddleware::new().with_cache(CredentialsCache::new()))
+            .with(AuthMiddleware::new(Arc::default()))
             .build();
 
         let base_url = Url::parse(&server.uri())?;

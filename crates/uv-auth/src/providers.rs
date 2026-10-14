@@ -1,5 +1,4 @@
-use std::borrow::Cow;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::{Context, Result};
 use reqsign::aws::DefaultSigner as AwsDefaultSigner;
@@ -13,7 +12,7 @@ use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
 use crate::Credentials;
-use crate::credentials::Token;
+use crate::credentials::Authentication;
 use crate::index::is_path_prefix;
 use crate::realm::{Realm, RealmRef};
 
@@ -23,8 +22,8 @@ static HUGGING_FACE_REALM: LazyLock<Realm> = LazyLock::new(|| {
     Realm::from(&url)
 });
 
-/// The authentication token for the Hugging Face platform, if set.
-static HUGGING_FACE_TOKEN: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
+/// Authentication for the Hugging Face platform, if a token is set.
+static HUGGING_FACE_AUTHENTICATION: LazyLock<Option<Arc<Authentication>>> = LazyLock::new(|| {
     // Extract the Hugging Face token from the environment variable, if it exists.
     let hf_token = std::env::var(EnvVars::HF_TOKEN)
         .ok()
@@ -37,7 +36,9 @@ static HUGGING_FACE_TOKEN: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
     }
 
     debug!("Found Hugging Face token in environment");
-    Some(hf_token)
+    Some(Arc::new(Authentication::from(Credentials::bearer(
+        hf_token,
+    ))))
 });
 
 /// A provider for authentication credentials for the Hugging Face platform.
@@ -45,22 +46,17 @@ static HUGGING_FACE_TOKEN: LazyLock<Option<Vec<u8>>> = LazyLock::new(|| {
 pub(crate) struct HuggingFaceProvider;
 
 impl HuggingFaceProvider {
-    /// Returns the credentials for the Hugging Face platform, if available.
-    pub(crate) fn credentials_for(url: &Url) -> Option<Credentials> {
-        if RealmRef::from(url) == *HUGGING_FACE_REALM {
-            if let Some(token) = HUGGING_FACE_TOKEN.as_ref() {
-                return Some(Credentials::Bearer {
-                    token: Token::new(token.clone()),
-                });
-            }
+    /// Returns authentication for the Hugging Face platform, if available.
+    pub(crate) fn authentication_for(url: &Url) -> Option<Arc<Authentication>> {
+        if RealmRef::from(url) != *HUGGING_FACE_REALM {
+            return None;
         }
-        None
+        HUGGING_FACE_AUTHENTICATION.as_ref().map(Arc::clone)
     }
 }
 
-/// The [`Url`] for the S3 endpoint, if set.
-static S3_ENDPOINT_URL: LazyLock<Result<Option<Url>, ParseError>> =
-    LazyLock::new(|| endpoint_url(EnvVars::UV_S3_ENDPOINT_URL));
+static S3_ENDPOINT: LazyLock<CloudEndpoint> =
+    LazyLock::new(|| CloudEndpoint::new(EnvVars::UV_S3_ENDPOINT_URL, PreviewFeature::S3Endpoint));
 
 /// A provider for authentication credentials for S3 endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,25 +65,7 @@ pub(crate) struct S3EndpointProvider;
 impl S3EndpointProvider {
     /// Returns `true` if the URL matches the configured S3 endpoint.
     pub(crate) fn is_s3_endpoint(url: &Url, preview: Preview) -> Result<bool> {
-        if let Some(s3_endpoint_url) = S3_ENDPOINT_URL
-            .as_ref()
-            .map_err(|error| *error)
-            .with_context(|| format!("Invalid `{}`", EnvVars::UV_S3_ENDPOINT_URL))?
-        {
-            if !preview.is_enabled(PreviewFeature::S3Endpoint) {
-                warn_user_once!(
-                    "The `s3-endpoint` option is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
-                    PreviewFeature::S3Endpoint
-                );
-            }
-
-            // Treat any URL under the endpoint path on the same domain or subdomain as available
-            // for S3 signing.
-            if is_endpoint_url(url, s3_endpoint_url) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        S3_ENDPOINT.matches(url, preview)
     }
 
     /// Creates a new S3 signer with the configured region.
@@ -98,19 +76,13 @@ impl S3EndpointProvider {
         // TODO(charlie): Can `reqsign` infer the region for us? Profiles, for example,
         // often have a region set already.
         let region = std::env::var(EnvVars::AWS_REGION)
-            .map(Cow::Owned)
-            .unwrap_or_else(|_| {
-                std::env::var(EnvVars::AWS_DEFAULT_REGION)
-                    .map(Cow::Owned)
-                    .unwrap_or_else(|_| Cow::Borrowed("us-east-1"))
-            });
-        reqsign::aws::default_signer("s3", &region)
+            .or_else(|_| std::env::var(EnvVars::AWS_DEFAULT_REGION));
+        reqsign::aws::default_signer("s3", region.as_deref().unwrap_or("us-east-1"))
     }
 }
 
-/// The [`Url`] for the GCS endpoint, if set.
-static GCS_ENDPOINT_URL: LazyLock<Result<Option<Url>, ParseError>> =
-    LazyLock::new(|| endpoint_url(EnvVars::UV_GCS_ENDPOINT_URL));
+static GCS_ENDPOINT: LazyLock<CloudEndpoint> =
+    LazyLock::new(|| CloudEndpoint::new(EnvVars::UV_GCS_ENDPOINT_URL, PreviewFeature::GcsEndpoint));
 
 /// A provider for authentication credentials for GCS endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,25 +91,7 @@ pub(crate) struct GcsEndpointProvider;
 impl GcsEndpointProvider {
     /// Returns `true` if the URL matches the configured GCS endpoint.
     pub(crate) fn is_gcs_endpoint(url: &Url, preview: Preview) -> Result<bool> {
-        if let Some(gcs_endpoint_url) = GCS_ENDPOINT_URL
-            .as_ref()
-            .map_err(|error| *error)
-            .with_context(|| format!("Invalid `{}`", EnvVars::UV_GCS_ENDPOINT_URL))?
-        {
-            if !preview.is_enabled(PreviewFeature::GcsEndpoint) {
-                warn_user_once!(
-                    "The `gcs-endpoint` option is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
-                    PreviewFeature::GcsEndpoint
-                );
-            }
-
-            // Treat any URL under the endpoint path on the same domain or subdomain as available
-            // for GCS signing.
-            if is_endpoint_url(url, gcs_endpoint_url) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        GCS_ENDPOINT.matches(url, preview)
     }
 
     /// Creates a new GCS signer.
@@ -149,9 +103,12 @@ impl GcsEndpointProvider {
     }
 }
 
-/// The [`Url`] for the Azure endpoint, if set.
-static AZURE_ENDPOINT_URL: LazyLock<Result<Option<Url>, ParseError>> =
-    LazyLock::new(|| endpoint_url(EnvVars::UV_AZURE_ENDPOINT_URL));
+static AZURE_ENDPOINT: LazyLock<CloudEndpoint> = LazyLock::new(|| {
+    CloudEndpoint::new(
+        EnvVars::UV_AZURE_ENDPOINT_URL,
+        PreviewFeature::AzureEndpoint,
+    )
+});
 
 /// A provider for authentication credentials for Azure endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,25 +117,7 @@ pub struct AzureEndpointProvider;
 impl AzureEndpointProvider {
     /// Returns `true` if the URL matches the configured Azure endpoint.
     pub fn is_azure_endpoint(url: &Url, preview: Preview) -> Result<bool> {
-        if let Some(azure_endpoint_url) = AZURE_ENDPOINT_URL
-            .as_ref()
-            .map_err(|error| *error)
-            .with_context(|| format!("Invalid `{}`", EnvVars::UV_AZURE_ENDPOINT_URL))?
-        {
-            if !preview.is_enabled(PreviewFeature::AzureEndpoint) {
-                warn_user_once!(
-                    "The `azure-endpoint` option is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
-                    PreviewFeature::AzureEndpoint
-                );
-            }
-
-            // Treat any URL under the endpoint path on the same domain or subdomain as available
-            // for Azure signing.
-            if is_endpoint_url(url, azure_endpoint_url) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        AZURE_ENDPOINT.matches(url, preview)
     }
 
     /// Creates a new Azure signer using the default Azure credential chain.
@@ -190,12 +129,42 @@ impl AzureEndpointProvider {
     }
 }
 
-/// Returns the configured endpoint [`Url`], if set and valid.
-fn endpoint_url(env_var: &str) -> Result<Option<Url>, ParseError> {
-    let Some(endpoint_url) = std::env::var(env_var).ok() else {
-        return Ok(None);
-    };
-    Url::parse(&endpoint_url).map(Some)
+/// Configuration shared by cloud authentication endpoints.
+struct CloudEndpoint {
+    env_var: &'static str,
+    feature: PreviewFeature,
+    url: Result<Option<Url>, ParseError>,
+}
+
+impl CloudEndpoint {
+    fn new(env_var: &'static str, feature: PreviewFeature) -> Self {
+        Self {
+            env_var,
+            feature,
+            url: std::env::var(env_var)
+                .ok()
+                .map(|url| Url::parse(&url))
+                .transpose(),
+        }
+    }
+
+    fn matches(&self, url: &Url, preview: Preview) -> Result<bool> {
+        let Some(endpoint_url) = self
+            .url
+            .as_ref()
+            .map_err(|error| *error)
+            .with_context(|| format!("Invalid `{}`", self.env_var))?
+        else {
+            return Ok(false);
+        };
+        let feature = self.feature;
+        if !preview.is_enabled(feature) {
+            warn_user_once!(
+                "The `{feature}` option is experimental and may change without warning. Pass `--preview-features {feature}` to disable this warning."
+            );
+        }
+        Ok(is_endpoint_url(url, endpoint_url))
+    }
 }
 
 /// Returns `true` if `url` is within the configured S3, GCS, or Azure-compatible endpoint URL.

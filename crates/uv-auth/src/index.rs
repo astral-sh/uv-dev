@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::fmt::{self, Display, Formatter};
 
 use rustc_hash::FxHashSet;
@@ -90,10 +91,6 @@ pub(crate) fn is_path_prefix(prefix: &str, path: &str) -> bool {
     prefix.ends_with('/') || suffix.starts_with('/')
 }
 
-// TODO(john): Multiple methods in this struct need to iterate over
-// all the indexes in the set. There are probably not many URLs to
-// iterate through, but we could use a trie instead of a HashSet here
-// for more efficient search.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct Indexes(FxHashSet<Index>);
 
@@ -104,27 +101,15 @@ impl Indexes {
 
     /// Create a new [`Indexes`] instance from an iterator of [`Index`]s.
     pub fn from_indexes(urls: impl IntoIterator<Item = Index>) -> Self {
-        let mut index_urls = Self::new();
-        for url in urls {
-            index_urls.0.insert(url);
-        }
-        index_urls
+        Self(urls.into_iter().collect())
     }
 
-    /// Get the index for a URL if one exists.
+    /// Get the most specific index for a URL, keeping the first match among equally specific roots.
     pub(crate) fn index_for(&self, url: &Url) -> Option<&Index> {
-        self.find_prefix_index(url)
-    }
-
-    /// Get the [`AuthPolicy`] for a URL.
-    pub(crate) fn auth_policy_for(&self, url: &Url) -> AuthPolicy {
-        self.find_prefix_index(url)
-            .map(|index| index.auth_policy)
-            .unwrap_or(AuthPolicy::Auto)
-    }
-
-    fn find_prefix_index(&self, url: &Url) -> Option<&Index> {
-        self.0.iter().find(|&index| index.is_prefix_for(url))
+        self.0
+            .iter()
+            .filter(|index| index.is_prefix_for(url))
+            .min_by_key(|index| Reverse(index.root_url.path().len()))
     }
 }
 
@@ -139,6 +124,16 @@ mod tests {
             root_url,
             auth_policy,
         }
+    }
+
+    #[test]
+    fn index_prefers_the_most_specific_matching_root() {
+        let broad = index("https://example.com/", AuthPolicy::Auto);
+        let specific = index("https://example.com/private/", AuthPolicy::Never);
+        let indexes = Indexes::from_indexes([broad, specific.clone()]);
+        let request = Url::parse("https://example.com/private/package").unwrap();
+
+        assert_eq!(indexes.index_for(&request), Some(&specific));
     }
 
     #[test]

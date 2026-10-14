@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 use std::hash::BuildHasherDefault;
 use std::sync::Arc;
@@ -66,17 +67,14 @@ impl CredentialsCache {
         url: &DisplaySafeUrl,
     ) -> Result<bool, CredentialsFromUrlError> {
         if let Some(credentials) = Credentials::from_url(url)? {
-            trace!("Caching credentials for `{url}`");
-            self.insert(url, Arc::new(Authentication::from(credentials)));
+            self.store_credentials(url, credentials);
             Ok(true)
         } else {
             Ok(false)
         }
     }
 
-    /// Populate the global authentication store with credentials on a URL, if there are any.
-    ///
-    /// Returns `true` if the store was updated.
+    /// Populate the authentication cache with credentials for a URL.
     pub fn store_credentials(&self, url: &DisplaySafeUrl, credentials: Credentials) {
         trace!("Caching credentials for `{url}`");
         self.insert(url, Arc::new(Authentication::from(credentials)));
@@ -88,9 +86,9 @@ impl CredentialsCache {
         realm: Realm,
         username: Username,
     ) -> Option<Arc<Authentication>> {
-        let realms = self.realms.read().unwrap();
         let given_username = username.is_some();
         let key = (realm, username);
+        let credentials = self.realms.read().unwrap().get(&key).cloned();
         let realm_username = fmt::from_fn(|f| {
             let (realm, username) = &key;
             if let Some(username) = username.as_deref() {
@@ -100,7 +98,7 @@ impl CredentialsCache {
             }
         });
 
-        let Some(credentials) = realms.get(&key).cloned() else {
+        let Some(credentials) = credentials else {
             trace!("No credentials in cache for realm {realm_username}");
             return None;
         };
@@ -115,7 +113,7 @@ impl CredentialsCache {
         Some(credentials)
     }
 
-    /// Return the cached credentials for a URL and username, if any.
+    /// Return credentials cached at the most specific URL prefix, if they match the username.
     ///
     /// Note we do not cache per username, but if a username is passed we will confirm that the
     /// cached credentials have a username equal to the provided one — otherwise `None` is returned.
@@ -125,21 +123,26 @@ impl CredentialsCache {
         url: &DisplaySafeUrl,
         username: &Username,
     ) -> Option<Arc<Authentication>> {
-        let urls = self.urls.read().unwrap();
-        let credentials = urls.get(url);
-        if let Some(credentials) = credentials {
-            if username.is_none() || username.as_deref() == credentials.username() {
-                if username.is_some() && credentials.password().is_none() {
-                    // If given a username, don't return password-less credentials
-                    trace!("No password in cache for URL `{url}`");
-                    return None;
-                }
-                trace!("Found cached credentials for URL `{url}`");
-                return Some(credentials.clone());
-            }
+        let credentials = self
+            .urls
+            .read()
+            .unwrap()
+            .get(url)
+            .filter(|credentials| {
+                username.is_none() || username.as_deref() == credentials.username()
+            })
+            .cloned();
+        let Some(credentials) = credentials else {
+            trace!("No credentials in cache for URL `{url}`");
+            return None;
+        };
+        if username.is_some() && credentials.password().is_none() {
+            // If given a username, don't return password-less credentials
+            trace!("No password in cache for URL `{url}`");
+            return None;
         }
-        trace!("No credentials in cache for URL `{url}`");
-        None
+        trace!("Found cached credentials for URL `{url}`");
+        Some(credentials)
     }
 
     /// Update the cache with the given credentials.
@@ -149,48 +152,36 @@ impl CredentialsCache {
             return;
         }
 
-        // Insert an entry for requests including the username
+        let realm = Realm::from(url);
         let username = credentials.to_username();
-        if username.is_some() {
-            let realm = (Realm::from(url), username);
-            self.insert_realm(realm, &credentials);
+        {
+            let mut realms = self.realms.write().unwrap();
+            if username.is_some() {
+                Self::insert_realm(&mut realms, (realm.clone(), username), &credentials);
+            }
+            Self::insert_realm(&mut realms, (realm, Username::none()), &credentials);
         }
-
-        // Insert an entry for requests with no username
-        self.insert_realm((Realm::from(url), Username::none()), &credentials);
 
         // Insert an entry for the URL
         let mut urls = self.urls.write().unwrap();
         urls.insert(url, credentials);
     }
 
-    /// Private interface to update a realm cache entry.
-    ///
-    /// Returns replaced credentials, if any.
+    /// Update a realm cache entry without replacing password-bearing credentials with an
+    /// unauthenticated value.
     fn insert_realm(
-        &self,
+        realms: &mut FxHashMap<(Realm, Username), Arc<Authentication>>,
         key: (Realm, Username),
         credentials: &Arc<Authentication>,
-    ) -> Option<Arc<Authentication>> {
-        // Do not cache empty credentials
-        if credentials.is_empty() {
-            return None;
-        }
-
-        let mut realms = self.realms.write().unwrap();
-
-        // Always replace existing entries if we have a password or token
-        if credentials.is_authenticated() {
-            return realms.insert(key, credentials.clone());
-        }
-
-        // If we only have a username, add a new entry or replace an existing entry if it doesn't have a password
-        let existing = realms.get(&key);
-        if existing.is_none_or(|credentials| credentials.password().is_none()) {
-            return realms.insert(key, credentials.clone());
-        }
-
-        None
+    ) {
+        realms
+            .entry(key)
+            .and_modify(|cached| {
+                if credentials.is_authenticated() || cached.password().is_none() {
+                    *cached = Arc::clone(credentials);
+                }
+            })
+            .or_insert_with(|| Arc::clone(credentials));
     }
 }
 
@@ -216,50 +207,56 @@ impl<T> Default for TrieState<T> {
 
 impl<T> UrlTrie<T> {
     fn new() -> Self {
-        let mut trie = Self { states: vec![] };
-        trie.alloc();
-        trie
+        Self {
+            states: vec![TrieState::default()],
+        }
     }
 
     fn get(&self, url: &Url) -> Option<&T> {
-        let segments = url.path_segments()?;
-        let mut state = 0;
-        let realm = Realm::from(url).to_string();
-        for component in [realm.as_str()]
-            .into_iter()
-            .chain(segments.filter(|item| !item.is_empty()))
-        {
-            state = self.states[state].get(component)?;
-            if let Some(ref value) = self.states[state].value {
-                return Some(value);
+        let mut state = &self.states[0];
+        let mut matched = None;
+        for component in Self::components(url)? {
+            let Some(next) = state.get(&component) else {
+                break;
+            };
+            state = &self.states[next];
+            if let Some(value) = &state.value {
+                matched = Some(value);
             }
         }
-        self.states[state].value.as_ref()
+        matched
     }
 
     fn insert(&mut self, url: &Url, value: T) {
         // Opaque URLs have no path hierarchy for prefix matching.
-        let Some(segments) = url.path_segments() else {
+        let Some(components) = Self::components(url) else {
             return;
         };
         let mut state = 0;
-        let realm = Realm::from(url).to_string();
-        for component in [realm.as_str()]
-            .into_iter()
-            .chain(segments.filter(|item| !item.is_empty()))
-        {
-            match self.states[state].index(component) {
+        for component in components {
+            match self.states[state].index(&component) {
                 Ok(i) => state = self.states[state].children[i].1,
                 Err(i) => {
                     let new_state = self.alloc();
                     self.states[state]
                         .children
-                        .insert(i, (component.to_string(), new_state));
+                        .insert(i, (component.into_owned(), new_state));
                     state = new_state;
                 }
             }
         }
         self.states[state].value = Some(value);
+    }
+
+    /// Return the realm and path segments that form a URL's cache key.
+    fn components(url: &Url) -> Option<impl Iterator<Item = Cow<'_, str>>> {
+        let mut segments = url.path_segments()?;
+        // A trailing slash does not change the scope, but interior empty segments do.
+        if url.path().ends_with('/') {
+            segments.next_back();
+        }
+        let realm = Cow::Owned(Realm::from(url).to_string());
+        Some(std::iter::once(realm).chain(segments.map(Cow::Borrowed)))
     }
 
     fn alloc(&mut self) -> usize {
