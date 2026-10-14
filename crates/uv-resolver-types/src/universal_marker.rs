@@ -177,10 +177,7 @@ impl UniversalMarker {
         if conflicts.marker.is_true() {
             return;
         }
-        let self_marker = self.marker;
-        self.marker = conflicts.marker;
-        self.marker = self.marker.implies(self_marker);
-        self.pep508 = self.marker.without_extras();
+        *self = Self::from_combined(conflicts.marker.implies(self.marker));
     }
 
     /// If all inference sets reduce to the same marker, simplify the marker using that knowledge.
@@ -208,8 +205,7 @@ impl UniversalMarker {
         }
 
         if let Some(all_branches_marker) = previous_marker {
-            self.marker = all_branches_marker;
-            self.pep508 = self.marker.without_extras();
+            *self = Self::from_combined(all_branches_marker);
         }
     }
 
@@ -219,10 +215,10 @@ impl UniversalMarker {
     /// marker.
     pub fn assume_conflict_item(&mut self, item: &ConflictItem) {
         let extra = encode_conflict_item(item);
-        self.marker = self
-            .marker
-            .simplify_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
+        *self = Self::from_combined(
+            self.marker
+                .simplify_extras_with(|candidate| *candidate == extra),
+        );
     }
 
     /// Assumes that the given conflict item is not activated.
@@ -231,10 +227,10 @@ impl UniversalMarker {
     /// marker.
     pub fn assume_not_conflict_item(&mut self, item: &ConflictItem) {
         let extra = encode_conflict_item(item);
-        self.marker = self
-            .marker
-            .simplify_not_extras_with(|candidate| *candidate == extra);
-        self.pep508 = self.marker.without_extras();
+        *self = Self::from_combined(
+            self.marker
+                .simplify_not_extras_with(|candidate| *candidate == extra),
+        );
     }
 
     /// Returns true if this universal marker will always evaluate to `true`.
