@@ -6,6 +6,9 @@ use std::process::Command;
 use anyhow::Result;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
+use serde_json::json;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_pep508::Requirement;
 use uv_test::archive::generate_source_archive;
@@ -72,6 +75,37 @@ fn install(context: &TestContext) -> Command {
         .arg("--find-links")
         .arg(context.temp_dir.path());
     command
+}
+
+/// Serve the named local artifacts as a registry package.
+async fn registry_index(context: &TestContext, name: &str, archives: &[&str]) -> MockServer {
+    let server = MockServer::start().await;
+    let mut files = Vec::with_capacity(archives.len());
+    for &archive in archives {
+        files.push(json!({
+            "filename": archive,
+            "url": format!("{}/{archive}", server.uri()),
+            "hashes": {},
+            "upload-time": "2024-01-01T00:00:00Z",
+        }));
+        Mock::given(method("GET"))
+            .and(path(format!("/{archive}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(context.read_bytes(context.temp_dir.child(archive).path())),
+            )
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path(format!("/simple/{name}/")))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            json!({ "meta": { "api-version": "1.0" }, "name": name, "files": files }).to_string(),
+            "application/vnd.pypi.simple.v1+json",
+        ))
+        .mount(&server)
+        .await;
+    server
 }
 
 /// A package-specific source policy overrides the global wheel-only policy for a dependency.
@@ -207,5 +241,84 @@ fn only_binary_all_and_no_binary_all() -> Result<()> {
 
     markers.source_built.assert(predicates::path::missing());
     context.assert_not_installed("anyio");
+    Ok(())
+}
+
+/// Cached registry artifacts remain subject to the active binary and build policies.
+#[tokio::test]
+async fn build_policy_cache() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let markers = wheel_and_sdist(&context, "idna")?;
+    let server = registry_index(
+        &context,
+        "idna",
+        &["idna-1.0.0-py3-none-any.whl", "idna-1.0.0.tar.gz"],
+    )
+    .await;
+    let index_url = format!("{}/simple", server.uri());
+    let install = || {
+        let mut command = context.pip_install();
+        command.arg("idna").arg("--index-url").arg(&index_url);
+        command
+    };
+
+    // Download the published wheel, then reuse it from the cache.
+    uv_snapshot!(context.filters(), install(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + idna==1.0.0
+    ");
+    markers.assert_wheel_selected();
+
+    context.reset_venv();
+    uv_snapshot!(context.filters(), install(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + idna==1.0.0
+    ");
+    markers.assert_wheel_selected();
+
+    // A source-only policy must bypass the cached published wheel.
+    context.reset_venv();
+    uv_snapshot!(context.filters(), install().arg("--no-binary=:all:"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + idna==1.0.0
+    ");
+    markers.assert_source_selected();
+
+    // The built wheel may be reused offline without executing the source backend again.
+    fs_err::remove_file(markers.source_built.path())?;
+    context.reset_venv();
+    uv_snapshot!(context.filters(), install().arg("--no-binary=:all:").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + idna==1.0.0
+    ");
+    context.assert_installed("idna", "1.0.0");
+    markers.wheel_installed.assert(predicates::path::missing());
+    markers.source_built.assert(predicates::path::missing());
+
+    // With building disabled, either cached wheel can be reused without running the backend.
+    context.reset_venv();
+    uv_snapshot!(context.filters(), install().arg("--no-build").arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + idna==1.0.0
+    ");
+    context.assert_installed("idna", "1.0.0");
+    markers.source_built.assert(predicates::path::missing());
     Ok(())
 }
