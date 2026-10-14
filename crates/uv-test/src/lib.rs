@@ -2234,9 +2234,13 @@ fn python_installations_for_versions(
         .collect()
 }
 
-/// Recursively copy a directory and its contents, skipping gitignored files.
+/// Recursively copy a directory and its contents, skipping gitignored files and Git metadata.
 pub fn copy_dir_ignore(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> anyhow::Result<()> {
-    for entry in ignore::Walk::new(&src) {
+    let walker = ignore::WalkBuilder::new(&src)
+        .hidden(false)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .build();
+    for entry in walker {
         let entry = entry?;
         let relative = entry.path().strip_prefix(&src)?;
         let ty = entry.file_type().unwrap();
@@ -2414,7 +2418,7 @@ mod copy_dir_ignore_tests {
     use assert_fs::prelude::*;
     use predicates::prelude::predicate;
 
-    use super::copy_dir_ignore;
+    use super::{assert_path_missing, copy_dir_ignore};
 
     #[test]
     fn copy_fixture_into_nested_destination() -> Result<()> {
@@ -2451,6 +2455,31 @@ mod copy_dir_ignore_tests {
 
         destination.child("module.py").assert("VALUE = 1\n");
         destination.child("existing.txt").assert("existing file");
+        Ok(())
+    }
+
+    #[test]
+    fn copies_unignored_dotfiles_without_git_metadata() -> Result<()> {
+        let root = assert_fs::TempDir::new()?;
+        let source = root.child("source");
+        source
+            .child(".git/HEAD")
+            .write_str("ref: refs/heads/main\n")?;
+        source
+            .child("nested/.git/HEAD")
+            .write_str("ref: refs/heads/main\n")?;
+        source.child(".gitignore").write_str(".ignored.env\n")?;
+        source.child(".ignored.env").write_str("ignored\n")?;
+        source.child(".python-version").write_str("3.12\n")?;
+
+        let destination = root.child("destination");
+        copy_dir_ignore(&source, &destination)?;
+
+        destination.child(".python-version").assert("3.12\n");
+        destination.child(".gitignore").assert(".ignored.env\n");
+        assert_path_missing(destination.child(".ignored.env"));
+        assert_path_missing(destination.child(".git"));
+        assert_path_missing(destination.child("nested/.git"));
         Ok(())
     }
 }
