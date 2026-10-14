@@ -181,7 +181,6 @@ pub async fn check(
     let target_dir = script
         .as_ref()
         .and_then(|script| script.path.parent())
-        .map(Path::to_path_buf)
         .or_else(|| {
             project.as_ref().map(|project| {
                 // If multiple packages are selected, or the package is outside the workspace dir,
@@ -191,13 +190,13 @@ pub async fn check(
                     || !normalize_path(project.root())
                         .starts_with(project.workspace().install_path())
                 {
-                    project.workspace().install_path().to_owned()
+                    project.workspace().install_path().as_path()
                 } else {
-                    project.root().to_owned()
+                    project.root()
                 }
             })
         })
-        .unwrap_or_else(|| project_dir.to_owned());
+        .unwrap_or(project_dir);
 
     let check_targets = if let Some(script) = script.as_ref() {
         vec![script.path.clone()]
@@ -729,7 +728,7 @@ pub async fn check(
         ty_version,
         ty_path.or(locked_ty_path),
         fix,
-        &target_dir,
+        target_dir,
         project
             .as_ref()
             .map(|project| project.workspace().install_path().as_path()),
