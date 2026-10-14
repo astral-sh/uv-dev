@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use pubgrub::Term;
-use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, trace};
 use uv_resolver_types::PackageNodeKind;
 
@@ -11,7 +10,10 @@ use crate::candidate_selector::CandidateSelector;
 use crate::prioritized_distribution::CompatibleDist;
 use crate::pubgrub::{PubGrubPackage, PubGrubPackageInner, Range};
 use crate::resolver::requests::{MetadataRequest, MetadataRequests};
-use crate::{PythonRequirement, ResolveError, ResolverEnvironment, VersionsResponse};
+use crate::{
+    FxHashbrownMap, FxHashbrownSet, PythonRequirement, ResolveError, ResolverEnvironment,
+    VersionsResponse,
+};
 use uv_distribution_types::{IndexCapabilities, IndexMetadata};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -41,13 +43,13 @@ enum BatchPrefetchStrategy {
 /// Note that these all heuristics that could totally prefetch lots of irrelevant versions.
 #[derive(Clone)]
 pub(crate) struct BatchPrefetcher {
-    packages: FxHashMap<PackageName, PackagePrefetchState>,
+    packages: FxHashbrownMap<PackageName, PackagePrefetchState>,
     prefetch_runner: BatchPrefetcherRunner,
 }
 
 #[derive(Clone, Default)]
 struct PackagePrefetchState {
-    tried_versions: FxHashSet<Version>,
+    tried_versions: FxHashbrownSet<Version>,
     /// Number of tried versions at the last prefetch.
     last_prefetch: usize,
 }
@@ -65,7 +67,7 @@ pub(crate) struct BatchPrefetcherRunner {
 impl BatchPrefetcher {
     pub(crate) fn new(capabilities: IndexCapabilities, requests: MetadataRequests) -> Self {
         Self {
-            packages: FxHashMap::default(),
+            packages: FxHashbrownMap::default(),
             prefetch_runner: BatchPrefetcherRunner {
                 capabilities,
                 requests,
@@ -142,10 +144,10 @@ impl BatchPrefetcher {
             return;
         };
         self.packages
-            .entry(name.clone())
+            .entry_ref(name)
             .or_default()
             .tried_versions
-            .insert(version.clone());
+            .get_or_insert_with(version, Version::clone);
     }
 
     /// Log stats about how many versions we tried.
