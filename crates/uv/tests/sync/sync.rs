@@ -11521,30 +11521,38 @@ fn sync_ignores_incompatible_global_python_version() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn sync_explicit() -> Result<()> {
+#[tokio::test]
+async fn sync_explicit_index_uses_cached_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let name = "idna".parse()?;
+    let (filename, wheel) = generate_wheel(
+        &name,
+        &"2.7".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let server = PackageServer::new(&name).await;
+    server.serve(&filename, &wheel, None).await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "root"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = [
-            "idna>2",
-        ]
+        dependencies = ["idna>2"]
 
         [[tool.uv.index]]
         name = "test"
-        url = "https://test.pypi.org/simple"
+        url = "{}"
         explicit = true
 
         [tool.uv.sources]
-        idna = { index = "test" }
-        "#,
-    )?;
+        idna = {{ index = "test" }}
+        "#, server.index_url()})?;
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -11555,10 +11563,15 @@ fn sync_explicit() -> Result<()> {
      + idna==2.7
     ");
 
-    // Clear the environment.
+    // Remove the environment, and reject a second download while leaving the index available.
     fs_err::remove_dir_all(&context.venv)?;
+    Mock::given(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(0)
+        .with_priority(1)
+        .mount(server.mock_server())
+        .await;
 
-    // The package should be drawn from the cache.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -11568,6 +11581,7 @@ fn sync_explicit() -> Result<()> {
     Installed 1 package in [TIME]
      + idna==2.7
     ");
+    context.assert_installed("idna", "2.7");
 
     Ok(())
 }
