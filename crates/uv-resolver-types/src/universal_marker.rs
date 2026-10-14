@@ -702,6 +702,25 @@ impl<'a> ParsedRawExtra<'a> {
     }
 }
 
+/// Looks up an encoded conflict marker without scanning and encoding every known conflict.
+fn find_encoded_conflict(
+    name: &ExtraName,
+    known_conflicts: &FxHashMap<ConflictItem, MarkerTree>,
+) -> Option<MarkerTree> {
+    if known_conflicts.is_empty()
+        || !matches!(
+            name.as_str().split_once('-'),
+            Some(("project" | "extra" | "group", _))
+        )
+    {
+        return None;
+    }
+    let item = ParsedRawExtra::parse(name).ok()?.to_conflict_item().ok()?;
+    let marker = *known_conflicts.get(&item)?;
+    // Decoding accepts some noncanonical spellings, which may instead name a scoped package extra.
+    (encode_conflict_item(&item) == *name).then_some(marker)
+}
+
 /// Resolve unencoded package extras and conflict-encoded project, extra, and group markers in a
 /// [`MarkerTree`] based on the conditions under which each item is known to be true.
 ///
@@ -745,9 +764,7 @@ pub fn resolve_activated_extras(
                 continue;
             };
 
-            let conflict_marker = known_conflicts
-                .iter()
-                .find_map(|(item, marker)| (encode_conflict_item(item) == *name).then_some(*marker))
+            let conflict_marker = find_encoded_conflict(name, known_conflicts)
                 .or_else(|| {
                     let package = scope_package?;
                     known_conflicts
@@ -1070,5 +1087,20 @@ mod tests {
         let cm = MarkerTree::from_str("python_version >= '3.10' and extra == 'bar'").unwrap();
         let cm = resolve_activated_extras(cm, Some(&package), &known_conflicts);
         assert!(cm.is_false());
+    }
+
+    #[test]
+    fn resolve_noncanonical_conflict_as_scoped_extra() {
+        let known_conflicts = create_known_conflicts([
+            ("foo", "sys_platform == 'darwin'"),
+            ("extra-03-pkg-foo", "sys_platform == 'linux'"),
+        ]);
+        let marker = MarkerTree::from_str("extra == 'extra-03-pkg-foo'").unwrap();
+        let resolved =
+            resolve_activated_extras(marker, Some(&create_package("pkg")), &known_conflicts);
+        assert_eq!(
+            resolved,
+            MarkerTree::from_str("sys_platform == 'linux'").unwrap()
+        );
     }
 }
