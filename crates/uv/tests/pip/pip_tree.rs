@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{ChildPath, DirCreate, FileTouch, FileWriteStr, PathChild};
+use assert_fs::fixture::{ChildPath, FileTouch, FileWriteStr, PathChild, PathCreateDir};
 use indoc::indoc;
 
 use uv_test::{TestContext, uv_snapshot};
