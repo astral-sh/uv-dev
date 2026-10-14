@@ -14,7 +14,7 @@ use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
     AuthorFrom, DependencyGroupsWithDefaults, InitKind, InitProjectKind, ProjectBuildBackend,
-    VersionControlError, VersionControlSystem,
+    VersionControlSystem,
 };
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
@@ -30,7 +30,7 @@ use uv_python_discovery::PythonVersionFile;
 use uv_python_discovery::VersionFileDiscoveryOptions;
 use uv_python_discovery::find_requires_python;
 use uv_python_discovery::init_script_python_requirement;
-use uv_python_interpreter::PythonEnvironment;
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
     PythonVariant, VersionRequest,
@@ -43,7 +43,7 @@ use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache, WorkspaceErrorKind,
 };
 
-/// Add one or more packages to the project requirements.
+/// Initialize a project or a PEP 723 script.
 #[expect(clippy::single_match_else, clippy::fn_params_excessive_bools)]
 pub async fn init(
     project_dir: &Path,
@@ -190,9 +190,7 @@ pub async fn init(
                     writeln!(printer.stderr(), "Initialized project `{}`", name.cyan())?;
                 }
                 // Initialized a project in the given directory.
-                Some(path) => {
-                    let path = std::path::absolute(&path)
-                        .unwrap_or_else(|_| path.simplified().to_path_buf());
+                Some(_) => {
                     writeln!(
                         printer.stderr(),
                         "Initialized project `{}` at `{}`",
@@ -336,38 +334,33 @@ async fn init_project(
         )
         .await
         {
-            Ok(workspace) => {
-                // Ignore the current workspace if `--no-workspace` was provided.
-                if no_workspace {
-                    debug!("Ignoring discovered workspace due to `--no-workspace`");
-                    None
-                } else {
-                    Some(workspace)
-                }
+            Ok(_) if no_workspace => {
+                debug!("Ignoring discovered workspace due to `--no-workspace`");
+                None
             }
-            Err(err) => {
+            Ok(workspace) => Some(workspace),
+            Err(err)
                 if matches!(
                     err.as_ref(),
                     WorkspaceErrorKind::MissingPyprojectToml | WorkspaceErrorKind::NonWorkspace(_)
-                ) {
-                    if no_workspace {
-                        warn!("`--no-workspace` was provided, but no workspace was found");
-                    }
-                    None
-                } else {
-                    // If the user runs with `--no-workspace`, ignore the error.
-                    if no_workspace {
-                        warn!("Ignoring workspace discovery error due to `--no-workspace`: {err}");
-                        None
-                    } else {
-                        return Err(err).with_context(|| {
-                            format!(
-                                "Failed to discover parent workspace; use `{}` to ignore",
-                                "uv init --no-workspace".green()
-                            )
-                        });
-                    }
+                ) =>
+            {
+                if no_workspace {
+                    warn!("`--no-workspace` was provided, but no workspace was found");
                 }
+                None
+            }
+            Err(err) if no_workspace => {
+                warn!("Ignoring workspace discovery error due to `--no-workspace`: {err}");
+                None
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Failed to discover parent workspace; use `{}` to ignore",
+                        "uv init --no-workspace".green()
+                    )
+                });
             }
         }
     };
@@ -426,7 +419,7 @@ async fn init_project(
         no_readme,
     )?;
 
-    if let Some(workspace) = workspace {
+    if let Some(workspace) = workspace.as_deref() {
         if workspace.excludes(path)? {
             // If the member is excluded by the workspace, ignore it.
             writeln!(
@@ -464,39 +457,33 @@ async fn init_project(
                 workspace.install_path().simplified_display().cyan()
             )?;
         }
-        // Write .python-version if it doesn't exist in the workspace or if the version differs
-        if let Some(python_request) = python_pin {
-            if PythonVersionFile::discover(path, &VersionFileDiscoveryOptions::default())
+    }
+
+    if let Some(python_request) = python_pin {
+        // Standalone projects retain any local pin. Projects in a workspace reuse a matching pin
+        // from either the project or workspace root.
+        let reuse_version_file =
+            PythonVersionFile::discover(path, &VersionFileDiscoveryOptions::default())
                 .await?
-                .as_ref()
-                .is_none_or(|file| !{
-                    file.version()
-                        .is_some_and(|version| *version == python_request)
-                        && file.path().parent().is_some_and(|parent| {
-                            parent == workspace.install_path() || parent == path
-                        })
-                })
-            {
-                PythonVersionFile::new(path.join(".python-version"))
-                    .with_versions(vec![python_request.clone()])
-                    .write()
-                    .await?;
-            }
-        }
-    } else {
-        // Write .python-version if it doesn't exist in the project directory.
-        if let Some(python_request) = python_pin {
-            if PythonVersionFile::discover(path, &VersionFileDiscoveryOptions::default())
-                .await?
-                .filter(|file| file.version().is_some())
-                .as_ref()
-                .is_none_or(|file| file.path().parent().is_none_or(|parent| parent != path))
-            {
-                PythonVersionFile::new(path.join(".python-version"))
-                    .with_versions(vec![python_request.clone()])
-                    .write()
-                    .await?;
-            }
+                .is_some_and(|file| {
+                    let Some(version) = file.version() else {
+                        return false;
+                    };
+                    match workspace.as_deref() {
+                        Some(workspace) => {
+                            *version == python_request
+                                && file.path().parent().is_some_and(|parent| {
+                                    parent == workspace.install_path() || parent == path
+                                })
+                        }
+                        None => file.path().parent() == Some(path),
+                    }
+                });
+        if !reuse_version_file {
+            PythonVersionFile::new(path.join(".python-version"))
+                .with_versions(vec![python_request])
+                .write()
+                .await?;
         }
     }
 
@@ -516,74 +503,46 @@ async fn determine_requires_python(
     reporter: &PythonDownloadReporter,
     python_request: Option<PythonRequest>,
 ) -> Result<(RequiresPython, Option<PythonRequest>)> {
+    let find_interpreter = async |request: Option<&PythonRequest>| {
+        PythonInstallation::find_or_download(
+            request,
+            EnvironmentPreference::OnlySystem,
+            python_preference,
+            python_arch,
+            python_downloads,
+            client_builder,
+            cache,
+            Some(reporter),
+            install_mirrors.mirrors(),
+            install_mirrors.python_downloads_json_url.as_deref(),
+        )
+        .await
+        .map(PythonInstallation::into_interpreter)
+    };
+
     // Add a `requires-python` field to the `pyproject.toml` and return the corresponding interpreter.
     if let Some(python_request) = python_request {
         // (1) A request from the user or `.python-version` file
         // This can be arbitrary, i.e., not a version — in which case we may need to resolve the
         // interpreter
         let (requires_python, python_pin) = match &python_request {
-            PythonRequest::Version(VersionRequest::MajorMinor(major, minor, variant)) => {
-                let requires_python = RequiresPython::greater_than_equal_version(&Version::new([
-                    u64::from(*major),
-                    u64::from(*minor),
-                ]));
-
-                let python_pin = if pin_python {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                        *major, *minor, *variant,
-                    )))
-                } else {
-                    None
-                };
-
-                (requires_python, python_pin)
-            }
-            PythonRequest::Version(VersionRequest::MajorMinorPatch(
-                major,
-                minor,
-                patch,
-                variant,
-            )) => {
-                let requires_python = RequiresPython::greater_than_equal_version(&Version::new([
-                    u64::from(*major),
-                    u64::from(*minor),
-                    u64::from(*patch),
-                ]));
-
-                let python_pin = if pin_python {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinorPatch(
-                        *major, *minor, *patch, *variant,
-                    )))
-                } else {
-                    None
-                };
-
-                (requires_python, python_pin)
+            PythonRequest::Version(
+                version_request @ (VersionRequest::MajorMinor(major, minor, _)
+                | VersionRequest::MajorMinorPatch(major, minor, _, _)),
+            ) => {
+                let release = [*major, *minor].into_iter().chain(version_request.patch());
+                let requires_python = RequiresPython::greater_than_equal_version(&Version::new(
+                    release.map(u64::from),
+                ));
+                (requires_python, pin_python.then(|| python_request.clone()))
             }
             python_request @ PythonRequest::Version(VersionRequest::Range(specifiers, variant)) => {
                 let requires_python = RequiresPython::from_specifiers(specifiers.clone());
 
                 let python_pin = if pin_python {
-                    let interpreter = PythonInstallation::find_or_download(
-                        Some(python_request),
-                        EnvironmentPreference::OnlySystem,
-                        python_preference,
-                        python_arch,
-                        python_downloads,
-                        client_builder,
-                        cache,
-                        Some(reporter),
-                        install_mirrors.mirrors(),
-                        install_mirrors.python_downloads_json_url.as_deref(),
-                    )
-                    .await?
-                    .into_interpreter();
+                    let interpreter = find_interpreter(Some(python_request)).await?;
 
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                        interpreter.python_major(),
-                        interpreter.python_minor(),
-                        *variant,
-                    )))
+                    Some(python_minor_pin(&interpreter, *variant))
                 } else {
                     None
                 };
@@ -591,33 +550,13 @@ async fn determine_requires_python(
                 (requires_python, python_pin)
             }
             python_request => {
-                let interpreter = PythonInstallation::find_or_download(
-                    Some(python_request),
-                    EnvironmentPreference::OnlySystem,
-                    python_preference,
-                    python_arch,
-                    python_downloads,
-                    client_builder,
-                    cache,
-                    Some(reporter),
-                    install_mirrors.mirrors(),
-                    install_mirrors.python_downloads_json_url.as_deref(),
-                )
-                .await?
-                .into_interpreter();
+                let interpreter = find_interpreter(Some(python_request)).await?;
 
                 let requires_python =
                     RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
-                let python_pin = if pin_python {
-                    Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                        interpreter.python_major(),
-                        interpreter.python_minor(),
-                        PythonVariant::Default,
-                    )))
-                } else {
-                    None
-                };
+                let python_pin =
+                    pin_python.then(|| python_minor_pin(&interpreter, PythonVariant::Default));
 
                 (requires_python, python_pin)
             }
@@ -633,16 +572,7 @@ async fn determine_requires_python(
         let requires_python =
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
-        // Pin to the minor version.
-        let python_pin = if pin_python {
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                interpreter.python_major(),
-                interpreter.python_minor(),
-                PythonVariant::Default,
-            )))
-        } else {
-            None
-        };
+        let python_pin = pin_python.then(|| python_minor_pin(&interpreter, PythonVariant::Default));
 
         debug!(
             "Using Python version `{requires_python}` from existing virtual environment in project"
@@ -659,28 +589,10 @@ async fn determine_requires_python(
         let python_request = PythonRequest::from_specifiers(requires_python.specifiers())
             .unwrap_or(PythonRequest::Default);
 
-        // Pin to the minor version.
         let python_pin = if pin_python {
-            let interpreter = PythonInstallation::find_or_download(
-                Some(&python_request),
-                EnvironmentPreference::OnlySystem,
-                python_preference,
-                python_arch,
-                python_downloads,
-                client_builder,
-                cache,
-                Some(reporter),
-                install_mirrors.mirrors(),
-                install_mirrors.python_downloads_json_url.as_deref(),
-            )
-            .await?
-            .into_interpreter();
+            let interpreter = find_interpreter(Some(&python_request)).await?;
 
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                interpreter.python_major(),
-                interpreter.python_minor(),
-                PythonVariant::Default,
-            )))
+            Some(python_minor_pin(&interpreter, PythonVariant::Default))
         } else {
             None
         };
@@ -690,39 +602,26 @@ async fn determine_requires_python(
         Ok((requires_python, python_pin))
     } else {
         // (4) Default to the system Python
-        let interpreter = PythonInstallation::find_or_download(
-            None,
-            EnvironmentPreference::OnlySystem,
-            python_preference,
-            python_arch,
-            python_downloads,
-            client_builder,
-            cache,
-            Some(reporter),
-            install_mirrors.mirrors(),
-            install_mirrors.python_downloads_json_url.as_deref(),
-        )
-        .await?
-        .into_interpreter();
+        let interpreter = find_interpreter(None).await?;
 
         let requires_python =
             RequiresPython::greater_than_equal_version(&interpreter.python_minor_version());
 
-        // Pin to the minor version.
-        let python_pin = if pin_python {
-            Some(PythonRequest::Version(VersionRequest::MajorMinor(
-                interpreter.python_major(),
-                interpreter.python_minor(),
-                PythonVariant::Default,
-            )))
-        } else {
-            None
-        };
+        let python_pin = pin_python.then(|| python_minor_pin(&interpreter, PythonVariant::Default));
 
         debug!("Using Python version `{requires_python}` from default interpreter");
 
         Ok((requires_python, python_pin))
     }
+}
+
+/// Pin to the interpreter's minor version with the specified Python variant.
+fn python_minor_pin(interpreter: &Interpreter, variant: PythonVariant) -> PythonRequest {
+    PythonRequest::Version(VersionRequest::MajorMinor(
+        interpreter.python_major(),
+        interpreter.python_minor(),
+        variant,
+    ))
 }
 
 /// Initialize this project kind at the target path.
@@ -767,26 +666,26 @@ fn init_project_kind(
     match project_kind {
         // Create only the most barebones `pyproject.toml`, no build system
         InitProjectKind::Bare => {}
-        // Create only a barebones `pyproject.toml`, but with a build system table
-        InitProjectKind::BareWithBuildSystem => {
-            // Add a build system
+        InitProjectKind::BareWithBuildSystem
+        | InitProjectKind::ApplicationWithLibrary
+        | InitProjectKind::Library => {
+            if matches!(project_kind, InitProjectKind::ApplicationWithLibrary) {
+                pyproject.push('\n');
+                pyproject.push_str(&pyproject_project_scripts(name, name.as_str(), "main"));
+            }
+
             let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
             pyproject.push('\n');
             pyproject.push_str(&pyproject_build_system(name, build_backend));
-        }
-        InitProjectKind::ApplicationWithLibrary => {
-            // Since it'll be packaged, we can add a `[project.scripts]` entry
-            pyproject.push('\n');
-            pyproject.push_str(&pyproject_project_scripts(name, name.as_str(), "main"));
-
-            // Add a build system
-            let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
-            pyproject.push('\n');
-            pyproject.push_str(&pyproject_build_system(name, build_backend));
-            pyproject_build_backend_prerequisites(name, path, build_backend)?;
-
-            // Generate `src` files with app-style `main()` in `__init__.py`
-            generate_package_scripts(name, path, build_backend, false)?;
+            if !matches!(project_kind, InitProjectKind::BareWithBuildSystem) {
+                pyproject_build_backend_prerequisites(name, path, build_backend)?;
+                generate_package_scripts(
+                    name,
+                    path,
+                    build_backend,
+                    matches!(project_kind, InitProjectKind::Library),
+                )?;
+            }
         }
         InitProjectKind::Application => {
             let main_contents = indoc::formatdoc! {r#"
@@ -806,15 +705,6 @@ fn init_project_kind(
                 fs_err::write(path.join("main.py"), main_contents)?;
             }
         }
-        InitProjectKind::Library => {
-            let build_backend = build_backend.unwrap_or(ProjectBuildBackend::Uv);
-            pyproject.push('\n');
-            pyproject.push_str(&pyproject_build_system(name, build_backend));
-            pyproject_build_backend_prerequisites(name, path, build_backend)?;
-
-            // Generate `src` files
-            generate_package_scripts(name, path, build_backend, true)?;
-        }
     }
     fs_err::write(path.join("pyproject.toml"), pyproject)?;
     Ok(())
@@ -828,7 +718,7 @@ enum Author {
 }
 
 impl Author {
-    fn to_toml_string(&self) -> String {
+    fn to_inline_table(&self) -> InlineTable {
         let mut inline = InlineTable::new();
 
         match self {
@@ -844,7 +734,7 @@ impl Author {
             }
         }
 
-        inline.to_string()
+        inline
     }
 }
 
@@ -870,7 +760,7 @@ fn pyproject_project(
         } else {
             format!("\ndescription = {}", Value::from(description.unwrap_or("Add your description here")))
         },
-        authors = author.map_or_else(String::new, |author| format!("\nauthors = [\n    {}\n]", author.to_toml_string())),
+        authors = author.map_or_else(String::new, |author| format!("\nauthors = [\n    {}\n]", author.to_inline_table())),
         requires_python = requires_python.specifiers(),
     }
 }
@@ -1039,41 +929,36 @@ fn generate_package_scripts(
     let pkg_dir = src_dir.join(&*module_name);
     fs_err::create_dir_all(&pkg_dir)?;
 
-    let pure_python_script = if is_lib {
-        indoc::formatdoc! {r#"
-        def hello() -> str:
-            return "Hello from {package}!"
-        "#}
-    } else {
-        indoc::formatdoc! {r#"
-        def main() -> None:
-            print("Hello from {package}!")
-        "#}
+    // Both native backends expose the same Python interface.
+    let generate_native_package_script = || -> Result<String> {
+        let pyi_file = pkg_dir.join("_core.pyi");
+        if !pyi_file.try_exists()? {
+            fs_err::write(
+                pyi_file,
+                indoc::indoc! {r"
+                    def hello_from_bin() -> str: ...
+                "},
+            )?;
+        }
+
+        Ok(if is_lib {
+            indoc::formatdoc! {r"
+            from {module_name}._core import hello_from_bin
+
+
+            def hello() -> str:
+                return hello_from_bin()
+            "}
+        } else {
+            indoc::formatdoc! {r"
+            from {module_name}._core import hello_from_bin
+
+
+            def main() -> None:
+                print(hello_from_bin())
+            "}
+        })
     };
-
-    // Python script for binary-based packaged apps or libs
-    let binary_call_script = if is_lib {
-        indoc::formatdoc! {r"
-        from {module_name}._core import hello_from_bin
-
-
-        def hello() -> str:
-            return hello_from_bin()
-        "}
-    } else {
-        indoc::formatdoc! {r"
-        from {module_name}._core import hello_from_bin
-
-
-        def main() -> None:
-            print(hello_from_bin())
-        "}
-    };
-
-    // .pyi file for binary script
-    let pyi_contents = indoc::indoc! {r"
-        def hello_from_bin() -> str: ...
-    "};
 
     let package_script = match build_backend {
         ProjectBuildBackend::Maturin => {
@@ -1100,13 +985,7 @@ fn generate_package_scripts(
                 "#},
                 )?;
             }
-            // Generate .pyi file
-            let pyi_file = pkg_dir.join("_core.pyi");
-            if !pyi_file.try_exists()? {
-                fs_err::write(pyi_file, pyi_contents)?;
-            }
-            // Return python script calling binary
-            binary_call_script
+            generate_native_package_script()?
         }
         ProjectBuildBackend::Scikit => {
             // Generate main.cpp
@@ -1131,15 +1010,16 @@ fn generate_package_scripts(
                 "#},
                 )?;
             }
-            // Generate .pyi file
-            let pyi_file = pkg_dir.join("_core.pyi");
-            if !pyi_file.try_exists()? {
-                fs_err::write(pyi_file, pyi_contents)?;
-            }
-            // Return python script calling binary
-            binary_call_script
+            generate_native_package_script()?
         }
-        _ => pure_python_script,
+        _ if is_lib => indoc::formatdoc! {r#"
+            def hello() -> str:
+                return "Hello from {package}!"
+            "#},
+        _ => indoc::formatdoc! {r#"
+            def main() -> None:
+                print("Hello from {package}!")
+            "#},
     };
 
     // Create `src/{name}/__init__.py`, if it doesn't exist already.
@@ -1165,17 +1045,15 @@ enum GitDiscoveryResult {
     Repository,
     /// Git is not initialized at the path.
     NoRepository,
-    /// There is no `git[.exe]` binary in PATH.
-    NoGit,
-    /// There is a `git[.exe]` binary in PATH, but it returned an unexpected output.
-    BrokenGit,
+    /// Git repository discovery did not produce a definitive result.
+    Unknown,
 }
 
 /// Checks if there is a Git work tree at the given path.
 fn detect_git_repository(path: &Path) -> GitDiscoveryResult {
     // Determine whether the path is inside a Git work tree.
     let Ok(git) = GIT.as_ref() else {
-        return GitDiscoveryResult::NoGit;
+        return GitDiscoveryResult::Unknown;
     };
     let Ok(output) = git
         .build_command()
@@ -1189,7 +1067,7 @@ fn detect_git_repository(path: &Path) -> GitDiscoveryResult {
             "`git rev-parse --is-inside-work-tree` failed to launch for `{}`",
             path.display()
         );
-        return GitDiscoveryResult::BrokenGit;
+        return GitDiscoveryResult::Unknown;
     };
     if output.status.success() {
         if std::str::from_utf8(&output.stdout).map(str::trim) == Ok("true") {
@@ -1204,7 +1082,7 @@ fn detect_git_repository(path: &Path) -> GitDiscoveryResult {
                 "`git rev-parse --is-inside-work-tree` stdout: {:?}",
                 String::from_utf8_lossy(&output.stdout)
             );
-            GitDiscoveryResult::BrokenGit
+            GitDiscoveryResult::Unknown
         }
     } else {
         if std::str::from_utf8(&output.stderr).is_ok_and(|err| err.contains("not a git repository"))
@@ -1216,60 +1094,41 @@ fn detect_git_repository(path: &Path) -> GitDiscoveryResult {
                 "`git rev-parse --is-inside-work-tree` failed but didn't contain `not a git repository` in stderr for `{}`",
                 path.display()
             );
-            GitDiscoveryResult::BrokenGit
+            GitDiscoveryResult::Unknown
         }
     }
 }
 
 /// Initialize the version control system at the given path, if applicable.
 fn init_vcs(path: &Path, vcs: Option<VersionControlSystem>) -> Result<()> {
-    // vcs is None for an existing repository because we don't want to initialize again.
-    let (vcs, implicit) = match vcs {
+    let initialize_git = match vcs {
         None => match detect_git_repository(path) {
-            GitDiscoveryResult::NoRepository => (VersionControlSystem::Git, true),
-            GitDiscoveryResult::Repository
-            | GitDiscoveryResult::NoGit
-            | GitDiscoveryResult::BrokenGit => (VersionControlSystem::None, false),
+            GitDiscoveryResult::NoRepository => true,
+            GitDiscoveryResult::Repository | GitDiscoveryResult::Unknown => false,
         },
-        Some(VersionControlSystem::None) => (VersionControlSystem::None, false),
-        // The user requested Git explicitly, so the only reason not to invoke it is that Git is
-        // already initialized. In case of an error (broken git), we will raise the real error
-        // when trying to initialize, which should give us a better error message.
+        Some(VersionControlSystem::None) => false,
+        // An explicit request should report initialization errors even if discovery failed.
         Some(VersionControlSystem::Git) => match detect_git_repository(path) {
-            GitDiscoveryResult::NoRepository
-            | GitDiscoveryResult::BrokenGit
-            | GitDiscoveryResult::NoGit => (VersionControlSystem::Git, false),
-            GitDiscoveryResult::Repository => (VersionControlSystem::None, false),
+            GitDiscoveryResult::Repository => false,
+            GitDiscoveryResult::NoRepository | GitDiscoveryResult::Unknown => true,
         },
     };
-
-    // Attempt to initialize the VCS.
-    match vcs.init(path) {
-        Ok(()) => Ok(()),
-        // If the VCS isn't installed, only raise an error if a VCS was explicitly specified.
-        Err(err @ VersionControlError::GitNotInstalled) if implicit => {
-            debug!("Failed to initialize version control: {err}");
-            Ok(())
-        }
-        Err(err) => Err(err.into()),
+    if initialize_git {
+        VersionControlSystem::Git.init(path)?;
     }
+    Ok(())
 }
 
 /// Try to get the author information.
 ///
 /// Currently, this only tries to get the author information from git.
 fn get_author_info(path: &Path, author_from: AuthorFrom) -> Option<Author> {
-    if matches!(author_from, AuthorFrom::None) {
-        return None;
+    match author_from {
+        AuthorFrom::None => None,
+        AuthorFrom::Auto | AuthorFrom::Git => get_author_from_git(path)
+            .inspect_err(|err| warn!("Failed to get author from git: {err}"))
+            .ok(),
     }
-    if matches!(author_from, AuthorFrom::Auto | AuthorFrom::Git) {
-        match get_author_from_git(path) {
-            Ok(author) => return Some(author),
-            Err(err) => warn!("Failed to get author from git: {err}"),
-        }
-    }
-
-    None
 }
 
 /// Fetch the default author from git configuration.
@@ -1278,36 +1137,23 @@ fn get_author_from_git(path: &Path) -> Result<Author> {
         anyhow::bail!("`git` not found in PATH")
     };
 
-    let mut name = None;
-    let mut email = None;
+    let read_config = |key: &str| -> std::io::Result<Option<String>> {
+        let output = git
+            .build_command()
+            .arg("config")
+            .arg("--get")
+            .arg(key)
+            .current_dir(path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()?;
+        Ok(output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string()))
+    };
 
-    let output = git
-        .build_command()
-        .arg("config")
-        .arg("--get")
-        .arg("user.name")
-        .current_dir(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()?;
-    if output.status.success() {
-        name = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
-    }
-
-    let output = git
-        .build_command()
-        .arg("config")
-        .arg("--get")
-        .arg("user.email")
-        .current_dir(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()?;
-    if output.status.success() {
-        email = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
-    }
-
-    let author = match (name, email) {
+    let author = match (read_config("user.name")?, read_config("user.email")?) {
         (Some(name), Some(email)) => Author::NameEmail { name, email },
         (Some(name), None) => Author::Name(name),
         (None, Some(email)) => Author::Email(email),
@@ -1322,14 +1168,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn author_to_toml_string_handles_inline_quotes() {
+    fn author_inline_table_handles_inline_quotes() {
         let author = Author::NameEmail {
             name: "Tony \"Iron Man\" Stark".to_string(),
             email: "ironman@example.com".to_string(),
         };
 
         assert_eq!(
-            author.to_toml_string(),
+            author.to_inline_table().to_string(),
             "{ name = 'Tony \"Iron Man\" Stark', email = \"ironman@example.com\" }"
         );
     }
