@@ -700,16 +700,17 @@ impl SourceBuild {
             backend_path.validate(source_tree)?;
         }
 
+        let uv_settings = pyproject_toml
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref());
+
         // Only show the warning for first party and URL dependencies, not for registry dependencies
         // (which have sources disabled). In-tree build backends may wrap `uv_build`, so we don't
         // warn for them either.
         if !no_sources.all()
             && backend_path.is_none()
-            && pyproject_toml
-                .tool
-                .as_ref()
-                .and_then(|tool| tool.uv.as_ref())
-                .is_some_and(|uv| uv.build_backend.is_some())
+            && uv_settings.is_some_and(|uv| uv.build_backend.is_some())
             && build_backend != Some("uv_build")
             && let Some(package_name) =
                 package_name.or(pyproject_toml.project.as_ref().map(|project| &project.name))
@@ -793,13 +794,7 @@ impl SourceBuild {
                 && !source_tree.join("setup.cfg").is_file()
             {
                 // Give a specific hint for `uv pip install .` in a workspace root.
-                let looks_like_workspace_root = pyproject_toml
-                    .tool
-                    .as_ref()
-                    .and_then(|tool| tool.uv.as_ref())
-                    .and_then(|tool| tool.workspace.as_ref())
-                    .is_some();
-                if looks_like_workspace_root {
+                if uv_settings.is_some_and(|uv| uv.workspace.is_some()) {
                     warn_user_once!(
                         "`{}` appears to be a workspace root without a Python project; \
                         consider using `uv sync` to install the workspace, or add a \
