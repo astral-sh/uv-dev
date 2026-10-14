@@ -5,6 +5,8 @@ use rustc_hash::FxHasher;
 use uv_distribution_types::{IndexMetadata, IndexUrl};
 use uv_normalize::PackageName;
 use uv_once_map::{RegisteredEntry, RegisteredOnceMap};
+use uv_pep440::Version;
+use uv_pypi_types::ResolutionMetadata;
 use uv_resolver_types::DistributionMetadataIndex;
 
 use crate::resolver::provider::VersionsResponse;
@@ -40,6 +42,35 @@ impl InMemoryIndex {
             Some(index) => self.explicit().get(&(name.clone(), index.url().clone())),
             None => self.implicit().get(name),
         }
+    }
+
+    /// Find registry-provided metadata, preferring the matching implicit index over the explicit index.
+    pub(crate) fn get_registry_metadata(
+        &self,
+        name: &PackageName,
+        version: &Version,
+        index: &IndexUrl,
+    ) -> Option<ResolutionMetadata> {
+        let find = |response: &VersionsResponse, required_index: Option<&IndexUrl>| {
+            let VersionsResponse::Found(version_maps) = response else {
+                return None;
+            };
+            version_maps
+                .iter()
+                .filter(|version_map| {
+                    required_index.is_none_or(|index| version_map.index() == Some(index))
+                })
+                .find_map(|version_map| version_map.get_metadata(version))
+        };
+
+        self.implicit()
+            .get(name)
+            .and_then(|response| find(&response, Some(index)))
+            .or_else(|| {
+                self.explicit()
+                    .get(&(name.clone(), index.clone()))
+                    .and_then(|response| find(&response, None))
+            })
     }
 
     /// Returns a reference to the package metadata map.
