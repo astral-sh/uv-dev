@@ -69,8 +69,18 @@ pub fn uninstall_wheel(
             continue;
         }
 
+        let is_symlink = match fs_err::symlink_metadata(&path) {
+            Ok(metadata) => metadata.file_type().is_symlink(),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        };
         match fs_err::remove_file(&path) {
-            Ok(()) => uninstall.record_removed_wheel_file(path, &mut visited),
+            Ok(()) => {
+                if is_symlink {
+                    record_paths.cached_parent = None;
+                }
+                uninstall.record_removed_wheel_file(path, &mut visited);
+            }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => {
                 match contains_installation_scheme(&path, layout) {
@@ -692,6 +702,42 @@ mod tests {
         assert!(!alias.exists());
         assert!(!final_symlink.exists());
         assert!(!dist_info.exists());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_uninstall_re_resolves_a_parent_after_removing_its_symlink() -> anyhow::Result<()> {
+        let venv = assert_fs::TempDir::new()?;
+        let site_packages = venv.child("lib/python3.12/site-packages");
+        site_packages.create_dir_all()?;
+        let alias = site_packages.child("alias");
+        symlink(".", alias.path())?;
+        let sentinel = site_packages.child("sentinel.txt");
+        sentinel.write_str("keep")?;
+        let dist_info = site_packages.child("example-1.0.dist-info");
+        dist_info.child("RECORD").write_str(concat!(
+            "alias/alias,,\n",
+            "alias/sentinel.txt,,\n",
+            "example-1.0.dist-info/RECORD,,\n",
+        ))?;
+        let layout = Layout {
+            sys_executable: venv.path().join("bin/python"),
+            python_version: (3, 12),
+            os_name: "posix".to_string(),
+            scheme: Scheme {
+                purelib: site_packages.to_path_buf(),
+                platlib: site_packages.to_path_buf(),
+                scripts: venv.path().join("bin"),
+                data: venv.path().to_path_buf(),
+                include: venv.path().join("include"),
+            },
+        };
+
+        uninstall_wheel(dist_info.path(), "example 1.0", &layout)?;
+
+        assert!(!alias.exists());
+        assert!(sentinel.exists());
         Ok(())
     }
 
