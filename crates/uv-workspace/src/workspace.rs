@@ -1670,7 +1670,7 @@ impl ProjectWorkspace {
             .and_then(|uv| uv.workspace.as_ref())
             .map(|workspace| {
                 (
-                    project_path.to_path_buf(),
+                    project_path.clone(),
                     workspace.clone(),
                     project_pyproject_toml.clone(),
                 )
@@ -1683,7 +1683,7 @@ impl ProjectWorkspace {
         }
 
         let current_project = || WorkspaceMember {
-            root: project_path.to_path_buf(),
+            root: project_path.clone(),
             project: project.clone(),
             pyproject_toml: project_pyproject_toml.clone(),
         };
@@ -1706,7 +1706,7 @@ impl ProjectWorkspace {
             )?;
 
             let workspace = Workspace {
-                install_path: project_path.to_path_buf(),
+                install_path: project_path.clone(),
                 packages: current_project_as_members,
                 required_members,
                 // There may be package sources, but we don't need to duplicate them into the
