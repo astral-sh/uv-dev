@@ -252,7 +252,7 @@ pub async fn install(
         }
     };
 
-    let latest = resolve_latest::<anyhow::Error>(
+    let latest = resolve_latest(
         &request,
         &interpreter,
         &settings.resolver,
