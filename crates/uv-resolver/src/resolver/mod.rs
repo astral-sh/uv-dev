@@ -3622,22 +3622,21 @@ impl ForkedDependencies {
                         // not on whether the dependency's conflict item is included by the fork's
                         // environment so there may be extraneous dependencies and we need to filter
                         // the fork to clean up dependencies gated on already-excluded extras.
-                        let rules: Vec<_> = set
+                        let rules = set
                             .iter()
                             .filter(|item| !fork.env.included_by_group(item.as_ref()))
                             .cloned()
-                            .map(Err)
-                            .collect();
-                        if let Some(filtered) = fork.filter(rules) {
-                            new.push(filtered);
+                            .map(Err);
+                        if let Some(env) = fork.env.filter_by_group(rules) {
+                            new.push(fork.apply_conflict_filter(env));
                         }
                         continue;
                     }
                 }
 
                 // Create a fork that excludes ALL conflicts.
-                if let Some(fork_none) = fork.clone().filter(set.iter().cloned().map(Err)) {
-                    new.push(fork_none);
+                if let Some(env) = fork.env.filter_by_group(set.iter().cloned().map(Err)) {
+                    new.push(fork.clone().apply_conflict_filter(env));
                 }
 
                 // Now create a fork for each conflicting group, where
@@ -3648,14 +3647,13 @@ impl ForkedDependencies {
                 // {foo, bar}, one that excludes {foo, baz} and one
                 // that excludes {bar, baz}.
                 for (i, _) in set.iter().enumerate() {
-                    let fork_allows_group = fork.clone().filter(
-                        set.iter()
-                            .cloned()
-                            .enumerate()
-                            .map(|(j, group)| if i == j { Ok(group) } else { Err(group) }),
-                    );
-                    if let Some(fork_allows_group) = fork_allows_group {
-                        new.push(fork_allows_group);
+                    let rules = set
+                        .iter()
+                        .cloned()
+                        .enumerate()
+                        .map(|(j, group)| if i == j { Ok(group) } else { Err(group) });
+                    if let Some(env) = fork.env.filter_by_group(rules) {
+                        new.push(fork.clone().apply_conflict_filter(env));
                     }
                 }
             }
@@ -3748,17 +3746,9 @@ impl Fork {
         self.conflicts.contains(&item)
     }
 
-    /// Include or Exclude the given groups from this fork.
-    ///
-    /// This removes all dependencies matching the given conflicting groups.
-    ///
-    /// If the exclusion rules would result in a fork with an unsatisfiable
-    /// resolver environment, then this returns `None`.
-    fn filter(
-        mut self,
-        rules: impl IntoIterator<Item = Result<ConflictItem, ConflictItem>>,
-    ) -> Option<Self> {
-        self.env = self.env.filter_by_group(rules)?;
+    /// Apply an environment narrowed by conflicting groups and remove excluded dependencies.
+    fn apply_conflict_filter(mut self, env: ResolverEnvironment) -> Self {
+        self.env = env;
         self.dependencies.retain(|dep| {
             let Some(conflicting_item) = dep.conflicting_item() else {
                 return true;
@@ -3780,7 +3770,7 @@ impl Fork {
             self.conflicts.remove(&conflicting_item);
             false
         });
-        Some(self)
+        self
     }
 
     /// Compare forks by their lower `requires-python` bounds.
