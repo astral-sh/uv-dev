@@ -43,10 +43,7 @@ impl uv_installer::PrepareReporter for PrepareReporter {
     }
 
     fn on_complete(&self) {
-        // Need an extra call to `set_message` here to fully clear avoid leaving ghost output
-        // in Jupyter notebooks.
-        self.reporter.root.set_message("");
-        self.reporter.root.finish_and_clear();
+        finish_progress(&self.reporter.root);
     }
 
     fn on_build_start(&self, source: &BuildableSource) -> usize {
@@ -109,7 +106,12 @@ impl uv_installer::InstallReporter for InstallReporter {
     }
 
     fn on_install_complete(&self) {
-        self.progress.set_message("");
-        self.progress.finish_and_clear();
+        finish_progress(&self.progress);
     }
+}
+
+/// Clear the message before finishing to avoid leaving ghost output in Jupyter notebooks.
+fn finish_progress(progress: &ProgressBar) {
+    progress.set_message("");
+    progress.finish_and_clear();
 }
