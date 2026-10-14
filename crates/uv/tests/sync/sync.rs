@@ -18224,7 +18224,7 @@ fn sync_fails_ambiguous_url() -> Result<()> {
 /// Test that when a local directory dependency's version changes, the planner reinstalls it
 /// even if the source directory content (cache info) hasn't changed.
 ///
-/// Regression test for: <https://github.com/astral-sh/uv/issues/17370>
+/// Regression test for astral-sh/uv#17370.
 #[test]
 fn sync_reinstalls_on_version_change() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -18244,21 +18244,26 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
         "#,
     )?;
 
-    // Create the child package with version 0.1.0.
     let child = context.temp_dir.child("packages/child");
     child.create_dir_all()?;
-    child.child("pyproject.toml").write_str(
-        r#"
+    let child_project = |version: &str| {
+        formatdoc! {r#"
         [project]
         name = "child"
-        version = "0.1.0"
+        version = "{version}"
         requires-python = ">=3.12"
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-        "#,
-    )?;
+
+        [tool.uv]
+        cache-keys = [{{ file = "src/child/__init__.py" }}]
+        "#}
+    };
+    child
+        .child("pyproject.toml")
+        .write_str(&child_project("0.1.0"))?;
     child
         .child("src")
         .child("child")
@@ -18280,20 +18285,13 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
     Installed 1 package in [TIME]
      + child==0.1.0 (from file://[TEMP_DIR]/packages/child)
     ");
+    let initial_cache_info = uv_cache_info::CacheInfo::from_path(child.path())?;
+    assert!(!initial_cache_info.is_empty(), "the child must be cached");
 
-    // Now bump the child's version to 0.1.1.
-    child.child("pyproject.toml").write_str(
-        r#"
-        [project]
-        name = "child"
-        version = "0.1.1"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-        "#,
-    )?;
+    // Change the version without changing the source cache key.
+    child
+        .child("pyproject.toml")
+        .write_str(&child_project("0.1.1"))?;
 
     // Lock again; lockfile should show v0.1.1.
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -18302,8 +18300,13 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
     Resolved 2 packages in [TIME]
     Updated child v0.1.0 -> v0.1.1
     ");
+    assert_eq!(
+        uv_cache_info::CacheInfo::from_path(child.path())?,
+        initial_cache_info,
+        "the version mismatch must trigger reinstallation without source cache invalidation"
+    );
 
-    // Sync should reinstall child with the new version. Before the fix for #17370,
+    // Sync should reinstall child with the new version. Before the fix for astral-sh/uv#17370,
     // this would incorrectly say "Checked 2 packages" and not reinstall the child package.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
