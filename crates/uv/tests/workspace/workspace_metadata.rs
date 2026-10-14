@@ -81,7 +81,7 @@ fn workspace_metadata_simple() {
 
     let workspace = context.temp_dir.child("foo");
 
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
+    let metadata = uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {
@@ -130,58 +130,16 @@ fn workspace_metadata_simple() {
     );
 
     assert!(!workspace.child(".venv").exists());
+
+    let quiet = context
+        .workspace_metadata()
+        .current_dir(&workspace)
+        .arg("--quiet")
+        .assert()
+        .success();
+    assert_eq!(quiet.get_output().stdout, metadata.stdout);
+    assert!(quiet.get_output().stderr.is_empty());
 }
-
-#[test]
-fn workspace_metadata_quiet() {
-    let context = uv_test::test_context!("3.12");
-    context.init().arg("foo").assert().success();
-
-    let workspace = context.temp_dir.child("foo");
-
-    uv_snapshot!(context.filters(), context.workspace_metadata().current_dir(&workspace).arg("--quiet"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    {
-      "schema": {
-        "version": "preview"
-      },
-      "workspace_root": "[TEMP_DIR]/foo",
-      "workspace": {
-        "path": "[TEMP_DIR]/foo",
-        "id": "workspace+[TEMP_DIR]/foo"
-      },
-      "requires_python": ">=3.12",
-      "conflicts": {
-        "sets": []
-      },
-      "members": [
-        {
-          "name": "foo",
-          "path": "[TEMP_DIR]/foo",
-          "id": "foo==0.1.0@editable+[TEMP_DIR]/foo"
-        }
-      ],
-      "resolution": {
-        "foo==0.1.0@editable+[TEMP_DIR]/foo": {
-          "name": "foo",
-          "version": "0.1.0",
-          "source": {
-            "editable": "[TEMP_DIR]/foo"
-          },
-          "kind": "package",
-          "dependencies": []
-        },
-        "workspace+[TEMP_DIR]/foo": {
-          "kind": "workspace",
-          "path": "[TEMP_DIR]/foo",
-          "dependencies": []
-        }
-      }
-    }
-    "#);
-}
-
 #[test]
 fn workspace_metadata_extra_quiet() {
     let context = uv_test::test_context!("3.12");
