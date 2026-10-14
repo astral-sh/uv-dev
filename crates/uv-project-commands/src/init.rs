@@ -14,7 +14,7 @@ use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
     AuthorFrom, DependencyGroupsWithDefaults, InitKind, InitProjectKind, ProjectBuildBackend,
-    VersionControlError, VersionControlSystem,
+    VersionControlSystem,
 };
 use uv_distribution_types::RequiresPython;
 use uv_fs::{CWD, Simplified};
@@ -1129,36 +1129,21 @@ fn detect_git_repository(path: &Path) -> GitDiscoveryResult {
 
 /// Initialize the version control system at the given path, if applicable.
 fn init_vcs(path: &Path, vcs: Option<VersionControlSystem>) -> Result<()> {
-    // vcs is None for an existing repository because we don't want to initialize again.
-    let (vcs, implicit) = match vcs {
-        None => match detect_git_repository(path) {
-            GitDiscoveryResult::NoRepository => (VersionControlSystem::Git, true),
-            GitDiscoveryResult::Repository
-            | GitDiscoveryResult::NoGit
-            | GitDiscoveryResult::BrokenGit => (VersionControlSystem::None, false),
-        },
-        Some(VersionControlSystem::None) => (VersionControlSystem::None, false),
-        // The user requested Git explicitly, so the only reason not to invoke it is that Git is
-        // already initialized. In case of an error (broken git), we will raise the real error
-        // when trying to initialize, which should give us a better error message.
-        Some(VersionControlSystem::Git) => match detect_git_repository(path) {
+    let initialize_git = match vcs {
+        None => matches!(
+            detect_git_repository(path),
             GitDiscoveryResult::NoRepository
-            | GitDiscoveryResult::BrokenGit
-            | GitDiscoveryResult::NoGit => (VersionControlSystem::Git, false),
-            GitDiscoveryResult::Repository => (VersionControlSystem::None, false),
-        },
-    };
-
-    // Attempt to initialize the VCS.
-    match vcs.init(path) {
-        Ok(()) => Ok(()),
-        // If the VCS isn't installed, only raise an error if a VCS was explicitly specified.
-        Err(err @ VersionControlError::GitNotInstalled) if implicit => {
-            debug!("Failed to initialize version control: {err}");
-            Ok(())
+        ),
+        Some(VersionControlSystem::None) => false,
+        // An explicit request should report initialization errors even if discovery failed.
+        Some(VersionControlSystem::Git) => {
+            !matches!(detect_git_repository(path), GitDiscoveryResult::Repository)
         }
-        Err(err) => Err(err.into()),
+    };
+    if initialize_git {
+        VersionControlSystem::Git.init(path)?;
     }
+    Ok(())
 }
 
 /// Try to get the author information.
