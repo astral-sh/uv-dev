@@ -850,7 +850,7 @@ impl SourceBuild {
         Ok((backend, pyproject_toml.project))
     }
 
-    /// Run a hook in the source build environment.
+    /// Run a hook in the source build environment and require a successful exit status.
     async fn run_build_hook(
         &self,
         hook_prefix: &str,
@@ -861,7 +861,8 @@ impl SourceBuild {
             script = format!("{hook_prefix}_{}", self.build_kind),
             version_id = self.version_id,
         );
-        self.runner
+        let output = self
+            .runner
             .run_script(
                 &self.venv,
                 script,
@@ -870,7 +871,26 @@ impl SourceBuild {
                 &self.modified_path,
             )
             .instrument(span)
-            .await
+            .await?;
+        if !output.status.success() {
+            return Err(self.build_hook_failure(hook_prefix, output));
+        }
+        Ok(output)
+    }
+
+    /// Construct an error for a failed hook from its captured output.
+    fn build_hook_failure(&self, hook_prefix: &str, output: PythonRunnerOutput) -> Error {
+        Error::from_command_output(
+            format!(
+                "Call to `{}.{hook_prefix}_{}` failed",
+                self.pep517_backend.backend, self.build_kind
+            ),
+            &output,
+            self.level,
+            self.package_name.as_ref(),
+            self.package_version.as_ref(),
+            self.version_id.as_deref(),
+        )
     }
 
     /// Try calling `prepare_metadata_for_build_wheel` to get the metadata without executing the
@@ -921,22 +941,8 @@ impl SourceBuild {
             self.config_settings.escape_for_python(),
             outfile.escape_for_python(),
         };
-        let output = self
-            .run_build_hook("prepare_metadata_for_build", &script)
+        self.run_build_hook("prepare_metadata_for_build", &script)
             .await?;
-        if !output.status.success() {
-            return Err(Error::from_command_output(
-                format!(
-                    "Call to `{}.prepare_metadata_for_build_{}` failed",
-                    self.pep517_backend.backend, self.build_kind
-                ),
-                &output,
-                self.level,
-                self.package_name.as_ref(),
-                self.package_version.as_ref(),
-                self.version_id.as_deref(),
-            ));
-        }
 
         let dirname = fs::read_to_string(&outfile)?;
         if dirname.is_empty() {
@@ -1031,25 +1037,14 @@ impl SourceBuild {
             }
         };
 
-        let output = self.run_build_hook("build", &script).await?;
-        if output.status.success() {
-            let distribution_filename = fs::read_to_string(&outfile)?;
-            if output_dir.join(&distribution_filename).is_file() {
-                return Ok(distribution_filename);
-            }
+        let hook_prefix = "build";
+        let output = self.run_build_hook(hook_prefix, &script).await?;
+        let distribution_filename = fs::read_to_string(&outfile)?;
+        if output_dir.join(&distribution_filename).is_file() {
+            return Ok(distribution_filename);
         }
 
-        Err(Error::from_command_output(
-            format!(
-                "Call to `{}.build_{}` failed",
-                self.pep517_backend.backend, self.build_kind
-            ),
-            &output,
-            self.level,
-            self.package_name.as_ref(),
-            self.package_version.as_ref(),
-            self.version_id.as_deref(),
-        ))
+        Err(self.build_hook_failure(hook_prefix, output))
     }
 }
 
