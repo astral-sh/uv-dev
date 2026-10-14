@@ -1,4 +1,5 @@
 use either::Either;
+use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use same_file::is_same_file;
 use tracing::debug;
@@ -235,25 +236,22 @@ impl Urls {
             });
         };
 
-        let matching_urls: Vec<_> = expected
+        expected
             .iter()
             .filter(|requirement| same_resource(&requirement.parsed_url, parsed_url, git))
-            .collect();
-
-        let [allowed_url] = matching_urls.as_slice() else {
-            let mut conflicting_urls: Vec<_> = matching_urls
-                .into_iter()
-                .map(|parsed_url| parsed_url.parsed_url.clone())
-                .chain(std::iter::once(parsed_url.clone()))
-                .collect();
-            conflicting_urls.sort();
-            return Err(ResolveError::ConflictingUrls {
-                package_name: package_name.clone(),
-                urls: conflicting_urls,
-                env: env.clone(),
-            });
-        };
-        Ok(*allowed_url)
+            .exactly_one()
+            .map_err(|matching_urls| {
+                let mut conflicting_urls: Vec<_> = matching_urls
+                    .map(|parsed_url| parsed_url.parsed_url.clone())
+                    .chain(std::iter::once(parsed_url.clone()))
+                    .collect();
+                conflicting_urls.sort();
+                ResolveError::ConflictingUrls {
+                    package_name: package_name.clone(),
+                    urls: conflicting_urls,
+                    env: env.clone(),
+                }
+            })
     }
 }
 
