@@ -1102,15 +1102,16 @@ fn detect_git_repository(path: &Path) -> GitDiscoveryResult {
 /// Initialize the version control system at the given path, if applicable.
 fn init_vcs(path: &Path, vcs: Option<VersionControlSystem>) -> Result<()> {
     let initialize_git = match vcs {
-        None => matches!(
-            detect_git_repository(path),
-            GitDiscoveryResult::NoRepository
-        ),
+        None => match detect_git_repository(path) {
+            GitDiscoveryResult::NoRepository => true,
+            GitDiscoveryResult::Repository | GitDiscoveryResult::Unknown => false,
+        },
         Some(VersionControlSystem::None) => false,
         // An explicit request should report initialization errors even if discovery failed.
-        Some(VersionControlSystem::Git) => {
-            !matches!(detect_git_repository(path), GitDiscoveryResult::Repository)
-        }
+        Some(VersionControlSystem::Git) => match detect_git_repository(path) {
+            GitDiscoveryResult::Repository => false,
+            GitDiscoveryResult::NoRepository | GitDiscoveryResult::Unknown => true,
+        },
     };
     if initialize_git {
         VersionControlSystem::Git.init(path)?;
