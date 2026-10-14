@@ -4121,24 +4121,7 @@ fn non_project() -> Result<()> {
     "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--group").arg("async"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    anyio v4.3.0 (group: async)
-    ├── idna v3.6
-    └── sniffio v1.3.1
-
-    ----- stderr -----
-    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
-    Resolved 3 packages in [TIME]
-    "
-    );
-
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
-
-    Ok(())
+    assert_non_project_async_group_tree(&context)
 }
 
 /// A pyproject.toml with only `[dependency-groups]` (no `[project]`, no `[tool.uv.workspace]`)
@@ -4156,23 +4139,37 @@ fn dependency_groups_only() -> Result<()> {
     "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--group").arg("async"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    anyio v4.3.0 (group: async)
-    ├── idna v3.6
-    └── sniffio v1.3.1
+    assert_non_project_async_group_tree(&context)
+}
 
-    ----- stderr -----
-    warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
-    Resolved 3 packages in [TIME]
-    "
+#[cfg(feature = "test-universal")]
+fn assert_non_project_async_group_tree(context: &TestContext) -> Result<()> {
+    insta::allow_duplicates! {
+        uv_snapshot!(context.filters(), context.tree().arg("--universal").arg("--group").arg("async"), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        anyio v4.3.0 (group: async)
+        ├── idna v3.6
+        └── sniffio v1.3.1
+
+        ----- stderr -----
+        warning: No `requires-python` value found in the workspace. Defaulting to `>=3.12`.
+        Resolved 3 packages in [TIME]
+        ");
+    }
+
+    let lock = uv_lock::Lock::from_canonical_toml(&context.read("uv.lock"))?;
+    let group = lock
+        .dependency_groups()
+        .get(&"async".parse()?)
+        .context("missing async group in lockfile manifest")?;
+    assert_eq!(
+        group
+            .iter()
+            .map(|requirement| requirement.name.as_str())
+            .collect::<Vec<_>>(),
+        ["anyio"]
     );
-
-    // `uv tree` should update the lockfile
-    let lock = context.read("uv.lock");
-    assert!(!lock.is_empty());
-
     Ok(())
 }
 
