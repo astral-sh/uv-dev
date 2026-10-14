@@ -560,60 +560,49 @@ pub struct IndexCapabilities(Arc<RwLock<FxHashMap<IndexUrl, Flags>>>);
 impl IndexCapabilities {
     /// Returns `true` if the given [`IndexUrl`] supports range requests.
     pub fn supports_range_requests(&self, index_url: &IndexUrl) -> bool {
-        !self
-            .0
-            .read()
-            .unwrap()
-            .get(index_url)
-            .is_some_and(|flags| flags.intersects(Flags::NO_RANGE_REQUESTS))
+        !self.has_flag(index_url, Flags::NO_RANGE_REQUESTS)
     }
 
     /// Mark an [`IndexUrl`] as not supporting range requests.
     pub fn set_no_range_requests(&self, index_url: IndexUrl) {
-        self.0
-            .write()
-            .unwrap()
-            .entry(index_url)
-            .or_insert(Flags::empty())
-            .insert(Flags::NO_RANGE_REQUESTS);
+        self.set_flag(index_url, Flags::NO_RANGE_REQUESTS);
     }
 
     /// Returns `true` if the given [`IndexUrl`] returns a `401 Unauthorized` status code.
     pub fn unauthorized(&self, index_url: &IndexUrl) -> bool {
-        self.0
-            .read()
-            .unwrap()
-            .get(index_url)
-            .is_some_and(|flags| flags.intersects(Flags::UNAUTHORIZED))
+        self.has_flag(index_url, Flags::UNAUTHORIZED)
     }
 
     /// Mark an [`IndexUrl`] as returning a `401 Unauthorized` status code.
     pub(crate) fn set_unauthorized(&self, index_url: IndexUrl) {
-        self.0
-            .write()
-            .unwrap()
-            .entry(index_url)
-            .or_insert(Flags::empty())
-            .insert(Flags::UNAUTHORIZED);
+        self.set_flag(index_url, Flags::UNAUTHORIZED);
     }
 
     /// Returns `true` if the given [`IndexUrl`] returns a `403 Forbidden` status code.
     pub fn forbidden(&self, index_url: &IndexUrl) -> bool {
-        self.0
-            .read()
-            .unwrap()
-            .get(index_url)
-            .is_some_and(|flags| flags.intersects(Flags::FORBIDDEN))
+        self.has_flag(index_url, Flags::FORBIDDEN)
     }
 
     /// Mark an [`IndexUrl`] as returning a `403 Forbidden` status code.
     pub(crate) fn set_forbidden(&self, index_url: IndexUrl) {
+        self.set_flag(index_url, Flags::FORBIDDEN);
+    }
+
+    fn has_flag(&self, index_url: &IndexUrl, flag: Flags) -> bool {
+        self.0
+            .read()
+            .unwrap()
+            .get(index_url)
+            .is_some_and(|flags| flags.intersects(flag))
+    }
+
+    fn set_flag(&self, index_url: IndexUrl, flag: Flags) {
         self.0
             .write()
             .unwrap()
             .entry(index_url)
             .or_insert(Flags::empty())
-            .insert(Flags::FORBIDDEN);
+            .insert(flag);
     }
 }
 
