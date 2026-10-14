@@ -493,9 +493,11 @@ fn dubious_filenames() {
 async fn publish_wheels_before_sdist_in_filename_order() {
     let context = uv_test::test_context!("3.12").with_filtered_sizes();
     let server = MockServer::start().await;
-    let app_wheel = basic_app_wheel();
-    let sdist = basic_package_sdist();
-    let package_wheel = basic_package_wheel();
+    let expected_uploads = [
+        basic_app_wheel(),
+        basic_package_wheel(),
+        basic_package_sdist(),
+    ];
 
     Mock::given(method("POST"))
         .and(path("/upload"))
@@ -506,9 +508,7 @@ async fn publish_wheels_before_sdist_in_filename_order() {
 
     uv_snapshot!(context.filters(), context.publish()
         // Pass the source distribution first and the wheels in reverse filename order.
-        .arg(sdist)
-        .arg(package_wheel)
-        .arg(app_wheel)
+        .args(expected_uploads.iter().rev())
         .arg("--username")
         .arg("dummy")
         .arg("--password")
@@ -526,6 +526,23 @@ async fn publish_wheels_before_sdist_in_filename_order() {
     Uploading basic_package-0.1.0.tar.gz ([SIZE]B)
     "
     );
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("Request recording is enabled");
+    assert_eq!(requests.len(), expected_uploads.len());
+    for (index, (request, expected)) in requests.iter().zip(&expected_uploads).enumerate() {
+        let filename = expected.file_name().unwrap().to_string_lossy();
+        let header = format!("name=\"content\"; filename=\"{filename}\"");
+        assert!(
+            request
+                .body
+                .windows(header.len())
+                .any(|bytes| bytes == header.as_bytes()),
+            "upload {index} did not contain {filename}"
+        );
+    }
 }
 
 /// Check that we (don't) use the keyring and warn for missing keyring behaviors correctly.
