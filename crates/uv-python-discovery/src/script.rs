@@ -6,6 +6,7 @@ use crate::ConfigDiscovery;
 use crate::PythonInstallation;
 use crate::PythonVersionFile;
 use crate::VersionFileDiscoveryOptions;
+use crate::virtualenv_discovery::virtualenv_from_env;
 use tracing::{debug, trace, warn};
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{cache_digest, cache_name};
@@ -22,7 +23,6 @@ use uv_python_types::{
 };
 use uv_scripts::Pep723ItemRef;
 use uv_settings::PythonInstallMirrors;
-use uv_static::EnvVars;
 use uv_warnings::{warn_user, warn_user_once};
 
 use crate::PythonDownloadReporter;
@@ -131,23 +131,6 @@ impl ScriptInterpreter {
     ///
     /// See: [`uv_workspace::Workspace::environment_selection`].
     pub fn root(script: Pep723ItemRef<'_>, active: ActiveEnvironment, cache: &Cache) -> PathBuf {
-        /// Resolve the `VIRTUAL_ENV` variable, if any.
-        fn from_virtual_env_variable() -> Option<PathBuf> {
-            let value = std::env::var_os(EnvVars::VIRTUAL_ENV)?;
-
-            if value.is_empty() {
-                return None;
-            }
-
-            let path = PathBuf::from(value);
-            if path.is_absolute() {
-                return Some(path);
-            }
-
-            // Resolve the path relative to current directory.
-            Some(CWD.join(path))
-        }
-
         // Determine the stable path to the script environment in the cache.
         let cache_env = {
             let entry = match script {
@@ -177,7 +160,12 @@ impl ScriptInterpreter {
         };
 
         // If `--active` is set, prefer the active virtual environment.
-        if let Some(from_virtual_env) = from_virtual_env_variable() {
+        if let Some(from_virtual_env) = virtualenv_from_env() {
+            let from_virtual_env = if from_virtual_env.is_absolute() {
+                from_virtual_env
+            } else {
+                CWD.join(from_virtual_env)
+            };
             if !uv_fs::is_same_file_allow_missing(&from_virtual_env, &cache_env).unwrap_or(false) {
                 match active {
                     ActiveEnvironment::Prefer => {
