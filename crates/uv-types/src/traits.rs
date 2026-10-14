@@ -217,7 +217,7 @@ pub trait BuildContext {
 /// You can call [`Self::wheel`] to build the wheel directly, call [`Self::metadata`] to get
 /// the metadata without building the wheel, or call [`Self::metadata`] before [`Self::wheel`].
 pub trait SourceBuildTrait {
-    /// A wrapper for `uv_build_frontend::SourceBuild::get_metadata_without_build`.
+    /// Try to prepare distribution metadata without building a wheel.
     ///
     /// For PEP 517 builds, this calls `prepare_metadata_for_build_wheel`
     ///

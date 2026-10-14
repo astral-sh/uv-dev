@@ -287,7 +287,7 @@ pub struct SourceBuild {
     skip_metadata_hook: bool,
     /// The virtual environment in which to build the source distribution.
     venv: PythonEnvironment,
-    /// Populated if `prepare_metadata_for_build_wheel` was called.
+    /// Metadata directory returned by the build backend's preparation hook.
     ///
     /// > If the build frontend has previously called `prepare_metadata_for_build_wheel` and depends
     /// > on the wheel resulting from this call to have metadata matching this earlier call, then
@@ -863,19 +863,17 @@ impl SourceBuild {
         )
     }
 
-    /// Try calling `prepare_metadata_for_build_wheel` to get the metadata without executing the
-    /// actual build.
-    async fn get_metadata_without_build(&mut self) -> Result<Option<PathBuf>, Error> {
-        // We've already called this method; return the existing result.
-        if let Some(metadata_dir) = &self.metadata_directory {
-            return Ok(Some(metadata_dir.clone()));
+    /// Try preparing metadata without executing the actual build.
+    async fn prepare_metadata_without_build(&mut self) -> Result<(), Error> {
+        if self.metadata_directory.is_some() {
+            return Ok(());
         }
 
         // Lock the source tree, if necessary.
         let _lock = self.acquire_lock().await?;
 
         if self.skip_metadata_hook {
-            return Ok(None);
+            return Ok(());
         }
 
         let metadata_directory = self.temp_dir.path().join("metadata_directory");
@@ -911,11 +909,10 @@ impl SourceBuild {
         self.run_build_hook(hook_prefix, &script).await?;
 
         let dirname = fs::read_to_string(&outfile)?;
-        if dirname.is_empty() {
-            return Ok(None);
+        if !dirname.is_empty() {
+            self.metadata_directory = Some(metadata_directory.join(dirname));
         }
-        self.metadata_directory = Some(metadata_directory.join(dirname));
-        Ok(self.metadata_directory.clone())
+        Ok(())
     }
 
     /// Build a distribution from an archive (`.zip` or `.tar.gz`) or source tree, and return the
@@ -1073,7 +1070,8 @@ impl SourceBuild {
 
 impl SourceBuildTrait for SourceBuild {
     async fn metadata(&mut self) -> Result<Option<PathBuf>, AnyErrorBuild> {
-        Ok(self.get_metadata_without_build().await?)
+        self.prepare_metadata_without_build().await?;
+        Ok(self.metadata_directory.clone())
     }
 
     async fn wheel<'a>(&'a self, wheel_dir: &'a Path) -> Result<String, AnyErrorBuild> {
