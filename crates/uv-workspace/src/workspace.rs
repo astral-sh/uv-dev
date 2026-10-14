@@ -402,6 +402,21 @@ impl DiscoveryOptions {
         debug!("Found project root: {}", project_root.simplified_display());
         Ok(project_root)
     }
+
+    /// Return the cache root to exclude from unrestricted discovery.
+    fn external_cache_root<'a>(&self, cache: &'a Cache) -> Option<Cow<'a, Path>> {
+        if self.stop_discovery_at.is_some() {
+            return None;
+        }
+        // We may receive an uninitialized cache with a relative cache root.
+        let cache_root = cache.root();
+        let cache_root = if cache_root.is_absolute() {
+            Cow::Borrowed(cache_root)
+        } else {
+            Cow::Owned(CWD.join(cache_root))
+        };
+        Some(normalize_path(cache_root))
+    }
 }
 
 /// The declaration contributing a workspace Python requirement.
@@ -1169,18 +1184,8 @@ impl Workspace {
         let mut seen = FxHashSet::default();
 
         let external_cache_root = options
-            .stop_discovery_at
-            .is_none()
-            .then(|| {
-                // We may receive an uninitialized cache with a relative cache root.
-                let cache_root = if cache.root().is_absolute() {
-                    cache.root().to_path_buf()
-                } else {
-                    CWD.join(cache.root())
-                };
-                normalize_path(&cache_root).into_owned()
-            })
-            .filter(|cache_root| !workspace_root.starts_with(cache_root));
+            .external_cache_root(cache)
+            .filter(|cache_root| !workspace_root.starts_with(cache_root.as_ref()));
 
         // Add the project at the workspace root, if it exists and if it's distinct from the current
         // project. If it is the current project, it is added as such in the next step.
@@ -1220,7 +1225,7 @@ impl Workspace {
                 let member_root = member_root
                     .map_err(|err| WorkspaceErrorKind::GlobWalk(absolute_glob.clone(), err))?;
                 if external_cache_root
-                    .as_ref()
+                    .as_deref()
                     .is_some_and(|cache_root| member_root.starts_with(cache_root))
                 {
                     debug!(
@@ -1817,20 +1822,9 @@ async fn find_workspace(
     options: &DiscoveryOptions,
     cache: &Cache,
 ) -> Result<Option<(PathBuf, ToolUvWorkspace, PyProjectToml)>, WorkspaceError> {
-    let external_cache_root = if options.stop_discovery_at.is_none() {
-        // We may receive an uninitialized cache with a relative cache root.
-        let cache_root = if cache.root().is_absolute() {
-            cache.root().to_path_buf()
-        } else {
-            CWD.join(cache.root())
-        };
-        Some(normalize_path(&cache_root).into_owned())
-    } else {
-        None
-    };
     // Avoid panicking in the odd (unsupported) case that uv is running inside the cache dir.
-    if let Some(cache_root) = external_cache_root
-        && project_root.starts_with(cache_root)
+    if let Some(cache_root) = options.external_cache_root(cache)
+        && project_root.starts_with(cache_root.as_ref())
     {
         debug!(
             "Project is contained in cache directory: {}",
