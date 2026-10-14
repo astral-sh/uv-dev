@@ -10418,166 +10418,92 @@ fn is_wheel_unreachable_for_marker(
     }
 
     if platform_tags.iter().all(PlatformTag::is_linux) {
-        if platform_tags.iter().all(PlatformTag::is_arm) {
-            if marker.is_disjoint(*LINUX_ARM_MARKERS) {
-                return true;
-            }
+        let platform_marker = if platform_tags.iter().all(PlatformTag::is_arm) {
+            *LINUX_ARM_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_x86_64) {
-            if marker.is_disjoint(*LINUX_X86_64_MARKERS) {
-                return true;
-            }
+            *LINUX_X86_64_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_x86) {
-            if marker.is_disjoint(*LINUX_X86_MARKERS) {
-                return true;
-            }
+            *LINUX_X86_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_ppc64le) {
-            if marker.is_disjoint(*LINUX_PPC64LE_MARKERS) {
-                return true;
-            }
+            *LINUX_PPC64LE_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_ppc64) {
-            if marker.is_disjoint(*LINUX_PPC64_MARKERS) {
-                return true;
-            }
+            *LINUX_PPC64_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_s390x) {
-            if marker.is_disjoint(*LINUX_S390X_MARKERS) {
-                return true;
-            }
+            *LINUX_S390X_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_riscv64) {
-            if marker.is_disjoint(*LINUX_RISCV64_MARKERS) {
-                return true;
-            }
+            *LINUX_RISCV64_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_loongarch64) {
-            if marker.is_disjoint(*LINUX_LOONGARCH64_MARKERS) {
-                return true;
-            }
+            *LINUX_LOONGARCH64_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_armv7l) {
-            if marker.is_disjoint(*LINUX_ARMV7L_MARKERS) {
-                return true;
-            }
+            *LINUX_ARMV7L_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_armv6l) {
-            if marker.is_disjoint(*LINUX_ARMV6L_MARKERS) {
-                return true;
-            }
-        } else if marker.is_disjoint(*LINUX_MARKERS) {
+            *LINUX_ARMV6L_MARKERS
+        } else {
+            *LINUX_MARKERS
+        };
+        if marker.is_disjoint(platform_marker) {
             return true;
         }
     }
 
     if platform_tags.iter().all(PlatformTag::is_windows) {
-        if platform_tags.iter().all(PlatformTag::is_arm) {
-            if marker.is_disjoint(*WINDOWS_ARM_MARKERS) {
-                return true;
-            }
+        let platform_marker = if platform_tags.iter().all(PlatformTag::is_arm) {
+            *WINDOWS_ARM_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_x86_64) {
-            if marker.is_disjoint(*WINDOWS_X86_64_MARKERS) {
-                return true;
-            }
+            *WINDOWS_X86_64_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_x86) {
-            if marker.is_disjoint(*WINDOWS_X86_MARKERS) {
-                return true;
-            }
-        } else if marker.is_disjoint(*WINDOWS_MARKERS) {
+            *WINDOWS_X86_MARKERS
+        } else {
+            *WINDOWS_MARKERS
+        };
+        if marker.is_disjoint(platform_marker) {
             return true;
         }
     }
 
     if platform_tags.iter().all(PlatformTag::is_macos) {
-        if platform_tags.iter().all(PlatformTag::is_arm) {
-            if marker.is_disjoint(*MAC_ARM_MARKERS) {
-                return true;
-            }
+        let platform_marker = if platform_tags.iter().all(PlatformTag::is_arm) {
+            *MAC_ARM_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_x86_64) {
-            if marker.is_disjoint(*MAC_X86_64_MARKERS) {
-                return true;
-            }
+            *MAC_X86_64_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_x86) {
-            if marker.is_disjoint(*MAC_X86_MARKERS) {
-                return true;
-            }
-        } else if marker.is_disjoint(*MAC_MARKERS) {
+            *MAC_X86_MARKERS
+        } else {
+            *MAC_MARKERS
+        };
+        if marker.is_disjoint(platform_marker) {
             return true;
         }
     }
 
     if platform_tags.iter().all(PlatformTag::is_android) {
-        if platform_tags.iter().all(PlatformTag::is_arm) {
-            if marker.is_disjoint(*ANDROID_ARM_MARKERS) {
-                return true;
-            }
+        let platform_marker = if platform_tags.iter().all(PlatformTag::is_arm) {
+            *ANDROID_ARM_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_x86_64) {
-            if marker.is_disjoint(*ANDROID_X86_64_MARKERS) {
-                return true;
-            }
+            *ANDROID_X86_64_MARKERS
         } else if platform_tags.iter().all(PlatformTag::is_x86) {
-            if marker.is_disjoint(*ANDROID_X86_MARKERS) {
-                return true;
-            }
-        } else if marker.is_disjoint(*ANDROID_MARKERS) {
+            *ANDROID_X86_MARKERS
+        } else {
+            *ANDROID_MARKERS
+        };
+        if marker.is_disjoint(platform_marker) {
             return true;
         }
     }
 
-    if platform_tags.iter().all(PlatformTag::is_arm) {
-        if marker.is_disjoint(*ARM_MARKERS) {
-            return true;
-        }
-    }
-
-    if platform_tags.iter().all(PlatformTag::is_x86_64) {
-        if marker.is_disjoint(*X86_64_MARKERS) {
-            return true;
-        }
-    }
-
-    if platform_tags.iter().all(PlatformTag::is_x86) {
-        if marker.is_disjoint(*X86_MARKERS) {
-            return true;
-        }
-    }
-
-    if platform_tags.iter().all(PlatformTag::is_ppc64le) {
-        if marker.is_disjoint(*PPC64LE_MARKERS) {
-            return true;
-        }
-    }
-
-    if platform_tags.iter().all(PlatformTag::is_ppc64) {
-        if marker.is_disjoint(*PPC64_MARKERS) {
-            return true;
-        }
-    }
-
-    if platform_tags.iter().all(PlatformTag::is_s390x) {
-        if marker.is_disjoint(*S390X_MARKERS) {
-            return true;
-        }
-    }
-
-    if platform_tags.iter().all(PlatformTag::is_riscv64) {
-        if marker.is_disjoint(*RISCV64_MARKERS) {
-            return true;
-        }
-    }
-
-    if platform_tags.iter().all(PlatformTag::is_loongarch64) {
-        if marker.is_disjoint(*LOONGARCH64_MARKERS) {
-            return true;
-        }
-    }
-
-    if platform_tags.iter().all(PlatformTag::is_armv7l) {
-        if marker.is_disjoint(*ARMV7L_MARKERS) {
-            return true;
-        }
-    }
-
-    if platform_tags.iter().all(PlatformTag::is_armv6l) {
-        if marker.is_disjoint(*ARMV6L_MARKERS) {
-            return true;
-        }
-    }
-
-    false
+    (platform_tags.iter().all(PlatformTag::is_arm) && marker.is_disjoint(*ARM_MARKERS))
+        || (platform_tags.iter().all(PlatformTag::is_x86_64) && marker.is_disjoint(*X86_64_MARKERS))
+        || (platform_tags.iter().all(PlatformTag::is_x86) && marker.is_disjoint(*X86_MARKERS))
+        || (platform_tags.iter().all(PlatformTag::is_ppc64le)
+            && marker.is_disjoint(*PPC64LE_MARKERS))
+        || (platform_tags.iter().all(PlatformTag::is_ppc64) && marker.is_disjoint(*PPC64_MARKERS))
+        || (platform_tags.iter().all(PlatformTag::is_s390x) && marker.is_disjoint(*S390X_MARKERS))
+        || (platform_tags.iter().all(PlatformTag::is_riscv64)
+            && marker.is_disjoint(*RISCV64_MARKERS))
+        || (platform_tags.iter().all(PlatformTag::is_loongarch64)
+            && marker.is_disjoint(*LOONGARCH64_MARKERS))
+        || (platform_tags.iter().all(PlatformTag::is_armv7l) && marker.is_disjoint(*ARMV7L_MARKERS))
+        || (platform_tags.iter().all(PlatformTag::is_armv6l) && marker.is_disjoint(*ARMV6L_MARKERS))
 }
 
 pub(crate) fn is_wheel_unreachable(
