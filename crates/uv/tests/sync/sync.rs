@@ -15083,8 +15083,8 @@ fn sync_workspace_member_build_constraints() -> Result<()> {
     Ok(())
 }
 
-// Test that we recreate a virtual environment when `pyvenv.cfg` version
-// is incompatible with the interpreter version.
+/// Recreate an environment when either supported `pyvenv.cfg` version key is incompatible with
+/// its interpreter.
 #[test]
 fn sync_when_virtual_environment_incompatible_with_interpreter() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -15110,77 +15110,39 @@ fn sync_when_virtual_environment_incompatible_with_interpreter() -> Result<()> {
         .assert()
         .success();
 
-    // Simulate an incompatible `pyvenv.cfg:version` value created
-    // by the venv module.
     let pyvenv_cfg = context.venv.child("pyvenv.cfg");
-    let contents = context
-        .read(".venv/pyvenv.cfg")
-        .lines()
-        .map(|line| {
-            if line.trim_start().starts_with("version") {
-                "version = 3.11.0".to_string()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs_err::write(&pyvenv_cfg, contents)?;
-
-    // We should also be able to read from the lockfile.
-    uv_snapshot!(context.filters(), context.sync(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Removed virtual environment at: .venv
-    Creating virtual environment at: .venv
-    Resolved 1 package in [TIME]
-    Checked in [TIME]
-    ");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
+    // stdlib `venv` writes `version`; uv and virtualenv write `version_info`.
+    for version_key in ["version", "version_info"] {
         let contents = context.read(".venv/pyvenv.cfg");
-        let lines: Vec<&str> = contents.split('\n').collect();
-        assert_snapshot!(lines[3], @"version_info = 3.12.[X]");
-    });
+        let version_line = contents
+            .lines()
+            .find(|line| line.starts_with("version_info = "))
+            .ok_or_else(|| anyhow!("missing version_info in pyvenv.cfg:\n{contents}"))?;
+        fs_err::write(
+            &pyvenv_cfg,
+            contents.replacen(version_line, &format!("{version_key} = 3.11.0"), 1),
+        )?;
 
-    // Simulate an incompatible `pyvenv.cfg:version_info` value created
-    // by uv or virtualenv.
-    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
-    let contents = context
-        .read(".venv/pyvenv.cfg")
-        .lines()
-        .map(|line| {
-            if line.trim_start().starts_with("version") {
-                "version_info = 3.11.0".to_string()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs_err::write(&pyvenv_cfg, contents)?;
+        insta::allow_duplicates! {
+            uv_snapshot!(context.filters(), context.sync(), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+            Removed virtual environment at: .venv
+            Creating virtual environment at: .venv
+            Resolved 1 package in [TIME]
+            Checked in [TIME]
+            ");
+        }
 
-    // We should also be able to read from the lockfile.
-    uv_snapshot!(context.filters(), context.sync(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Removed virtual environment at: .venv
-    Creating virtual environment at: .venv
-    Resolved 1 package in [TIME]
-    Checked in [TIME]
-    ");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
         let contents = context.read(".venv/pyvenv.cfg");
-        let lines: Vec<&str> = contents.split('\n').collect();
-        assert_snapshot!(lines[3], @"version_info = 3.12.[X]");
-    });
+        assert!(
+            contents
+                .lines()
+                .any(|line| line.starts_with("version_info = 3.12.")),
+            "expected Python 3.12 after recreating an environment with incompatible {version_key}:\n{contents}"
+        );
+    }
 
     Ok(())
 }
