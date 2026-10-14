@@ -1,6 +1,7 @@
 //! Installation with the cache and environment on different filesystems.
 //! Requires `UV_INTERNAL__TEST_ALT_FS`.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -33,7 +34,7 @@ fn fixture() -> Result<Option<(TestContext, PathBuf)>> {
         &"cross-device".parse()?,
         &"1.0.0".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],

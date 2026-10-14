@@ -1,5 +1,7 @@
 //! Resolve local wheel path spellings and their transitive dependency metadata.
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use assert_fs::prelude::*;
 
@@ -17,7 +19,7 @@ fn flask_wheel_fixture() -> Result<(TestContext, PackseServer)> {
         &"flask".parse()?,
         &"3.0.0".parse()?,
         &["jinja2==3.1.3".parse()?, "werkzeug==3.0.1".parse()?],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],

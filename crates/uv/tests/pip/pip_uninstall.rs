@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 #[cfg(windows)]
 use std::path::{Component, Prefix};
 
@@ -46,7 +47,7 @@ fn missing_record() -> Result<()> {
         &"demo".parse()?,
         &"1.0.0".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],
@@ -397,7 +398,7 @@ fn uninstall_record_path_traversal() -> Result<()> {
         &"evilpkg".parse()?,
         &"0.1.0".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],

@@ -1,5 +1,7 @@
 //! Requirements files with a UTF-16 byte-order mark. See astral-sh/uv#2276.
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
@@ -19,7 +21,7 @@ fn tomli_wheels(context: &TestContext) -> Result<ChildPath> {
             &name,
             &version.parse()?,
             &[],
-            &Default::default(),
+            &BTreeMap::new(),
             None,
             "py3-none-any",
             &[],

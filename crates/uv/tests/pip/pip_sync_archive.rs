@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
@@ -19,7 +20,7 @@ fn tomli_2_0_1_wheel() -> Result<Vec<u8>> {
         &"tomli".parse()?,
         &"2.0.1".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::new(),
         None,
         "py3-none-any",
         &[],
