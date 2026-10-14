@@ -296,7 +296,9 @@ impl PythonRequest {
         // the prefix of e.g. `python312` and the empty prefix of bare versions, e.g. `312`
         let abstract_version_prefixes = ["python", ""];
         let all_implementation_names = ImplementationName::iter_all().flat_map(|implementation| {
-            std::iter::once(implementation.long_name()).chain(implementation.short_name())
+            std::iter::once(implementation.long_name())
+                .chain(implementation.short_name())
+                .map(move |name| (implementation, name))
         });
         // Abstract versions like `python@312`, `python312`, or `312`, plus implementations and
         // implementation versions like `pypy`, `pypy@312` or `pypy312`.
@@ -372,7 +374,8 @@ impl PythonRequest {
         }
         Self::parse_versions_and_implementations(
             abstract_version_prefixes.iter().copied(),
-            ImplementationName::iter_all().map(ImplementationName::long_name),
+            ImplementationName::iter_all()
+                .map(|implementation| (implementation, implementation.long_name())),
             lowercase_value,
         )
     }
@@ -388,8 +391,8 @@ impl PythonRequest {
     fn parse_versions_and_implementations<'a>(
         // typically "python", possibly also "pythonw" or "" (for bare versions)
         abstract_version_prefixes: impl IntoIterator<Item = &'a str>,
-        // expected to be either long names or all names
-        implementation_names: impl IntoIterator<Item = &'a str>,
+        // expected to be either long names or all names, paired with their implementation
+        implementation_names: impl IntoIterator<Item = (ImplementationName, &'a str)>,
         // the string to parse
         lowercase_value: &str,
     ) -> Result<Option<Self>, PythonRequestError> {
@@ -403,21 +406,17 @@ impl PythonRequest {
                 return Ok(Some(Self::Version(version_request)));
             }
         }
-        for implementation in implementation_names {
-            if lowercase_value == implementation {
-                return Ok(Some(Self::Implementation(
-                    // e.g. `pypy`
-                    // Safety: The name matched the possible names above
-                    ImplementationName::from_str(implementation).unwrap(),
-                )));
+        for (implementation, name) in implementation_names {
+            if lowercase_value == name {
+                // e.g. `pypy`
+                return Ok(Some(Self::Implementation(implementation)));
             }
             if let Some(version_request) =
-                Self::try_split_prefix_and_version(implementation, lowercase_value)?
+                Self::try_split_prefix_and_version(name, lowercase_value)?
             {
                 // e.g. `pypy39`
                 return Ok(Some(Self::ImplementationVersion(
-                    // Safety: The name matched the possible names above
-                    ImplementationName::from_str(implementation).unwrap(),
+                    implementation,
                     version_request,
                 )));
             }
