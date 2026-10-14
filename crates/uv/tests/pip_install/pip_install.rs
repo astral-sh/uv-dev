@@ -12679,22 +12679,31 @@ fn unsupported_git_scheme() {
 #[cfg(feature = "test-git")]
 fn install_git_submodule_relative_url() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let git = |repository: &Path| {
+        let mut command = context.external_command("git");
+        command.arg("-C").arg(repository);
+        command
+    };
+    let commit = |repository: &Path, message: &str| {
+        git(repository).args(["add", "--all"]).assert().success();
+        git(repository)
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--no-gpg-sign",
+                "-m",
+                message,
+            ])
+            .assert()
+            .success();
+    };
     let temp_dir = &context.temp_dir;
-    let utilities_dir = temp_dir.child("utilities");
-    utilities_dir.create_dir_all()?;
-
-    // Create and initialize the helper repository
-    let helpers_dir = utilities_dir.child("helpers");
+    let helpers_dir = temp_dir.child("utilities/helpers");
     helpers_dir.create_dir_all()?;
-
-    // Initialize helpers as a git repo
-    Command::new("git")
-        .args(["init"])
-        .current_dir(helpers_dir.path())
-        .assert()
-        .success();
-
-    // Create a simple file in helpers
+    git(helpers_dir.path()).arg("init").assert().success();
     helpers_dir
         .child("helper.py")
         .write_str("def help():\n    return 'I am a helper'")?;
@@ -12705,37 +12714,18 @@ fn install_git_submodule_relative_url() -> Result<()> {
     let grandchild_dir = temp_dir.child("grandchild");
     grandchild_dir.create_dir_all()?;
 
-    Command::new("git")
-        .args(["init"])
-        .current_dir(grandchild_dir.path())
-        .assert()
-        .success();
+    git(grandchild_dir.path()).arg("init").assert().success();
 
     grandchild_dir
         .child("grandchild.py")
         .write_str("def help():\n    return 'I am a nested helper'")?;
     grandchild_dir.child("__init__.py").touch()?;
 
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(grandchild_dir.path())
-        .assert()
-        .success();
+    commit(grandchild_dir.path(), "Initial nested helpers commit");
 
-    Command::new("git")
-        .args(["commit", "-m", "Initial nested helpers commit"])
-        .current_dir(grandchild_dir.path())
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .assert()
-        .success();
-
-    Command::new("git")
+    git(helpers_dir.path())
         .args(["submodule", "add", "../../grandchild", "nested/grandchild"])
-        .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh")
-        .current_dir(helpers_dir.path())
+        .env("GIT_ALLOW_PROTOCOL", "file")
         .assert()
         .success();
     helpers_dir
@@ -12748,35 +12738,11 @@ fn install_git_submodule_relative_url() -> Result<()> {
         .assert(predicate::path::is_file());
     helpers_dir.child("nested/__init__.py").touch()?;
 
-    // Add and commit in helpers
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(helpers_dir.path())
-        .assert()
-        .success();
+    commit(helpers_dir.path(), "Initial helpers commit");
 
-    Command::new("git")
-        .args(["commit", "-m", "Initial helpers commit"])
-        .current_dir(helpers_dir.path())
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .assert()
-        .success();
-
-    // Create and initialize the main repository
     let mylib_dir = temp_dir.child("mylib");
     mylib_dir.create_dir_all()?;
-
-    // Initialize mylib as a git repo
-    Command::new("git")
-        .args(["init"])
-        .current_dir(mylib_dir.path())
-        .assert()
-        .success();
-
-    // Create a simple setup.py
+    git(mylib_dir.path()).arg("init").assert().success();
     mylib_dir.child("setup.py").write_str(
         r#"
 from pathlib import Path
@@ -12794,7 +12760,6 @@ setup(
 "#,
     )?;
 
-    // Create a simple module file
     let mylib_package = mylib_dir.child("mylib");
     mylib_package.create_dir_all()?;
     mylib_package.child("__init__.py").write_str(
@@ -12807,11 +12772,9 @@ def main():
 "#,
     )?;
 
-    // Set helper as a submodule
-    Command::new("git")
+    git(mylib_dir.path())
         .args(["submodule", "add", "../utilities/helpers", "mylib/helpers"])
-        .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh")
-        .current_dir(mylib_dir.path())
+        .env("GIT_ALLOW_PROTOCOL", "file")
         .assert()
         .success();
     mylib_dir
@@ -12822,30 +12785,15 @@ def main():
         .child("helper.py")
         .assert(predicate::path::is_file());
 
-    // Add and commit in mylib
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(mylib_dir.path())
-        .assert()
-        .success();
-
-    Command::new("git")
-        .args(["commit", "-m", "Initial mylib commit with submodule"])
-        .current_dir(mylib_dir.path())
-        .env("GIT_AUTHOR_NAME", "Test")
-        .env("GIT_AUTHOR_EMAIL", "test@example.com")
-        .env("GIT_COMMITTER_NAME", "Test")
-        .env("GIT_COMMITTER_EMAIL", "test@example.com")
-        .assert()
-        .success();
+    commit(mylib_dir.path(), "Initial mylib commit with submodule");
 
     let mut filters = context.filters();
     filters.push((r"@[0-9a-f]{40}", "@COMMIT_HASH"));
 
+    let url = Url::from_directory_path(mylib_dir.path()).unwrap();
     uv_snapshot!(filters, context.pip_install()
-        .arg(format!("git+file://{}", mylib_dir.path().display()))
-        // Pass through environment variable to allow file:// URLs in Git subprocesses
-        .env("GIT_ALLOW_PROTOCOL", "file:ext:http:https:ssh"), @r"
+        .arg(format!("git+{}", url.as_str().trim_end_matches('/')))
+        .env("GIT_ALLOW_PROTOCOL", "file"), @r"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
