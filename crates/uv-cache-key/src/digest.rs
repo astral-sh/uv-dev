@@ -9,26 +9,16 @@ use crate::cache_key::{CacheKey, CacheKeyHasher};
 ///
 /// The value returned by [`cache_digest`] should be stable across releases and platforms.
 pub fn cache_digest<H: CacheKey>(hashable: &H) -> String {
-    /// Compute a u64 hash of a [`CacheKey`] object.
-    fn cache_key_u64<H: CacheKey>(hashable: &H) -> u64 {
-        let mut hasher = CacheKeyHasher::new();
-        hashable.cache_key(&mut hasher);
-        hasher.finish()
-    }
-
-    to_hex(cache_key_u64(hashable))
+    let mut hasher = CacheKeyHasher::new();
+    hashable.cache_key(&mut hasher);
+    to_hex(hasher.finish())
 }
 
 /// Compute a hex string hash of a hashable object.
 pub fn hash_digest<H: Hash>(hashable: &H) -> String {
-    /// Compute a u64 hash of a hashable object.
-    fn hash_u64<H: Hash>(hashable: &H) -> u64 {
-        let mut hasher = SeaHasher::new();
-        hashable.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    to_hex(hash_u64(hashable))
+    let mut hasher = SeaHasher::new();
+    hashable.hash(&mut hasher);
+    to_hex(hasher.finish())
 }
 
 /// Convert a u64 to a hex string.
