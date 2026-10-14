@@ -483,11 +483,12 @@ fn compile_constraints_markers() -> Result<()> {
     let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("anyio")?;
 
-    // Constrain a transitive dependency based on the Python version
     let constraints_txt = context.temp_dir.child("constraints.txt");
-    // If constraints are ignored, these will conflict
-    constraints_txt.write_str("sniffio==1.2.0;python_version<='3.7'")?;
-    constraints_txt.write_str("sniffio==1.3.0;python_version>'3.7'")?;
+    // The versions conflict if the marker conditions are ignored.
+    constraints_txt.write_str(indoc! {"
+        sniffio==1.2.0; python_version <= '3.7'
+        sniffio==1.3.0; python_version > '3.7'
+    "})?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
             .arg("requirements.in")
