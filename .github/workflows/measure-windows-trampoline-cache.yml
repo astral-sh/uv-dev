@@ -22,7 +22,7 @@ jobs:
       matrix:
         variant: [baseline, improved]
         target-arch: [x86_64, i686, aarch64]
-    uses: ./.github/workflows/benchmark-windows-trampoline-cache.yml
+    uses: $/.github/workflows/benchmark-windows-trampoline-cache.yml
     with:
       variant: ${{ matrix.variant }}
       target-arch: ${{ matrix.target-arch }}
@@ -37,7 +37,7 @@ jobs:
         variant: [baseline, improved]
         target-arch: [x86_64, i686, aarch64]
         sample: [1, 2, 3]
-    uses: ./.github/workflows/benchmark-windows-trampoline-cache.yml
+    uses: $/.github/workflows/benchmark-windows-trampoline-cache.yml
     with:
       variant: ${{ matrix.variant }}
       target-arch: ${{ matrix.target-arch }}
