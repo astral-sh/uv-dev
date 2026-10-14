@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use std::env::current_dir;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use uv_static::EnvVars;
 use uv_test::{uv_snapshot, venv_bin_path};
 use wiremock::matchers::{basic_auth, body_json, method, path};
@@ -48,14 +49,18 @@ fn upload_attestations(request: &Request) -> Option<Value> {
     Some(serde_json::from_str(attestations).expect("Attestations are JSON"))
 }
 
-/// Mock token acquisition and invalidation for the expected number of publishing runs.
-async fn mock_trusted_publishing(server: &MockServer, runs: u64) {
+async fn mock_trusted_publishing_audience(server: &MockServer, requests: u64) {
     Mock::given(method("GET"))
         .and(path("/_/oidc/audience"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "audience": "pypi" })))
-        .expect(runs)
+        .expect(requests)
         .mount(server)
         .await;
+}
+
+/// Mock token acquisition and invalidation for the expected number of publishing runs.
+async fn mock_trusted_publishing(server: &MockServer, runs: u64) {
+    mock_trusted_publishing_audience(server, runs).await;
     Mock::given(method("POST"))
         .and(path("/_/oidc/mint-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "token": "apitoken" })))
@@ -69,6 +74,14 @@ async fn mock_trusted_publishing(server: &MockServer, runs: u64) {
         .expect(runs)
         .mount(server)
         .await;
+}
+
+fn github_actions_without_oidc(mut command: Command) -> Command {
+    command
+        .env(EnvVars::GITHUB_ACTIONS, "true")
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_URL")
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+    command
 }
 
 #[test]
@@ -153,21 +166,21 @@ fn mixed_credentials() {
 }
 
 /// Emulate a missing `permission` `id-token: write` situation.
-#[test]
-fn missing_trusted_publishing_permission() {
+#[tokio::test]
+async fn missing_trusted_publishing_permission() {
     let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    mock_trusted_publishing_audience(&server, 1).await;
 
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), github_actions_without_oidc(context.publish())
         .arg("--publish-url")
-        .arg("https://test.pypi.org/legacy/")
+        .arg(format!("{}/upload", server.uri()))
         .arg("--trusted-publishing")
         .arg("always")
-        .arg(dummy_wheel())
-        // Emulate CI
-        .env(EnvVars::GITHUB_ACTIONS, "true"), @"
+        .arg(dummy_wheel()), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Publishing 1 file to https://test.pypi.org/legacy/
+    Publishing 1 file to http://[LOCALHOST]/upload
     error: Failed to obtain token for trusted publishing
       cause: Failed to obtain OIDC token: is the `id-token: write` permission missing?
       cause: GitHub Actions detection error
@@ -182,12 +195,7 @@ fn missing_trusted_publishing_permission() {
 async fn no_credentials() {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes();
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/_/oidc/audience"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "audience": "pypi" })))
-        .expect(1)
-        .mount(&server)
-        .await;
+    mock_trusted_publishing_audience(&server, 1).await;
     Mock::given(method("POST"))
         .and(path("/upload"))
         .respond_with(ResponseTemplate::new(200))
@@ -195,14 +203,10 @@ async fn no_credentials() {
         .mount(&server)
         .await;
 
-    uv_snapshot!(context.filters(), context.publish()
+    uv_snapshot!(context.filters(), github_actions_without_oidc(context.publish())
         .arg("--publish-url")
         .arg(format!("{}/upload", server.uri()))
-        .arg(dummy_wheel())
-        // Emulate CI
-        .env(EnvVars::GITHUB_ACTIONS, "true")
-        .env_remove("ACTIONS_ID_TOKEN_REQUEST_URL")
-        .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN"), @"
+        .arg(dummy_wheel()), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Publishing 1 file to http://[LOCALHOST]/upload
