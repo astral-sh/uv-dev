@@ -517,9 +517,9 @@ fn tool_upgrade_not_stop_if_upgrade_fails() -> anyhow::Result<()> {
     Installed 1 executable: pybabel
     ");
 
-    // Break the receipt for python-dotenv
+    // `babel` sorts before `python-dotenv`, so its failure must not abort the later upgrade.
     tool_dir
-        .child("python-dotenv")
+        .child("babel")
         .child("uv-receipt.toml")
         .write_str("Invalid receipt")?;
 
@@ -531,13 +531,12 @@ fn tool_upgrade_not_stop_if_upgrade_fails() -> anyhow::Result<()> {
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Updated babel v2.6.0 -> v2.14.0
-     - babel==2.6.0
-     + babel==2.14.0
-     - pytz==2018.5
-    Installed 1 executable: pybabel
-    error: Failed to upgrade python-dotenv
-      cause: `python-dotenv` is missing a valid receipt; run `uv tool install --force python-dotenv` to reinstall
+    Updated python-dotenv v0.10.2.post2 -> v1.0.1
+     - python-dotenv==0.10.2.post2
+     + python-dotenv==1.0.1
+    Installed 1 executable: dotenv
+    error: Failed to upgrade babel
+      cause: `babel` is missing a valid receipt; run `uv tool install --force babel` to reinstall
     ");
 
     Ok(())
