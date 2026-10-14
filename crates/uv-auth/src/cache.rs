@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 use std::hash::BuildHasherDefault;
 use std::sync::Arc;
@@ -212,15 +213,10 @@ impl<T> UrlTrie<T> {
     }
 
     fn get(&self, url: &Url) -> Option<&T> {
-        let segments = url.path_segments()?;
         let mut state = &self.states[0];
         let mut matched = None;
-        let realm = Realm::from(url).to_string();
-        for component in [realm.as_str()]
-            .into_iter()
-            .chain(segments.filter(|item| !item.is_empty()))
-        {
-            let Some(next) = state.get(component) else {
+        for component in Self::components(url)? {
+            let Some(next) = state.get(&component) else {
                 break;
             };
             state = &self.states[next];
@@ -233,27 +229,33 @@ impl<T> UrlTrie<T> {
 
     fn insert(&mut self, url: &Url, value: T) {
         // Opaque URLs have no path hierarchy for prefix matching.
-        let Some(segments) = url.path_segments() else {
+        let Some(components) = Self::components(url) else {
             return;
         };
         let mut state = 0;
-        let realm = Realm::from(url).to_string();
-        for component in [realm.as_str()]
-            .into_iter()
-            .chain(segments.filter(|item| !item.is_empty()))
-        {
-            match self.states[state].index(component) {
+        for component in components {
+            match self.states[state].index(&component) {
                 Ok(i) => state = self.states[state].children[i].1,
                 Err(i) => {
                     let new_state = self.alloc();
                     self.states[state]
                         .children
-                        .insert(i, (component.to_string(), new_state));
+                        .insert(i, (component.into_owned(), new_state));
                     state = new_state;
                 }
             }
         }
         self.states[state].value = Some(value);
+    }
+
+    /// Return the realm and nonempty path segments that form a URL's cache key.
+    fn components(url: &Url) -> Option<impl Iterator<Item = Cow<'_, str>>> {
+        let segments = url.path_segments()?;
+        let realm = Cow::Owned(Realm::from(url).to_string());
+        let path = segments
+            .filter(|segment| !segment.is_empty())
+            .map(Cow::Borrowed);
+        Some(std::iter::once(realm).chain(path))
     }
 
     fn alloc(&mut self) -> usize {
