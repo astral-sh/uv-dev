@@ -7,6 +7,8 @@ use uv_auth::{AuthBackend, Credentials, Service, TextCredentialStore};
 use uv_command_support::{ExitStatus, Printer};
 use uv_preview::Preview;
 
+use super::TOKEN_USERNAME;
+
 /// Login to a service.
 pub(crate) async fn login(
     service: Service,
@@ -37,7 +39,7 @@ pub(crate) async fn login(
         (None, None) => {
             // When using `--token`, we'll use a `__token__` placeholder username
             if token.is_some() {
-                Some("__token__".to_string())
+                Some(TOKEN_USERNAME.to_string())
             } else {
                 None
             }
@@ -47,7 +49,7 @@ pub(crate) async fn login(
     // Ensure that a username is not provided when using a token
     if token.is_some() {
         if let Some(username) = &username {
-            if username != "__token__" {
+            if username != TOKEN_USERNAME {
                 bail!("When using `--token`, a username cannot not be provided; found: {username}");
             }
         }
@@ -102,11 +104,7 @@ pub(crate) async fn login(
         bail!("Password cannot be empty");
     }
 
-    let display_url = if username == "__token__" {
-        url.without_credentials().to_string()
-    } else {
-        format!("{username}@{}", url.without_credentials())
-    };
+    let display_url = super::display_service(&service, &username);
 
     // TODO(zanieb): Add support for other authentication schemes here, e.g., `Credentials::Bearer`
     let credentials = Credentials::basic(Some(username), Some(password));
