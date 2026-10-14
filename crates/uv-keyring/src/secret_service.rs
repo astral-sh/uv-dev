@@ -265,7 +265,7 @@ impl SsCredential {
 
     /// Apply an async function to the unique item matching this credential.
     ///
-    /// The item is unlocked before the function is applied.
+    /// A locked service-wide match is unlocked before the function is applied.
     async fn with_unique_item<F, T>(&self, f: F) -> Result<T>
     where
         F: AsyncFnOnce(&Item<'_>) -> Result<T>,
@@ -273,7 +273,10 @@ impl SsCredential {
         let ss = SecretService::connect(EncryptionType::Dh)
             .await
             .map_err(platform_failure)?;
-        let attributes: HashMap<&str, &str> = self.search_attributes(false).into_iter().collect();
+        let mut attributes = self.search_attributes();
+        if let Some(target) = self.target() {
+            attributes.insert("target", target);
+        }
         let search = ss.search_items(attributes).await.map_err(decode_error)?;
         match (search.locked.as_slice(), search.unlocked.as_slice()) {
             ([], []) if self.target() == Some("default") => {
@@ -316,9 +319,8 @@ impl SsCredential {
         F: AsyncFnOnce(&Item<'_>) -> Result<T>,
     {
         let collection = ss.get_default_collection().await.map_err(decode_error)?;
-        let attributes = self.search_attributes(true);
         let search = collection
-            .search_items(attributes)
+            .search_items(self.search_attributes())
             .await
             .map_err(decode_error)?;
         match search.as_slice() {
@@ -347,16 +349,12 @@ impl SsCredential {
             .collect()
     }
 
-    /// Similar to [`all_attributes`](SsCredential::all_attributes),
-    /// but this just selects the ones we search on
-    fn search_attributes(&self, omit_target: bool) -> HashMap<&str, &str> {
-        let mut result: HashMap<&str, &str> = HashMap::new();
-        if !omit_target && let Some(target) = self.target() {
-            result.insert("target", target);
-        }
-        result.insert("service", self.attributes["service"].as_str());
-        result.insert("username", self.attributes["username"].as_str());
-        result
+    /// The attributes shared by service-wide and legacy collection searches.
+    fn search_attributes(&self) -> HashMap<&str, &str> {
+        HashMap::from([
+            ("service", self.attributes["service"].as_str()),
+            ("username", self.attributes["username"].as_str()),
+        ])
     }
 }
 
