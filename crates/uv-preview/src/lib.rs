@@ -425,6 +425,9 @@ pub enum PreviewFeature {
     /// more than once.
     ContentAddressedCache,
     /// Fetches Git trees and blobs lazily when checking out source repositories.
+    ///
+    /// Git sources are cached separately from normal fetches. Switching modes can require
+    /// downloading a repository again, even when its revision is cached in the other mode.
     GitPartialFetches,
     /// uv omits `exclude-newer-package` entries from the lockfile when the corresponding packages
     /// are absent from the resolved dependencies. This keeps cutoffs for unrelated packages out of
