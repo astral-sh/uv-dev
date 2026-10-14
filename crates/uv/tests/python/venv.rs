@@ -2341,7 +2341,7 @@ fn create_venv_nested_symlink_preservation() -> Result<()> {
 /// On Unix, creating a virtual environment in the current working directory should work.
 #[test]
 #[cfg(unix)]
-fn create_venv_current_working_directory() {
+fn create_venv_current_working_directory() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     uv_snapshot!(context.filters(), context.venv()
@@ -2355,6 +2355,8 @@ fn create_venv_current_working_directory() {
     Activate with: source .venv/[BIN]/activate
     "
     );
+    let marker = context.venv.child("recreation-marker");
+    marker.write_str("existing environment\n")?;
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(".")
@@ -2370,7 +2372,13 @@ fn create_venv_current_working_directory() {
     "
     );
 
-    context.root.assert(predicates::path::is_dir());
+    assert_path_missing(marker);
+    context
+        .venv
+        .child("pyvenv.cfg")
+        .assert(predicates::path::is_file());
+
+    Ok(())
 }
 
 /// On Windows, creating a virtual environment in the current working directory should fail,
