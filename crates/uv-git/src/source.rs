@@ -97,7 +97,14 @@ impl GitSource {
         // it easier to short-circuit this in the cases where we do have the commit.
         let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {
             let git_remote = GitRemote::new(remote.clone().into_owned());
-            let maybe_db = git_remote.db_at(&db_path).ok();
+            let maybe_db = match settings.checkout {
+                GitCheckoutStrategy::Clone => git_remote.db_at(&db_path).ok(),
+                // Recreating an unreadable database would invalidate existing worktrees.
+                GitCheckoutStrategy::Worktree if db_path.try_exists()? => {
+                    Some(git_remote.db_at(&db_path)?)
+                }
+                GitCheckoutStrategy::Worktree => None,
+            };
 
             // If we have a locked revision, and we have a pre-existing database which has that
             // revision, then no update needs to happen.
