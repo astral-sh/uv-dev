@@ -4,10 +4,13 @@ use assert_fs::prelude::*;
 use async_zip::base::read::seek::ZipFileReader;
 use futures::executor::block_on;
 use futures::io::Cursor;
+use indoc::indoc;
 use predicates::prelude::predicate;
 
-use uv_test::TestContext;
+use uv_cache::CacheBucket;
+use uv_test::archive::generate_source_archive;
 use uv_test::find_links::FindLinksServer;
+use uv_test::{TestContext, assert_link_target, assert_path_missing, uv_snapshot};
 
 const WHEEL_FILENAME: &str = "ok-1.0.0-py3-none-any.whl";
 
@@ -111,5 +114,76 @@ fn reject_incorrect_crc32() -> Result<()> {
         )))
         .stderr(predicate::str::contains("__init__.py"));
     context.assert_not_installed("ok");
+    Ok(())
+}
+
+/// A tar symlink can precede its target, as in `pgpdump==1.5`. See astral-sh/uv#1858.
+#[test]
+fn install_source_archive_symlink() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let original = context.temp_dir.child("original.tar.gz");
+    original.write_binary(&generate_source_archive(
+        &"linked".parse()?,
+        &"1.0.0".parse()?,
+        "",
+        None,
+    )?)?;
+    let archive = context.temp_dir.child("linked-1.0.0.tar.gz");
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            import io
+            import sys
+            import tarfile
+
+            with tarfile.open(sys.argv[1]) as original, tarfile.open(sys.argv[2], "w:gz") as archive:
+                link = tarfile.TarInfo("linked-1.0.0/README")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "README.md"
+                archive.addfile(link)
+
+                contents = b"Linked package\n"
+                target = tarfile.TarInfo("linked-1.0.0/README.md")
+                target.size = len(contents)
+                archive.addfile(target, io.BytesIO(contents))
+
+                for member in original:
+                    archive.addfile(member, original.extractfile(member))
+        "#})
+        .arg(original.path())
+        .arg(archive.path())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(archive.path()).args(["--offline", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + linked==1.0.0 (from file://[TEMP_DIR]/linked-1.0.0.tar.gz)
+    ");
+    context.assert_installed("linked", "1.0.0");
+
+    let target = context
+        .cache_files(CacheBucket::SourceDistributions)?
+        .into_iter()
+        .find(|path| path.file_name().is_some_and(|name| name == "README.md"))
+        .context("source distribution was not extracted into the cache")?;
+    let link = target.with_file_name("README");
+    if cfg!(windows) {
+        assert_path_missing(link);
+    } else {
+        assert_link_target(link, "README.md");
+    }
+
+    uv_snapshot!(context.pip_uninstall().arg("linked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - linked==1.0.0
+    ");
+    context.assert_not_installed("linked");
     Ok(())
 }
