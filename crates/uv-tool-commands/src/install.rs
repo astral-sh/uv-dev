@@ -338,7 +338,7 @@ pub async fn install(
         requirements.push(requirement.clone());
         requirements.extend(
             resolve_names(
-                spec.requirements.clone(),
+                spec.requirements,
                 &interpreter,
                 &settings.resolver,
                 &build_constraints,
@@ -411,7 +411,7 @@ pub async fn install(
     .await?;
 
     // Resolve the excludes.
-    let receipt_excludes = spec.excludes.clone();
+    let receipt_excludes = spec.excludes;
 
     // Convert to tool options.
     let options = ToolOptions::from(options);
