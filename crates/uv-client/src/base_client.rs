@@ -9,7 +9,7 @@ use http::header::{
     AUTHORIZATION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, LOCATION,
     PROXY_AUTHORIZATION, REFERER, TRANSFER_ENCODING, WWW_AUTHENTICATE,
 };
-use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use http::{HeaderName, HeaderValue, Method, StatusCode};
 use reqwest::{
     Certificate, Client, ClientBuilder, IntoUrl, NoProxy, Proxy, Request, Response, multipart,
 };
@@ -1035,8 +1035,7 @@ fn request_into_redirect(
         )));
     }
 
-    let mut headers = HeaderMap::new();
-    std::mem::swap(req.headers_mut(), &mut headers);
+    let headers = req.headers_mut();
 
     let cross_realm = RealmRef::from(&*redirect_url) != RealmRef::from(&*original_req_url);
     if cross_realm {
@@ -1072,7 +1071,6 @@ fn request_into_redirect(
         }
     }
 
-    std::mem::swap(req.headers_mut(), &mut headers);
     *req.url_mut() = Url::from(redirect_url);
     debug!(
         "Received HTTP {status}. Redirecting to `{}`",
