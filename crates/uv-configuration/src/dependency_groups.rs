@@ -31,55 +31,17 @@ impl DependencyGroups {
     /// This is the "real" constructor, it's basically taking raw CLI flags but in
     /// a way that's a bit nicer for other constructors to use.
     fn from_history(history: DependencyGroupsHistory) -> Self {
-        let DependencyGroupsHistory {
-            dev_mode,
-            mut group,
-            mut only_group,
-            mut no_group,
-            all_groups,
-            no_default_groups,
-            mut defaults,
-        } = history.clone();
-
-        // First desugar --dev flags
-        match dev_mode {
-            Some(DevMode::Include) => group.push(DEV_DEPENDENCIES.clone()),
-            Some(DevMode::Only) => only_group.push(DEV_DEPENDENCIES.clone()),
-            Some(DevMode::Exclude) => no_group.push(DEV_DEPENDENCIES.clone()),
-            None => {}
-        }
-
         // `group` and `only_group` actually have the same meanings: packages to include.
         // But if `only_group` is non-empty then *other* packages should be excluded.
-        // So we just record whether it was and then treat the two lists as equivalent.
-        let only_groups = !only_group.is_empty();
-        // --only flags imply --no-default-groups
-        let default_groups = !no_default_groups && !only_groups;
-
-        let include = if all_groups {
-            // If this is set we can ignore group/only_group/defaults as irrelevant
-            // (`--all-groups --only-*` is rejected at the CLI level, don't worry about it).
-            IncludeGroups::All
-        } else {
-            // Merge all these lists, they're equivalent now
-            group.append(&mut only_group);
-            // Resolve default groups potentially also setting All
-            if default_groups {
-                match &mut defaults {
-                    DefaultGroups::All => IncludeGroups::All,
-                    DefaultGroups::List(defaults) => {
-                        group.append(defaults);
-                        IncludeGroups::Some(group)
-                    }
-                }
-            } else {
-                IncludeGroups::Some(group)
-            }
-        };
+        let only_groups = !history.only_group.is_empty() || history.dev_mode == Some(DevMode::Only);
+        let mut exclude = history.no_group.clone();
+        if history.dev_mode == Some(DevMode::Exclude) {
+            exclude.push(DEV_DEPENDENCIES.clone());
+        }
 
         Self(Arc::new(DependencyGroupsInner {
-            include,
-            exclude: no_group,
+            include: IncludeGroups::from_history(&history, only_groups),
+            exclude,
             only_groups,
             history,
         }))
@@ -353,6 +315,48 @@ pub enum IncludeGroups {
 }
 
 impl IncludeGroups {
+    /// Resolve the included groups from the raw flags and defaults.
+    fn from_history(history: &DependencyGroupsHistory, only_groups: bool) -> Self {
+        let DependencyGroupsHistory {
+            dev_mode,
+            group,
+            only_group,
+            no_group: _,
+            all_groups,
+            no_default_groups,
+            defaults,
+        } = history;
+        if *all_groups {
+            return Self::All;
+        }
+
+        let defaults: &[GroupName] = if *no_default_groups || only_groups {
+            &[]
+        } else {
+            match defaults {
+                DefaultGroups::All => return Self::All,
+                DefaultGroups::List(defaults) => defaults,
+            }
+        };
+
+        // `--dev` and `--only-dev` append to their corresponding explicit group lists.
+        let (dev, only_dev) = match dev_mode {
+            Some(DevMode::Include) => (Some(&*DEV_DEPENDENCIES), None),
+            Some(DevMode::Only) => (None, Some(&*DEV_DEPENDENCIES)),
+            Some(DevMode::Exclude) | None => (None, None),
+        };
+        Self::Some(
+            group
+                .iter()
+                .chain(dev)
+                .chain(only_group)
+                .chain(only_dev)
+                .chain(defaults)
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Returns `true` if the specification includes the given group.
     fn contains(&self, group: &GroupName) -> bool {
         match self {
