@@ -23,13 +23,13 @@ use uv_test::{
 
 #[track_caller]
 fn assert_venv_python_version(context: &TestContext, version: &str) {
+    let components = version.split('.').count();
+    let script = format!(
+        "import sys; print('.'.join(map(str, sys.version_info[:{components}])), sys.prefix != sys.base_prefix, end='')"
+    );
     context
         .external_command(context.interpreter())
-        .args([
-            "-I",
-            "-c",
-            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor} {sys.prefix != sys.base_prefix}', end='')",
-        ])
+        .args(["-I", "-c", &script])
         .assert()
         .success()
         .stdout(format!("{version} True"))
@@ -1525,7 +1525,7 @@ fn create_venv_python_patch() {
     "
     );
 
-    context.venv.assert(predicates::path::is_dir());
+    assert_venv_python_version(&context, "3.12.9");
 }
 
 #[test]
