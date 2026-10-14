@@ -43,19 +43,7 @@ pub fn generate_source_archive(
     marker_path: Option<&Path>,
 ) -> Result<Vec<u8>> {
     let (filename, wheel) = WheelBuilder::new(name, version).build();
-    let pkg_info = formatdoc! {r"
-        Metadata-Version: 2.2
-        Name: {name}
-        Version: {version}
-        Dynamic: Requires-Dist
-    "};
-    let name = name.as_dist_info_name();
-    let pyproject = indoc! {r#"
-        [build-system]
-        requires = []
-        build-backend = "backend"
-        backend-path = ["."]
-    "#};
+    let dist_info_name = name.as_dist_info_name();
     let marker = if let Some(marker_path) = marker_path {
         format!("Path({}).touch()", marker_path.escape_for_python())
     } else {
@@ -69,7 +57,7 @@ pub fn generate_source_archive(
         {marker}
 
         WHEEL = Path(__file__).with_name("{filename}")
-        DIST_INFO = "{name}-{version}.dist-info"
+        DIST_INFO = "{dist_info_name}-{version}.dist-info"
 
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
             shutil.copyfile(WHEEL, Path(wheel_directory) / WHEEL.name)
@@ -82,20 +70,63 @@ pub fn generate_source_archive(
                 (dist_info / "METADATA").write_bytes(wheel.read(f"{{DIST_INFO}}/METADATA"))
             return dist_info.name
     "#};
-    let mut prefix = format!("{name}-{version}/");
+    source_archive(
+        name,
+        version,
+        subdirectory,
+        &backend,
+        Some((&filename, &wheel)),
+    )
+}
+
+/// Create a source archive whose dependency-free backend fails while preparing dynamic metadata.
+pub fn generate_failing_source_archive(name: &PackageName, version: &Version) -> Result<Vec<u8>> {
+    let backend = indoc! {r#"
+        import sys
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            sys.exit("intentional build failure")
+    "#};
+    source_archive(name, version, "", backend, None)
+}
+
+fn source_archive(
+    name: &PackageName,
+    version: &Version,
+    subdirectory: &str,
+    backend: &str,
+    wheel: Option<(&str, &[u8])>,
+) -> Result<Vec<u8>> {
+    let pkg_info = formatdoc! {r"
+        Metadata-Version: 2.2
+        Name: {name}
+        Version: {version}
+        Dynamic: Requires-Dist
+    "};
+    let pyproject = indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#};
+    let mut prefix = format!("{}-{version}/", name.as_dist_info_name());
     if !subdirectory.is_empty() {
         prefix.push_str(subdirectory.trim_end_matches('/'));
         prefix.push('/');
     }
+    let pyproject_path = format!("{prefix}pyproject.toml");
+    let pkg_info_path = format!("{prefix}PKG-INFO");
+    let backend_path = format!("{prefix}backend.py");
+    let wheel = wheel.map(|(filename, bytes)| (format!("{prefix}{filename}"), bytes));
+    let mut entries = vec![
+        (pyproject_path.as_str(), pyproject.as_bytes()),
+        (pkg_info_path.as_str(), pkg_info.as_bytes()),
+        (backend_path.as_str(), backend.as_bytes()),
+    ];
+    if let Some((path, bytes)) = &wheel {
+        entries.push((path, bytes));
+    }
     let mut archive = Vec::new();
-    write_tar_gz(
-        &mut archive,
-        &[
-            (&format!("{prefix}pyproject.toml"), pyproject.as_bytes()),
-            (&format!("{prefix}PKG-INFO"), pkg_info.as_bytes()),
-            (&format!("{prefix}backend.py"), backend.as_bytes()),
-            (&format!("{prefix}{filename}"), wheel.as_slice()),
-        ],
-    )?;
+    write_tar_gz(&mut archive, &entries)?;
     Ok(archive)
 }
