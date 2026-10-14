@@ -3,7 +3,7 @@ use std::fmt::Write;
 use anyhow::{Result, bail};
 use console::Term;
 use owo_colors::OwoColorize;
-use uv_auth::{AuthBackend, Credentials, Service, TextCredentialStore};
+use uv_auth::{AuthBackend, Credentials, Service};
 use uv_command_support::{ExitStatus, Printer};
 use uv_preview::Preview;
 
@@ -97,9 +97,9 @@ pub(crate) async fn login(
         AuthBackend::System(provider) => {
             provider.store(url, &credentials).await?;
         }
-        AuthBackend::TextStore(mut store, _lock) => {
+        AuthBackend::TextStore(mut store, lock) => {
             store.insert(service, credentials);
-            store.write(TextCredentialStore::default_file()?, _lock)?;
+            store.write(lock)?;
         }
     }
 
