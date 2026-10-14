@@ -4,7 +4,7 @@ use std::process::Command;
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use uv_test::packse::PackseServer;
-use uv_test::packse::scenario::{ArtifactMetadata, Package, PackageMetadata, Scenario};
+use uv_test::packse::scenario::{Package, PackageMetadata, Scenario};
 use uv_test::{TestContext, uv_snapshot};
 
 const PACKAGES: [(&str, &str); 2] = [("markupsafe", "2.1.3"), ("tomli", "2.0.1")];
@@ -17,14 +17,7 @@ fn setup() -> Result<(TestContext, PackseServer)> {
         scenario.packages.insert(
             name.parse()?,
             Package {
-                versions: [(
-                    version.parse()?,
-                    PackageMetadata {
-                        wheel: Some(ArtifactMetadata::default()),
-                        ..PackageMetadata::default()
-                    },
-                )]
-                .into(),
+                versions: [(version.parse()?, PackageMetadata::wheel_only())].into(),
             },
         );
         writeln!(requirements, "{name}=={version}")?;
