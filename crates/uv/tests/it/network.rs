@@ -28,9 +28,12 @@ use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::{TestContext, uv_snapshot};
 
+const BUILD_TAG_WHEEL: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
+
 /// Creates a CONNECT tunnel proxy that forwards connections to the target.
 ///
 /// Returns the proxy address and the number of established tunnels.
+#[cfg(feature = "test-pypi")]
 fn start_connect_tunnel_proxy() -> (std::net::SocketAddr, Arc<AtomicUsize>) {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
@@ -108,41 +111,46 @@ fn start_connect_tunnel_proxy() -> (std::net::SocketAddr, Arc<AtomicUsize>) {
     (addr, connections)
 }
 
-/// Creates a mock that serves a Simple API index page for iniconfig.
-async fn mock_simple_api(server: &MockServer) {
-    // Simple API response for iniconfig pointing to the real PyPI wheel.
-    // Uses upload-time before EXCLUDE_NEWER (2024-03-25) so the package is available.
+/// Serve a local package through the same host as the requested index.
+#[cfg(feature = "test-python")]
+async fn mock_build_tag_index(context: &TestContext, server: &MockServer) {
+    use wiremock::matchers::path;
+
+    let wheel = context.read_bytes(
+        context
+            .workspace_root
+            .join("test/links")
+            .join(BUILD_TAG_WHEEL),
+    );
+    let hash = hex::encode(Sha256::digest(&wheel));
     let body = json!({
-        "name": "iniconfig",
+        "name": "build-tag",
         "files": [{
-            "filename": "iniconfig-2.0.0-py3-none-any.whl",
-            "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
-            "hashes": {
-                "sha256": "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"
-            },
-            "requires-python": ">=3.8",
+            "filename": BUILD_TAG_WHEEL,
+            "url": format!("/{BUILD_TAG_WHEEL}"),
+            "hashes": { "sha256": hash },
             "upload-time": "2024-01-01T00:00:00Z"
         }]
     });
-
-    // Serve the simple index for iniconfig - use any() matcher since HTTP proxy
-    // requests may have the full URL in the path
-    Mock::given(any())
+    Mock::given(method("GET"))
+        .and(path("/build-tag/"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_raw(body.to_string(), "application/vnd.pypi.simple.v1+json"),
         )
+        .expect(1..)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{BUILD_TAG_WHEEL}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1..)
         .mount(server)
         .await;
 }
 
 fn connection_reset(_request: &wiremock::Request) -> io::Error {
     io::Error::new(io::ErrorKind::ConnectionReset, "Connection reset by peer")
-}
-
-/// Returns true if the mock server has received any requests.
-async fn has_received_requests(server: &MockServer) -> bool {
-    !server.received_requests().await.unwrap().is_empty()
 }
 
 /// Answers with a retryable HTTP status 500.
@@ -841,19 +849,20 @@ fn proxy_url_without_host() -> Result<()> {
 }
 
 /// Test that valid proxy URL in uv.toml routes requests through the proxy.
-#[cfg(feature = "test-pypi")]
+#[cfg(feature = "test-python")]
 #[tokio::test]
 async fn proxy_valid_url_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
 
     let target_server = MockServer::start().await;
     Mock::given(any())
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&target_server)
         .await;
 
     let proxy_server = MockServer::start().await;
-    mock_simple_api(&proxy_server).await;
+    mock_build_tag_index(&context, &proxy_server).await;
 
     let target_uri = target_server.uri();
     let proxy_uri = proxy_server.uri();
@@ -869,7 +878,7 @@ async fn proxy_valid_url_in_uv_toml() {
 
     uv_snapshot!(context.filters(), context
         .pip_install()
-        .arg("iniconfig")
+        .arg("build-tag")
         .arg("--index-url")
         .arg(&target_uri)
         .arg("--config-file")
@@ -883,17 +892,8 @@ async fn proxy_valid_url_in_uv_toml() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + build-tag==1.0.0
     ");
-
-    assert!(
-        has_received_requests(&proxy_server).await,
-        "Proxy should have received the request"
-    );
-    assert!(
-        !has_received_requests(&target_server).await,
-        "Target should NOT have been called directly when proxy is configured"
-    );
 }
 
 /// Test that https-proxy in uv.toml routes HTTPS requests through a CONNECT tunnel proxy.
@@ -935,17 +935,18 @@ fn proxy_https_proxy_in_uv_toml() {
 }
 
 /// Test that no-proxy in uv.toml bypasses the proxy for specified hosts.
-#[cfg(feature = "test-pypi")]
+#[cfg(feature = "test-python")]
 #[tokio::test]
 async fn proxy_no_proxy_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
 
     let target_server = MockServer::start().await;
-    mock_simple_api(&target_server).await;
+    mock_build_tag_index(&context, &target_server).await;
 
     let proxy_server = MockServer::start().await;
     Mock::given(any())
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&proxy_server)
         .await;
 
@@ -972,7 +973,7 @@ no-proxy = ["{target_host}"]
 
     uv_snapshot!(context.filters(), context
         .pip_install()
-        .arg("iniconfig")
+        .arg("build-tag")
         .arg("--index-url")
         .arg(&target_uri)
         .arg("--config-file")
@@ -986,33 +987,25 @@ no-proxy = ["{target_host}"]
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + build-tag==1.0.0
     ");
-
-    assert!(
-        has_received_requests(&target_server).await,
-        "Target should have received the request directly when in no-proxy list"
-    );
-    assert!(
-        !has_received_requests(&proxy_server).await,
-        "Proxy should NOT have received requests when target is in no-proxy list"
-    );
 }
 
 /// Test that proxy URLs without a scheme in uv.toml default to http://.
-#[cfg(feature = "test-pypi")]
+#[cfg(feature = "test-python")]
 #[tokio::test]
 async fn proxy_schemeless_url_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
 
     let target_server = MockServer::start().await;
     Mock::given(any())
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&target_server)
         .await;
 
     let proxy_server = MockServer::start().await;
-    mock_simple_api(&proxy_server).await;
+    mock_build_tag_index(&context, &proxy_server).await;
 
     let target_uri = target_server.uri();
     let proxy_uri = proxy_server.uri();
@@ -1034,7 +1027,7 @@ async fn proxy_schemeless_url_in_uv_toml() {
 
     uv_snapshot!(context.filters(), context
         .pip_install()
-        .arg("iniconfig")
+        .arg("build-tag")
         .arg("--index-url")
         .arg(&target_uri)
         .arg("--config-file")
@@ -1048,17 +1041,8 @@ async fn proxy_schemeless_url_in_uv_toml() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + build-tag==1.0.0
     ");
-
-    assert!(
-        has_received_requests(&proxy_server).await,
-        "Proxy should have received the request even with schemeless URL"
-    );
-    assert!(
-        !has_received_requests(&target_server).await,
-        "Target should NOT have been called directly when proxy is configured"
-    );
 }
 
 #[test]
@@ -1321,8 +1305,6 @@ fn wheel_response(
     ))
 }
 
-const DOWNLOAD_WHEEL: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
-
 struct WheelServer<Guard> {
     url: String,
     _guard: Guard,
@@ -1359,7 +1341,7 @@ fn wheel_server(
     retries: usize,
 ) -> WheelServer<impl Drop> {
     let fixtures = context.workspace_root.join("test/links");
-    let wheel = Bytes::from(context.read_bytes(fixtures.join(DOWNLOAD_WHEEL)));
+    let wheel = Bytes::from(context.read_bytes(fixtures.join(BUILD_TAG_WHEEL)));
     let hash = hex::encode(Sha256::digest(&wheel));
     let size = wheel.len();
     let requests = Arc::new(DownloadRequests::default());
@@ -1368,7 +1350,7 @@ fn wheel_server(
         wheel_response(&request, &wheel, range_response, retries, &server_requests)
     });
     WheelServer {
-        url: format!("{url}/{DOWNLOAD_WHEEL}"),
+        url: format!("{url}/{BUILD_TAG_WHEEL}"),
         _guard: guard,
         requests,
         hash,
