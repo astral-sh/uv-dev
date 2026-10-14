@@ -44,7 +44,7 @@ impl Debug for VerbatimUrl {
                 |_| Cow::Borrowed(given),
                 |url| {
                     let redacted = url.to_string();
-                    if redacted == url.displayable_with_credentials().to_string() {
+                    if redacted == url.as_str() {
                         Cow::Borrowed(given)
                     } else {
                         Cow::Owned(redacted)
