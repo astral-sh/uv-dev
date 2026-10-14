@@ -2973,7 +2973,7 @@ fn install_managed_venv_allow_existing() {
 // A virtual environment should track the latest patch version installed.
 #[test]
 fn install_transparent_patch_upgrade_uv_venv() {
-    let context = uv_test::test_context_with_versions!(&["3.13"])
+    let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
         .with_managed_python_dirs()
@@ -3015,7 +3015,7 @@ fn install_transparent_patch_upgrade_uv_venv() {
         });
     }
 
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.9
@@ -3032,7 +3032,7 @@ fn install_transparent_patch_upgrade_uv_venv() {
     );
 
     // Virtual environment should reflect higher version.
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.11
@@ -3049,7 +3049,7 @@ fn install_transparent_patch_upgrade_uv_venv() {
     );
 
     // Virtual environment should reflect highest version.
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.11
@@ -3089,7 +3089,7 @@ fn install_multiple_patches() {
     );
 
     // Virtual environment should be on highest installed patch.
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.11
@@ -3121,7 +3121,7 @@ fn install_multiple_patches() {
     );
 
     // Virtual environment should be on highest installed patch.
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -3160,7 +3160,7 @@ fn uninstall_highest_patch() {
     "
     );
 
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.11
@@ -3178,7 +3178,7 @@ fn uninstall_highest_patch() {
     );
 
     // Virtual environment should be on highest patch version remaining.
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.9
@@ -3186,12 +3186,10 @@ fn uninstall_highest_patch() {
     );
 }
 
-// Virtual environments only record minor versions. `uv venv -p 3.x.y` will
-// not prevent a virtual environment from tracking the latest patch version
-// installed.
+// An exact patch request binds the virtual environment to that installation.
 #[test]
 fn install_no_transparent_upgrade_with_venv_patch_specification() {
-    let context = uv_test::test_context_with_versions!(&["3.13"])
+    let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
         .with_managed_python_dirs()
@@ -3216,7 +3214,7 @@ fn install_no_transparent_upgrade_with_venv_patch_specification() {
     "
     );
 
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.9
@@ -3232,8 +3230,8 @@ fn install_no_transparent_upgrade_with_venv_patch_specification() {
     "
     );
 
-    // The virtual environment Python version is transparently upgraded.
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    // The virtual environment remains on the requested patch.
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.9
@@ -3340,7 +3338,7 @@ fn install_lower_patch_automatically() {
     ");
 
     // Original virtual environment should still point to higher patch
-    uv_snapshot!(context.filters(), context.run().arg("python").arg("--version"), @"
+    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.11
