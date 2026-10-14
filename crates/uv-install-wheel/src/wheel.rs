@@ -1031,6 +1031,7 @@ pub(crate) fn write_record(
     for entry in record {
         record_writer.serialize(entry)?;
     }
+    record_writer.flush()?;
     Ok(())
 }
 
@@ -1376,6 +1377,24 @@ mod test {
             Error::Io(err) if err.kind() == ErrorKind::InvalidData
         );
 
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn write_record_propagates_flush_failure() -> Result<()> {
+        let wheel = assert_fs::TempDir::new()?;
+        let dist_info = wheel.child("demo-1.0.dist-info");
+        dist_info.create_dir_all()?;
+        std::os::unix::fs::symlink("/dev/full", dist_info.child("RECORD").path())?;
+
+        let entry = RecordEntry {
+            path: "demo.py".to_owned(),
+            hash: None,
+            size: None,
+        };
+        let err = super::write_record(wheel.path(), "demo-1.0", vec![entry]).unwrap_err();
+        assert_matches!(err, Error::Io(err) if err.kind() == ErrorKind::StorageFull);
         Ok(())
     }
 
