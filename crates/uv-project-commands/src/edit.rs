@@ -56,12 +56,12 @@ impl EditTarget {
     /// Update parsed metadata and the workspace cache after writing the target.
     pub(super) fn update(
         self,
-        content: &str,
+        content: String,
         workspace_cache: &WorkspaceCache,
     ) -> Result<Self, ProjectError> {
         match self {
             Self::Script(mut script) => {
-                script.metadata = Pep723Metadata::from_str(content)
+                script.metadata = Pep723Metadata::from_str(&content)
                     .map_err(ProjectError::Pep723ScriptTomlParse)?;
                 Ok(Self::Script(script))
             }
@@ -69,7 +69,7 @@ impl EditTarget {
                 let pyproject_path = project.root().join("pyproject.toml");
                 let project = project
                     .update_member(
-                        PyProjectToml::from_string(content.to_string(), &pyproject_path)
+                        PyProjectToml::from_string(content, &pyproject_path)
                             .map_err(ProjectError::PyprojectTomlParse)?,
                         workspace_cache,
                     )?

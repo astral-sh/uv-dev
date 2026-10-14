@@ -701,8 +701,7 @@ pub async fn add(
         false
     };
 
-    // Update the `pypackage.toml` in-memory.
-    let target = target.update(&content, &WorkspaceCache::default())?;
+    let target = target.update(content, &WorkspaceCache::default())?;
 
     // Use separate state for locking and syncing.
     let lock_state = state.fork();
@@ -1172,8 +1171,7 @@ async fn lock_and_sync(
             // Write the updated `pyproject.toml` to disk.
             target.write(&content)?;
 
-            // Update the `pypackage.toml` in-memory.
-            target = target.update(&content, &WorkspaceCache::default())?;
+            target = target.update(content, &WorkspaceCache::default())?;
 
             // Invalidate any cached project metadata. Reusing a metadata-free lock may not
             // populate the in-memory index.
