@@ -389,7 +389,7 @@ fn render_compile(output: &mut String, cases: &[&ScenarioCase]) -> Result<()> {
     {
         output.push_str("use indoc::indoc;\n");
     }
-    output.push_str("use predicates::prelude::predicate;\n\n");
+    output.push('\n');
     output.push_str("use uv_static::EnvVars;\n");
     output.push_str("use uv_test::packse::PackseServer;\n");
     output.push_str(
@@ -481,7 +481,7 @@ fn render_compile_case(output: &mut String, case: &ScenarioCase) -> Result<()> {
         for (name, version) in &case.scenario.expected.packages {
             writeln!(
                 output,
-                "            .stdout(predicate::str::contains(\"{name}=={version}\"))"
+                "            .stdout(predicates::str::contains(\"{name}=={version}\"))"
             )
             .unwrap();
         }
