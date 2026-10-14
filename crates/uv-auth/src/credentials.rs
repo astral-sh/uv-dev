@@ -164,10 +164,7 @@ impl Credentials {
 
     /// Return the username as an owned value.
     pub(crate) fn to_username(&self) -> Username {
-        match self {
-            Self::Basic { username, .. } => username.clone(),
-            Self::Bearer { .. } => Username::none(),
-        }
+        self.as_username().into_owned()
     }
 
     fn as_username(&self) -> Cow<'_, Username> {
@@ -483,10 +480,7 @@ impl Authentication {
 
     /// Return the username used for authentication, if any.
     pub(crate) fn to_username(&self) -> Username {
-        match self {
-            Self::Credentials(credentials) => credentials.to_username(),
-            Self::AwsSigner(..) | Self::GcsSigner(..) | Self::AzureSigner(..) => Username::none(),
-        }
+        self.as_username().into_owned()
     }
 
     /// Return `true` if the object contains a means of authenticating.
