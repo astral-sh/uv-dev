@@ -3059,7 +3059,7 @@ fn tool_run_with_compatible_build_constraints() -> Result<()> {
 
 #[test]
 fn tool_run_with_incompatible_build_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.9")
+    let context = uv_test::test_context!("3.12")
         .with_exclude_newer("2024-05-04T00:00:00Z")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
