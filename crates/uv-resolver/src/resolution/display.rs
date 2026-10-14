@@ -8,8 +8,11 @@ use petgraph::{Directed, Direction, Graph};
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use uv_configuration::AnnotationStyle;
-use uv_distribution_types::{DistributionMetadata, Name, SourceAnnotation, SourceAnnotations};
+use uv_distribution_types::{
+    DistributionMetadata, Name, Requirement, SourceAnnotation, SourceAnnotations,
+};
 use uv_normalize::PackageName;
+use uv_pep508::RequirementOrigin;
 
 use crate::resolution::{RequirementsTxtDist, ResolutionGraphNode};
 use crate::{ResolverEnvironment, ResolverOutput};
@@ -83,6 +86,22 @@ impl<'a> DisplayResolutionGraph<'a> {
             annotation_style,
         }
     }
+
+    /// Add source annotations for requirements that apply in this environment.
+    fn annotate_requirements<'req>(
+        &self,
+        sources: &mut SourceAnnotations,
+        requirements: impl IntoIterator<Item = &'req Requirement>,
+        annotation: impl Fn(RequirementOrigin) -> SourceAnnotation,
+    ) {
+        for requirement in requirements {
+            if requirement.evaluate_markers(self.env.marker_environment(), &[])
+                && let Some(origin) = &requirement.origin
+            {
+                sources.add(&requirement.name, annotation(origin.clone()));
+            }
+        }
+    }
 }
 
 /// Write the graph in the `{name}=={version}` format of requirements.txt that pip uses.
@@ -92,48 +111,21 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
         let sources = if self.include_annotations {
             let mut sources = SourceAnnotations::default();
 
-            for requirement in self.resolution.requirements.iter().filter(|requirement| {
-                requirement.evaluate_markers(self.env.marker_environment(), &[])
-            }) {
-                if let Some(origin) = &requirement.origin {
-                    sources.add(
-                        &requirement.name,
-                        SourceAnnotation::Requirement(origin.clone()),
-                    );
-                }
-            }
-
-            for requirement in self
-                .resolution
-                .constraints
-                .requirements()
-                .filter(|requirement| {
-                    requirement.evaluate_markers(self.env.marker_environment(), &[])
-                })
-            {
-                if let Some(origin) = &requirement.origin {
-                    sources.add(
-                        &requirement.name,
-                        SourceAnnotation::Constraint(origin.clone()),
-                    );
-                }
-            }
-
-            for requirement in self
-                .resolution
-                .modifiers
-                .global_overrides()
-                .filter(|requirement| {
-                    requirement.evaluate_markers(self.env.marker_environment(), &[])
-                })
-            {
-                if let Some(origin) = &requirement.origin {
-                    sources.add(
-                        &requirement.name,
-                        SourceAnnotation::Override(origin.clone()),
-                    );
-                }
-            }
+            self.annotate_requirements(
+                &mut sources,
+                &self.resolution.requirements,
+                SourceAnnotation::Requirement,
+            );
+            self.annotate_requirements(
+                &mut sources,
+                self.resolution.constraints.requirements(),
+                SourceAnnotation::Constraint,
+            );
+            self.annotate_requirements(
+                &mut sources,
+                self.resolution.modifiers.global_overrides(),
+                SourceAnnotation::Override,
+            );
 
             for edge in self.resolution.graph.edge_references() {
                 let (ResolutionGraphNode::Dist(parent), ResolutionGraphNode::Dist(dependency)) = (
@@ -142,22 +134,14 @@ impl std::fmt::Display for DisplayResolutionGraph<'_> {
                 ) else {
                     continue;
                 };
-                for requirement in self
-                    .resolution
-                    .modifiers
-                    .scoped_overrides_for(&parent.name, &parent.version)
-                    .filter(|requirement| requirement.name == dependency.name)
-                    .filter(|requirement| {
-                        requirement.evaluate_markers(self.env.marker_environment(), &[])
-                    })
-                {
-                    if let Some(origin) = &requirement.origin {
-                        sources.add(
-                            &requirement.name,
-                            SourceAnnotation::Override(origin.clone()),
-                        );
-                    }
-                }
+                self.annotate_requirements(
+                    &mut sources,
+                    self.resolution
+                        .modifiers
+                        .scoped_overrides_for(&parent.name, &parent.version)
+                        .filter(|requirement| requirement.name == dependency.name),
+                    SourceAnnotation::Override,
+                );
             }
 
             sources
