@@ -6,7 +6,7 @@ use assert_fs::prelude::*;
 use indoc::formatdoc;
 
 use uv_test::packse::PackseServer;
-use uv_test::uv_snapshot;
+use uv_test::{TestContext, uv_snapshot};
 
 const WHEEL: &str = "a-1.0.0-py3-none-any.whl";
 const SDIST: &str = "a-1.0.0.tar.gz";
@@ -43,13 +43,111 @@ impl GeneratedArtifact {
     }
 }
 
-#[test]
-fn pep_751_validates_cached_remote_archive_size() -> Result<()> {
+fn setup(filename: &'static str) -> (TestContext, PackseServer, GeneratedArtifact) {
     let server = PackseServer::new("simple/single-package.toml");
-    let wheel = GeneratedArtifact::new(&server, WHEEL);
+    let artifact = GeneratedArtifact::new(&server, filename);
     let context = uv_test::test_context!("3.12")
         .with_filtered_http_retries()
-        .with_filter(wheel.size_filter());
+        .with_filter(artifact.size_filter());
+    (context, server, artifact)
+}
+
+#[test]
+fn pep_751_validates_remote_archive_size() -> Result<()> {
+    let (context, _server, wheel) = setup(WHEEL);
+    context
+        .temp_dir
+        .child("pylock.toml")
+        .write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "a"
+        version = "1.0.0"
+        archive = {{ url = "{url}", size = 1, hashes = {{ sha256 = "{sha256}" }} }}
+        "#,
+            url = wheel.url,
+            sha256 = wheel.sha256,
+        })?;
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
+      cause: Size mismatch for `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`: expected 1 bytes, but downloaded [SIZE:a-1.0.0-py3-none-any.whl] bytes
+    ");
+    context.assert_not_installed("a");
+    Ok(())
+}
+
+#[test]
+fn pep_751_validates_remote_registry_wheel_size() -> Result<()> {
+    let (context, _server, wheel) = setup(WHEEL);
+    context
+        .temp_dir
+        .child("pylock.toml")
+        .write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "a"
+        version = "1.0.0"
+        wheels = [{{ url = "{url}", size = 1, hashes = {{ sha256 = "{sha256}" }} }}]
+        "#,
+            url = wheel.url,
+            sha256 = wheel.sha256,
+        })?;
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded [SIZE:a-1.0.0-py3-none-any.whl] bytes
+    ");
+    context.assert_not_installed("a");
+    Ok(())
+}
+
+#[test]
+fn pep_751_validates_remote_registry_sdist_size() -> Result<()> {
+    let (context, _server, sdist) = setup(SDIST);
+    context
+        .temp_dir
+        .child("pylock.toml")
+        .write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+
+        [[packages]]
+        name = "a"
+        version = "1.0.0"
+        sdist = {{ url = "{url}", size = 1, hashes = {{ sha256 = "{sha256}" }} }}
+        "#,
+            url = sdist.url,
+            sha256 = sdist.sha256,
+        })?;
+
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `a==1.0.0`
+      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded [SIZE:a-1.0.0.tar.gz] bytes
+    ");
+    context.assert_not_installed("a");
+    Ok(())
+}
+
+#[test]
+fn pep_751_validates_cached_remote_archive_size() -> Result<()> {
+    let (context, _server, wheel) = setup(WHEEL);
 
     context
         .pip_install()
@@ -108,11 +206,7 @@ fn pep_751_validates_cached_remote_archive_size() -> Result<()> {
 
 #[test]
 fn pep_751_validates_cached_registry_wheel_size() -> Result<()> {
-    let server = PackseServer::new("simple/single-package.toml");
-    let wheel = GeneratedArtifact::new(&server, WHEEL);
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_http_retries()
-        .with_filter(wheel.size_filter());
+    let (context, server, wheel) = setup(WHEEL);
     let pylock = |size| {
         formatdoc! {
             r#"
@@ -175,11 +269,7 @@ fn pep_751_validates_cached_registry_wheel_size() -> Result<()> {
 
 #[test]
 fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
-    let server = PackseServer::new("simple/single-package.toml");
-    let sdist = GeneratedArtifact::new(&server, SDIST);
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_http_retries()
-        .with_filter(sdist.size_filter());
+    let (context, server, sdist) = setup(SDIST);
     let pylock = |size| {
         formatdoc! {
             r#"
@@ -242,11 +332,7 @@ fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
 
 #[test]
 fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
-    let server = PackseServer::new("simple/single-package.toml");
-    let sdist = GeneratedArtifact::new(&server, SDIST);
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_http_retries()
-        .with_filter(sdist.size_filter());
+    let (context, server, sdist) = setup(SDIST);
     let pylock = |size| {
         formatdoc! {
             r#"
