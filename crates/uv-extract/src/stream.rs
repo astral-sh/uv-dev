@@ -28,7 +28,7 @@ use crate::dirhash::{
     DirhashTree, HashedFile, UnhashedFile, UnzipOutput, blake3_copy_with_buffer,
     directory_tree_from_extracted,
 };
-use crate::{Error, ExtractionDirectories, insecure_no_validate};
+use crate::{Error, ExtractionDirectories, insecure_no_validate, validate_zip_directory_entry};
 
 /// Default buffer size for streaming archive reads and file copies.
 const DEFAULT_BUF_SIZE: usize = 128 * 1024;
@@ -221,26 +221,8 @@ async fn unzip_inner<R: tokio::io::AsyncRead + Unpin>(
         let computed = if is_dir {
             directories.create(&path)?;
 
-            // If this is a directory, we expect the CRC32 to be 0.
-            if zip_entry.crc32() != 0 {
-                if !skip_validation {
-                    return Err(Error::BadCrc32 {
-                        path: relpath.to_path_buf(),
-                        computed: 0,
-                        expected: zip_entry.crc32(),
-                    });
-                }
-            }
-
-            // If this is a directory, we expect the uncompressed size to be 0.
-            if zip_entry.uncompressed_size() != 0 {
-                if !skip_validation {
-                    return Err(Error::BadUncompressedSize {
-                        path: relpath.to_path_buf(),
-                        computed: 0,
-                        expected: zip_entry.uncompressed_size(),
-                    });
-                }
+            if !skip_validation {
+                validate_zip_directory_entry(zip_entry, relpath.as_path())?;
             }
 
             ComputedEntry {
