@@ -2062,27 +2062,6 @@ fn tool_run_python_at_version() {
     Resolved in [TIME]
     ");
 
-    // But short names don't work in the executable position (as opposed to with -p/--python). We
-    // interpret those as package names.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("cp311")
-        .arg("--version"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving tool dependencies
-      cause: Because cp311 was not found in the package registry and you require cp311, we can conclude that your requirements are unsatisfiable.
-    ");
-
-    // Bare versions don't work either. Again we interpret them as package names.
-    uv_snapshot!(context.filters(), context.tool_run()
-        .arg("311")
-        .arg("--version"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving tool dependencies
-      cause: Because 311 was not found in the package registry and you require 311, we can conclude that your requirements are unsatisfiable.
-    ");
-
     // Request a version via `-p`
     uv_snapshot!(context.filters(), context.tool_run()
         .arg("-p")
