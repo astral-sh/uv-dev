@@ -169,27 +169,8 @@ impl Manifest {
             DependencyMode::Transitive => Either::Left(
                 self.lookaheads
                     .iter()
-                    .flat_map(move |lookahead| {
-                        self.modifiers
-                            .apply(
-                                DependencyModifierScope::Package(
-                                    lookahead.package(),
-                                    lookahead.version(),
-                                ),
-                                lookahead.requirements(),
-                            )
-                            .filter(move |requirement| {
-                                requirement
-                                    .evaluate_markers(env.marker_environment(), lookahead.extras())
-                            })
-                    })
-                    .chain(
-                        self.modifiers
-                            .apply(DependencyModifierScope::Global, &self.requirements)
-                            .filter(move |requirement| {
-                                requirement.evaluate_markers(env.marker_environment(), &[])
-                            }),
-                    )
+                    .flat_map(move |lookahead| self.lookahead_requirements(env, lookahead))
+                    .chain(self.root_requirements(env))
                     .chain(
                         self.constraints
                             .requirements()
@@ -239,45 +220,41 @@ impl Manifest {
         env: &'a ResolverEnvironment,
         mode: DependencyMode,
     ) -> impl Iterator<Item = Cow<'a, Requirement>> + 'a {
-        match mode {
-            // Include direct requirements, dependencies of editables, and transitive dependencies
-            // of local packages.
-            DependencyMode::Transitive => Either::Left(
-                self.lookaheads
-                    .iter()
-                    .filter(|lookahead| lookahead.direct())
-                    .flat_map(move |lookahead| {
-                        self.modifiers
-                            .apply(
-                                DependencyModifierScope::Package(
-                                    lookahead.package(),
-                                    lookahead.version(),
-                                ),
-                                lookahead.requirements(),
-                            )
-                            .filter(move |requirement| {
-                                requirement
-                                    .evaluate_markers(env.marker_environment(), lookahead.extras())
-                            })
-                    })
-                    .chain(
-                        self.modifiers
-                            .apply(DependencyModifierScope::Global, &self.requirements)
-                            .filter(move |requirement| {
-                                requirement.evaluate_markers(env.marker_environment(), &[])
-                            }),
-                    ),
-            ),
+        let lookaheads = match mode {
+            DependencyMode::Transitive => self.lookaheads.as_slice(),
+            DependencyMode::Direct => &[],
+        };
+        lookaheads
+            .iter()
+            .filter(|lookahead| lookahead.direct())
+            .flat_map(move |lookahead| self.lookahead_requirements(env, lookahead))
+            .chain(self.root_requirements(env))
+    }
 
-            // Restrict to the direct requirements.
-            DependencyMode::Direct => Either::Right(
-                self.modifiers
-                    .apply(DependencyModifierScope::Global, self.requirements.iter())
-                    .filter(move |requirement| {
-                        requirement.evaluate_markers(env.marker_environment(), &[])
-                    }),
-            ),
-        }
+    /// Apply package-scoped modifiers and evaluate markers with the lookahead's active extras.
+    fn lookahead_requirements<'a>(
+        &'a self,
+        env: &'a ResolverEnvironment,
+        lookahead: &'a RequestedRequirements,
+    ) -> impl Iterator<Item = Cow<'a, Requirement>> + 'a {
+        self.modifiers
+            .apply(
+                DependencyModifierScope::Package(lookahead.package(), lookahead.version()),
+                lookahead.requirements(),
+            )
+            .filter(move |requirement| {
+                requirement.evaluate_markers(env.marker_environment(), lookahead.extras())
+            })
+    }
+
+    /// Apply global modifiers and evaluate markers for root requirements.
+    fn root_requirements<'a>(
+        &'a self,
+        env: &'a ResolverEnvironment,
+    ) -> impl Iterator<Item = Cow<'a, Requirement>> + 'a {
+        self.modifiers
+            .apply(DependencyModifierScope::Global, &self.requirements)
+            .filter(move |requirement| requirement.evaluate_markers(env.marker_environment(), &[]))
     }
 
     /// Returns the number of input requirements.
