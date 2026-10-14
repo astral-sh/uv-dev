@@ -157,9 +157,8 @@ fn missing_requirements_in() {
 
 #[test]
 fn missing_venv() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     context.temp_dir.child("requirements.in").touch()?;
-    fs_err::remove_dir_all(context.venv.path())?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
             .arg("requirements.in"), @"
