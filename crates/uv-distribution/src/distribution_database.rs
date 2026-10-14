@@ -714,14 +714,14 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         hashes: MetadataHashPolicy<'_>,
     ) -> Result<ArchiveMetadata, Error> {
         // If the metadata was provided by the user directly, prefer it.
-        if let Some(dist) = source.as_dist() {
-            if let Some(metadata) = self.dependency_metadata(dist.name(), dist.version()) {
-                // If we skipped the build, we should still resolve any Git dependencies to precise
-                // commits.
-                self.builder.resolve_revision(source, &self.client).await?;
+        if let Some(dist) = source.as_dist()
+            && let Some(metadata) = self.dependency_metadata(dist.name(), dist.version())
+        {
+            // If we skipped the build, we should still resolve any Git dependencies to precise
+            // commits.
+            self.builder.resolve_revision(source, &self.client).await?;
 
-                return Ok(Metadata::from_dependency_metadata(metadata).into());
-            }
+            return Ok(Metadata::from_dependency_metadata(metadata).into());
         }
 
         let url_hashes = if let BuildableSource::Dist(SourceDist::DirectUrl(dist)) = source {
