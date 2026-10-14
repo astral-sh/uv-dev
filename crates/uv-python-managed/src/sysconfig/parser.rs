@@ -113,7 +113,8 @@ impl FromStr for SysconfigData {
             match next {
                 '\'' | '"' => {
                     // Parse key.
-                    let key = parse_string(&mut cursor, next)?;
+                    let mut key = String::new();
+                    parse_string_into(&mut cursor, next, &mut key)?;
 
                     cursor.eat_while(is_python_whitespace);
                     cursor.eat_char(':');
@@ -155,11 +156,10 @@ impl FromStr for SysconfigData {
     }
 }
 
-/// Parse a Python string literal.
+/// Parse a Python string literal into `result`.
 ///
 /// Expects the previous character to be the opening quote character.
-fn parse_string(cursor: &mut Cursor, quote: char) -> Result<String, Error> {
-    let mut result = String::new();
+fn parse_string_into(cursor: &mut Cursor, quote: char, result: &mut String) -> Result<(), Error> {
     loop {
         let Some(c) = cursor.bump() else {
             return Err(Error::UnexpectedEof);
@@ -192,7 +192,7 @@ fn parse_string(cursor: &mut Cursor, quote: char) -> Result<String, Error> {
             }
         }
     }
-    Ok(result)
+    Ok(())
 }
 
 /// Parse a Python string, which may be a concatenation of multiple string literals.
@@ -206,8 +206,7 @@ fn parse_concatenated_string(cursor: &mut Cursor) -> Result<String, Error> {
         };
         match c {
             '\'' | '"' => {
-                // Parse a new string fragment and append it.
-                result.push_str(&parse_string(cursor, c)?);
+                parse_string_into(cursor, c, &mut result)?;
             }
             c if is_python_whitespace(c) => {
                 // Skip whitespace between fragments
