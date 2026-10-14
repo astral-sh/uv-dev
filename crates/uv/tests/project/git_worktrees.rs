@@ -348,6 +348,63 @@ fn missing_revision_preserves_database() -> Result<()> {
     Ok(())
 }
 
+/// An interrupted initialization can be retried when the database has no worktree registrations.
+#[test]
+fn incomplete_database_is_reinitialized() -> Result<()> {
+    if !supports_relative_worktrees() {
+        return Ok(());
+    }
+    let context = uv_test::test_context!("3.12");
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    git(repository.path(), &["add", "."])?;
+    git(repository.path(), &["commit", "-m", "Initial version"])?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
+    let short_revision = revision.parse::<GitOid>()?.as_short_str().to_owned();
+    let url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository path"))?;
+    let ident = cache_digest(&RepositoryUrl::parse(url.as_str())?);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dependency @ git+{url}@{revision}"]
+    "#})?;
+    let database = context.cache_dir.child("git-v1/worktrees/db").child(&ident);
+    database.child(".git").create_dir_all()?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "git-worktrees", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    let checkout = context
+        .cache_dir
+        .child("git-v1/worktrees/checkouts")
+        .child(&ident)
+        .child(short_revision);
+    assert!(checkout.child(".git").is_file());
+    assert_eq!(git(checkout.path(), &["rev-parse", "HEAD"])?, revision);
+    Ok(())
+}
+
 /// Failure to open an existing database must leave its worktree registrations intact.
 #[test]
 fn database_open_error_preserves_worktree() -> Result<()> {
