@@ -7,7 +7,9 @@ use smallvec::SmallVec;
 use tracing::{debug, trace};
 
 use uv_configuration::IndexStrategy;
-use uv_distribution_types::{DistributionMetadata, IndexUrl, Name, ResolutionRecorder};
+use uv_distribution_types::{
+    DistributionMetadata, IndexUrl, InstalledDist, Name, ResolutionRecorder,
+};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::Tags;
@@ -272,45 +274,21 @@ impl CandidateSelector {
 
             // Check for a locally installed distribution that matches the preferred version, unless
             // we have to reinstall, in which case we can't reuse an already-installed distribution.
-            if !reinstall {
-                let installed_dists = installed_packages.get_packages(package_name);
-                match installed_dists.as_slice() {
-                    [] => {}
-                    [dist] => {
-                        if dist.version() == version {
-                            debug!(
-                                "Found installed version of `{dist}` that satisfies preference in {range}"
-                            );
-
-                            // Verify that the installed distribution is compatible with the environment.
-                            if tags.is_some_and(|tags| {
-                                let Ok(Some(wheel_tags)) = dist.read_tags() else {
-                                    return false;
-                                };
-                                !wheel_tags.is_compatible(tags)
-                            }) {
-                                debug!("Platform tags mismatch for installed `{dist}`");
-                                continue;
-                            }
-
-                            return Some(Candidate {
-                                name: package_name,
-                                version,
-                                dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(
-                                    dist,
-                                )),
-                                choice_kind: VersionChoiceKind::Preference,
-                            });
-                        }
-                    }
-                    // We do not consider installed distributions with multiple versions because
-                    // during installation these must be reinstalled from the remote
-                    _ => {
-                        debug!(
-                            "Ignoring installed versions of {package_name}: multiple distributions found"
-                        );
-                    }
+            if !reinstall
+                && let Some(dist) = Self::get_single_installed(package_name, installed_packages)
+                && dist.version() == version
+            {
+                debug!("Found installed version of `{dist}` that satisfies preference in {range}");
+                if !Self::has_compatible_installed_tags(dist, tags) {
+                    continue;
                 }
+
+                return Some(Candidate {
+                    name: package_name,
+                    version,
+                    dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(dist)),
+                    choice_kind: VersionChoiceKind::Preference,
+                });
             }
 
             // Respect the pre-release strategy for this fork.
@@ -383,44 +361,47 @@ impl CandidateSelector {
         installed_packages: &'a InstalledPackages,
         tags: Option<&'a Tags>,
     ) -> Option<Candidate<'a>> {
-        let installed_dists = installed_packages.get_packages(package_name);
-        match installed_dists.as_slice() {
-            [] => {}
-            [dist] => {
-                let version = dist.version();
+        let dist = Self::get_single_installed(package_name, installed_packages)?;
+        let version = dist.version();
+        if !range.contains(version) || !Self::has_compatible_installed_tags(dist, tags) {
+            return None;
+        }
 
-                // Respect the version range for this requirement.
-                if !range.contains(version) {
-                    return None;
-                }
+        Some(Candidate {
+            name: package_name,
+            version,
+            dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(dist)),
+            choice_kind: VersionChoiceKind::Installed,
+        })
+    }
 
-                // Verify that the installed distribution is compatible with the environment.
-                if tags.is_some_and(|tags| {
-                    let Ok(Some(wheel_tags)) = dist.read_tags() else {
-                        return false;
-                    };
-                    !wheel_tags.is_compatible(tags)
-                }) {
-                    debug!("Platform tags mismatch for installed `{dist}`");
-                    return None;
-                }
-
-                return Some(Candidate {
-                    name: package_name,
-                    version,
-                    dist: CandidateDist::Compatible(CompatibleDist::InstalledDist(dist)),
-                    choice_kind: VersionChoiceKind::Installed,
-                });
-            }
-            // We do not consider installed distributions with multiple versions because
-            // during installation these must be reinstalled from the remote
+    /// Ignore multiple installed versions, which must be reinstalled from a remote source.
+    fn get_single_installed<'a>(
+        package_name: &PackageName,
+        installed_packages: &'a impl InstalledPackagesProvider,
+    ) -> Option<&'a InstalledDist> {
+        match installed_packages.get_packages(package_name).as_slice() {
+            [] => None,
+            [dist] => Some(*dist),
             _ => {
                 debug!(
                     "Ignoring installed versions of {package_name}: multiple distributions found"
                 );
+                None
             }
         }
-        None
+    }
+
+    /// Check installed wheel compatibility when both wheel and environment tags are available.
+    fn has_compatible_installed_tags(dist: &InstalledDist, tags: Option<&Tags>) -> bool {
+        if let Some(tags) = tags
+            && let Ok(Some(wheel_tags)) = dist.read_tags()
+            && !wheel_tags.is_compatible(tags)
+        {
+            debug!("Platform tags mismatch for installed `{dist}`");
+            return false;
+        }
+        true
     }
 
     /// Select a [`Candidate`] without checking for version preference such as an existing
