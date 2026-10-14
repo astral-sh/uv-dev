@@ -30,8 +30,8 @@ pub(super) async fn run(
     workspace_root: Option<&Path>,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
-    check_targets: &[PathBuf],
-    excluded_targets: &[PathBuf],
+    check_targets: &[&Path],
+    excluded_targets: &[&Path],
     explicit_targets: bool,
     venv_path: Option<&Path>,
     python_version: Option<&Version>,
@@ -200,7 +200,11 @@ pub(super) async fn run(
         Vec::new()
     };
 
-    for excluded_target in excluded_targets.iter().chain(&excluded_scripts) {
+    for excluded_target in excluded_targets
+        .iter()
+        .copied()
+        .chain(excluded_scripts.iter().map(PathBuf::as_path))
+    {
         command.arg("--exclude");
         command.arg(
             excluded_target
@@ -216,7 +220,7 @@ pub(super) async fn run(
         // Keep paths relative to the working directory for stable diagnostics, and use `--` so
         // option-like filenames are treated as paths.
         command.arg("--");
-        for check_target in check_targets {
+        for &check_target in check_targets {
             command.arg(
                 check_target
                     .strip_prefix(target_dir)
