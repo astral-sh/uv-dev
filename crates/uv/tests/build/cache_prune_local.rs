@@ -56,6 +56,7 @@ fn prune_hardlinked_file() -> Result<()> {
     Pruning cache at: [CACHE_DIR]/
     Removed 1 file (0B)
     ");
+    assert_path_missing(&stale);
 
     stale.create_dir_all()?;
     fs_err::hard_link(&retained, stale.child("hardlinked.bin"))?;
