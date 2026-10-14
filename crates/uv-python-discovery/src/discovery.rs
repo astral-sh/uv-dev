@@ -279,17 +279,12 @@ fn python_executables_from_installed<'a>(
     .map_ok(|executable| PythonExecutableGroup(vec![executable]));
 
     let from_search_path = iter::once_with(move || {
-        let mut first = true;
+        let mut next_source = PythonSource::SearchPathFirst;
         python_executables_from_search_path(version, implementation).filter_map(move |paths| {
             let executables = paths
                 .into_iter()
                 .map(|path| {
-                    let source = if first {
-                        first = false;
-                        PythonSource::SearchPathFirst
-                    } else {
-                        PythonSource::SearchPath
-                    };
+                    let source = std::mem::replace(&mut next_source, PythonSource::SearchPath);
                     (source, path)
                 })
                 .collect();
