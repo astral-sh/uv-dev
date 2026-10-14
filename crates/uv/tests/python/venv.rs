@@ -796,8 +796,7 @@ fn create_centralized_project_environment_with_seed_packages() -> Result<()> {
 
 #[test]
 fn virtual_empty() -> Result<()> {
-    // testing how `uv venv` reacts to a pyproject with no `[project]` and nothing useful to it
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -805,7 +804,7 @@ fn virtual_empty() -> Result<()> {
         wow = "someconfig"
     "#})?;
 
-    uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
+    uv_snapshot!(context.filters(), context.venv(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -818,9 +817,7 @@ fn virtual_empty() -> Result<()> {
 
 #[test]
 fn virtual_dependency_group() -> Result<()> {
-    // testing basic `uv venv` functionality
-    // when the pyproject.toml is fully virtual (no `[project]`, but `[dependency-groups]` defined)
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc! {r#"
@@ -830,7 +827,7 @@ fn virtual_dependency_group() -> Result<()> {
         dev = ["sniffio"]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.venv().arg("--clear"), @"
+    uv_snapshot!(context.filters(), context.venv(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
