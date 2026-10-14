@@ -902,22 +902,16 @@ async fn get_or_create_environment(
 
                     (executable, requirement)
                 }
-                // Ex) `ruff@0.6.0`
-                Target::Version(executable, name, extras, version) => {
-                    let executable = request_executable
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| (*executable).to_string());
-                    let requirement =
-                        registry_requirement(name.clone(), extras.clone(), Some(version.clone()));
-
-                    (executable, requirement)
-                }
-                // Ex) `ruff@latest`
-                Target::Latest(executable, name, extras) => {
-                    let executable = request_executable
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| (*executable).to_string());
-                    let requirement = registry_requirement(name.clone(), extras.clone(), None);
+                // Ex) `ruff@0.6.0` or `ruff@latest`
+                Target::Version(executable, name, extras, _)
+                | Target::Latest(executable, name, extras) => {
+                    let executable = request_executable.unwrap_or(executable).to_string();
+                    let version = if let Target::Version(.., version) = target {
+                        Some(version.clone())
+                    } else {
+                        None
+                    };
+                    let requirement = registry_requirement(name.clone(), extras.clone(), version);
 
                     (executable, requirement)
                 }
