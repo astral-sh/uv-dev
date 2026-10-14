@@ -156,17 +156,13 @@ impl ManagedPythonInstallations {
 
         // Support `toolchains` -> `python` migration transparently.
         if !root.exists()
-            && root
-                .parent()
-                .is_some_and(|parent| parent.join("toolchains").exists())
+            && let Some(deprecated) = root.parent().map(|parent| parent.join("toolchains"))
+            && deprecated.exists()
         {
-            let deprecated = root.parent().unwrap().join("toolchains");
             // Move the deprecated directory to the new location.
             fs::rename(&deprecated, root)?;
-            // Create a link or junction to at the old location
+            // Create a link or junction at the old location.
             uv_fs::replace_symlink(root, &deprecated)?;
-        } else {
-            fs::create_dir_all(root)?;
         }
 
         // Create the directory, if it doesn't exist.
