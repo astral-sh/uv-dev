@@ -16,7 +16,21 @@ pub enum BuildIsolation<'a> {
     SharedPackage(&'a PythonEnvironment, &'a [PackageName]),
 }
 
-impl BuildIsolation<'_> {
+impl<'a> BuildIsolation<'a> {
+    /// Bind build-isolation settings to an environment, requesting it only for shared builds.
+    pub fn from_settings(
+        settings: &'a uv_configuration::BuildIsolation,
+        environment: impl FnOnce() -> &'a PythonEnvironment,
+    ) -> Self {
+        match settings {
+            uv_configuration::BuildIsolation::Isolate => Self::Isolated,
+            uv_configuration::BuildIsolation::Shared => Self::Shared(environment()),
+            uv_configuration::BuildIsolation::SharedPackage(packages) => {
+                Self::SharedPackage(environment(), packages)
+            }
+        }
+    }
+
     /// Returns `true` if build isolation is enforced for the given package name.
     pub fn is_isolated(&self, package: Option<&PackageName>) -> bool {
         match self {

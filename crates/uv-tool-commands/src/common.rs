@@ -454,18 +454,10 @@ impl ToolLock {
         .platform(interpreter.platform())
         .build()?;
 
-        let environment;
-        let build_isolation = match build_isolation {
-            uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-            uv_configuration::BuildIsolation::Shared => {
-                environment = PythonEnvironment::from_interpreter(interpreter.clone());
-                BuildIsolation::Shared(&environment)
-            }
-            uv_configuration::BuildIsolation::SharedPackage(packages) => {
-                environment = PythonEnvironment::from_interpreter(interpreter.clone());
-                BuildIsolation::SharedPackage(&environment, packages)
-            }
-        };
+        let mut environment = None;
+        let build_isolation = BuildIsolation::from_settings(build_isolation, || {
+            environment.insert(PythonEnvironment::from_interpreter(interpreter.clone()))
+        });
 
         let options = OptionsBuilder::new()
             .resolution_mode(*resolution)

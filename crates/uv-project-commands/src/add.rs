@@ -446,20 +446,13 @@ pub async fn add(
                 settings.resolver.build_hash_checking,
             )?;
             // Determine whether to enable build isolation.
-            let environment;
-            let build_isolation = match &settings.resolver.build_isolation {
-                uv_configuration::BuildIsolation::Isolate => BuildIsolation::Isolated,
-                uv_configuration::BuildIsolation::Shared => {
-                    environment =
-                        PythonEnvironment::from_interpreter(python_target.interpreter().clone());
-                    BuildIsolation::Shared(&environment)
-                }
-                uv_configuration::BuildIsolation::SharedPackage(packages) => {
-                    environment =
-                        PythonEnvironment::from_interpreter(python_target.interpreter().clone());
-                    BuildIsolation::SharedPackage(&environment, packages)
-                }
-            };
+            let mut environment = None;
+            let build_isolation =
+                BuildIsolation::from_settings(&settings.resolver.build_isolation, || {
+                    environment.insert(PythonEnvironment::from_interpreter(
+                        python_target.interpreter().clone(),
+                    ))
+                });
 
             // Resolve the flat indexes from `--find-links`.
             let flat_index =
