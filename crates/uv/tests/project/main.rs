@@ -27,5 +27,9 @@ mod run;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tree;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(all(
+    feature = "test-python",
+    feature = "test-pypi",
+    feature = "test-ecosystem"
+))]
 mod workflow;
