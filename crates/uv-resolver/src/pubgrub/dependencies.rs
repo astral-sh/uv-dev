@@ -5,7 +5,7 @@ use either::Either;
 
 use uv_distribution_types::{IndexMetadata, Requirement, RequirementScope, RequirementSource};
 use uv_normalize::{GroupName, PackageName};
-use uv_pep440::{Version, VersionSpecifiers};
+use uv_pep440::Version;
 use uv_pypi_types::{ConflictItemRef, Conflicts, VerbatimParsedUrl};
 use uv_resolver_types::PackageNodeKind;
 
@@ -269,33 +269,20 @@ struct PubGrubRequirement {
 }
 
 impl PubGrubRequirement {
-    fn package_for_requirement(requirement: &Requirement, kind: PackageNodeKind) -> PubGrubPackage {
-        PubGrubPackage::from_package(requirement.name.clone(), kind, requirement.marker)
-    }
-
-    /// Convert a [`Requirement`] to a PubGrub-compatible package and range, while returning the URL
-    /// on the [`Requirement`], if any.
+    /// Convert a requirement into its PubGrub package, source constraint, and version range.
     fn from_requirement(requirement: &Requirement, kind: PackageNodeKind) -> Self {
-        if let RequirementSource::Registry { specifier, .. } = &requirement.source {
-            return Self::from_registry_requirement(specifier, kind, requirement);
-        }
-
         Self {
-            package: Self::package_for_requirement(requirement, kind),
-            version: Range::full(),
+            package: PubGrubPackage::from_package(
+                requirement.name.clone(),
+                kind,
+                requirement.marker,
+            ),
             source: DependencySource::from_requirement(requirement),
-        }
-    }
-
-    fn from_registry_requirement(
-        specifier: &VersionSpecifiers,
-        kind: PackageNodeKind,
-        requirement: &Requirement,
-    ) -> Self {
-        Self {
-            package: Self::package_for_requirement(requirement, kind),
-            source: DependencySource::from_requirement(requirement),
-            version: Range::from(specifier.clone()),
+            version: requirement
+                .source
+                .version_specifiers()
+                .cloned()
+                .map_or_else(Range::full, Range::from),
         }
     }
 }
