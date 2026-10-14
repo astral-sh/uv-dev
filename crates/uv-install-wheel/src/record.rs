@@ -1,4 +1,6 @@
+use data_encoding::BASE64URL_NOPAD;
 use serde::{Deserialize, Serialize};
+use sha2::{Sha256, digest::Output};
 
 /// Line in a RECORD file
 /// <https://www.python.org/dev/peps/pep-0376/#record>
@@ -11,6 +13,10 @@ use serde::{Deserialize, Serialize};
 pub struct RecordEntry {
     pub path: String,
     pub hash: Option<String>,
-    #[allow(dead_code)]
     pub size: Option<u64>,
+}
+
+/// Encode a SHA-256 digest for the hash column of a wheel's RECORD file.
+pub(crate) fn encode_sha256(digest: &Output<Sha256>) -> String {
+    format!("sha256={}", BASE64URL_NOPAD.encode_display(digest))
 }

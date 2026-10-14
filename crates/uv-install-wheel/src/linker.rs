@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -20,16 +21,17 @@ use crate::wheel::ValidatedWheel;
 
 pub use uv_fs::link::LinkMode;
 
+type InstalledPaths = FxHashMap<PathBuf, BTreeSet<(WheelFilename, PathBuf)>>;
+
 /// Shared state for concurrent wheel installations.
 #[derive(Debug, Default)]
 pub struct InstallState {
     /// Directory-level locks to prevent concurrent write corruption.
     locks: CopyLocks,
     /// Top level files and directories in site-packages, stored as relative path, and wheels they
-    /// are from, with the absolute paths in the unpacked wheel.
-    site_packages_paths: Mutex<FxHashMap<PathBuf, BTreeSet<(WheelFilename, PathBuf)>>>,
-    /// Preview settings for feature flags.
-    preview: Preview,
+    /// are from, with the absolute paths in the unpacked wheel. Only populated when conflict
+    /// detection is enabled.
+    site_packages_paths: Option<Mutex<InstalledPaths>>,
 }
 
 impl InstallState {
@@ -37,8 +39,9 @@ impl InstallState {
     pub fn new(preview: Preview) -> Self {
         Self {
             locks: CopyLocks::default(),
-            site_packages_paths: Mutex::new(FxHashMap::default()),
-            preview,
+            site_packages_paths: preview
+                .is_enabled(PreviewFeature::DetectModuleConflicts)
+                .then(Mutex::default),
         }
     }
 
@@ -47,28 +50,30 @@ impl InstallState {
         &self.locks
     }
 
-    /// Register which package installs which (top level) path.
+    /// Register top-level wheel paths for conflict detection.
     ///
-    /// This is later used warn when different files at the same path exist in multiple packages.
-    ///
-    /// The first non-self argument is the target path relative to site-packages, the second is the
-    /// source path in the unpacked wheel.
-    fn register_installed_path(&self, relative: &Path, absolute: &Path, wheel: &WheelFilename) {
-        debug_assert!(!relative.is_absolute());
-        debug_assert!(absolute.is_absolute());
+    /// Only top-level entries are reliably available because cloning a directory on macOS
+    /// traverses outside our code.
+    fn register_installed_paths(&self, wheel: &Path, filename: &WheelFilename) -> io::Result<()> {
+        // Enumerate every entry before linking so read errors cannot leave a wheel partially installed.
+        for entry in fs::read_dir(wheel)? {
+            let entry = entry?;
+            debug_assert!(wheel.is_absolute());
+            let Some(site_packages_paths) = &self.site_packages_paths else {
+                continue;
+            };
+            let absolute = entry.path();
+            let relative = PathBuf::from(entry.file_name());
+            debug_assert!(!relative.is_absolute());
 
-        // Only register top level entries, these are the only ones we have reliably as cloning
-        // a directory on macOS traverses outside our code.
-        if relative.components().count() != 1 {
-            return;
+            site_packages_paths
+                .lock()
+                .unwrap()
+                .entry(relative)
+                .or_default()
+                .insert((filename.clone(), absolute));
         }
-
-        self.site_packages_paths
-            .lock()
-            .unwrap()
-            .entry(relative.to_path_buf())
-            .or_default()
-            .insert((wheel.clone(), absolute.to_path_buf()));
+        Ok(())
     }
 
     /// Warn when the same file with different contents exists in multiple packages.
@@ -87,7 +92,7 @@ impl InstallState {
     ///
     /// # Performance
     ///
-    /// When there are no namespace packages, this method is a Mutex lock and a hash map iteration.
+    /// When there are no namespace packages, this method is a hash map iteration.
     ///
     /// When there are namespace packages, we only traverse into directories shared by at least two
     /// packages. For example, for namespace packages gpu-a, gpu-b, and gpu-c with
@@ -104,15 +109,11 @@ impl InstallState {
     /// length matches. This also excludes the same empty `__init__.py` files being reported as
     /// conflicting.
     pub fn warn_package_conflicts(self) -> Result<(), io::Error> {
-        // This warning is currently in preview.
-        if !self
-            .preview
-            .is_enabled(PreviewFeature::DetectModuleConflicts)
-        {
+        let Some(site_packages_paths) = self.site_packages_paths else {
             return Ok(());
-        }
+        };
 
-        for (relative, wheels) in &*self.site_packages_paths.lock().unwrap() {
+        for (relative, wheels) in site_packages_paths.into_inner().unwrap() {
             // Fast path: Only one package is using this module name, no conflicts.
             let mut wheel_iter = wheels.iter();
             let Some(first_wheel) = wheel_iter.next() else {
@@ -132,11 +133,11 @@ impl InstallState {
                     .iter()
                     .map(|(wheel, absolute)| Ok((wheel, absolute.metadata()?.len())))
                     .collect::<Result<_, io::Error>>()?;
-                Self::warn_file_conflict(relative, &files);
+                Self::warn_file_conflict(&relative, &files);
             } else if file_type.is_dir() {
                 // Don't early return if the method returns true, so we show warnings for each
                 // top-level module.
-                Self::warn_directory_conflict(relative, wheels)?;
+                Self::warn_directory_conflict(&relative, &wheels)?;
             } else {
                 // We don't expect any other file type, but it's ok if this check has false
                 // negatives.
@@ -157,18 +158,19 @@ impl InstallState {
     /// Returns `true` if a warning was emitted.
     fn warn_directory_conflict(
         directory: &Path,
-        wheels: &BTreeSet<(WheelFilename, PathBuf)>,
+        wheels: &BTreeSet<(impl Borrow<WheelFilename>, PathBuf)>,
     ) -> Result<bool, io::Error> {
         // The files in the directory, as paths relative to the site-packages, with their origin and
         // size.
         let mut files: BTreeMap<PathBuf, BTreeSet<(&WheelFilename, u64)>> = BTreeMap::default();
         // The directories in the directory, as paths relative to the site-packages, with their
-        // origin and absolute path.
-        let mut subdirectories: BTreeMap<PathBuf, BTreeSet<(WheelFilename, PathBuf)>> =
+        // origin and absolute path. Borrow wheel filenames from the top-level set during recursion.
+        let mut subdirectories: BTreeMap<PathBuf, BTreeSet<(&WheelFilename, PathBuf)>> =
             BTreeMap::default();
 
         // Read the shared directory in each unpacked wheel.
         for (wheel, absolute) in wheels {
+            let wheel = wheel.borrow();
             for dir_entry in fs_err::read_dir(absolute)? {
                 let dir_entry = dir_entry?;
                 let relative = directory.join(dir_entry.file_name());
@@ -182,7 +184,7 @@ impl InstallState {
                     subdirectories
                         .entry(relative)
                         .or_default()
-                        .insert((wheel.clone(), dir_entry.path()));
+                        .insert((wheel, dir_entry.path()));
                 } else {
                     // We don't expect any other file type, but it's ok if this check has false
                     // negatives.
@@ -216,29 +218,19 @@ impl InstallState {
     /// the same length, so we use this heuristic in this performance critical path to avoid
     /// reading potentially large files.
     fn warn_file_conflict(file: &Path, file_wheels: &BTreeSet<(&WheelFilename, u64)>) -> bool {
-        let Some((_, file_len)) = file_wheels.first() else {
-            debug_assert!(false, "Always at least one element");
-            return false;
-        };
-        if !file_wheels
-            .iter()
-            .any(|(_, file_len_other)| file_len_other != file_len)
-        {
+        debug_assert!(!file_wheels.is_empty(), "Always at least one element");
+        if file_wheels.iter().map(|(_, length)| length).all_equal() {
             return false;
         }
 
-        let packages = file_wheels
-            .iter()
-            .map(|(wheel_filename, _file_len)| {
-                format!("* {} ({})", wheel_filename.name, wheel_filename)
-            })
-            .join("\n");
         warn_user!(
             "The file `{}` is provided by more than one package, \
             which causes an install race condition and can result in a broken module. \
             Packages containing the file:\n{}",
             file.user_display(),
-            packages
+            file_wheels.iter().format_with("\n", |(wheel, _), format| {
+                format(&format_args!("* {} ({wheel})", wheel.name))
+            })
         );
 
         // Assumption: There is generally two packages that have a conflict. The output is
@@ -259,7 +251,7 @@ pub(crate) fn link_wheel_files(
 ) -> Result<(), Error> {
     let wheel = wheel.as_path();
     let site_packages = site_packages.as_ref();
-    register_installed_paths(wheel, state, filename)?;
+    state.register_installed_paths(wheel, filename)?;
 
     // The `RECORD` file is modified during installation, so it needs a real
     // copy rather than a link back to the cache.
@@ -299,19 +291,4 @@ fn update_site_packages_mtime(site_packages: &Path) {
             site_packages.display()
         ),
     }
-}
-
-/// Register top-level wheel paths for conflict detection.
-fn register_installed_paths(
-    wheel: &Path,
-    state: &InstallState,
-    filename: &WheelFilename,
-) -> Result<(), Error> {
-    for entry in fs::read_dir(wheel)? {
-        let entry = entry?;
-        let path = entry.path();
-        let relative = PathBuf::from(entry.file_name());
-        state.register_installed_path(&relative, &path, filename);
-    }
-    Ok(())
 }

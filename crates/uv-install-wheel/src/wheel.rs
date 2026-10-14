@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::io;
@@ -7,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use astral_mail_headers::Message;
-use data_encoding::BASE64URL_NOPAD;
 use fs_err as fs;
 use fs_err::{DirEntry, File};
 use itertools::Itertools;
@@ -25,7 +25,7 @@ use uv_shell::escape_posix_for_single_quotes;
 use uv_trampoline_builder::windows_script_launcher;
 use uv_warnings::warn_user_once;
 
-use crate::record::RecordEntry;
+use crate::record::{RecordEntry, encode_sha256};
 use crate::script::{EntryPoints, Script};
 use crate::{Error, Layout};
 
@@ -113,10 +113,7 @@ fn copy_and_hash(reader: &mut impl Read, writer: &mut impl Write) -> io::Result<
         writer.write_all(&buf[..len])?;
         written += len as u64;
     }
-    Ok((
-        written,
-        format!("sha256={}", BASE64URL_NOPAD.encode(&hasher.finalize())),
-    ))
+    Ok((written, encode_sha256(&hasher.finalize())))
 }
 
 /// Format the shebang for a given Python executable.
@@ -348,19 +345,18 @@ impl<'script> ValidatedScript<'script> {
     fn inner(&self) -> &Script {
         self.script
     }
+}
 
-    /// Return the script destination relative to `site_packages` for use in `RECORD`.
-    ///
-    /// Entry points are installed in the scripts directory, which may sit outside
-    /// `site_packages`, so we use a lexical diff rather than stripping a prefix.
-    fn relative_to_site_package(&self, site_packages: &Path) -> Result<PathBuf, Error> {
-        pathdiff::diff_paths(self.as_path(), site_packages).ok_or_else(|| {
-            Error::Io(io::Error::other(format!(
-                "Could not find relative path for: {}",
-                self.as_path().simplified_display()
-            )))
-        })
-    }
+/// Return a lexical path between locations in the installation scheme.
+///
+/// Script destinations and their interpreters may sit outside the base directory.
+fn relative_install_path(path: &Path, base: &Path) -> Result<PathBuf, Error> {
+    pathdiff::diff_paths(path, base).ok_or_else(|| {
+        Error::Io(io::Error::other(format!(
+            "Could not find relative path for: {}",
+            path.simplified_display()
+        )))
+    })
 }
 
 /// Create the wrapper scripts in the bin folder of the venv for launching console scripts.
@@ -374,7 +370,7 @@ pub(crate) fn write_script_entrypoints(
 ) -> Result<(), Error> {
     for script in entrypoints {
         let script = ValidatedScript::try_from_script(script, layout)?;
-        let entrypoint_relative = script.relative_to_site_package(site_packages)?;
+        let entrypoint_relative = relative_install_path(script.as_path(), site_packages)?;
 
         // Generate the launcher script.
         let launcher_executable = get_script_executable(&layout.sys_executable, is_gui);
@@ -428,15 +424,15 @@ impl WheelFile {
     /// > {distribution}-{version}.dist-info/WHEEL is metadata about the archive itself in the same
     /// > email message format:
     pub fn parse(wheel_text: &str) -> Result<Self, Error> {
-        // {distribution}-{version}.dist-info/WHEEL is metadata about the archive itself in the same email message format:
-        let data = parse_email_message_file(&mut wheel_text.as_bytes(), "WHEEL")?;
+        const EXPECTED_MAJOR: &str = "1";
+        const EXPECTED_MINOR: &str = "0";
+
+        let wheel = Self(parse_email_message(wheel_text.as_bytes(), "WHEEL")?);
 
         // mkl_fft-1.3.6-58-cp310-cp310-manylinux2014_x86_64.whl has multiple Wheel-Version entries, we have to ignore that
         // like pip
-        let wheel_version = data
-            .get("Wheel-Version")
-            .and_then(|wheel_versions| wheel_versions.first());
-        let wheel_version = wheel_version
+        let wheel_version = wheel.first_header_value("Wheel-Version");
+        let (major, minor) = wheel_version
             .and_then(|wheel_version| wheel_version.split_once('.'))
             .ok_or_else(|| {
                 Error::InvalidWheel(format!(
@@ -445,37 +441,33 @@ impl WheelFile {
             })?;
         // pip has some test wheels that use that ancient version,
         // and technically we only need to check that the version is not higher
-        if wheel_version == ("0", "1") {
-            warn!("Ancient wheel version 0.1 (expected is 1.0)");
-            return Ok(Self(data));
+        if (major, minor) == ("0", "1") {
+            warn!("Ancient wheel version 0.1 (expected is {EXPECTED_MAJOR}.{EXPECTED_MINOR})");
+            return Ok(wheel);
         }
-        // Check that installer is compatible with Wheel-Version. Warn if minor version is greater, abort if major version is greater.
-        // Wheel-Version: 1.0
-        if wheel_version.0 != "1" {
+        // Warn for a newer minor version, but reject an incompatible major version.
+        if major != EXPECTED_MAJOR {
             return Err(Error::InvalidWheel(format!(
-                "Unsupported wheel major version (expected {}, got {})",
-                1, wheel_version.0
+                "Unsupported wheel major version (expected {EXPECTED_MAJOR}, got {major})"
             )));
         }
-        if wheel_version.1 > "0" {
+        if minor > EXPECTED_MINOR {
             warn!(
-                "Warning: Unsupported wheel minor version (expected {}, got {})",
-                0, wheel_version.1
+                "Warning: Unsupported wheel minor version (expected {EXPECTED_MINOR}, got {minor})"
             );
         }
-        Ok(Self(data))
+        Ok(wheel)
+    }
+
+    fn first_header_value(&self, header: &str) -> Option<&str> {
+        self.0.get(header)?.first().map(String::as_str)
     }
 
     /// Whether the wheel should be installed into the `purelib` or `platlib` directory.
     pub(crate) fn lib_kind(&self) -> LibKind {
         // Determine whether Root-Is-Purelib == ‘true’.
         // If it is, the wheel is pure, and should be installed into purelib.
-        let root_is_purelib = self
-            .0
-            .get("Root-Is-Purelib")
-            .and_then(|root_is_purelib| root_is_purelib.first())
-            .is_some_and(|root_is_purelib| root_is_purelib == "true");
-        if root_is_purelib {
+        if self.first_header_value("Root-Is-Purelib") == Some("true") {
             LibKind::Pure
         } else {
             LibKind::Plat
@@ -509,36 +501,47 @@ fn move_folder_recorded(
     fs::create_dir_all(dest_dir)?;
     for entry in WalkDir::new(src_dir) {
         let entry = entry?;
+        // The walk root maps to the destination directory, which was created above.
+        if entry.depth() == 0 && entry.file_type().is_dir() {
+            continue;
+        }
         let src = entry.path();
         // This is the base path for moving to the actual target for the data
         // e.g. for data it's without <..>.data/data/
         let relative_to_data = src
             .strip_prefix(src_dir)
             .expect("walkdir prefix must not change");
-        // This is the path stored in RECORD
-        // e.g. for data it's with .data/data/
-        let relative_to_site_packages = src
-            .strip_prefix(site_packages)
-            .expect("prefix must not change");
         let target = dest_dir.join(relative_to_data);
         if entry.file_type().is_dir() {
             fs::create_dir_all(&target)?;
         } else {
+            // This is the path stored in RECORD, e.g. with .data/data/.
+            let relative_to_site_packages = src
+                .strip_prefix(site_packages)
+                .expect("prefix must not change");
             validate_data_script_destination(&target, scripts)?;
             rename_or_copy.rename_or_copy(src, &target)?;
-            let entry = record
-                .iter_mut()
-                .find(|entry| Path::new(&entry.path) == relative_to_site_packages)
-                .ok_or_else(|| Error::RecordFile {
-                    relative: relative_to_site_packages.to_path_buf(),
-                    absolute: src.to_path_buf(),
-                })?;
+            let entry = find_record_entry(record, relative_to_site_packages, src)?;
             entry.path = relative_to(&target, site_packages)?
                 .portable_display()
                 .to_string();
         }
     }
     Ok(())
+}
+
+fn find_record_entry<'record>(
+    record: &'record mut [RecordEntry],
+    relative: &Path,
+    absolute: &Path,
+) -> Result<&'record mut RecordEntry, Error> {
+    record
+        .iter_mut()
+        .find(|entry| Path::new(&entry.path) == relative)
+        .ok_or_else(|| Error::RecordFile {
+            relative: relative.to_path_buf(),
+            absolute: absolute.to_path_buf(),
+        })
 }
 
 /// Installs a single script (not an entrypoint).
@@ -579,13 +582,7 @@ fn install_script(
 
     let script_absolute = layout.scheme.scripts.join(file.file_name());
     validate_data_script_destination(&script_absolute, &layout.scheme.scripts)?;
-    let script_relative =
-        pathdiff::diff_paths(&script_absolute, site_packages).ok_or_else(|| {
-            Error::Io(io::Error::other(format!(
-                "Could not find relative path for: {}",
-                script_absolute.simplified_display()
-            )))
-        })?;
+    let script_relative = relative_install_path(&script_absolute, site_packages)?;
 
     let path = file.path();
     let mut script = BufReader::new(File::open(&path)?);
@@ -744,16 +741,7 @@ fn install_script(
     let relative_to_site_packages = path
         .strip_prefix(site_packages)
         .expect("Prefix must no change");
-    let entry = record
-        .iter_mut()
-        .find(|entry| Path::new(&entry.path) == relative_to_site_packages)
-        .ok_or_else(|| {
-            // It should not be possible to error at this point, but filesystems and such.
-            Error::RecordFile {
-                relative: relative_to_site_packages.to_path_buf(),
-                absolute: path.clone(),
-            }
-        })?;
+    let entry = find_record_entry(record, relative_to_site_packages, &path)?;
 
     // Update the entry in the `RECORD`.
     entry.path = script_relative.portable_display().to_string();
@@ -780,22 +768,9 @@ pub(crate) fn install_data(
         let entry = entry?;
         let path = entry.path();
 
-        match path.file_name().and_then(|name| name.to_str()) {
-            Some("data") => {
-                trace!(
-                    ?dist_name,
-                    "Installing data/data to `{}`",
-                    layout.scheme.data.user_display()
-                );
-                // Move the content of the folder to the root of the venv
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.data,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
-            }
+        let kind = path.file_name().and_then(|name| name.to_str());
+        let (kind, target): (&str, Cow<'_, Path>) = match kind {
+            Some(kind @ "data") => (kind, Cow::Borrowed(&layout.scheme.data)),
             Some("scripts") => {
                 trace!(
                     ?dist_name,
@@ -838,65 +813,40 @@ pub(crate) fn install_data(
                         &mut rename_or_copy,
                     )?;
                 }
+                continue;
             }
-            Some("headers") => {
-                let target_path = layout.scheme.include.join(dist_name.as_str());
-                trace!(
-                    ?dist_name,
-                    "Installing data/headers to `{}`",
-                    target_path.user_display()
-                );
-                move_folder_recorded(
-                    &path,
-                    &target_path,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
-            }
-            Some("purelib") => {
-                trace!(
-                    ?dist_name,
-                    "Installing data/purelib to `{}`",
-                    layout.scheme.purelib.user_display()
-                );
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.purelib,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
-            }
-            Some("platlib") => {
-                trace!(
-                    ?dist_name,
-                    "Installing data/platlib to `{}`",
-                    layout.scheme.platlib.user_display()
-                );
-                move_folder_recorded(
-                    &path,
-                    &layout.scheme.platlib,
-                    &layout.scheme.scripts,
-                    site_packages,
-                    record,
-                )?;
-            }
+            Some(kind @ "headers") => (
+                kind,
+                Cow::Owned(layout.scheme.include.join(dist_name.as_str())),
+            ),
+            Some(kind @ "purelib") => (kind, Cow::Borrowed(&layout.scheme.purelib)),
+            Some(kind @ "platlib") => (kind, Cow::Borrowed(&layout.scheme.platlib)),
             _ => {
                 return Err(Error::InvalidWheel(format!(
                     "Unknown wheel data type: {}",
                     entry.file_name().display()
                 )));
             }
-        }
+        };
+        trace!(
+            ?dist_name,
+            "Installing data/{kind} to `{}`",
+            target.as_ref().user_display()
+        );
+        move_folder_recorded(
+            &path,
+            target.as_ref(),
+            &layout.scheme.scripts,
+            site_packages,
+            record,
+        )?;
     }
     Ok(())
 }
 
 /// Write the content to a file and add the hash to the RECORD list
 ///
-/// We still the path in the absolute path to the site packages and the relative path in the
-/// site packages because we must only record the relative path in RECORD
+/// The filesystem path is resolved from site-packages, but RECORD contains the relative path.
 fn write_file_recorded(
     site_packages: &Path,
     relative_path: &Path,
@@ -909,23 +859,33 @@ fn write_file_recorded(
         relative_path.display()
     );
 
-    uv_fs::write_atomic_sync(site_packages.join(relative_path), content.as_ref())?;
+    let content = content.as_ref();
+    uv_fs::write_atomic_sync(site_packages.join(relative_path), content)?;
 
-    let hash = Sha256::new().chain_update(content.as_ref()).finalize();
-    let encoded_hash = format!("sha256={}", BASE64URL_NOPAD.encode(&hash));
+    let encoded_hash = encode_sha256(&Sha256::digest(content));
     record.push(RecordEntry {
         path: relative_path.portable_display().to_string(),
         hash: Some(encoded_hash),
-        size: Some(content.as_ref().len() as u64),
+        size: Some(content.len() as u64),
     });
     Ok(())
 }
 
-/// Adds `INSTALLER`, `REQUESTED` and `direct_url.json` to the .dist-info dir
+/// Serialize the content as JSON, write it to a file, and add it to RECORD.
+fn write_json_recorded(
+    site_packages: &Path,
+    relative_path: &Path,
+    content: &impl serde::Serialize,
+    record: &mut Vec<RecordEntry>,
+) -> Result<(), Error> {
+    let content = serde_json::to_vec(content)?;
+    write_file_recorded(site_packages, relative_path, content, record)
+}
+
+/// Write `REQUESTED` and any available installer metadata to `.dist-info`.
 pub(crate) fn write_installer_metadata<Cache: serde::Serialize, Build: serde::Serialize>(
     site_packages: &Path,
     dist_info_prefix: &str,
-    requested: bool,
     direct_url: Option<&DirectUrl>,
     cache_info: Option<&Cache>,
     build_info: Option<&Build>,
@@ -933,30 +893,28 @@ pub(crate) fn write_installer_metadata<Cache: serde::Serialize, Build: serde::Se
     record: &mut Vec<RecordEntry>,
 ) -> Result<(), Error> {
     let dist_info_dir = PathBuf::from(format!("{dist_info_prefix}.dist-info"));
-    if requested {
-        write_file_recorded(site_packages, &dist_info_dir.join("REQUESTED"), "", record)?;
-    }
+    write_file_recorded(site_packages, &dist_info_dir.join("REQUESTED"), "", record)?;
     if let Some(direct_url) = direct_url {
-        write_file_recorded(
+        write_json_recorded(
             site_packages,
             &dist_info_dir.join("direct_url.json"),
-            serde_json::to_string(direct_url)?.as_bytes(),
+            direct_url,
             record,
         )?;
     }
     if let Some(cache_info) = cache_info {
-        write_file_recorded(
+        write_json_recorded(
             site_packages,
             &dist_info_dir.join("uv_cache.json"),
-            serde_json::to_string(cache_info)?.as_bytes(),
+            cache_info,
             record,
         )?;
     }
     if let Some(build_info) = build_info {
-        write_file_recorded(
+        write_json_recorded(
             site_packages,
             &dist_info_dir.join("uv_build.json"),
-            serde_json::to_string(build_info)?.as_bytes(),
+            build_info,
             record,
         )?;
     }
@@ -981,16 +939,10 @@ fn get_relocatable_executable(
     layout: &Layout,
     relocatable: bool,
 ) -> Result<PathBuf, Error> {
-    Ok(if relocatable {
-        pathdiff::diff_paths(&executable, &layout.scheme.scripts).ok_or_else(|| {
-            Error::Io(io::Error::other(format!(
-                "Could not find relative path for: {}",
-                executable.simplified_display()
-            )))
-        })?
-    } else {
-        executable
-    })
+    if !relocatable {
+        return Ok(executable);
+    }
+    relative_install_path(&executable, &layout.scheme.scripts)
 }
 
 /// Reads the record file
@@ -1004,12 +956,12 @@ pub fn read_record_into_iter(
         .from_reader(record)
         .into_deserialize()
         .map(|entry| {
-            let entry: RecordEntry = entry?;
-            Ok(RecordEntry {
-                // selenium uses absolute paths for some reason
-                path: entry.path.trim_start_matches('/').to_string(),
-                ..entry
-            })
+            let mut entry: RecordEntry = entry?;
+            // Some wheels contain absolute paths in `RECORD`.
+            if entry.path.starts_with('/') {
+                entry.path = entry.path.trim_start_matches('/').to_string();
+            }
+            Ok(entry)
         })
 }
 
@@ -1017,12 +969,7 @@ pub fn read_record(record: impl Read) -> Result<Vec<RecordEntry>, Error> {
     read_record_into_iter(record).collect()
 }
 
-pub(crate) fn write_record(
-    site_packages: &Path,
-    dist_info_prefix: &str,
-    mut record: Vec<RecordEntry>,
-) -> Result<(), Error> {
-    let record_file = site_packages.join(format!("{dist_info_prefix}.dist-info/RECORD"));
+pub(crate) fn write_record(record_file: &Path, mut record: Vec<RecordEntry>) -> Result<(), Error> {
     let mut record_writer = csv::WriterBuilder::new()
         .has_headers(false)
         .escape(b'"')
@@ -1054,34 +1001,35 @@ pub fn validate_and_heal_record<'a>(
 
     // In the record: The files we expect in the wheel.
     let dist_info_prefix = find_dist_info(wheel_dir)?;
-    let dist_info_dir = format!("{dist_info_prefix}.dist-info");
-    let record_path = wheel_dir.join(&dist_info_dir).join("RECORD");
+    let relative_record_path =
+        PathBuf::from(format!("{dist_info_prefix}.dist-info")).join("RECORD");
+    let record_path = wheel_dir.join(&relative_record_path);
     let mut record_file = File::open(&record_path)?;
     let mut record = read_record(&mut record_file)?;
 
-    // Remove matching files from both collections.
-    let mut extra_record_entries = Vec::new();
-    record.retain(|entry| {
-        let path = Path::new(&entry.path);
-        if files.remove(path).is_some() {
-            return true;
-        }
-        // Allow non-canonical spellings such as `./foo`.
-        if files.remove(uv_fs::normalize_path(path).as_ref()).is_some() {
-            return true;
-        }
-        extra_record_entries.push(path.to_path_buf());
-        false
-    });
+    // Match recorded files against the archive and extract stale entries.
+    let extra_record_entries = record
+        .extract_if(.., |entry| {
+            let path = Path::new(&entry.path);
+            if files.remove(path).is_some() {
+                return false;
+            }
+            // Allow non-canonical spellings such as `./foo`.
+            files.remove(uv_fs::normalize_path(path).as_ref()).is_none()
+        })
+        .map(|entry| PathBuf::from(entry.path))
+        .collect::<Vec<_>>();
 
     if !files.is_empty() {
         // Deprecated, but not listed in RECORD if used.
-        files.remove(Path::new(&dist_info_dir).join("RECORD.jws").as_path());
-        files.remove(Path::new(&dist_info_dir).join("RECORD.p7s").as_path());
+        files.remove(relative_record_path.with_file_name("RECORD.jws").as_path());
+        files.remove(relative_record_path.with_file_name("RECORD.p7s").as_path());
     }
 
-    // If the RECORD was correct, there were no extra entries in the record and no missing entries
-    // that weren't removed from files.
+    if extra_record_entries.is_empty() && files.is_empty() {
+        return Ok(None);
+    }
+
     if !extra_record_entries.is_empty() {
         debug!(
             "Files `{}` are listed in `RECORD` but missing from the wheel archive for `{dist}`",
@@ -1100,54 +1048,43 @@ pub fn validate_and_heal_record<'a>(
                 .join("`, `")
         );
     }
-    let healed = !extra_record_entries.is_empty() || !files.is_empty();
-    if healed {
-        debug!("Rewriting `RECORD` to match actual wheel contents for {dist}");
-        // We already removed RECORD entries with no matching unpacked file, now add files that
-        // were unpacked but not listed in the archive.
-        for (path, size) in files {
-            record.push(RecordEntry {
-                // RECORD entries always use forward slashes, even on Windows.
-                path: PortablePath::from(path).to_string(),
-                // We don't heal the hash. It's not validated anyway (pip doesn't), and by rules of
-                // the spec the wheel would have been rejected anyway (if the spec would have been
-                // enforced).
-                hash: None,
-                size: Some(size),
-            });
-        }
-
-        write_record(wheel_dir, &dist_info_prefix, record)?;
+    debug!("Rewriting `RECORD` to match actual wheel contents for {dist}");
+    // Add files from the archive that were not listed in `RECORD`.
+    for (path, size) in files {
+        record.push(RecordEntry {
+            // RECORD entries always use forward slashes, even on Windows.
+            path: PortablePath::from(path).to_string(),
+            // We don't heal the hash. It's not validated anyway (pip doesn't), and by rules of
+            // the spec the wheel would have been rejected anyway (if the spec would have been
+            // enforced).
+            hash: None,
+            size: Some(size),
+        });
     }
 
-    Ok(healed.then(|| PathBuf::from(dist_info_dir).join("RECORD")))
+    write_record(&record_path, record)?;
+    Ok(Some(relative_record_path))
 }
 
-/// Parse a file with email message format such as WHEEL and METADATA
-fn parse_email_message_file(
-    file: impl Read,
+/// Parse metadata in email message format, such as WHEEL and METADATA.
+fn parse_email_message(
+    content: &[u8],
     debug_filename: &str,
 ) -> Result<FxHashMap<String, Vec<String>>, Error> {
     let mut data: FxHashMap<String, Vec<String>> = FxHashMap::default();
 
-    let file = BufReader::new(file);
-    let content = file.bytes().collect::<Result<Vec<u8>, _>>()?;
-
-    let message = Message::parse(&content);
+    let message = Message::parse(content);
     for header in message.headers() {
         let name = header.name().to_owned();
-        let mut value = header
-            .decoded_value()
-            .map_err(|err| {
-                Error::InvalidWheel(format!("Failed to decode `{debug_filename}` file: {err}"))
-            })?
-            .into_owned();
-
-        // Trim the value only if needed
-        let trimmed_value = value.trim();
-        if value != trimmed_value {
-            value = trimmed_value.to_string();
-        }
+        let value = header.decoded_value().map_err(|err| {
+            Error::InvalidWheel(format!("Failed to decode `{debug_filename}` file: {err}"))
+        })?;
+        let trimmed = value.trim();
+        let value = if trimmed.len() == value.len() {
+            value.into_owned()
+        } else {
+            trimmed.to_owned()
+        };
 
         data.entry(name).or_default().push(value);
     }
@@ -1163,41 +1100,33 @@ fn parse_email_message_file(
 pub(crate) fn find_dist_info(path: impl AsRef<Path>) -> Result<String, Error> {
     // Iterate over `path` to find the `.dist-info` directory. It should be at the top-level,
     // and wheels must contain exactly one.
-    let mut dist_info = fs::read_dir(path.as_ref())?
+    let dist_info = fs::read_dir(path.as_ref())?
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let file_type = entry.file_type().ok()?;
             if file_type.is_dir() {
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "dist-info") {
-                    return Some(path);
+                let filename = PathBuf::from(entry.file_name());
+                if filename.extension().is_some_and(|ext| ext == "dist-info") {
+                    return Some(filename);
                 }
             }
             None
         })
-        .collect::<Vec<_>>();
-    dist_info.sort();
-
-    let dist_info = match dist_info.as_slice() {
-        [] => {
-            return Err(Error::InvalidWheel(
-                "Missing .dist-info directory".to_string(),
-            ));
-        }
-        [dist_info] => dist_info,
-        _ => {
-            return Err(Error::InvalidWheel(format!(
+        .at_most_one()
+        .map_err(|dist_info| {
+            let mut dist_info = dist_info.collect::<Vec<_>>();
+            dist_info.sort();
+            Error::InvalidWheel(format!(
                 "Multiple .dist-info directories found: {}",
                 dist_info
                     .iter()
                     .filter_map(|path| path.file_stem())
                     .map(|prefix| prefix.to_string_lossy())
                     .join(", ")
-            )));
-        }
-    };
+            ))
+        })?;
 
-    let Some(dist_info_prefix) = dist_info.file_stem() else {
+    let Some(dist_info_prefix) = dist_info.as_deref().and_then(Path::file_stem) else {
         return Err(Error::InvalidWheel(
             "Missing .dist-info directory".to_string(),
         ));
@@ -1206,15 +1135,9 @@ pub(crate) fn find_dist_info(path: impl AsRef<Path>) -> Result<String, Error> {
     Ok(dist_info_prefix.to_string_lossy().to_string())
 }
 
-/// Read the `dist-info` metadata from a directory.
-pub(crate) fn dist_info_metadata(
-    dist_info_prefix: &str,
-    wheel: impl AsRef<Path>,
-) -> Result<Vec<u8>, Error> {
-    let metadata_file = wheel
-        .as_ref()
-        .join(format!("{dist_info_prefix}.dist-info/METADATA"));
-    Ok(fs::read(metadata_file)?)
+/// Return the path to a file in a distribution's `.dist-info` directory.
+pub(crate) fn dist_info_file(base: &Path, prefix: &str, file: &str) -> PathBuf {
+    base.join(format!("{prefix}.dist-info/{file}"))
 }
 
 /// Parses the `entry_points.txt` entry in the wheel for console scripts
@@ -1227,9 +1150,7 @@ pub(crate) fn parse_scripts(
     dist_info_prefix: &str,
     python_minor: u8,
 ) -> Result<(Vec<Script>, Vec<Script>), Error> {
-    let entry_points_path = wheel
-        .as_ref()
-        .join(format!("{dist_info_prefix}.dist-info/entry_points.txt"));
+    let entry_points_path = dist_info_file(wheel.as_ref(), dist_info_prefix, "entry_points.txt");
 
     let EntryPoints {
         console_scripts,
@@ -1240,7 +1161,7 @@ pub(crate) fn parse_scripts(
 }
 
 /// Rename a file with a fallback to copy that switches over on the first failure.
-#[derive(Default, Copy, Clone)]
+#[derive(Default)]
 enum RenameOrCopy {
     #[default]
     Rename,
@@ -1252,20 +1173,18 @@ impl RenameOrCopy {
     ///
     /// Usually, source and target are on the same device, so we can rename, but if that fails, we
     /// have to copy. If renaming failed once, we switch to copy permanently.
-    fn rename_or_copy(&mut self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
+    fn rename_or_copy(&mut self, from: &Path, to: &Path) -> io::Result<()> {
         match self {
-            Self::Rename => match fs_err::rename(from.as_ref(), to.as_ref()) {
-                Ok(()) => {}
+            Self::Rename => match fs_err::rename(from, to) {
+                Ok(()) => return Ok(()),
                 Err(err) => {
                     *self = Self::Copy;
                     debug!("Failed to rename, falling back to copy: {err}");
-                    fs_err::copy(from.as_ref(), to.as_ref())?;
                 }
             },
-            Self::Copy => {
-                fs_err::copy(from.as_ref(), to.as_ref())?;
-            }
+            Self::Copy => {}
         }
+        fs_err::copy(from, to)?;
         Ok(())
     }
 }
@@ -1282,7 +1201,7 @@ mod test {
 
     use super::{
         Error, RecordEntry, Script, WheelFile, find_script_encoding, format_shebang,
-        get_script_executable, parse_email_message_file, parse_scripts, read_record,
+        get_script_executable, parse_email_message, parse_scripts, read_record,
         write_installer_metadata,
     };
 
@@ -1296,7 +1215,7 @@ mod test {
             Tag: cp38-cp38-manylinux2014_x86_64
         "};
 
-        parse_email_message_file(&mut text.as_bytes(), "WHEEL").unwrap();
+        parse_email_message(text.as_bytes(), "WHEEL").unwrap();
     }
 
     #[test]
@@ -1308,7 +1227,7 @@ mod test {
             Tag:        cp38-cp38-manylinux_2_17_x86_64
         "};
 
-        let wheel = parse_email_message_file(&mut text.as_bytes(), "WHEEL").unwrap();
+        let wheel = parse_email_message(text.as_bytes(), "WHEEL").unwrap();
         let tags = &wheel["Tag"];
         let tag = tags
             .first()
@@ -1325,7 +1244,7 @@ mod test {
               Tag  : cp38-cp38-manylinux_2_17_x86_64
         "};
 
-        let wheel = parse_email_message_file(&mut text.as_bytes(), "WHEEL").unwrap();
+        let wheel = parse_email_message(text.as_bytes(), "WHEEL").unwrap();
         assert!(!wheel.contains_key("Tag"));
         assert_eq!(3, wheel.keys().len());
     }
@@ -1341,7 +1260,7 @@ mod test {
               py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64
         "};
 
-        parse_email_message_file(&mut text.as_bytes(), "WHEEL").unwrap();
+        parse_email_message(text.as_bytes(), "WHEEL").unwrap();
     }
 
     #[test]
@@ -1386,14 +1305,15 @@ mod test {
         let wheel = assert_fs::TempDir::new()?;
         let dist_info = wheel.child("demo-1.0.dist-info");
         dist_info.create_dir_all()?;
-        std::os::unix::fs::symlink("/dev/full", dist_info.child("RECORD").path())?;
+        let record = dist_info.child("RECORD");
+        std::os::unix::fs::symlink("/dev/full", record.path())?;
 
         let entry = RecordEntry {
             path: "demo.py".to_owned(),
             hash: None,
             size: None,
         };
-        let err = super::write_record(wheel.path(), "demo-1.0", vec![entry]).unwrap_err();
+        let err = super::write_record(record.path(), vec![entry]).unwrap_err();
         assert_matches!(err, Error::Io(err) if err.kind() == ErrorKind::StorageFull);
         Ok(())
     }
@@ -1519,8 +1439,7 @@ mod test {
         Tag: -manylinux2014_x86_64
         "
         };
-        let reader = Cursor::new(wheel.to_string().into_bytes());
-        let wheel_file = parse_email_message_file(reader, "WHEEL")?;
+        let wheel_file = parse_email_message(wheel.as_bytes(), "WHEEL")?;
         assert_eq!(
             wheel_file.get("Wheel-Version"),
             Some(&["1.0".to_string()].to_vec())
@@ -1603,7 +1522,6 @@ mod test {
         write_installer_metadata::<(), ()>(
             site_packages,
             "foo-0.1.0",
-            true,
             None,
             None,
             None,

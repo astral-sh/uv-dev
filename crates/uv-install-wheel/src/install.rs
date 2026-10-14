@@ -1,5 +1,4 @@
-//! Like `wheel.rs`, but for installing wheels that have already been unzipped, rather than
-//! reading from a zip file.
+//! Installation of unpacked wheels into a Python environment.
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -13,7 +12,7 @@ use uv_pypi_types::{DirectUrl, Metadata10};
 
 use crate::linker::{InstallState, LinkMode, link_wheel_files};
 use crate::wheel::{
-    LibKind, ValidatedWheel, WheelFile, dist_info_metadata, find_dist_info, install_data,
+    LibKind, ValidatedWheel, WheelFile, dist_info_file, find_dist_info, install_data,
     parse_scripts, read_record, write_installer_metadata, write_record, write_script_entrypoints,
 };
 use crate::{Error, Layout};
@@ -33,7 +32,7 @@ fn wheel_destination<'layout>(
     wheel: &Path,
 ) -> Result<(String, &'layout Path), Error> {
     let dist_info_prefix = find_dist_info(wheel)?;
-    let wheel_file_path = wheel.join(format!("{dist_info_prefix}.dist-info/WHEEL"));
+    let wheel_file_path = dist_info_file(wheel, &dist_info_prefix, "WHEEL");
     let wheel_text = fs_err::read_to_string(wheel_file_path)?;
     let site_packages = match WheelFile::parse(&wheel_text)?.lib_kind() {
         LibKind::Pure => &layout.scheme.purelib,
@@ -42,7 +41,7 @@ fn wheel_destination<'layout>(
     Ok((dist_info_prefix, site_packages))
 }
 
-/// Install the given wheel to the given venv
+/// Install the given unpacked wheel into a Python environment.
 ///
 /// The caller must ensure that the wheel is compatible to the environment.
 ///
@@ -65,7 +64,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
 ) -> Result<(), Error> {
     let wheel = wheel.as_ref();
     let (dist_info_prefix, site_packages) = wheel_destination(layout, wheel)?;
-    let metadata = dist_info_metadata(&dist_info_prefix, wheel)?;
+    let metadata = fs_err::read(dist_info_file(wheel, &dist_info_prefix, "METADATA"))?;
     let Metadata10 { name, version } = Metadata10::parse_pkg_info(&metadata)
         .map_err(|err| Error::InvalidWheel(err.to_string()))?;
 
@@ -82,19 +81,14 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         }
     }
 
-    // We're going step by step though
-    // https://packaging.python.org/en/latest/specifications/binary-distribution-format/#installing-a-wheel-distribution-1-0-py32-none-any-whl
-    // > 1.a Parse distribution-1.0.dist-info/WHEEL.
-    // > 1.b Check that installer is compatible with Wheel-Version. Warn if minor version is greater, abort if major version is greater.
-    // > 1.c If Root-Is-Purelib == ‘true’, unpack archive into purelib (site-packages).
-    // > 1.d Else unpack archive into platlib (site-packages).
+    // Parse `RECORD` and entry points and validate script destinations before linking wheel files.
     let validated_wheel = ValidatedWheel::new(layout, wheel, &dist_info_prefix)?;
     trace!(?name, "Extracting wheel files");
     link_wheel_files(link_mode, site_packages, &validated_wheel, state, filename)?;
     trace!(?name, "Extracted wheel files");
 
     // Read the RECORD file.
-    let mut record_file = File::open(wheel.join(format!("{dist_info_prefix}.dist-info/RECORD")))?;
+    let mut record_file = File::open(dist_info_file(wheel, &dist_info_prefix, "RECORD"))?;
     let mut record = read_record(&mut record_file)?;
 
     let (console_scripts, gui_scripts) =
@@ -124,8 +118,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         )?;
     }
 
-    // 2.a Unpacked archive includes distribution-1.0.dist-info/ and (if there is data) distribution-1.0.data/.
-    // 2.b Move each subtree of distribution-1.0.data/ onto its destination path. Each subdirectory of distribution-1.0.data/ is a key into a dict of destination directories, such as distribution-1.0.data/(purelib|platlib|headers|scripts|data). The initially supported paths are taken from distutils.command.install.
+    // Move wheel data into the interpreter's installation scheme.
     let data_dir = site_packages.join(format!("{dist_info_prefix}.data"));
     if data_dir.is_dir() {
         install_data(
@@ -138,9 +131,6 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
             &gui_scripts,
             &mut record,
         )?;
-        // 2.c If applicable, update scripts starting with #!python to point to the correct interpreter.
-        // Script are unsupported through data
-        // 2.e Remove empty distribution-1.0.data directory.
         fs_err::remove_dir_all(data_dir)?;
     } else {
         trace!(?name, "No data");
@@ -151,7 +141,6 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
         write_installer_metadata(
             site_packages,
             &dist_info_prefix,
-            true,
             direct_url,
             cache_info,
             build_info,
@@ -161,7 +150,8 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
     }
 
     trace!(?name, "Writing record");
-    write_record(site_packages, &dist_info_prefix, record)?;
+    let record_path = dist_info_file(site_packages, &dist_info_prefix, "RECORD");
+    write_record(&record_path, record)?;
 
     Ok(())
 }
