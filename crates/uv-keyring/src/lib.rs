@@ -200,8 +200,7 @@ impl Entry {
     /// Returns an [`Error`] if the `service` or `user` values are invalid or no credential store
     /// was compiled for the current platform. Validation constraints depend on the platform.
     pub fn new(service: &str, user: &str) -> Result<Self> {
-        let entry = build_default_credential(None, service, user)?;
-        Ok(entry)
+        build_default_credential(None, service, user)
     }
 
     /// Create an entry for the given target, service, and user.
@@ -215,8 +214,7 @@ impl Entry {
         not(miri)
     ))]
     fn new_with_target(target: &str, service: &str, user: &str) -> Result<Self> {
-        let entry = build_default_credential(Some(target), service, user)?;
-        Ok(entry)
+        build_default_credential(Some(target), service, user)
     }
 
     /// Create an entry from a credential that may be in any credential store.
