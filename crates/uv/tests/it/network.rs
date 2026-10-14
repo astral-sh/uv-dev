@@ -1023,20 +1023,50 @@ async fn proxy_schemeless_url_in_uv_toml() {
     ");
 }
 
-#[test]
-fn connect_timeout_index() {
+/// Keep an accepted socket open without completing the TLS handshake.
+struct StalledTlsServer {
+    address: std::net::SocketAddr,
+    connection: tokio::task::JoinHandle<(tokio::net::TcpStream, Instant)>,
+}
+
+impl StalledTlsServer {
+    async fn start() -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        // The task result retains the socket until the assertion, keeping the handshake stalled.
+        let connection = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            (socket, Instant::now())
+        });
+        Self {
+            address,
+            connection,
+        }
+    }
+
+    async fn assert_connect_timeout(self) {
+        let (_socket, connected_at) = tokio::time::timeout(Duration::from_secs(3), self.connection)
+            .await
+            .expect("uv should connect to the TLS server")
+            .expect("TLS server task should complete");
+        let elapsed = connected_at.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "one-second connect timeout took {elapsed:?} after accepting the connection"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_timeout_index() {
     let context = uv_test::test_context!("3.12");
 
-    // Create a server that never responds, causing a timeout for our requests.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let server = listener.local_addr().unwrap().to_string();
-
-    let start = Instant::now();
+    let server = StalledTlsServer::start().await;
     uv_snapshot!(context.filters(), context
         .pip_install()
         .arg("tqdm")
         .arg("--index-url")
-        .arg(format!("https://{server}"))
+        .arg(format!("https://{}", server.address))
         .env(EnvVars::UV_HTTP_CONNECT_TIMEOUT, "1")
         .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
     exit_code: 2 (failure)
@@ -1047,26 +1077,17 @@ fn connect_timeout_index() {
       cause: operation timed out
     ");
 
-    // Assumption: There's less than 2s overhead for this test and startup.
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed < Duration::from_secs(3),
-        "Test with 1s connect timeout took too long"
-    );
+    server.assert_connect_timeout().await;
 }
 
-#[test]
-fn connect_timeout_stream() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_timeout_stream() {
     let context = uv_test::test_context!("3.12");
 
-    // Create a server that never responds, causing a timeout for our requests.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let server = listener.local_addr().unwrap().to_string();
-
-    let start = Instant::now();
+    let server = StalledTlsServer::start().await;
     uv_snapshot!(context.filters(), context
         .pip_install()
-        .arg(format!("https://{server}/tqdm-0.1-py3-none-any.whl"))
+        .arg(format!("https://{}/tqdm-0.1-py3-none-any.whl", server.address))
         .env(EnvVars::UV_HTTP_CONNECT_TIMEOUT, "1")
         .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
     exit_code: 2 (failure)
@@ -1078,12 +1099,7 @@ fn connect_timeout_stream() {
       cause: operation timed out
     ");
 
-    // Assumption: There's less than 2s overhead for this test and startup.
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed < Duration::from_secs(3),
-        "Test with 1s connect timeout took too long"
-    );
+    server.assert_connect_timeout().await;
 }
 
 #[tokio::test]
