@@ -163,8 +163,11 @@ fn create_venv_with_removed_distutils_patch_preview() {
 fn create_venv_preserves_existing_distutils_patch() -> Result<()> {
     let context = uv_test::test_context!("3.10");
     let site_packages = site_packages_path(context.venv.path(), "python3.10");
-    fs_err::write(site_packages.join("_virtualenv.py"), "")?;
-    fs_err::write(site_packages.join("_virtualenv.pth"), "import _virtualenv")?;
+    fs_err::write(site_packages.join("_virtualenv.py"), "# existing patch\n")?;
+    fs_err::write(
+        site_packages.join("_virtualenv.pth"),
+        "import _virtualenv\n",
+    )?;
 
     uv_snapshot!(context.filters(), context.venv()
         .arg("--allow-existing")
@@ -177,8 +180,14 @@ fn create_venv_preserves_existing_distutils_patch() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     ");
 
-    assert!(site_packages.join("_virtualenv.py").is_file());
-    assert!(site_packages.join("_virtualenv.pth").is_file());
+    assert_eq!(
+        context.read(site_packages.join("_virtualenv.py")),
+        "# existing patch\n"
+    );
+    assert_eq!(
+        context.read(site_packages.join("_virtualenv.pth")),
+        "import _virtualenv\n"
+    );
 
     context
         .venv()
