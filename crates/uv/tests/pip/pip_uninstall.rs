@@ -6,6 +6,7 @@ use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 
+use uv_test::packse::generate_wheel;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -463,13 +464,18 @@ fn uninstall_record_path_traversal() -> Result<()> {
         "[..]/traversal_target.txt",
     ));
 
-    context
-        .init()
-        .arg("--lib")
-        .arg("evilpkg")
-        .assert()
-        .success();
-    context.pip_install().arg("./evilpkg").assert().success();
+    let (filename, bytes) = generate_wheel(
+        &"evilpkg".parse()?,
+        &"0.1.0".parse()?,
+        &[],
+        &Default::default(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel = context.temp_dir.child(filename);
+    wheel.write_binary(&bytes)?;
+    context.pip_install().arg(wheel.path()).assert().success();
 
     // Build the relative traversal path from site-packages to a target file outside
     // site-packages but inside the test temp dir. RECORD uses forward slashes, even on
@@ -506,9 +512,9 @@ fn uninstall_record_path_traversal() -> Result<()> {
         .arg("evilpkg"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    warning: Invalid `RECORD` entry in `evilpkg==0.1.0 (from file://[TEMP_DIR]/evilpkg)` that escapes the Python environment, skipping: [..]/traversal_target.txt
+    warning: Invalid `RECORD` entry in `evilpkg==0.1.0 (from file://[TEMP_DIR]/evilpkg-0.1.0-py3-none-any.whl)` that escapes the Python environment, skipping: [..]/traversal_target.txt
     Uninstalled 1 package in [TIME]
-     - evilpkg==0.1.0 (from file://[TEMP_DIR]/evilpkg)
+     - evilpkg==0.1.0 (from file://[TEMP_DIR]/evilpkg-0.1.0-py3-none-any.whl)
     ");
 
     target_file.assert("I should not be deleted");
