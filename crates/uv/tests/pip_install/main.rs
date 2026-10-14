@@ -32,7 +32,7 @@ mod exact;
 mod git;
 #[cfg(feature = "test-python")]
 mod index;
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
 mod json;
 #[cfg(feature = "test-python")]
 mod launcher;
