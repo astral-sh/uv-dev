@@ -2612,20 +2612,21 @@ impl std::fmt::Display for PackageRange<'_> {
         }
         let package = self.package;
 
-        if self.range.is_empty() {
+        let mut segments = self.range.iter().peekable();
+        let Some(first) = segments.next() else {
             return write!(f, "{package} ∅");
-        }
+        };
 
-        let segments: Vec<_> = self.range.iter().collect();
-        if segments.len() > 1 {
+        let multiline = segments.peek().is_some();
+        if multiline {
             match self.kind {
                 PackageRangeKind::Dependency => write!(f, "one of:")?,
                 PackageRangeKind::Compatibility => write!(f, "all of:")?,
                 PackageRangeKind::Available => write!(f, "are available:")?,
             }
         }
-        for (lower, upper) in &segments {
-            if segments.len() > 1 {
+        for (lower, upper) in std::iter::once(first).chain(segments) {
+            if multiline {
                 write!(f, "\n    ")?;
             }
             match (lower, upper) {
@@ -2645,7 +2646,7 @@ impl std::fmt::Display for PackageRange<'_> {
                     }
                 }
                 (Bound::Included(v), Bound::Excluded(b)) => {
-                    if let Some(prefix) = PrefixMatch::from_range(*lower, *upper) {
+                    if let Some(prefix) = PrefixMatch::from_range(lower, upper) {
                         write!(f, "{package}{prefix}")?;
                     } else {
                         write!(f, "{package}>={v},<{b}")?;
@@ -2656,7 +2657,7 @@ impl std::fmt::Display for PackageRange<'_> {
                 (Bound::Excluded(v), Bound::Excluded(b)) => write!(f, "{package}>{v},<{b}")?,
             }
         }
-        if segments.len() > 1 {
+        if multiline {
             writeln!(f)?;
         }
         Ok(())
