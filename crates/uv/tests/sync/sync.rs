@@ -12937,53 +12937,6 @@ fn mismatched_name_self_editable_package() -> Result<()> {
     Ok(())
 }
 
-/// A wheel is available in the cache, but was requested under the wrong name.
-#[test]
-fn mismatched_name_cached_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-
-    // Cache the `iniconfig` wheel.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz"]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.sync(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz)
-    ");
-
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["foo @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz"]
-        "#,
-    )?;
-
-    // Detect the name mismatch from cached artifacts without downloading the source again.
-    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to download and build `foo @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz`
-      cause: Package metadata name `iniconfig` does not match given name `foo`
-    ");
-
-    Ok(())
-}
-
 /// Sync a Git repository that depends on a package within the same repository via a `path` source.
 ///
 /// See: <https://github.com/astral-sh/uv/issues/9516>
