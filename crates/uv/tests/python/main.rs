@@ -26,6 +26,8 @@ mod python_module;
 
 mod python_pin;
 
+mod python_request_validation;
+
 #[cfg(feature = "test-python-managed")]
 mod python_upgrade;
 

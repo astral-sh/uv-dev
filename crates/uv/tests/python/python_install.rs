@@ -1264,28 +1264,6 @@ async fn python_install_registry_takes_precedence_over_no_registry() -> anyhow::
     registry.cleanup()
 }
 
-#[test]
-fn python_upgrade_not_allowed() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_python_keys()
-        .with_filtered_exe_suffix()
-        .with_managed_python_dirs();
-
-    // Request a patch upgrade
-    uv_snapshot!(context.filters(), context.python_upgrade().arg("--preview").arg("3.13.0"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: `uv python upgrade` only accepts minor versions, got: 3.13.0
-    ");
-
-    // Request a pre-release upgrade
-    uv_snapshot!(context.filters(), context.python_upgrade().arg("--preview").arg("3.14rc3"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: `uv python upgrade` only accepts minor versions, got: 3.14rc3
-    ");
-}
-
 // We only support debug builds on Unix
 #[cfg(unix)]
 #[test]
@@ -1485,47 +1463,6 @@ fn python_install_debug_freethreaded() {
      - cpython-3.13.[LATEST]+debug-[PLATFORM] (python3.13d)
      - cpython-3.13.[LATEST]-[PLATFORM] (python3.13)
     ");
-}
-
-#[test]
-fn python_install_invalid_request() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_python_keys()
-        .with_filtered_exe_suffix()
-        .with_managed_python_dirs();
-
-    // Request something that is not a Python version
-    uv_snapshot!(context.filters(), context.python_install().arg("foobar"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `foobar` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions
-    ");
-
-    // Request a version we don't have a download for
-    uv_snapshot!(context.filters(), context.python_install().arg("3.8.0"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No download found for request: cpython-3.8.0-[PLATFORM]
-    ");
-
-    // Resolve every request before installing; an unavailable later request must not leave the
-    // earlier valid request installed.
-    uv_snapshot!(context.filters(), context.python_install().arg("3.12").arg("3.8.0"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No download found for request: cpython-3.8.0-[PLATFORM]
-    ");
-    context
-        .python_list()
-        .args(["3.12", "--only-installed", "--managed-python"])
-        .assert()
-        .success()
-        .stdout("");
-    assert_path_missing(
-        context
-            .bin_dir
-            .child(format!("python3.12{}", std::env::consts::EXE_SUFFIX)),
-    );
 }
 
 /// Check the default, major-version, and minor-version launchers against their direct target.
@@ -1863,27 +1800,6 @@ fn read_link(path: &Path) -> String {
     let linked_path = launcher_path(path);
 
     linked_path.simplified_display().to_string()
-}
-
-#[test]
-fn python_install_unknown() {
-    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
-
-    // An unknown request
-    uv_snapshot!(context.filters(), context.python_install().arg("foobar"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `foobar` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions
-    ");
-
-    context.temp_dir.child("foo").create_dir_all().unwrap();
-
-    // A directory
-    uv_snapshot!(context.filters(), context.python_install().arg("./foo"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `./foo` is not a valid Python download request; see `uv help python` for supported formats and `uv python list --only-downloads` for available versions
-    ");
 }
 
 #[cfg(unix)]
@@ -3610,18 +3526,6 @@ fn python_install_upgrade_version_file() {
     error: `uv python install --upgrade` only accepts minor versions, got: 3.12.4
 
     hint: The version request came from a `.python-version` file; change the patch version in the file to upgrade instead
-    ");
-}
-
-#[test]
-fn python_install_armv7_musl_unavailable() {
-    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
-
-    // Explicitly request a musl build for armv7l
-    uv_snapshot!(context.filters(), context.python_install().arg("cpython-3.12.12-linux-armv7-musl"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: uv does not yet provide musl Python distributions on armv7.
     ");
 }
 
