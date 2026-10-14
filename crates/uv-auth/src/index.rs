@@ -90,10 +90,6 @@ pub(crate) fn is_path_prefix(prefix: &str, path: &str) -> bool {
     prefix.ends_with('/') || suffix.starts_with('/')
 }
 
-// TODO(john): Multiple methods in this struct need to iterate over
-// all the indexes in the set. There are probably not many URLs to
-// iterate through, but we could use a trie instead of a HashSet here
-// for more efficient search.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct Indexes(FxHashSet<Index>);
 
@@ -113,17 +109,6 @@ impl Indexes {
 
     /// Get the index for a URL if one exists.
     pub(crate) fn index_for(&self, url: &Url) -> Option<&Index> {
-        self.find_prefix_index(url)
-    }
-
-    /// Get the [`AuthPolicy`] for a URL.
-    pub(crate) fn auth_policy_for(&self, url: &Url) -> AuthPolicy {
-        self.find_prefix_index(url)
-            .map(|index| index.auth_policy)
-            .unwrap_or(AuthPolicy::Auto)
-    }
-
-    fn find_prefix_index(&self, url: &Url) -> Option<&Index> {
         self.0.iter().find(|&index| index.is_prefix_for(url))
     }
 }
