@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque, hash_map::Entry};
 use std::fmt::{Display, Formatter};
 use std::ops::Bound;
 use std::sync::Arc;
@@ -1033,10 +1033,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             }
             // Unit propagation often leaves a package's range unchanged. Although prefetching the
             // same package and range is idempotent, selecting its candidate is not free.
-            if pre_visited.get(&id) == Some(range) {
-                continue;
+            match pre_visited.entry(id) {
+                Entry::Occupied(entry) if entry.get() == range => continue,
+                entry => {
+                    entry.insert_entry(range.clone());
+                }
             }
-            pre_visited.insert(id, range.clone());
             requests.prefetch(name, range, python_requirement)?;
         }
         Ok(())
