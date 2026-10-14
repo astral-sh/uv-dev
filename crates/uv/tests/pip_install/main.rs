@@ -41,6 +41,8 @@ mod record;
 #[cfg(feature = "test-python")]
 mod remote_requirements;
 #[cfg(feature = "test-python")]
+mod requirement_files;
+#[cfg(feature = "test-python")]
 mod requirements_encoding;
 #[cfg(feature = "test-python")]
 mod target;
