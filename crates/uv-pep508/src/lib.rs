@@ -589,7 +589,6 @@ fn parse_extras_cursor<T: Pep508Url>(
     cursor.eat_whitespace();
 
     let mut extras = Vec::new();
-    let mut is_first_iteration = true;
 
     loop {
         // End of the extras section. (Empty extras are allowed.)
@@ -599,7 +598,7 @@ fn parse_extras_cursor<T: Pep508Url>(
         }
 
         // Comma separator
-        match (cursor.peek(), is_first_iteration) {
+        match (cursor.peek(), extras.is_empty()) {
             // For the first iteration, we don't expect a comma.
             (Some((pos, ',')), true) => {
                 return Err(Pep508Error {
@@ -697,7 +696,6 @@ fn parse_extras_cursor<T: Pep508Url>(
             ExtraName::from_str(&buffer)
                 .expect("`ExtraName` validation should match PEP 508 parsing"),
         );
-        is_first_iteration = false;
     }
 
     Ok(extras)
