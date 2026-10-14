@@ -453,12 +453,10 @@ impl From<ResolverOutput> for uv_distribution_types::Resolution {
                     let source = inverse[&source_dist.name()];
                     let target = inverse[&target_dist.name()];
 
-                    let edge = if let Some(extra) = source_dist.kind.extra() {
-                        Edge::Optional(extra.clone())
-                    } else if let Some(group) = source_dist.kind.group() {
-                        Edge::Dev(group.clone())
-                    } else {
-                        Edge::Prod
+                    let edge = match &source_dist.kind {
+                        PackageNodeKind::Base => Edge::Prod,
+                        PackageNodeKind::Group(group) => Edge::Dev(group.clone()),
+                        PackageNodeKind::Extra(extra) => Edge::Optional(extra.clone()),
                     };
 
                     transformed.add_edge(source, target, edge);
