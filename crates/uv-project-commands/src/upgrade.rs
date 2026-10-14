@@ -425,10 +425,11 @@ pub async fn upgrade(
 
     let lock = result.lock();
     for resolved_package in lock.packages() {
-        if !requirements
-            .iter()
-            .any(|selected| resolved_package.name() == &selected.package)
-        {
+        let mut matching_requirements = requirements
+            .iter_mut()
+            .filter(|selected| resolved_package.name() == &selected.package)
+            .peekable();
+        if matching_requirements.peek().is_none() {
             continue;
         }
         if resolved_package
@@ -438,10 +439,7 @@ pub async fn upgrade(
         {
             // A universal lock can contain versions from disjoint forks, so collect each version
             // only for the declarations that apply to its fork.
-            for selected in &mut requirements {
-                if resolved_package.name() != &selected.package {
-                    continue;
-                }
+            for selected in matching_requirements {
                 if resolved_package.is_included_by_marker(selected.effective_marker) {
                     selected.resolved_versions.insert(version.clone());
                 }
