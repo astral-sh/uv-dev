@@ -1667,13 +1667,16 @@ fn python_install_default_preview() -> anyhow::Result<()> {
 }
 
 #[cfg(windows)]
+#[track_caller]
 fn launcher_path(path: &Path) -> PathBuf {
-    let launcher = uv_trampoline_builder::Launcher::try_from_path(path)
-        .unwrap_or_else(|_| panic!("{} should be readable", path.display()))
-        .unwrap_or_else(|| panic!("{} should be a valid launcher", path.display()));
-    launcher.python_path
+    match uv_trampoline_builder::Launcher::try_from_path(path) {
+        Ok(Some(launcher)) => launcher.python_path,
+        Ok(None) => panic!("Expected a Python launcher at `{}`", path.display()),
+        Err(error) => panic!("Failed to inspect launcher `{}`: {error}", path.display()),
+    }
 }
 
+#[track_caller]
 fn canonicalize_link_path(path: &Path) -> String {
     #[cfg(unix)]
     let canonical_path = fs_err::canonicalize(path);
@@ -1681,16 +1684,19 @@ fn canonicalize_link_path(path: &Path) -> String {
     #[cfg(windows)]
     let canonical_path = dunce::canonicalize(launcher_path(path));
 
-    canonical_path
-        .unwrap_or_else(|_| panic!("{} should be readable", path.display()))
-        .simplified_display()
-        .to_string()
+    match canonical_path {
+        Ok(canonical_path) => canonical_path.simplified_display().to_string(),
+        Err(error) => panic!("Failed to resolve launcher `{}`: {error}", path.display()),
+    }
 }
 
+#[track_caller]
 fn read_link(path: &Path) -> String {
     #[cfg(unix)]
-    let linked_path =
-        fs_err::read_link(path).unwrap_or_else(|_| panic!("{} should be readable", path.display()));
+    let linked_path = match fs_err::read_link(path) {
+        Ok(linked_path) => linked_path,
+        Err(error) => panic!("Failed to read launcher `{}`: {error}", path.display()),
+    };
 
     #[cfg(windows)]
     let linked_path = launcher_path(path);
