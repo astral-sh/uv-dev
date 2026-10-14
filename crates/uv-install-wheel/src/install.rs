@@ -77,7 +77,7 @@ pub fn install_wheel<Cache: serde::Serialize, Build: serde::Serialize>(
             return Err(Error::MismatchedName(name, filename.name.clone()));
         }
 
-        if version != filename.version && version != filename.version.clone().without_local() {
+        if !filename.matches_version(&version) {
             return Err(Error::MismatchedVersion(version, filename.version.clone()));
         }
     }
