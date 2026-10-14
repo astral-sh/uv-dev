@@ -6,7 +6,7 @@ mod error;
 mod pipreqs;
 
 use std::borrow::Cow;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Formatter;
 use std::fmt::Write;
 use std::io;
@@ -32,9 +32,7 @@ use uv_cache::Cache;
 use uv_cache_key::cache_digest;
 use uv_configuration::{BuildKind, BuildOutput, NoSources};
 use uv_distribution::BuildRequires;
-use uv_distribution_types::{
-    ConfigSettings, ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, Requirement,
-};
+use uv_distribution_types::{ConfigSettings, ExtraBuildRequires, IndexLocations, Requirement};
 use uv_fs::{LockedFile, LockedFileMode};
 use uv_fs::{PythonExt, Simplified};
 use uv_normalize::PackageName;
@@ -189,13 +187,8 @@ impl Pep517Backend {
             .backend_path
             .iter()
             .flat_map(BackendPath::iter)
-            .map(|path| {
-                // Turn into properly escaped python string
-                '"'.to_string()
-                    + &path.replace('\\', "\\\\").replace('"', "\\\"")
-                    + &'"'.to_string()
-            })
-            .join(", ");
+            .map(|path| format!("\"{}\"", path.replace('\\', "\\\\").replace('"', "\\\"")))
+            .format(", ");
 
         // > Projects can specify that their backend code is hosted in-tree by including the
         // > backend-path key in pyproject.toml. This key contains a list of directories, which the
@@ -348,28 +341,24 @@ impl SourceBuild {
             .or(fallback_package_version)
             .cloned();
 
-        let extra_build_dependencies = package_name
-            .as_ref()
-            .and_then(|name| extra_build_requires.get(name).cloned())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|requirement| {
-                match requirement {
-                    ExtraBuildRequirement {
-                        requirement,
-                        match_runtime: true,
-                    } if requirement.source.is_empty() => {
-                        Err(Error::UnmatchedRuntime(
-                            requirement.name.clone(),
-                            // SAFETY: if `package_name` is `None`, the iterator is empty.
-                            package_name.clone().unwrap(),
-                        ))
+        let extra_build_dependencies = if let Some(package_name) = &package_name {
+            extra_build_requires
+                .get(package_name)
+                .into_iter()
+                .flatten()
+                .map(|extra| {
+                    if extra.match_runtime && extra.requirement.source.is_empty() {
+                        return Err(Error::UnmatchedRuntime(
+                            extra.requirement.name.clone(),
+                            package_name.clone(),
+                        ));
                     }
-                    requirement => Ok(requirement),
-                }
-            })
-            .map_ok(Requirement::from)
-            .collect::<Result<Vec<_>, _>>()?;
+                    Ok(extra.requirement.clone())
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
 
         // Create a virtual environment, or install into the shared environment if requested.
         let venv = if let Some(venv) = build_isolation.shared_environment(package_name.as_ref()) {
@@ -394,11 +383,7 @@ impl SourceBuild {
         let resolved_requirements = if build_isolation.is_isolated(package_name.as_ref()) {
             debug!("Resolving build requirements");
 
-            let dependency_sources = if extra_build_dependencies.is_empty() {
-                "`build-system.requires`"
-            } else {
-                "`build-system.requires` and `extra-build-dependencies`"
-            };
+            let dependency_sources = Self::dependency_sources(&extra_build_dependencies);
 
             let resolved_requirements = Self::get_resolved_requirements(
                 build_context,
@@ -421,25 +406,19 @@ impl SourceBuild {
 
         // Figure out what the modified path should be, and remove the PATH variable from the
         // environment variables if it's there.
-        let user_path = environment_variables.remove(&OsString::from(EnvVars::PATH));
+        let user_path = environment_variables.remove(OsStr::new(EnvVars::PATH));
 
         // See if there is an OS PATH variable.
         let os_path = env::var_os(EnvVars::PATH);
 
         // Prepend the user supplied PATH to the existing OS PATH
-        let modified_path = if let Some(user_path) = user_path {
-            match os_path {
-                // Prepend the user supplied PATH to the existing PATH
-                Some(env_path) => {
-                    let user_path = PathBuf::from(user_path);
-                    let new_path = env::split_paths(&user_path).chain(env::split_paths(&env_path));
-                    Some(env::join_paths(new_path).map_err(Error::BuildScriptPath)?)
-                }
-                // Use the user supplied PATH
-                None => Some(user_path),
+        let modified_path = match (user_path, os_path) {
+            (Some(user_path), Some(os_path)) => {
+                let paths = env::split_paths(&user_path).chain(env::split_paths(&os_path));
+                Some(env::join_paths(paths).map_err(Error::BuildScriptPath)?)
             }
-        } else {
-            os_path
+            (Some(path), None) | (None, Some(path)) => Some(path),
+            (None, None) => None,
         };
 
         // Prepend the venv bin directory to the modified path
@@ -595,26 +574,33 @@ impl SourceBuild {
         // stomp on each other. We need to lock something to fix that, but we don't want to dump a
         // `.lock` file into the source tree that the user will need to .gitignore. Take a global
         // proxy lock instead.
-        let mut source_tree_lock = None;
-        if self.pep517_backend.is_setuptools() {
-            debug!("Locking the source tree for setuptools");
-            let canonical_source_path = self.source_tree.canonicalize()?;
-            let lock_path = env::temp_dir().join(format!(
-                "uv-setuptools-{}.lock",
-                cache_digest(&canonical_source_path)
-            ));
-            source_tree_lock = LockedFile::acquire(
-                lock_path,
-                LockedFileMode::Exclusive,
-                self.source_tree.to_string_lossy(),
-            )
-            .await
-            .inspect_err(|err| {
-                warn!("Failed to acquire build lock: {err}");
-            })
-            .ok();
+        if !self.pep517_backend.is_setuptools() {
+            return Ok(None);
         }
-        Ok(source_tree_lock)
+        debug!("Locking the source tree for setuptools");
+        let canonical_source_path = self.source_tree.canonicalize()?;
+        let lock_path = env::temp_dir().join(format!(
+            "uv-setuptools-{}.lock",
+            cache_digest(&canonical_source_path)
+        ));
+        Ok(LockedFile::acquire(
+            lock_path,
+            LockedFileMode::Exclusive,
+            self.source_tree.to_string_lossy(),
+        )
+        .await
+        .inspect_err(|err| {
+            warn!("Failed to acquire build lock: {err}");
+        })
+        .ok())
+    }
+
+    fn dependency_sources(extra_build_dependencies: &[Requirement]) -> &'static str {
+        if extra_build_dependencies.is_empty() {
+            "`build-system.requires`"
+        } else {
+            "`build-system.requires` and `extra-build-dependencies`"
+        }
     }
 
     async fn get_resolved_requirements(
@@ -624,45 +610,38 @@ impl SourceBuild {
         extra_build_dependencies: &[Requirement],
         build_stack: &BuildStack,
     ) -> Result<ResolvedRequirements, Error> {
-        Ok(
-            if pep517_backend.requirements == DEFAULT_BACKEND.requirements
-                && extra_build_dependencies.is_empty()
-            {
-                let mut resolution = source_build_context.default_resolution.lock().await;
-                if let Some(resolved_requirements) = &*resolution {
-                    resolved_requirements.clone()
-                } else {
-                    let resolved_requirements = build_context
-                        .resolve(&DEFAULT_BACKEND.requirements, None, build_stack)
-                        .await
-                        .map_err(|err| {
-                            Error::RequirementsResolve("`setup.py` build", err.into())
-                        })?;
-                    *resolution = Some(resolved_requirements.clone());
-                    resolved_requirements
-                }
-            } else {
-                let (requirements, dependency_sources) = if extra_build_dependencies.is_empty() {
-                    (
-                        Cow::Borrowed(&pep517_backend.requirements),
-                        "`build-system.requires`",
-                    )
-                } else {
-                    // If there are extra build dependencies, we need to resolve them together with
-                    // the backend requirements.
-                    let mut requirements = pep517_backend.requirements.clone();
-                    requirements.extend_from_slice(extra_build_dependencies);
-                    (
-                        Cow::Owned(requirements),
-                        "`build-system.requires` and `extra-build-dependencies`",
-                    )
-                };
-                build_context
-                    .resolve(&requirements, None, build_stack)
-                    .await
-                    .map_err(|err| Error::RequirementsResolve(dependency_sources, err.into()))?
-            },
-        )
+        if pep517_backend.requirements == DEFAULT_BACKEND.requirements
+            && extra_build_dependencies.is_empty()
+        {
+            let mut resolution = source_build_context.default_resolution.lock().await;
+            if let Some(resolved_requirements) = &*resolution {
+                return Ok(resolved_requirements.clone());
+            }
+            let resolved_requirements = build_context
+                .resolve(&DEFAULT_BACKEND.requirements, None, build_stack)
+                .await
+                .map_err(|err| Error::RequirementsResolve("`setup.py` build", err.into()))?;
+            *resolution = Some(resolved_requirements.clone());
+            return Ok(resolved_requirements);
+        }
+
+        let requirements: Cow<'_, [Requirement]> = if extra_build_dependencies.is_empty() {
+            Cow::Borrowed(&pep517_backend.requirements)
+        } else {
+            // Resolve extra build dependencies together with the backend requirements.
+            let mut requirements = pep517_backend.requirements.clone();
+            requirements.extend_from_slice(extra_build_dependencies);
+            Cow::Owned(requirements)
+        };
+        build_context
+            .resolve(&requirements, None, build_stack)
+            .await
+            .map_err(|err| {
+                Error::RequirementsResolve(
+                    Self::dependency_sources(extra_build_dependencies),
+                    err.into(),
+                )
+            })
     }
 
     /// Extract the PEP 517 backend from the `pyproject.toml` or `setup.py` file.
@@ -881,8 +860,8 @@ impl SourceBuild {
         // this is just an optimization.
         //
         // See: https://github.com/astral-sh/uv/issues/2130
-        if self.pep517_backend.backend == "hatchling.build" {
-            if self
+        if self.pep517_backend.backend == "hatchling.build"
+            && self
                 .project
                 .as_ref()
                 .and_then(|project| project.dynamic.as_ref())
@@ -891,9 +870,8 @@ impl SourceBuild {
                         .iter()
                         .any(|field| field == "dependencies" || field == "optional-dependencies")
                 })
-            {
-                return Ok(None);
-            }
+        {
+            return Ok(None);
         }
 
         let metadata_directory = self.temp_dir.path().join("metadata_directory");
@@ -1189,14 +1167,11 @@ async fn get_pep517_build_requirements(
     }
 
     // Read and deserialize the requirements from the output file.
-    let read_requires_result = fs_err::read(&outfile)
+    let extra_requires: Vec<uv_pep508::Requirement<VerbatimParsedUrl>> = fs_err::read(&outfile)
         .map_err(|err| err.to_string())
-        .and_then(|contents| serde_json::from_slice(&contents).map_err(|err| err.to_string()));
-    let extra_requires: Vec<uv_pep508::Requirement<VerbatimParsedUrl>> = match read_requires_result
-    {
-        Ok(extra_requires) => extra_requires,
-        Err(err) => {
-            return Err(Error::from_command_output(
+        .and_then(|contents| serde_json::from_slice(&contents).map_err(|err| err.to_string()))
+        .map_err(|err| {
+            Error::from_command_output(
                 format!(
                     "Call to `{}.get_requires_for_build_{}` failed: {}",
                     pep517_backend.backend, build_kind, err
@@ -1206,9 +1181,8 @@ async fn get_pep517_build_requirements(
                 package_name,
                 package_version,
                 version_id,
-            ));
-        }
-    };
+            )
+        })?;
 
     // If necessary, lower the requirements.
     let extra_requires = if no_sources.all() {
