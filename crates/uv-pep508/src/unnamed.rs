@@ -12,7 +12,7 @@ use crate::verbatim_url::were_vars_expanded;
 use crate::{
     Cursor, MarkerEnvironment, MarkerTree, Pep508Error, Pep508ErrorSource, Pep508Url, Reporter,
     RequirementOrigin, Scheme, TracingReporter, VerbatimUrl, VerbatimUrlError, expand_env_vars,
-    parse_extras_cursor, split_extras, split_scheme,
+    parse_extras_cursor, scan_url, split_extras, split_scheme,
 };
 
 /// An extension over [`Pep508Url`] that also supports parsing unnamed requirements, namely paths.
@@ -373,62 +373,15 @@ fn parse_unnamed_url<Url: UnnamedRequirementUrl>(
     cursor: &mut Cursor,
     working_dir: Option<&Path>,
 ) -> Result<(Url, Vec<ExtraName>), Pep508Error<Url>> {
-    // wsp*
-    cursor.eat_whitespace();
-
-    // <URI_reference>
-    let (start, len) = {
-        let start = cursor.pos();
-        let mut len = 0;
-        let mut depth = 0u32;
-        while let Some((_, c)) = cursor.next() {
-            // If we see a line break, we're done.
-            if matches!(c, '\r' | '\n') {
-                break;
-            }
-
-            // Track the depth of brackets.
-            if c == '[' {
-                depth = depth.saturating_add(1);
-            } else if c == ']' {
-                depth = depth.saturating_sub(1);
-            }
-
-            // If we see top-level whitespace, check if it's followed by a semicolon or hash. If so,
-            // end the URL at the last non-whitespace character.
-            if depth == 0 && c.is_whitespace() {
-                let mut cursor = cursor.clone();
-                cursor.eat_whitespace();
-                if matches!(cursor.peek_char(), None | Some(';' | '#')) {
-                    break;
-                }
-            }
-
-            len += c.len_utf8();
-
-            // If we see a top-level semicolon or hash followed by whitespace, we're done.
-            if depth == 0 && cursor.peek_char().is_some_and(|c| matches!(c, ';' | '#')) {
-                let mut cursor = cursor.clone();
-                cursor.next();
-                if cursor.peek_char().is_some_and(char::is_whitespace) {
-                    break;
-                }
-            }
+    let mut depth = 0u32;
+    let (start, len) = scan_url::<Url>(cursor, |c| {
+        // Track the depth of brackets, to avoid interpreting delimiters inside extras.
+        if c == '[' {
+            depth = depth.saturating_add(1);
+        } else if c == ']' {
+            depth = depth.saturating_sub(1);
         }
-        (start, len)
-    };
-
-    let url = cursor.slice(start, len);
-    if url.is_empty() {
-        return Err(Pep508Error {
-            message: Pep508ErrorSource::String("Expected URL".to_string()),
-            start,
-            len,
-            input: cursor.to_string(),
-        });
-    }
-
-    let url = preprocess_unnamed_url(url, working_dir, cursor, start, len)?;
-
-    Ok(url)
+        depth == 0
+    })?;
+    preprocess_unnamed_url(cursor.slice(start, len), working_dir, cursor, start, len)
 }
