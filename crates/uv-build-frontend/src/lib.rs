@@ -953,60 +953,34 @@ impl SourceBuild {
         let output_dir_arg = output_dir.escape_for_python();
         let config_settings_arg = self.config_settings.escape_for_python();
 
-        // Construct the appropriate build script based on the build kind.
-        let script = match self.build_kind {
-            BuildKind::Sdist => {
-                debug!(
-                    r"Calling `{}.build_{}({}, {})`",
-                    self.pep517_backend.backend,
-                    self.build_kind,
-                    output_dir_arg,
-                    config_settings_arg,
-                );
-                formatdoc! {
-                    r#"
-                    {}
-
-                    sdist_filename = backend.build_{}({}, {})
-                    with open({}, "w") as fp:
-                        fp.write(sdist_filename)
-                    "#,
-                    self.pep517_backend.backend_import(),
-                    self.build_kind,
-                    output_dir_arg,
-                    config_settings_arg,
-                    outfile.escape_for_python()
-                }
-            }
+        let mut hook_call = format!(
+            "build_{}({output_dir_arg}, {config_settings_arg}",
+            self.build_kind
+        );
+        let filename_variable = match self.build_kind {
+            BuildKind::Sdist => "sdist_filename",
             BuildKind::Wheel | BuildKind::Editable => {
-                let metadata_directory = self
-                    .metadata_directory
-                    .as_deref()
-                    .map_or_else(|| "None".to_string(), |path| path.escape_for_python());
-                debug!(
-                    r"Calling `{}.build_{}({}, {}, {})`",
-                    self.pep517_backend.backend,
-                    self.build_kind,
-                    output_dir_arg,
-                    config_settings_arg,
-                    metadata_directory,
-                );
-                formatdoc! {
-                    r#"
-                    {}
-
-                    wheel_filename = backend.build_{}({}, {}, {})
-                    with open({}, "w") as fp:
-                        fp.write(wheel_filename)
-                    "#,
-                    self.pep517_backend.backend_import(),
-                    self.build_kind,
-                    output_dir_arg,
-                    config_settings_arg,
-                    metadata_directory,
-                    outfile.escape_for_python()
+                hook_call.push_str(", ");
+                match self.metadata_directory.as_deref() {
+                    Some(path) => hook_call.push_str(&path.escape_for_python()),
+                    None => hook_call.push_str("None"),
                 }
+                "wheel_filename"
             }
+        };
+        hook_call.push(')');
+        debug!("Calling `{}.{hook_call}`", self.pep517_backend.backend);
+
+        let script = formatdoc! {
+            r#"
+            {}
+
+            {filename_variable} = backend.{hook_call}
+            with open({}, "w") as fp:
+                fp.write({filename_variable})
+            "#,
+            self.pep517_backend.backend_import(),
+            outfile.escape_for_python()
         };
 
         let hook_prefix = "build";
