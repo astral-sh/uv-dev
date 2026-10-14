@@ -790,7 +790,7 @@ impl InternerGuard<'_> {
             if overlap.is_empty() {
                 continue;
             }
-            new.push((overlap.clone(), node));
+            new.push((overlap, node));
         }
 
         // Now that we know the only ranges left are those that
