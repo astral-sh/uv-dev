@@ -94,6 +94,7 @@ fn prune_physical_space_unsupported_fs() -> Result<()> {
     Pruning cache at: [ALT_FS]/[CACHE_DIR]/
     Removed 1 file (1.0MiB)
     ");
+    assert_path_missing(stale);
 
     Ok(())
 }
