@@ -1304,8 +1304,6 @@ impl CacheBucket {
             Self::FlatIndex => "flat-index-v7",
             Self::Git => "git-v1",
             Self::Interpreter => "interpreter-v4",
-            // Note that when bumping this, you'll also need to bump it
-            // in `crates/uv/tests/build/cache_clean.rs`.
             Self::Simple => "simple-v27",
             // Note that when bumping this, you'll also need to bump it
             // in `crates/uv/tests/build/cache_prune.rs`.
