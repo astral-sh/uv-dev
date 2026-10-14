@@ -29,6 +29,8 @@ mod python_upgrade;
 #[cfg(feature = "test-python")]
 mod venv;
 
+mod venv_config;
+
 #[cfg(all(
     windows,
     feature = "test-python-managed",
