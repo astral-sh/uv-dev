@@ -71,21 +71,13 @@ pub struct DisplaySafeUrl(Url);
 /// rather than credentials. This is important for handling nested URLs like proxy URLs:
 /// `git+https://proxy.com/https://github.com/user/repo.git@branch`.
 fn has_credential_like_pattern(s: &str) -> bool {
-    let mut remaining = s;
-    while let Some(colon_pos) = remaining.find(':') {
-        let after_colon = &remaining[colon_pos + 1..];
-        // If the colon is followed by "//", consider it a URL scheme.
-        if after_colon.starts_with("//") {
-            remaining = after_colon;
-            continue;
-        }
-        // Check if there's an @ after this colon.
-        if after_colon.contains('@') {
-            return true;
-        }
-        remaining = after_colon;
-    }
-    false
+    let Some((before_last_at, _)) = s.rsplit_once('@') else {
+        return false;
+    };
+    before_last_at
+        .split(':')
+        .skip(1)
+        .any(|after_colon| !after_colon.starts_with("//"))
 }
 
 impl DisplaySafeUrl {
@@ -725,5 +717,9 @@ mod tests {
 
         assert!(has_credential_like_pattern("/name:password@domain/a/b/c"));
         assert!(has_credential_like_pattern(":password@domain"));
+        assert!(has_credential_like_pattern(
+            "/https://proxy.example/name:password@domain"
+        ));
+        assert!(!has_credential_like_pattern("/user@domain:port"));
     }
 }
