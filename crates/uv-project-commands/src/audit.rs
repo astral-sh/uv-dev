@@ -190,13 +190,16 @@ pub async fn audit(
     .into_lock();
 
     // Determine the markers to use for resolution.
-    let markers = (!universal).then(|| {
-        resolution_markers(
-            python_version.as_ref(),
-            python_platform.as_ref(),
-            interpreter.as_ref().unwrap(),
-        )
-    });
+    let markers = interpreter
+        .as_ref()
+        .filter(|_| !universal)
+        .map(|interpreter| {
+            resolution_markers(
+                python_version.as_ref(),
+                python_platform.as_ref(),
+                interpreter,
+            )
+        });
 
     let outcome = audit_lock(
         lock.auditable(
