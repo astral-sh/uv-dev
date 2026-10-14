@@ -100,7 +100,7 @@ pub enum TomlCredentialError {
 }
 
 impl TomlCredentialError {
-    fn from_parse_error(error: toml::de::Error, content: &str) -> Self {
+    fn from_parse_error(error: &toml::de::Error, content: &str) -> Self {
         // Parser diagnostics can contain credential values in both source excerpts and messages.
         let location = error
             .span()
@@ -290,7 +290,7 @@ impl TextCredentialStore {
     fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, TomlCredentialError> {
         let content = fs::read_to_string(path)?;
         let mut credentials: TomlCredentials<TomlCredential> = toml::from_str(&content)
-            .map_err(|error| TomlCredentialError::from_parse_error(error, &content))?;
+            .map_err(|error| TomlCredentialError::from_parse_error(&error, &content))?;
 
         // A canonical entry takes precedence over a legacy key left in the same store after login.
         credentials.credentials.sort_by_key(|credential| {
