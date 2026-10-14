@@ -57,6 +57,3 @@ mod tool_upgrade_local;
 
 #[cfg(feature = "test-python")]
 mod tool_workspace;
-
-#[cfg(feature = "test-python")]
-mod workspace_fixture;
