@@ -630,15 +630,6 @@ fn parse_extras_cursor<T: Pep508Url>(
         // wsp* before the identifier
         cursor.eat_whitespace();
         let mut buffer = String::new();
-        let early_eof_error = Pep508Error {
-            message: Pep508ErrorSource::String(
-                "Missing closing bracket (expected ']', found end of dependency specification)"
-                    .to_string(),
-            ),
-            start: bracket_pos,
-            len: 1,
-            input: cursor.to_string(),
-        };
 
         // First char of the identifier.
         match cursor.next() {
@@ -656,7 +647,17 @@ fn parse_extras_cursor<T: Pep508Url>(
                     input: cursor.to_string(),
                 });
             }
-            None => return Err(early_eof_error),
+            None => {
+                return Err(Pep508Error {
+                    message: Pep508ErrorSource::String(
+                        "Missing closing bracket (expected ']', found end of dependency specification)"
+                            .to_string(),
+                    ),
+                    start: bracket_pos,
+                    len: 1,
+                    input: cursor.to_string(),
+                });
+            }
         }
         // Parse from the second char of the identifier
         // We handle the illegal character case below
