@@ -132,6 +132,7 @@ fn handle_record_mismatches() -> Result<()> {
         .is_some(),
         "the malformed fixture must require RECORD repair"
     );
+    // Repair changes the extracted tree, so its archive ID must reflect the repaired RECORD.
     let healed_digest = DirectoryDigest::from(dirhash_path(&extracted)?);
     assert_ne!(unhealed_digest, healed_digest);
 
@@ -179,7 +180,8 @@ fn handle_record_mismatches() -> Result<()> {
     Ok(())
 }
 
-/// RECORD paths for relocated wheel data use forward slashes. See astral-sh/uv#14446.
+/// RECORD paths for relocated wheel data use forward slashes.
+/// See <https://github.com/astral-sh/uv/issues/14446>.
 #[test]
 fn record_uses_forward_slashes() -> Result<()> {
     let context = uv_test::test_context!("3.12");

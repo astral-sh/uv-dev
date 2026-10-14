@@ -44,6 +44,7 @@ fn fixture() -> Result<Option<(TestContext, PathBuf)>> {
     Ok(Some((context, wheel)))
 }
 
+/// The default link mode falls back to copying across filesystems and warns.
 #[test]
 fn default_fallback() -> Result<()> {
     let Some((context, wheel)) = fixture()? else {
@@ -65,6 +66,7 @@ fn default_fallback() -> Result<()> {
     Ok(())
 }
 
+/// Explicit copy mode does not emit a fallback warning.
 #[test]
 fn explicit_copy() -> Result<()> {
     let Some((context, wheel)) = fixture()? else {
@@ -83,6 +85,7 @@ fn explicit_copy() -> Result<()> {
     Ok(())
 }
 
+/// Symlinks work across filesystems without a fallback warning.
 #[cfg(unix)]
 #[test]
 fn symlink() -> Result<()> {

@@ -70,6 +70,8 @@ async fn requires_python_prefetch() -> Result<()> {
 }
 
 /// Serve wheels whose `Requires-Python` metadata is absent from the index page.
+/// For example, PyTorch's networkx index has omitted `data-requires-python`:
+/// <https://download.pytorch.org/whl/cpu/networkx/>.
 async fn index_without_requires_python() -> Result<MockServer> {
     let server = MockServer::start().await;
     let mut links = Vec::new();

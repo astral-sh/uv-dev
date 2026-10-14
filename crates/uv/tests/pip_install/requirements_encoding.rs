@@ -1,4 +1,5 @@
-//! Requirements files with a UTF-16 byte-order mark. See astral-sh/uv#2276.
+//! Requirements files with a UTF-16 byte-order mark.
+//! See <https://github.com/astral-sh/uv/issues/2276>.
 
 use std::collections::BTreeMap;
 

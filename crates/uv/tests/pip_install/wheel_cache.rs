@@ -53,7 +53,7 @@ fn cache_priority() {
 }
 
 /// A cached compatible wheel must not displace a more specific wheel selected by the resolver.
-/// See astral-sh/uv#12273.
+/// See <https://github.com/astral-sh/uv/issues/12273>.
 #[test]
 fn avoid_cached_wheel() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);

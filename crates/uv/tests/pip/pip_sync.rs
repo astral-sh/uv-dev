@@ -1909,7 +1909,11 @@ fn set_read_permissions() -> Result<()> {
     Ok(())
 }
 
-/// Generate the versioned pip launcher for the target interpreter. See astral-sh/uv#1593.
+/// Generate the versioned pip launcher for the target interpreter.
+/// See <https://github.com/astral-sh/uv/issues/1593>.
+/// pip creates versioned launchers during wheel installation:
+/// <https://github.com/pypa/pip/blob/3898741e29b7279e7bffe044ecfbe20f6a438b1e/src/pip/_internal/operations/install/wheel.py#L283>.
+/// pip 24.0 entry points: <https://inspector.pypi.io/project/pip/24.0/packages/8a/6a/19e9fe04fca059ccf770861c7d5721ab4c2aebc539889e97c7977528a53b/pip-24.0-py3-none-any.whl/pip-24.0.dist-info/entry_points.txt>.
 #[test]
 fn pip_entrypoints() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1938,7 +1942,8 @@ fn pip_entrypoints() -> Result<()> {
     Ok(())
 }
 
-/// pip changed its launcher entry points in 24.1b1. See astral-sh/uv#1982.
+/// pip changed its launcher entry points in 24.1b1: <https://github.com/pypa/pip/pull/12536>.
+/// See <https://github.com/astral-sh/uv/pull/1982>.
 #[test]
 fn pip_entrypoints_24_1() -> Result<()> {
     // The default test cutoff predates pip's changed entry-point format.

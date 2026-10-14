@@ -57,7 +57,8 @@ fn executable_hardlink() -> Result<()> {
     install_executable(&uv_test::test_context!("3.12"), Some("hardlink"))
 }
 
-/// Cloning data blocks must retain executable permissions.
+/// Cloning data blocks must retain executable permissions. On Linux, `ioctl_ficlone` clones
+/// file data without copying metadata, so permissions must be copied separately.
 ///
 /// Requires `UV_INTERNAL__TEST_COW_FS`.
 /// See <https://github.com/astral-sh/uv/issues/18181>.
