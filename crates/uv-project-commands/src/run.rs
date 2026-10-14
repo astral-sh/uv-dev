@@ -798,7 +798,7 @@ pub async fn run(
                 target.validate_extras(&extras)?;
                 target.validate_groups(&groups)?;
 
-                match sync_from_lock(
+                sync_from_lock(
                     target,
                     &venv,
                     &extras,
@@ -825,10 +825,7 @@ pub async fn run(
                     MalwareCheckContext::from(&malware_settings),
                 )
                 .await
-                {
-                    Ok(_) => {}
-                    Err(err) => return Err(UvError::from(err).into()),
-                }
+                .map_err(UvError::from)?;
 
                 base_lock = Some((
                     result.into_lock(),
