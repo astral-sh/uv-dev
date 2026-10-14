@@ -12,7 +12,7 @@ use http::{HeaderMap, StatusCode};
 use itertools::Either;
 use reqwest::{Proxy, Response};
 use rustc_hash::FxHashMap;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Mutex, OnceCell, Semaphore};
 use tracing::{Instrument, Span, debug, info_span, instrument, trace, warn};
 use url::Url;
 
@@ -493,39 +493,27 @@ impl RegistryClient {
             let mut cache = self.flat_indexes.lock().await;
             cache.get_or_insert(index.clone())
         };
-        let mut flat_index = flat_index_slot.lock().await;
+        let entries = flat_index_slot
+            .get_or_try_init(|| async {
+                let client =
+                    FlatIndexClient::new(self.cached_client(), self.connectivity, &self.cache);
+                let (entries, _) = client
+                    .fetch_index(index)
+                    .await
+                    .map_err(ErrorKind::Flat)?
+                    .into_parts();
 
-        if let Some(entries) = flat_index.as_ref() {
-            return Ok(entries.get(package_name).cloned().unwrap_or_default());
-        }
-
-        let client = FlatIndexClient::new(self.cached_client(), self.connectivity, &self.cache);
-
-        // Fetch the entries for the index.
-        let (entries, _) = client
-            .fetch_index(index)
-            .await
-            .map_err(ErrorKind::Flat)?
-            .into_parts();
-
-        // Index by package name.
-        let mut entries_by_package: FxHashMap<PackageName, Vec<FlatIndexEntry>> =
-            FxHashMap::default();
-        for entry in entries {
-            entries_by_package
-                .entry(entry.filename().name().clone())
-                .or_default()
-                .push(entry);
-        }
-        let package_entries = entries_by_package
-            .get(package_name)
-            .cloned()
-            .unwrap_or_default();
-
-        // Write to the cache.
-        *flat_index = Some(entries_by_package);
-
-        Ok(package_entries)
+                let mut entries_by_package = FlatIndexEntriesByPackage::default();
+                for entry in entries {
+                    entries_by_package
+                        .entry(entry.filename().name().clone())
+                        .or_default()
+                        .push(entry);
+                }
+                Ok::<_, Error>(entries_by_package)
+            })
+            .await?;
+        Ok(entries.get(package_name).cloned().unwrap_or_default())
     }
 
     /// Fetch the [`SimpleDetailMetadata`] from a single index for a given package.
@@ -1375,13 +1363,13 @@ impl FlatIndexCache {
     fn get_or_insert(&mut self, index: IndexUrl) -> FlatIndexSlot {
         self.0
             .entry(index)
-            .or_insert_with(|| Arc::new(Mutex::new(None)))
+            .or_insert_with(|| Arc::new(OnceCell::new()))
             .clone()
     }
 }
 
 type FlatIndexEntriesByPackage = FxHashMap<PackageName, Vec<FlatIndexEntry>>;
-type FlatIndexSlot = Arc<Mutex<Option<FlatIndexEntriesByPackage>>>;
+type FlatIndexSlot = Arc<OnceCell<FlatIndexEntriesByPackage>>;
 
 #[derive(Default, Debug, rkyv::Archive, rkyv::Deserialize, rkyv::Serialize)]
 #[rkyv(derive(Debug))]
