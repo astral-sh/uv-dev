@@ -97,6 +97,8 @@ fn sync_centralized_env_switch_python() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         assert_snapshot!(link_312.portable_display(), @"[CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]");
     });
+    let marker = link_312.join("reuse-marker");
+    fs_err::write(&marker, "original environment")?;
 
     context
         .sync()
@@ -122,6 +124,8 @@ fn sync_centralized_env_switch_python() -> Result<()> {
     Resolved 1 package in [TIME]
     Checked in [TIME]
     "#);
+    assert_link_target(context.temp_dir.child(".venv"), &link_312);
+    assert_eq!(fs_err::read_to_string(marker)?, "original environment");
     Ok(())
 }
 
