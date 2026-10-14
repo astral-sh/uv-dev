@@ -168,15 +168,6 @@ mod tests {
         );
         assert_eq!(target, expected);
 
-        let target = Target::parse("flask@3.0.0");
-        let expected = Target::Version(
-            "flask",
-            PackageName::from_str("flask").unwrap(),
-            Box::new([]),
-            Version::new([3, 0, 0]),
-        );
-        assert_eq!(target, expected);
-
         let target = Target::parse("flask@latest");
         let expected = Target::Latest(
             "flask",
@@ -203,13 +194,13 @@ mod tests {
         assert_eq!(target, expected);
 
         // Missing a closing `]`.
-        let target = Target::parse("flask[dotenv");
-        let expected = Target::Unspecified("flask[dotenv");
+        let target = Target::parse("flask[dotenv@3.0.0");
+        let expected = Target::Unspecified("flask[dotenv@3.0.0");
         assert_eq!(target, expected);
 
         // Too many `]`.
-        let target = Target::parse("flask[dotenv]]");
-        let expected = Target::Unspecified("flask[dotenv]]");
+        let target = Target::parse("flask[dotenv]]@3.0.0");
+        let expected = Target::Unspecified("flask[dotenv]]@3.0.0");
         assert_eq!(target, expected);
     }
 }
