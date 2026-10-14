@@ -13,6 +13,8 @@ mod lock;
 #[cfg(all(feature = "test-python", feature = "test-universal"))]
 mod minimum_libc;
 
+mod no_project;
+
 #[cfg(all(
     feature = "test-python",
     feature = "test-pypi",
