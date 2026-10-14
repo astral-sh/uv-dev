@@ -6917,6 +6917,35 @@ fn path_name_version_change() {
     );
 }
 
+/// An archive pointer can outlive the extracted wheel it references.
+#[test]
+fn path_wheel_reextracts_missing_cached_archive() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context
+        .workspace_root
+        .join("test/links/ok-1.0.0-py3-none-any.whl");
+    context.pip_install().arg(&wheel).assert().success();
+    context.venv().arg("--clear").assert().success();
+
+    let archive = fs::read_dir(context.cache_dir.join("archive-v0"))?
+        .next()
+        .transpose()?
+        .context("missing cached wheel archive")?
+        .path();
+    assert!(archive.join("ok-1.0.0.dist-info/WHEEL").is_file());
+    fs::remove_dir_all(archive)?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0 (from file://[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl)
+    ");
+    Ok(())
+}
+
 /// Install from a direct path (wheel) with the same name at a different path.
 #[test]
 fn path_changes_with_same_name() -> Result<()> {
