@@ -1252,8 +1252,6 @@ fn python_install_debug_freethreaded() {
     #[cfg(unix)]
     bin_python.assert(predicate::path::is_symlink());
 
-    assert_python_launcher(&context, bin_python.path(), "3.13");
-
     // We should find it with opt-in
     uv_snapshot!(context.filters(), context.python_find().arg("3.13td"), @"
     exit_code: 0 (success)
@@ -1298,6 +1296,28 @@ fn python_install_debug_freethreaded() {
     Installed Python 3.13.[LATEST] in [TIME]
      + cpython-3.13.[LATEST]+debug-[PLATFORM] (python3.13d)
     ");
+
+    // Installing the other variants must not redirect the combined build's launcher.
+    context
+        .external_command(bin_python.path())
+        .args([
+            "-I",
+            "-c",
+            indoc! {"
+                import sys
+                import sysconfig
+                print(
+                    f'Python {sys.version_info.major}.{sys.version_info.minor}',
+                    'debug:', bool(sysconfig.get_config_var('Py_DEBUG')),
+                    'free-threaded:', bool(sysconfig.get_config_var('Py_GIL_DISABLED')),
+                    end='',
+                )
+            "},
+        ])
+        .assert()
+        .success()
+        .stdout("Python 3.13 debug: True free-threaded: True")
+        .stderr("");
 
     // Now we should prefer the non-debug version without opt-in
     uv_snapshot!(context.filters(), context.python_find().arg("3.13"), @"
