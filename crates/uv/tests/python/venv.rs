@@ -1699,25 +1699,10 @@ fn non_empty_dir_exists_clear_force() -> Result<()> {
 fn non_empty_dir_exists_allow_existing() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
-    // Create a non-empty directory at `.venv`. Creating a virtualenv at the same path should
-    // succeed when `--allow-existing` is specified, but fail when it is not.
+    // Create a non-empty directory that is not yet a virtual environment.
     context.venv.create_dir_all()?;
-    context.venv.child("file").touch()?;
-
-    uv_snapshot!(context.filters(), context.venv()
-        .arg(context.venv.as_os_str())
-        .arg("--python")
-        .arg("3.12"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    error: Failed to create virtual environment
-      cause: A directory already exists at: .venv
-
-    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
-    "
-    );
+    let existing_file = context.venv.child("file");
+    existing_file.write_str("existing contents\n")?;
 
     uv_snapshot!(context.filters(), context.venv()
         .arg(context.venv.as_os_str())
@@ -1731,6 +1716,7 @@ fn non_empty_dir_exists_allow_existing() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     "
     );
+    assert_eq!(context.read(&existing_file), "existing contents\n");
 
     // Running again should _also_ succeed, overwriting existing symlinks and respecting existing
     // directories.
@@ -1746,6 +1732,7 @@ fn non_empty_dir_exists_allow_existing() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     "
     );
+    assert_eq!(context.read(&existing_file), "existing contents\n");
 
     Ok(())
 }
