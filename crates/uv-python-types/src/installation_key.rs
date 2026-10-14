@@ -6,7 +6,7 @@ use std::str::FromStr;
 use ref_cast::RefCast;
 use thiserror::Error;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
-use uv_pep440::Prerelease;
+use uv_pep440::{Prerelease, Version};
 use uv_platform::{Arch, Libc, Os, Platform};
 
 use crate::{ImplementationName, LenientImplementationName, PythonVariant, PythonVersion};
@@ -76,6 +76,10 @@ impl PythonInstallationKey {
 
     pub fn version(&self) -> PythonVersion {
         PythonVersion::from_components(self.major, self.minor, self.patch, self.prerelease)
+    }
+
+    fn pep440_version(&self) -> Version {
+        Version::new([self.major, self.minor, self.patch].map(u64::from)).with_pre(self.prerelease)
     }
 
     /// The version in `x.y.z` format.
@@ -250,7 +254,7 @@ impl Ord for PythonInstallationKey {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.implementation
             .cmp(&other.implementation)
-            .then_with(|| self.version().cmp(&other.version()))
+            .then_with(|| self.pep440_version().cmp(&other.pep440_version()))
             // Platforms are sorted in preferred order for the target
             .then_with(|| self.platform.cmp(&other.platform).reverse())
             // Python variants are sorted in preferred order, with `Default` first
@@ -464,5 +468,16 @@ mod tests {
             key_with_variant.to_string(),
             "cpython-3.13.0+freethreaded-macos-aarch64-none"
         );
+    }
+
+    #[test]
+    fn test_python_installation_key_version_order() {
+        let prerelease =
+            PythonInstallationKey::from_str("cpython-3.13.0rc1-linux-x86_64-gnu").unwrap();
+        let stable = PythonInstallationKey::from_str("cpython-3.13.0-linux-x86_64-gnu").unwrap();
+
+        assert_eq!(prerelease.version().to_string(), "3.13.0rc1");
+        assert_eq!(stable.version().to_string(), "3.13.0");
+        assert!(prerelease < stable);
     }
 }
