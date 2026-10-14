@@ -15193,13 +15193,7 @@ fn add_no_install_project() -> Result<()> {
         requires = ["hatchling"]
         build-backend = "hatchling.build"
     "#})?;
-    context
-        .temp_dir
-        .child("project")
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .touch()?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--no-install-project"), @"
     exit_code: 0 (success)
@@ -15209,6 +15203,7 @@ fn add_no_install_project() -> Result<()> {
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
+    context.assert_not_installed("project");
 
     let pyproject_toml = context.read("pyproject.toml");
 
@@ -15277,6 +15272,7 @@ fn add_no_install_project() -> Result<()> {
     Installed 1 package in [TIME]
      + typing-extensions==4.10.0
     ");
+    context.assert_not_installed("project");
 
     uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--frozen").env(EnvVars::UV_NO_INSTALL_PROJECT, "1"), @"
     exit_code: 2 (failure)
@@ -15289,6 +15285,10 @@ fn add_no_install_project() -> Result<()> {
     ----- stderr -----
     error: the argument `UV_ONLY_INSTALL_PROJECT` (environment variable) cannot be used with `--frozen`
     ");
+
+    // Without either exclusion, adding the same requirement installs the project.
+    context.add().arg("typing-extensions").assert().success();
+    context.assert_command("import project").success();
 
     Ok(())
 }
