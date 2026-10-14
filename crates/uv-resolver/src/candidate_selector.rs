@@ -198,53 +198,36 @@ impl CandidateSelector {
         tags: Option<&'a Tags>,
     ) -> Option<Candidate<'a>> {
         let preferences = preferences.get(package_name);
+        let eligible = preferences
+            .iter()
+            .filter(|entry| index.is_none_or(|index| entry.index().matches(index)));
 
         // If there are multiple preferences for the same package, we need to sort them by priority.
-        let preferences = match preferences {
-            [] => return None,
-            [entry] => {
-                // Filter out preferences that map to a conflicting index.
-                if index.is_some_and(|index| !entry.index().matches(index)) {
-                    return None;
-                }
-                Either::Left(std::iter::once((entry.pin().version(), entry.source())))
-            }
-            [..] => {
-                type Entries<'a> = SmallVec<[&'a Entry; 3]>;
+        let ordered = if preferences.len() > 1 {
+            let mut eligible = eligible.collect::<SmallVec<[&Entry; 3]>>();
+            let highest = self.use_highest_version(package_name, env);
+            eligible.sort_by_key(|entry| {
+                let marker = entry.marker();
 
-                let mut preferences = preferences.iter().collect::<Entries>();
+                // Prefer preferences that match the current environment.
+                let matches_env = env.included_by_marker(marker.pep508());
 
-                // Filter out preferences that map to a conflicting index.
-                preferences.retain(|entry| index.is_none_or(|index| entry.index().matches(index)));
+                // Prefer the latest (or earliest) version.
+                let version = if highest {
+                    Either::Left(entry.pin().version())
+                } else {
+                    Either::Right(std::cmp::Reverse(entry.pin().version()))
+                };
 
-                // Sort the preferences by priority.
-                let highest = self.use_highest_version(package_name, env);
-                preferences.sort_by_key(|entry| {
-                    let marker = entry.marker();
-
-                    // Prefer preferences that match the current environment.
-                    let matches_env = env.included_by_marker(marker.pep508());
-
-                    // Prefer the latest (or earliest) version.
-                    let version = if highest {
-                        Either::Left(entry.pin().version())
-                    } else {
-                        Either::Right(std::cmp::Reverse(entry.pin().version()))
-                    };
-
-                    std::cmp::Reverse((matches_env, version))
-                });
-
-                Either::Right(
-                    preferences
-                        .into_iter()
-                        .map(|entry| (entry.pin().version(), entry.source())),
-                )
-            }
+                std::cmp::Reverse((matches_env, version))
+            });
+            Either::Right(eligible.into_iter())
+        } else {
+            Either::Left(eligible)
         };
 
         Self::get_preferred_from_iter(
-            preferences,
+            ordered.map(|entry| (entry.pin().version(), entry.source())),
             package_name,
             range,
             version_maps,
