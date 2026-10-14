@@ -2415,7 +2415,7 @@ fn create_venv_current_working_directory() {
 }
 
 #[test]
-fn no_clear_with_existing_directory() {
+fn no_clear_with_existing_directory() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a virtual environment first
@@ -2430,6 +2430,8 @@ fn no_clear_with_existing_directory() {
     Activate with: source .venv/[BIN]/activate
     "
     );
+    let marker = context.venv.child("marker");
+    marker.write_str("existing environment\n")?;
 
     // Try to create again with --no-clear (should fail)
     uv_snapshot!(context.filters(), context.venv()
@@ -2447,6 +2449,9 @@ fn no_clear_with_existing_directory() {
     hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
     "
     );
+
+    marker.assert("existing environment\n");
+    Ok(())
 }
 
 #[test]
@@ -2471,12 +2476,13 @@ fn no_clear_with_non_existent_directory() {
 }
 
 #[test]
-fn no_clear_overrides_clear() {
+fn no_clear_overrides_clear() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a non-empty directory at `.venv`
-    context.venv.create_dir_all().unwrap();
-    context.venv.child("file").touch().unwrap();
+    context.venv.create_dir_all()?;
+    let marker = context.venv.child("file");
+    marker.write_str("original contents\n")?;
 
     // --no-clear should override --clear and fail without prompting
     uv_snapshot!(context.filters(), context.venv()
@@ -2495,15 +2501,19 @@ fn no_clear_overrides_clear() {
     hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
     "
     );
+
+    marker.assert("original contents\n");
+    Ok(())
 }
 
 #[test]
-fn no_clear_overrides_clear_env_var() {
+fn no_clear_overrides_clear_env_var() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // Create a non-empty directory at `.venv`
-    context.venv.create_dir_all().unwrap();
-    context.venv.child("file").touch().unwrap();
+    context.venv.create_dir_all()?;
+    let marker = context.venv.child("file");
+    marker.write_str("original contents\n")?;
 
     // --no-clear should override UV_VENV_CLEAR=1 and fail without prompting
     uv_snapshot!(context.filters(), context.venv()
@@ -2522,6 +2532,9 @@ fn no_clear_overrides_clear_env_var() {
     hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing directory
     "
     );
+
+    marker.assert("original contents\n");
+    Ok(())
 }
 
 #[test]
