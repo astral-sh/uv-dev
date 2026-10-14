@@ -315,10 +315,7 @@ pub struct SourceBuild {
 }
 
 impl SourceBuild {
-    /// Create a virtual environment in which to build a source distribution, extracting the
-    /// contents from an archive if necessary.
-    ///
-    /// `source_dist` is for error reporting only.
+    /// Prepare a build environment for a source tree.
     pub async fn setup(
         source: &Path,
         subdirectory: Option<&Path>,
@@ -920,19 +917,15 @@ impl SourceBuild {
         Ok(())
     }
 
-    /// Build a distribution from an archive (`.zip` or `.tar.gz`) or source tree, and return the
-    /// location of the built distribution.
-    ///
-    /// The location will be inside `temp_dir`, i.e., you must use the distribution before dropping
-    /// the temporary directory.
+    /// Build a wheel or source distribution using `output_dir` and return the filename reported
+    /// by the backend.
     ///
     /// <https://packaging.python.org/en/latest/specifications/source-distribution-format/>
     #[instrument(skip_all, fields(version_id = self.version_id))]
-    pub async fn build(&self, wheel_dir: &Path) -> Result<String, Error> {
-        // The build scripts run with the extracted root as cwd, so they need the absolute path.
-        let wheel_dir = std::path::absolute(wheel_dir)?;
-        let filename = self.pep517_build(&wheel_dir).await?;
-        Ok(filename)
+    pub async fn build(&self, output_dir: &Path) -> Result<String, Error> {
+        // The backend runs in the source tree, so pass an absolute output path.
+        let output_dir = std::path::absolute(output_dir)?;
+        self.pep517_build(&output_dir).await
     }
 
     /// Perform a PEP 517 build for a wheel or source distribution (sdist).
