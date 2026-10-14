@@ -210,9 +210,31 @@ pub async fn sync(
     }
 
     // Discover or create the virtual environment.
+    let init_project_environment = async |project_target, install_target| {
+        ProjectEnvironment::get_or_init(
+            project_target,
+            install_target,
+            &groups,
+            python.as_deref().map(PythonRequest::parse),
+            &install_mirrors,
+            &client_builder,
+            python_preference,
+            python_arch,
+            python_downloads,
+            false,
+            config_discovery,
+            active,
+            cache,
+            dry_run,
+            LinkErrorReporting::User,
+            printer,
+        )
+        .await
+        .map(SyncEnvironment::Project)
+    };
     let environment = match &target {
-        SyncTarget::Manifest(SyncManifest::Project(project)) => SyncEnvironment::Project(
-            ProjectEnvironment::get_or_init(
+        SyncTarget::Manifest(SyncManifest::Project(project)) => {
+            init_project_environment(
                 ProjectEnvironmentTarget::from(project.workspace()),
                 frozen_lock
                     .as_ref()
@@ -220,25 +242,11 @@ pub async fn sync(
                     .map(|lock| {
                         identify_installation_target(&target, lock, all_packages, &package)
                     }),
-                &groups,
-                python.as_deref().map(PythonRequest::parse),
-                &install_mirrors,
-                &client_builder,
-                python_preference,
-                python_arch,
-                python_downloads,
-                false,
-                config_discovery,
-                active,
-                cache,
-                dry_run,
-                LinkErrorReporting::User,
-                printer,
             )
-            .await?,
-        ),
-        SyncTarget::Lockfile { workspace, .. } => SyncEnvironment::Project(
-            ProjectEnvironment::get_or_init(
+            .await?
+        }
+        SyncTarget::Lockfile { workspace, .. } => {
+            init_project_environment(
                 ProjectEnvironmentTarget::Lockfile {
                     root: workspace.root(),
                     lock: workspace.lock(),
@@ -249,23 +257,9 @@ pub async fn sync(
                     all_packages,
                     &package,
                 )),
-                &groups,
-                python.as_deref().map(PythonRequest::parse),
-                &install_mirrors,
-                &client_builder,
-                python_preference,
-                python_arch,
-                python_downloads,
-                false,
-                config_discovery,
-                active,
-                cache,
-                dry_run,
-                LinkErrorReporting::User,
-                printer,
             )
-            .await?,
-        ),
+            .await?
+        }
         SyncTarget::Manifest(SyncManifest::Script(script)) => SyncEnvironment::Script(
             ScriptEnvironment::get_or_init(
                 script.into(),
