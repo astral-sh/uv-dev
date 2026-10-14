@@ -16,6 +16,12 @@ fn tool_upgrade_empty() {
     ----- stderr -----
     Nothing to upgrade
     ");
+}
+
+#[test]
+fn tool_upgrade_empty_with_python_request() {
+    let context = uv_test::test_context_with_versions!(&[]).with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
 
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
