@@ -12942,7 +12942,8 @@ fn mismatched_name_cached_wheel() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    // Detect the name mismatch from cached artifacts without downloading the source again.
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download and build `foo @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz`
