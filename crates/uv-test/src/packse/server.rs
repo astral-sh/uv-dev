@@ -112,6 +112,16 @@ impl PackseServer {
         format!("{}/files/{filename}", self.server.url())
     }
 
+    /// Return the byte length of a generated scenario distribution.
+    ///
+    /// Vendored build dependencies are loaded lazily, so their size is unavailable here.
+    pub fn generated_file_size(&self, filename: &str) -> Option<usize> {
+        match self.index.files.get(filename)? {
+            FileData::Bytes(bytes) => Some(bytes.len()),
+            FileData::Vendor(_) => None,
+        }
+    }
+
     /// Return the filename and advertised SHA-256 digest of each index file, grouped in
     /// package-name order so snapshot filters derived from this iterator are deterministic.
     pub fn files(&self) -> impl Iterator<Item = (&str, &str)> {
@@ -482,6 +492,7 @@ sdist = false
             .error_for_status()?
             .bytes()
             .await?;
+        assert_eq!(server.generated_file_size(filename), Some(bytes.len()));
         assert_eq!(index["files"][0]["hashes"]["sha256"], sha256_hex(&bytes));
 
         Ok(())
