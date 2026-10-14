@@ -10,7 +10,6 @@ use std::{
 
 use std::{env, path::Path};
 
-use anyhow::Context;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{
     assert::PathAssert,
@@ -26,7 +25,6 @@ use uv_test::{TestContext, assert_path_missing, uv_snapshot};
 use uv_fs::Simplified;
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
-use walkdir::WalkDir;
 
 use crate::build_upgrade::OutdatedPythonBuild;
 use crate::managed_venv::{create_stdlib_venv, venv_version};
@@ -3622,54 +3620,57 @@ fn python_install_armv7_gnueabi_legacy_tar() {
     ");
 }
 
-fn assert_cpython_bytecode_compiled(context: &TestContext, version: &str) -> anyhow::Result<()> {
+/// Match each standard-library source to its cache without creating bytecode during the probe.
+fn assert_cpython_bytecode_compiled(context: &TestContext, version: &str) {
     let bin_path = context
         .bin_dir
         .child(format!("python{version}{}", std::env::consts::EXE_SUFFIX));
+    context
+        .external_command(bin_path.path())
+        .args([
+            "-I",
+            "-B",
+            "-c",
+            indoc! {r#"
+                import importlib.util
+                import os
+                import sys
+                import sysconfig
+                from pathlib import Path
 
-    #[cfg(unix)]
-    let stdlib = fs_err::read_link(bin_path)?
-        .parent()
-        .context("Python binary should be a child of `bin`")?
-        .parent()
-        .context("`bin` directory should be a child of the installation path")?
-        .join("lib")
-        .join(format!("python{version}"));
-    #[cfg(windows)]
-    let stdlib = launcher_path(&bin_path)
-        .parent()
-        .context("Python binary should be a child of the installation path")?
-        .join("Lib");
+                def raise_walk_error(error):
+                    raise error
 
-    let mut py_count = 0;
-    let mut pyc_count = 0;
-    for entry in WalkDir::new(&stdlib) {
-        let entry = entry?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        match entry
-            .path()
-            .extension()
-            .and_then(|extension| extension.to_str())
-        {
-            Some("py") => py_count += 1,
-            Some("pyc") => pyc_count += 1,
-            _ => {}
-        }
-    }
-    assert!(
-        py_count > 0,
-        "expected Python sources in {}",
-        stdlib.display()
-    );
-    assert_eq!(pyc_count, py_count, "{}", stdlib.display());
-
-    Ok(())
+                stdlib = Path(sysconfig.get_path("stdlib")).resolve()
+                managed = Path(sys.argv[1]).resolve()
+                assert stdlib.is_relative_to(managed), (stdlib, managed)
+                expected = set()
+                actual = set()
+                for directory, _, filenames in os.walk(stdlib, onerror=raise_walk_error):
+                    for filename in filenames:
+                        path = Path(directory, filename)
+                        if path.is_symlink() or not path.is_file():
+                            continue
+                        if path.suffix == ".py":
+                            expected.add(Path(importlib.util.cache_from_source(str(path))))
+                        elif path.suffix == ".pyc":
+                            actual.add(path)
+                assert expected, f"no Python sources in {stdlib}"
+                missing = sorted(expected - actual)
+                unexpected = sorted(actual - expected)
+                assert not missing and not unexpected, (
+                    f"missing {len(missing)} bytecode files: {missing[:5]}; "
+                    f"unexpected {len(unexpected)} bytecode files: {unexpected[:5]}"
+                )
+            "#},
+        ])
+        .arg(context.temp_dir.join("managed"))
+        .assert()
+        .success();
 }
 
 #[test]
-fn python_install_compile_bytecode() -> anyhow::Result<()> {
+fn python_install_compile_bytecode() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -3687,7 +3688,7 @@ fn python_install_compile_bytecode() -> anyhow::Result<()> {
     Bytecode compiled [COUNT] files in [TIME]
     ");
 
-    assert_cpython_bytecode_compiled(&context, "3.14")?;
+    assert_cpython_bytecode_compiled(&context, "3.14");
 
     // Attempting to install with --compile-bytecode should (currently)
     // unconditionally re-run the bytecode compiler
@@ -3706,12 +3707,10 @@ fn python_install_compile_bytecode() -> anyhow::Result<()> {
      ~ cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
     Bytecode compiled [COUNT] files in [TIME]
     ");
-
-    Ok(())
 }
 
 #[test]
-fn python_install_compile_bytecode_existing() -> anyhow::Result<()> {
+fn python_install_compile_bytecode_existing() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -3734,11 +3733,11 @@ fn python_install_compile_bytecode_existing() -> anyhow::Result<()> {
     Python 3.14 is already installed
     Bytecode compiled [COUNT] files in [TIME]
     ");
-    assert_cpython_bytecode_compiled(&context, "3.14")
+    assert_cpython_bytecode_compiled(&context, "3.14");
 }
 
 #[test]
-fn python_install_compile_bytecode_upgrade() -> anyhow::Result<()> {
+fn python_install_compile_bytecode_upgrade() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -3762,7 +3761,7 @@ fn python_install_compile_bytecode_upgrade() -> anyhow::Result<()> {
      + cpython-3.13.[LATEST]-[PLATFORM] (python3.13)
     Bytecode compiled [COUNT] files in [TIME]
     ");
-    assert_cpython_bytecode_compiled(&context, "3.14")
+    assert_cpython_bytecode_compiled(&context, "3.14");
 }
 
 #[test]
@@ -3811,7 +3810,7 @@ fn python_install_upgrade_build_version() -> anyhow::Result<()> {
 }
 
 #[test]
-fn python_install_compile_bytecode_multiple() -> anyhow::Result<()> {
+fn python_install_compile_bytecode_multiple() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -3830,11 +3829,8 @@ fn python_install_compile_bytecode_multiple() -> anyhow::Result<()> {
     Bytecode compiled [COUNT] files in [TIME]
     ");
 
-    for version in ["3.12", "3.14"] {
-        assert_cpython_bytecode_compiled(&context, version)?;
-    }
-
-    Ok(())
+    assert_cpython_bytecode_compiled(&context, "3.12");
+    assert_cpython_bytecode_compiled(&context, "3.14");
 }
 
 #[cfg(unix)] // Pyodide cannot be used on Windows
