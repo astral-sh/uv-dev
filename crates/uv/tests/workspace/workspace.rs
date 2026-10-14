@@ -11,7 +11,9 @@ use insta::assert_json_snapshot;
 #[cfg(feature = "test-universal")]
 use insta::assert_snapshot;
 #[cfg(feature = "test-pypi")]
-use predicates::prelude::{PredicateStrExt, predicate};
+use predicates::prelude::PredicateStrExt;
+#[cfg(any(feature = "test-pypi", feature = "test-universal"))]
+use predicates::prelude::predicate;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "test-pypi")]
@@ -2500,32 +2502,25 @@ fn workspace_unmanaged_member_no_project() -> Result<()> {
 
         [tool.uv.workspace]
         members = ["member"]
-
-        [build-system]
-        requires = ["uv_build>=0.9.0,<10000"]
-        build-backend = "uv_build"
     "#})?;
 
-    fs_err::create_dir_all(workspace.join("src").join("root"))?;
-    fs_err::write(workspace.join("src").join("root").join("__init__.py"), "")?;
-
-    // Create a workspace member with `managed = false` but no `[project]` section.
-    let member = workspace.join("member");
-    fs_err::create_dir_all(&member)?;
-    fs_err::write(
-        member.join("pyproject.toml"),
-        indoc! {"
+    workspace
+        .child("member/pyproject.toml")
+        .write_str(indoc! {"
             [tool.uv]
             managed = false
-        "},
-    )?;
+        "})?;
 
     context
         .lock()
         .arg("--verbose")
+        .arg("--offline")
         .current_dir(&workspace)
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains(
+            "is marked as unmanaged; omitting from workspace members",
+        ));
 
     Ok(())
 }
