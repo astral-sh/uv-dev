@@ -3,7 +3,7 @@ use std::fmt::Write;
 use anyhow::{Context, Result, bail};
 use owo_colors::OwoColorize;
 
-use uv_auth::{AuthBackend, Credentials, Service, TextCredentialStore, Username};
+use uv_auth::{AuthBackend, Credentials, Service, Username};
 use uv_command_support::{ExitStatus, Printer};
 use uv_preview::Preview;
 
@@ -43,7 +43,7 @@ pub(crate) async fn logout(
                 .await
                 .with_context(|| format!("Unable to remove credentials for `{display_url}`"))?;
         }
-        AuthBackend::TextStore(mut store, _lock) => {
+        AuthBackend::TextStore(mut store, lock) => {
             if store
                 .remove(service, Username::from(Some(username)))
                 .is_none()
@@ -51,7 +51,7 @@ pub(crate) async fn logout(
                 bail!("No matching entry found for `{display_url}`");
             }
             store
-                .write(TextCredentialStore::default_file()?, _lock)
+                .write(lock)
                 .with_context(|| "Failed to persist changes to credentials after removal")?;
         }
     }
