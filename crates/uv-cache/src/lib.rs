@@ -441,10 +441,10 @@ impl Cache {
         // Move the temporary directory into the directory store.
         let archive_entry = self.entry(CacheBucket::Archive, "", &id);
         fs_err::create_dir_all(archive_entry.dir())?;
-        if let Err(err) = uv_fs::rename_with_retry(temp_dir.path(), archive_entry.path()).await {
-            if !archive_entry.path().is_dir() {
-                return Err(err);
-            }
+        if let Err(err) = uv_fs::rename_with_retry(temp_dir.path(), archive_entry.path()).await
+            && !archive_entry.path().is_dir()
+        {
+            return Err(err);
         }
 
         // Create a symlink to the directory store.
@@ -548,12 +548,7 @@ impl Cache {
             Err(err) => return Err(err.into()),
         };
 
-        Self::create_base_files(root).map_err(|err| Error::Init(root.clone(), err))?;
-        Ok(Self {
-            root: std::path::absolute(root).map_err(Error::Absolute)?,
-            lock_file,
-            ..self
-        })
+        self.finish_init(lock_file)
     }
 
     /// Initialize the [`Cache`], assuming that there are no other uv processes running.
@@ -570,12 +565,17 @@ impl Cache {
         ) else {
             return Ok(None);
         };
-        Self::create_base_files(root).map_err(|err| Error::Init(root.clone(), err))?;
-        Ok(Some(Self {
-            root: std::path::absolute(root).map_err(Error::Absolute)?,
-            lock_file: Some(Arc::new(lock_file)),
+        self.finish_init(Some(Arc::new(lock_file))).map(Some)
+    }
+
+    /// Complete cache initialization after handling the shared lock.
+    fn finish_init(self, lock_file: Option<Arc<LockedFile>>) -> Result<Self, Error> {
+        Self::create_base_files(&self.root).map_err(|err| Error::Init(self.root.clone(), err))?;
+        Ok(Self {
+            root: std::path::absolute(&self.root).map_err(Error::Absolute)?,
+            lock_file,
             ..self
-        }))
+        })
     }
 
     /// Clear the cache, removing all entries.
