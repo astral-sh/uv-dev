@@ -337,7 +337,7 @@ fn sync_centralized_env_respects_explicit_environments() -> Result<()> {
         .assert()
         .success();
     // `UV_PROJECT_ENVIRONMENT` bypasses centralized environments.
-    assert_path_missing(context.temp_dir.child(".venv"));
+    context.assert_path_missing(".venv");
 
     let active = context.temp_dir.child("active");
     context.venv().arg(active.path()).assert().success();
@@ -352,7 +352,7 @@ fn sync_centralized_env_respects_explicit_environments() -> Result<()> {
         .assert()
         .success();
     // `--active` uses `VIRTUAL_ENV` directly.
-    assert_path_missing(context.temp_dir.child(".venv"));
+    context.assert_path_missing(".venv");
 
     for environment in [override_environment, active] {
         let python = uv_test::venv_bin_path(environment.path())
@@ -460,7 +460,7 @@ fn sync_centralized_env_dry_run() -> Result<()> {
      + iniconfig==2.0.0
     "#);
     // Dry-run creates neither the persistent environment nor its project link.
-    assert_path_missing(context.temp_dir.child(".venv"));
+    context.assert_path_missing(".venv");
     assert!(!context.cache_dir.child("environments-v2").exists());
     Ok(())
 }
