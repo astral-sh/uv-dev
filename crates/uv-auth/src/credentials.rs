@@ -44,6 +44,14 @@ pub enum CredentialsFromUrlError {
     InvalidPasswordUtf8(#[source] Utf8Error),
 }
 
+#[derive(Debug, Error)]
+pub(crate) enum CredentialsFromRequestError {
+    #[error(transparent)]
+    Url(#[from] CredentialsFromUrlError),
+    #[error("Invalid HTTP Basic Authentication header")]
+    InvalidBasicHeader,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd, Hash, Default, Serialize)]
 #[serde(transparent)]
 pub struct Username(Option<String>);
@@ -282,52 +290,52 @@ impl Credentials {
     /// Parse [`Credentials`] from an HTTP request, if any.
     ///
     /// HTTP Basic and Bearer Authentication are supported.
-    pub(crate) fn from_request(request: &Request) -> Result<Option<Self>, CredentialsFromUrlError> {
+    pub(crate) fn from_request(
+        request: &Request,
+    ) -> Result<Option<Self>, CredentialsFromRequestError> {
         // First, attempt to retrieve the credentials from the URL
         if let Some(credentials) = Self::from_url(request.url())? {
             return Ok(Some(credentials));
         }
 
         // Then, attempt to pull the credentials from the headers
-        Ok(request
+        request
             .headers()
             .get(reqwest::header::AUTHORIZATION)
-            .and_then(Self::from_header_value))
+            .map_or(Ok(None), Self::from_header_value)
     }
 
     /// Parse [`Credentials`] from an authorization header, if any.
     ///
     /// HTTP Basic and Bearer Authentication are both supported.
     /// [`None`] will be returned if another authorization scheme is detected.
-    ///
-    /// Panics if the authentication is not conformant to the HTTP Basic Authentication scheme:
-    /// - The contents must be base64-encoded UTF-8
-    /// - There must be a `:` separator
-    fn from_header_value(header: &HeaderValue) -> Option<Self> {
+    fn from_header_value(
+        header: &HeaderValue,
+    ) -> Result<Option<Self>, CredentialsFromRequestError> {
         // Parse a `Basic` authentication header.
         if let Some(value) = header.as_bytes().strip_prefix(b"Basic ") {
-            let decoded = BASE64_STANDARD
-                .decode(value)
-                .expect("HTTP Basic Authentication should be base64 encoded");
-            let decoded = std::str::from_utf8(&decoded)
-                .expect("HTTP Basic Authentication credentials should be UTF-8");
-            let (username, password) = decoded
-                .split_once(':')
-                .expect("HTTP Basic Authentication should include a `:` separator");
-            return Some(Self::basic(
-                (!username.is_empty()).then(|| username.to_owned()),
-                (!password.is_empty()).then(|| password.to_owned()),
-            ));
+            return Self::from_basic_header(value)
+                .map(Some)
+                .ok_or(CredentialsFromRequestError::InvalidBasicHeader);
         }
 
         // Parse a `Bearer` authentication header.
         if let Some(token) = header.as_bytes().strip_prefix(b"Bearer ") {
-            return Some(Self::Bearer {
+            return Ok(Some(Self::Bearer {
                 token: Token::new(token.to_vec()),
-            });
+            }));
         }
 
-        None
+        Ok(None)
+    }
+
+    fn from_basic_header(value: &[u8]) -> Option<Self> {
+        let decoded = BASE64_STANDARD.decode(value).ok()?;
+        let (username, password) = std::str::from_utf8(&decoded).ok()?.split_once(':')?;
+        Some(Self::basic(
+            (!username.is_empty()).then(|| username.to_owned()),
+            (!password.is_empty()).then(|| password.to_owned()),
+        ))
     }
 
     /// Create an HTTP authorization header for the credentials.
@@ -675,7 +683,10 @@ mod tests {
         header.set_sensitive(false);
 
         assert_debug_snapshot!(header, @r#""Basic dXNlcjpwYXNzd29yZA==""#);
-        assert_eq!(Credentials::from_header_value(&header), Some(credentials));
+        assert_eq!(
+            Credentials::from_header_value(&header).unwrap(),
+            Some(credentials)
+        );
     }
 
     #[test]
@@ -697,7 +708,10 @@ mod tests {
         header.set_sensitive(false);
 
         assert_debug_snapshot!(header, @r#""Basic dXNlckBkb21haW46cGFzc3dvcmQ=""#);
-        assert_eq!(Credentials::from_header_value(&header), Some(credentials));
+        assert_eq!(
+            Credentials::from_header_value(&header).unwrap(),
+            Some(credentials)
+        );
     }
 
     #[test]
@@ -719,7 +733,28 @@ mod tests {
         header.set_sensitive(false);
 
         assert_debug_snapshot!(header, @r#""Basic dXNlcjpwYXNzd29yZD09""#);
-        assert_eq!(Credentials::from_header_value(&header), Some(credentials));
+        assert_eq!(
+            Credentials::from_header_value(&header).unwrap(),
+            Some(credentials)
+        );
+    }
+
+    #[test]
+    fn malformed_basic_authorization_header_is_an_error() {
+        for header in ["Basic !!!", "Basic /w==", "Basic dXNlcg=="] {
+            let mut request = Request::new(
+                reqwest::Method::GET,
+                Url::parse("https://example.com/").unwrap(),
+            );
+            request.headers_mut().insert(
+                reqwest::header::AUTHORIZATION,
+                HeaderValue::from_static(header),
+            );
+            assert_matches!(
+                Credentials::from_request(&request),
+                Err(CredentialsFromRequestError::InvalidBasicHeader)
+            );
+        }
     }
 
     #[tokio::test]
