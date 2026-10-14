@@ -8,6 +8,8 @@ mod archive;
 #[cfg(feature = "test-python")]
 mod binary_policy;
 #[cfg(feature = "test-python")]
+mod build_failures;
+#[cfg(feature = "test-python")]
 mod bytecode;
 #[cfg(feature = "test-python")]
 mod cache_keys;
