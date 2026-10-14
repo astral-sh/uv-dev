@@ -127,7 +127,7 @@ fn python_install() {
     ");
 
     // The executable should be removed
-    bin_python.assert(predicate::path::missing());
+    assert_path_missing(&bin_python);
 }
 
 /// Regression test for a panic when `/install` in a sysconfig value is followed by a non-ASCII
@@ -555,7 +555,7 @@ fn python_install_minor() {
     ");
 
     // The executable should be removed
-    bin_python.assert(predicate::path::missing());
+    assert_path_missing(&bin_python);
 }
 
 #[test]
@@ -786,7 +786,7 @@ fn python_install_preview() {
     ");
 
     // The executable should be removed
-    bin_python.assert(predicate::path::missing());
+    assert_path_missing(&bin_python);
 
     // Install a minor version
     uv_snapshot!(context.filters(), context.python_install().arg("3.11").arg("--preview"), @"
@@ -927,7 +927,7 @@ fn python_install_preview_no_bin() {
         .child(format!("python3.15{}", std::env::consts::EXE_SUFFIX));
 
     // The executable should not be installed in the bin directory
-    bin_python.assert(predicate::path::missing());
+    assert_path_missing(&bin_python);
 
     uv_snapshot!(context.filters(), context.python_install().arg("--preview").arg("--no-bin").arg("--default"), @"
     exit_code: 2 (failure)
@@ -944,7 +944,7 @@ fn python_install_preview_no_bin() {
         .child(format!("python{}", std::env::consts::EXE_SUFFIX));
 
     // The executable should not be installed in the bin directory
-    bin_python.assert(predicate::path::missing());
+    assert_path_missing(&bin_python);
 }
 
 #[test]
@@ -1661,8 +1661,8 @@ fn python_install_default() {
 
     // Only the minor versioned executable should be installed
     bin_python_minor_15.assert(predicate::path::exists());
-    bin_python_major.assert(predicate::path::missing());
-    bin_python_default.assert(predicate::path::missing());
+    assert_path_missing(&bin_python_major);
+    assert_path_missing(&bin_python_default);
 
     // Install again, with `--default`
     uv_snapshot!(context.filters(), context.python_install().arg("--default").arg("3.15"), @"
@@ -1688,9 +1688,9 @@ fn python_install_default() {
     ");
 
     // The executables should be removed
-    bin_python_minor_15.assert(predicate::path::missing());
-    bin_python_major.assert(predicate::path::missing());
-    bin_python_default.assert(predicate::path::missing());
+    assert_path_missing(&bin_python_minor_15);
+    assert_path_missing(&bin_python_major);
+    assert_path_missing(&bin_python_default);
 
     // Install the latest version, i.e., a "default install"
     uv_snapshot!(context.filters(), context.python_install().arg("--default"), @"
@@ -1767,9 +1767,9 @@ fn python_install_default() {
     ");
 
     // We should remove all the executables
-    bin_python_minor_15.assert(predicate::path::missing());
-    bin_python_major.assert(predicate::path::missing());
-    bin_python_default.assert(predicate::path::missing());
+    assert_path_missing(&bin_python_minor_15);
+    assert_path_missing(&bin_python_major);
+    assert_path_missing(&bin_python_default);
 
     // Install multiple versions, with the `--default` flag
     uv_snapshot!(context.filters(), context.python_install().arg("3.12").arg("3.15").arg("--default"), @"
@@ -1879,8 +1879,8 @@ fn python_install_default_preview() {
 
     // Only the minor versioned executable should be installed
     bin_python_minor_15.assert(predicate::path::exists());
-    bin_python_major.assert(predicate::path::missing());
-    bin_python_default.assert(predicate::path::missing());
+    assert_path_missing(&bin_python_major);
+    assert_path_missing(&bin_python_default);
 
     // Install again, with `--default`
     uv_snapshot!(context.filters(), context.python_install().arg("--preview").arg("--default").arg("3.15"), @"
@@ -1905,9 +1905,9 @@ fn python_install_default_preview() {
     ");
 
     // The executables should be removed
-    bin_python_minor_15.assert(predicate::path::missing());
-    bin_python_major.assert(predicate::path::missing());
-    bin_python_default.assert(predicate::path::missing());
+    assert_path_missing(&bin_python_minor_15);
+    assert_path_missing(&bin_python_major);
+    assert_path_missing(&bin_python_default);
 
     // Install the latest version, i.e., a "default install"
     uv_snapshot!(context.filters(), context.python_install().arg("--default").arg("--preview"), @"
@@ -2001,9 +2001,9 @@ fn python_install_default_preview() {
     ");
 
     // We should remove all the executables
-    bin_python_minor_15.assert(predicate::path::missing());
-    bin_python_major.assert(predicate::path::missing());
-    bin_python_default.assert(predicate::path::missing());
+    assert_path_missing(&bin_python_minor_15);
+    assert_path_missing(&bin_python_major);
+    assert_path_missing(&bin_python_default);
 
     // Install multiple versions, with the `--default` flag
     uv_snapshot!(context.filters(), context.python_install().arg("--preview").arg("3.12").arg("3.15").arg("--default"), @"
