@@ -1048,16 +1048,23 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
 #[test]
 fn workspace_metadata_sync_active_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    let wheel_url = Url::from_file_path(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+    )
+    .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
 
-    context.temp_dir.child("pyproject.toml").write_str(
-        r#"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = []
-        "#,
-    )?;
+        dependencies = ["ok @ {wheel_url}"]
+        "#})?;
 
     context
         .venv()
@@ -1087,6 +1094,14 @@ fn workspace_metadata_sync_active_environment() -> Result<()> {
         metadata["environment"]["root"].as_str().map(Path::new),
         Some(active.path())
     );
+    context
+        .pip_show()
+        .arg("--python")
+        .arg(active.path())
+        .arg("ok")
+        .assert()
+        .success();
+    context.assert_not_installed("ok");
 
     let assert = context
         .workspace_metadata()
