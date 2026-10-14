@@ -560,7 +560,6 @@ fn python_upgrade_implementation() {
         .with_empty_python_install_mirror()
         .with_managed_python_dirs();
 
-    // Install pypy
     context.python_install().arg("pypy@3.11").assert().success();
 
     // Upgrading PyPy should not install CPython.
@@ -569,6 +568,21 @@ fn python_upgrade_implementation() {
     ----- stderr -----
     All versions already on latest supported patch release
     ");
+
+    let launcher = context
+        .bin_dir
+        .join(format!("pypy3.11{}", std::env::consts::EXE_SUFFIX));
+    context
+        .external_command(&launcher)
+        .args([
+            "-I",
+            "-B",
+            "-c",
+            "import sys; print(sys.implementation.name, sys.version_info[:2], end='')",
+        ])
+        .assert()
+        .success()
+        .stdout("pypy (3, 11)");
 
     context
         .python_list()
