@@ -4004,21 +4004,16 @@ fn run_compiled_python_file() -> Result<()> {
     Hello, world!
     ");
 
-    let compile_output = context
+    context
         .run()
-        .arg("python")
-        .arg("-m")
-        .arg("compileall")
+        .args(["python", "-m", "compileall"])
         .arg(test_non_script.path())
-        .output()?;
-
-    assert!(
-        compile_output.status.success(),
-        "Failed to compile the python script"
-    );
+        .assert()
+        .success();
 
     // Run the compiled non-PEP 723 script.
     let compiled_non_script = context.temp_dir.child("__pycache__/main.cpython-312.pyc");
+    compiled_non_script.assert(predicate::path::is_file());
     uv_snapshot!(context.filters(), context.run().arg(compiled_non_script.path()), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -4048,21 +4043,16 @@ fn run_compiled_python_file() -> Result<()> {
     ");
 
     // Compile the PEP 723 script.
-    let compile_output = context
+    context
         .run()
-        .arg("python")
-        .arg("-m")
-        .arg("compileall")
+        .args(["python", "-m", "compileall"])
         .arg(test_script.path())
-        .output()?;
-
-    assert!(
-        compile_output.status.success(),
-        "Failed to compile the python script"
-    );
+        .assert()
+        .success();
 
     // Run the compiled PEP 723 script. This fails, since we can't read the script tag.
     let compiled_script = context.temp_dir.child("__pycache__/script.cpython-312.pyc");
+    compiled_script.assert(predicate::path::is_file());
     uv_snapshot!(context.filters(), context.run().arg(compiled_script.path()), @r#"
     exit_code: 1 (failure)
     ----- stderr -----
