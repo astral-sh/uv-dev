@@ -325,21 +325,19 @@ fn get_hashes(
     // hash the archive, so installation still needs the original hashes to verify its contents.
     if let Some(url) = url {
         let policy = hasher.archive_policy_for_url(&url.verbatim);
-        if !policy.digests().is_empty() {
-            return HashDigests::from(policy.digests());
+        let digests = policy.digests();
+        if !digests.is_empty() {
+            return HashDigests::from(digests);
         }
-    }
 
-    // 3. Reuse a direct URL's declared hash when collecting hashes without validation.
-    if let Some(url) = url
-        && let ParsedUrl::Archive(_) = &url.parsed_url
-        && hasher.collection() != HashCollection::None
-        && !hasher
-            .archive_policy_for_url(&url.verbatim)
-            .requires_validation()
-        && let Some(hashes) = parse_url_hashes(&url.verbatim)
-    {
-        return hashes;
+        // 3. Reuse a direct URL's declared hash when collecting hashes without validation.
+        if matches!(&url.parsed_url, ParsedUrl::Archive(_))
+            && hasher.collection() != HashCollection::None
+            && !policy.requires_validation()
+            && let Some(hashes) = parse_url_hashes(&url.verbatim)
+        {
+            return hashes;
+        }
     }
 
     // 4. Look for hashes computed for the specific wheel or source distribution.
