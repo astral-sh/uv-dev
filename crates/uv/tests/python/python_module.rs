@@ -21,14 +21,15 @@ fn user_scheme_bin_filter() -> (String, String) {
     }
 }
 
-// Override sys.base_prefix with a path that's guaranteed not to contain
-// uv, as otherwise the tests may pick up an already installed uv
-// when testing against the system Python install. See #15368.
+// Keep base-prefix discovery within the test environment instead of picking up a system uv.
+// See #15368.
 const TEST_SCRIPT: &str = "
+import os
 import sys
 import uv
 
-sys.base_prefix = '/dev/null'
+sys.base_prefix = os.path.join(sys.prefix, 'missing-base-prefix')
+assert not os.path.exists(sys.base_prefix), sys.base_prefix
 print(uv.find_uv_bin())
 ";
 
@@ -392,12 +393,12 @@ fn find_uv_bin_error_message() -> anyhow::Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     Traceback (most recent call last):
-      File "<string>", line 6, in <module>
+      File "<string>", line 8, in <module>
       File "[SITE_PACKAGES]/uv/_find_uv.py", line 50, in find_uv_bin
         raise UvNotFound(
     uv._find_uv.UvNotFound: Could not find the uv binary in any of the following locations:
      - [VENV]/[BIN]
-     - /dev/null/[BIN]
+     - [VENV]/missing-base-prefix/[BIN]
      - [SITE_PACKAGES]/[BIN]
      - [USER_SCHEME]/[BIN]
     "#
