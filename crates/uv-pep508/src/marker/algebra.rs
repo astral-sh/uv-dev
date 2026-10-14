@@ -1474,25 +1474,23 @@ impl Edges {
     where
         T: Ord + Clone,
     {
-        let mut edges = SmallVec::new();
+        let true_edges = range.iter().map(|(start, end)| {
+            (
+                Ranges::from_range_bounds((start.cloned(), end.cloned())),
+                NodeId::TRUE,
+            )
+        });
+        let false_edges = range
+            .complement()
+            .into_iter()
+            .map(|bounds| (Ranges::from_range_bounds(bounds), NodeId::FALSE));
 
-        // Add the `true` edges.
-        for (start, end) in range.iter() {
-            let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
-            edges.push((range, NodeId::TRUE));
+        // A range and its complement partition the domain into alternating intervals.
+        if matches!(range.bounding_range(), Some((Bound::Unbounded, _))) {
+            true_edges.interleave(false_edges).collect()
+        } else {
+            false_edges.interleave(true_edges).collect()
         }
-
-        // Add the `false` edges.
-        for (start, end) in range.complement().iter() {
-            let range = Ranges::from_range_bounds((start.cloned(), end.cloned()));
-            edges.push((range, NodeId::FALSE));
-        }
-
-        // Sort the ranges.
-        //
-        // The ranges are disjoint so we don't care about equality.
-        edges.sort_by(|(range1, _), (range2, _)| compare_disjoint_range_start(range1, range2));
-        edges
     }
 
     /// Merge two [`Edges`], applying the given operation (e.g., `AND` or `OR`) to all intersecting edges.
@@ -1882,26 +1880,6 @@ fn replace_lower_bound(range: &mut Ranges<Version>, lower: Bound<Version>) {
 fn replace_upper_bound(range: &mut Ranges<Version>, upper: Bound<Version>) {
     let lower = range.bounding_range().unwrap().0.cloned();
     *range = Ranges::from_range_bounds((lower, upper));
-}
-
-/// Compares the start of two ranges that are known to be disjoint.
-fn compare_disjoint_range_start<T>(range1: &Ranges<T>, range2: &Ranges<T>) -> Ordering
-where
-    T: Ord,
-{
-    let (upper1, _) = range1.bounding_range().unwrap();
-    let (upper2, _) = range2.bounding_range().unwrap();
-
-    match (upper1, upper2) {
-        (Bound::Unbounded, _) => Ordering::Less,
-        (_, Bound::Unbounded) => Ordering::Greater,
-        (Bound::Included(v1), Bound::Excluded(v2)) if v1 == v2 => Ordering::Less,
-        (Bound::Excluded(v1), Bound::Included(v2)) if v1 == v2 => Ordering::Greater,
-        // Note that the ranges are disjoint, so their lower bounds cannot be equal.
-        (Bound::Included(v1) | Bound::Excluded(v1), Bound::Included(v2) | Bound::Excluded(v2)) => {
-            v1.cmp(v2)
-        }
-    }
 }
 
 /// Returns `true` if two disjoint ranges can be conjoined seamlessly without introducing a gap.
