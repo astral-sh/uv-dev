@@ -41,40 +41,17 @@ fn freeze_many() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn freeze_duplicate() -> Result<()> {
-    use uv_fs::copy_dir_all;
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    for version in ["21.3.1", "22.1.1"] {
+        let dist_info = site_packages.child(format!("pip-{version}.dist-info"));
+        dist_info.create_dir_all()?;
+        dist_info.child("METADATA").write_str(&format!(
+            "Metadata-Version: 2.1\nName: pip\nVersion: {version}\n"
+        ))?;
+    }
 
-    // Sync a version of `pip` into a virtual environment.
-    let context1 = uv_test::test_context!("3.12");
-    let requirements_txt = context1.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==21.3.1")?;
-
-    // Run `pip sync`.
-    context1
-        .pip_sync()
-        .arg(requirements_txt.path())
-        .assert()
-        .success();
-
-    // Sync a different version of `pip` into a virtual environment.
-    let context2 = uv_test::test_context!("3.12");
-    let requirements_txt = context2.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==22.1.1")?;
-
-    // Run `pip sync`.
-    context2
-        .pip_sync()
-        .arg(requirements_txt.path())
-        .assert()
-        .success();
-
-    // Copy the virtual environment to a new location.
-    copy_dir_all(
-        context2.site_packages().join("pip-22.1.1.dist-info"),
-        context1.site_packages().join("pip-22.1.1.dist-info"),
-    )?;
-
-    // Run `pip freeze`.
-    uv_snapshot!(context1.filters(), context1.pip_freeze().arg("--strict"), @"
+    uv_snapshot!(context.filters(), context.pip_freeze().arg("--strict"), @"
     exit_code: 0 (success)
     ----- stdout -----
     pip==21.3.1
