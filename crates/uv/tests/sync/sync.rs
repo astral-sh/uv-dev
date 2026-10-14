@@ -18667,13 +18667,23 @@ async fn sync_malware_check_skips_inactive_extras_and_groups() {
         .and(body_string_contains("iniconfig"))
         .and(body_string_contains("typing-extensions"))
         .and(body_string_contains("sortedcontainers"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [
-                {"vulns": []},
-                {"vulns": [{"id": "MAL-INACTIVE-GROUP"}]},
-                {"vulns": [{"id": "MAL-INACTIVE-EXTRA"}]}
-            ]
-        })))
+        .respond_with(|request: &wiremock::Request| {
+            let batch = request
+                .body_json::<serde_json::Value>()
+                .expect("the audit request is JSON");
+            // OSV associates each response entry with the query at the same position.
+            let results: Vec<_> = batch["queries"]
+                .as_array()
+                .expect("the audit request contains a query batch")
+                .iter()
+                .map(|query| match query["package"]["name"].as_str() {
+                    Some("sortedcontainers") => json!({"vulns": [{"id": "MAL-INACTIVE-GROUP"}]}),
+                    Some("typing-extensions") => json!({"vulns": [{"id": "MAL-INACTIVE-EXTRA"}]}),
+                    _ => json!({"vulns": []}),
+                })
+                .collect();
+            ResponseTemplate::new(200).set_body_json(json!({ "results": results }))
+        })
         .mount(&server)
         .await;
 
