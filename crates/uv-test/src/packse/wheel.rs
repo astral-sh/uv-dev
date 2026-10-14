@@ -139,7 +139,7 @@ impl<'a> WheelBuilder<'a> {
         let record = build_record(&dist_info, &entries);
         let record_entry =
             ZipEntryBuilder::new(format!("{dist_info}/RECORD").into(), ZipCompression::Stored);
-        block_on(zip.write_entry_whole(record_entry, record.as_bytes()))
+        block_on(zip.write_entry_whole(record_entry, &record))
             .expect("failed to write `RECORD` file");
 
         let bytes = block_on(zip.close()).expect("failed to finish in-memory wheel");
@@ -149,17 +149,23 @@ impl<'a> WheelBuilder<'a> {
 }
 
 /// Build the `RECORD` metadata for a generated wheel.
-fn build_record(dist_info: &str, entries: &[(String, String)]) -> String {
-    let mut record = String::new();
+fn build_record(dist_info: &str, entries: &[(String, String)]) -> Vec<u8> {
+    let mut record = csv::WriterBuilder::new()
+        .terminator(csv::Terminator::Any(b'\n'))
+        .from_writer(Vec::new());
     for (path, contents) in entries {
         let contents = contents.as_bytes();
-        let hash = base64.encode(Sha256::digest(contents));
-        writeln!(&mut record, "{path},sha256={hash},{}", contents.len())
-            .expect("writing RECORD metadata into a string should succeed");
+        let hash = format!("sha256={}", base64.encode(Sha256::digest(contents)));
+        record
+            .write_record([path, &hash, &contents.len().to_string()])
+            .expect("writing RECORD metadata into memory should succeed");
     }
-    writeln!(&mut record, "{dist_info}/RECORD,,")
-        .expect("writing RECORD metadata into a string should succeed");
     record
+        .write_record([&format!("{dist_info}/RECORD"), "", ""])
+        .expect("writing RECORD metadata into memory should succeed");
+    record
+        .into_inner()
+        .expect("finishing RECORD metadata in memory should succeed")
 }
 
 /// Generate a source distribution (`.tar.gz`) as an in-memory tarball.
@@ -427,6 +433,26 @@ mod tests {
         my_package-1.0.0.dist-info/WHEEL,sha256=ujr00BDMtYYidJ71ulklWmNFpiGqy5NyjK1fX-JwFO4,78
         my_package-1.0.0.dist-info/RECORD,,
         ");
+    }
+
+    #[test]
+    fn record_encodes_special_characters_in_paths() {
+        let path = r#"my_package/data,"quoted".txt"#;
+        let record = build_record(
+            "my_package-1.0.0.dist-info",
+            &[(path.into(), "data".into())],
+        );
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(record.as_slice());
+        let row = reader
+            .records()
+            .next()
+            .expect("the file must be recorded")
+            .expect("the file record must be valid CSV");
+
+        assert_eq!(row.len(), 3);
+        assert_eq!(row.get(0), Some(path));
     }
 
     #[test]

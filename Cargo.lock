@@ -7961,6 +7961,7 @@ dependencies = [
  "assert_fs",
  "astral_async_zip",
  "base64 0.22.1",
+ "csv",
  "flate2",
  "fs-err",
  "futures",
