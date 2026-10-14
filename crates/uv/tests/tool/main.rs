@@ -6,6 +6,9 @@ use uv_test::pypi_proxy;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tool_audit;
 
+#[cfg(feature = "test-python")]
+mod tool_build_hashes;
+
 mod tool_dir;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
