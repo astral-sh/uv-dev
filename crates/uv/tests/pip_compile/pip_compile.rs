@@ -237,8 +237,9 @@ fn compile_pyproject_toml_dynamic_version() -> Result<()> {
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"[build-system]
-requires = ["uv_build>=0.7,<10000"]
-build-backend = "uv_build"
+requires = []
+build-backend = "backend"
+backend-path = ["."]
 
 [project]
 name = "project"
@@ -248,6 +249,12 @@ dependencies = [
 ]
 "#,
     )?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        Path(__file__).with_name("backend-invoked").touch()
+        raise RuntimeError("build backend should not run")
+    "#})?;
 
     uv_snapshot!(context.filters(), context.pip_compile()
             .arg("pyproject.toml"), @"
@@ -266,6 +273,10 @@ dependencies = [
     Resolved 3 packages in [TIME]
     "
     );
+    context
+        .temp_dir
+        .child("backend-invoked")
+        .assert(predicates::path::missing());
 
     Ok(())
 }
