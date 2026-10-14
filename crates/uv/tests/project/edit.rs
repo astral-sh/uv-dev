@@ -989,95 +989,98 @@ fn git_partial_fetches_preview() -> Result<()> {
 
 #[test]
 #[cfg(all(feature = "test-git", feature = "test-pypi"))]
-fn add_git_cache_compat_branch_and_tag() -> Result<()> {
-    fn run(reference_arg: &str, reference_value: &str) -> Result<()> {
-        let context = uv_test::test_context!("3.12")
-            // The old `uv` binary is installed from PyPI by `uv tool run`.
-            .with_exclude_newer("2026-10-04T00:00:00Z");
+fn add_git_cache_compat_upgrade() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        // The old `uv` binary is installed from PyPI by `uv tool run`.
+        .with_exclude_newer("2026-10-04T00:00:00Z");
 
-        let pyproject_toml = context.temp_dir.child("pyproject.toml");
-        pyproject_toml.write_str(indoc! {r#"
-            [project]
-            name = "project"
-            version = "0.1.0"
-            requires-python = ">=3.12"
-            dependencies = []
-        "#})?;
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
 
-        let repo_url = RepositoryUrl::parse("https://github.com/astral-test/uv-public-pypackage")?;
-        let git_cache = context.cache_dir.child("git-v1");
-        let db_root = git_cache.child("db").child(cache_digest(&repo_url));
-        let db_config = db_root.child(".git").child("config");
-        let checkout_root = git_cache
-            .child("checkouts")
-            .child(cache_digest(&repo_url))
-            .child("0dacfd6");
-        let ok_checkout_file = checkout_root.path().with_extension("ok");
+    let repo_url = RepositoryUrl::parse("https://github.com/astral-test/uv-public-pypackage")?;
+    let git_cache = context.cache_dir.child("git-v1");
+    let db_root = git_cache.child("db").child(cache_digest(&repo_url));
+    let db_config = db_root.child(".git").child("config");
+    let checkout_root = git_cache
+        .child("checkouts")
+        .child(cache_digest(&repo_url))
+        .child("0dacfd6");
+    let ok_checkout_file = checkout_root.path().with_extension("ok");
 
-        let mut old_uv = context.command();
-        old_uv
-            .arg("tool")
-            .arg("run")
-            .arg("uv@0.12.23")
-            .arg("add")
-            .arg("--cache-dir")
-            .arg(context.cache_dir.path())
-            .arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage")
-            .arg(reference_arg)
-            .arg(reference_value)
-            .assert()
-            .success();
+    uv_snapshot!(context.filters(), context.command()
+        .arg("tool")
+        .arg("run")
+        .arg("uv@0.12.23")
+        .arg("add")
+        .arg("--cache-dir")
+        .arg(context.cache_dir.path())
+        .arg("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage")
+        .arg("--branch")
+        .arg("test-branch"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 package in [TIME]
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
+    ");
 
-        // Verify this is an actual old cache: uv 0.12.23 populated a full Git database
-        // without partial-clone promisor metadata, and left a fresh checkout behind.
-        let db_config_contents = fs_err::read_to_string(&db_config)?;
-        assert!(!db_config_contents.contains("promisor = true"));
-        assert!(!db_config_contents.contains("partialclonefilter = tree:0"));
-        assert!(ok_checkout_file.exists());
+    // Verify this is an actual old cache: uv 0.12.23 populated a full Git database
+    // without partial-clone promisor metadata, and left a fresh checkout behind.
+    let db_config_contents = fs_err::read_to_string(&db_config)?;
+    assert!(!db_config_contents.contains("promisor = true"));
+    assert!(!db_config_contents.contains("partialclonefilter = tree:0"));
+    assert!(ok_checkout_file.exists());
 
-        // Simple API cache formats can differ between uv versions. Prime the
-        // rebuilding version's registry cache without touching the Git source.
-        context
-            .pip_install()
-            .arg("--target")
-            .arg(context.temp_dir.child("build-requirements").path())
-            .arg("hatchling")
-            .assert()
-            .success();
+    // Simple API cache formats can differ between uv versions. Prime the
+    // rebuilding version's registry cache without touching the Git source.
+    context
+        .pip_install()
+        .arg("--target")
+        .arg(context.temp_dir.child("build-requirements").path())
+        .arg("hatchling")
+        .assert()
+        .success();
 
-        // Remove the built Git distribution so the next invocation must consume
-        // the old Git cache. Keep registry wheels for build requirements.
-        for entry in fs_err::read_dir(context.cache_dir.path())? {
-            let entry = entry?;
-            let file_name = entry.file_name();
-            let file_name = file_name.to_string_lossy();
-            if file_name.starts_with("sdists-v") {
-                fs_err::remove_dir_all(entry.path())?;
-            }
+    // Remove the built Git distribution so the next invocation must consume
+    // the old Git cache. Keep registry wheels for build requirements.
+    for entry in fs_err::read_dir(context.cache_dir.path())? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if file_name.starts_with("sdists-v") {
+            fs_err::remove_dir_all(entry.path())?;
         }
-
-        context
-            .sync()
-            .arg("--preview-features")
-            .arg("git-partial-fetches")
-            .arg("--offline")
-            .arg("--reinstall")
-            .assert()
-            .success();
-
-        context
-            .python_command()
-            .arg("-c")
-            .arg("import uv_public_pypackage")
-            .assert()
-            .success();
-        assert!(ok_checkout_file.exists());
-
-        Ok(())
     }
 
-    run("--branch", "test-branch")?;
-    run("--tag", "test-tag")?;
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--preview-features")
+        .arg("git-partial-fetches")
+        .arg("--offline")
+        .arg("--reinstall"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
+    ");
+
+    context
+        .python_command()
+        .arg("-c")
+        .arg("import uv_public_pypackage")
+        .assert()
+        .success();
+    assert!(ok_checkout_file.exists());
 
     Ok(())
 }
@@ -1175,8 +1178,9 @@ fn add_git_cache_compat_downgrade() -> Result<()> {
     Ok(())
 }
 
+#[test]
 #[cfg(all(feature = "test-git-lfs", feature = "test-pypi"))]
-fn git_lfs_cache_recovery(partial_fetches: bool) -> Result<()> {
+fn add_git_cache_recovery_lfs() -> Result<()> {
     let context = uv_test::test_context!("3.13")
         // The old `uv` binary is installed from PyPI by `uv tool run`.
         .with_exclude_newer("2026-10-04T00:00:00Z")
@@ -1225,11 +1229,10 @@ fn git_lfs_cache_recovery(partial_fetches: bool) -> Result<()> {
     let short_revision = git(&["rev-parse", "--short", "HEAD"])?;
     let url = Url::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
-    let write_project = |lfs: bool| -> Result<()> {
-        context
-            .temp_dir
-            .child("pyproject.toml")
-            .write_str(&formatdoc! {r#"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -1237,47 +1240,8 @@ fn git_lfs_cache_recovery(partial_fetches: bool) -> Result<()> {
         dependencies = ["dependency"]
 
         [tool.uv.sources]
-        dependency = {{ git = "{url}", rev = "{revision}", lfs = {lfs} }}
+        dependency = {{ git = "{url}", rev = "{revision}", lfs = true }}
     "#})?;
-        Ok(())
-    };
-    let lock = || {
-        let mut command = context.lock();
-        if partial_fetches {
-            command.args(["--preview-features", "git-partial-fetches"]);
-        } else {
-            command.arg("--no-preview");
-        }
-        // Fetching LFS objects must also materialize them when smudge filters are absent.
-        command
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env(
-                "GIT_CONFIG_GLOBAL",
-                if cfg!(windows) { "NUL" } else { "/dev/null" },
-            )
-            .arg("--offline")
-            .assert()
-            .success();
-    };
-    let clear_source_metadata = || -> Result<()> {
-        fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
-        for entry in fs_err::read_dir(context.cache_dir.path())? {
-            let entry = entry?;
-            if entry.file_name().to_string_lossy().starts_with("sdists-v") {
-                fs_err::remove_dir_all(entry.path())?;
-            }
-        }
-        Ok(())
-    };
-
-    // The LFS and non-LFS sources share a Git database. Start with a cache
-    // that has not fetched LFS objects or retained the selected Git tree.
-    if partial_fetches {
-        write_project(false)?;
-        lock();
-        clear_source_metadata()?;
-    }
-    write_project(true)?;
 
     let repo_url = RepositoryUrl::parse(url.as_str())?;
     let git_cache = context.cache_dir.child("git-v1");
@@ -1290,14 +1254,20 @@ fn git_lfs_cache_recovery(partial_fetches: bool) -> Result<()> {
     let lfs_checkout_objects = checkout_root.child(".git").child("lfs");
     let ok_checkout_file = checkout_root.path().with_extension("ok");
 
-    lock();
+    // Fetching LFS objects must materialize them even without smudge filters.
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--no-preview")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
 
     // LFS objects and the selected Git tree are retained in the database.
     let db_config_contents = fs_err::read_to_string(&db_config)?;
-    assert_eq!(
-        db_config_contents.contains("promisor = true"),
-        partial_fetches
-    );
+    assert!(!db_config_contents.contains("promisor = true"));
     assert!(ok_checkout_file.exists());
     assert!(lfs_checkout_objects.exists());
     assert!(db_root.child(".git/lfs/objects").exists());
@@ -1318,41 +1288,62 @@ fn git_lfs_cache_recovery(partial_fetches: bool) -> Result<()> {
         .get_output()
         .stdout
         .clone();
-    assert_eq!(
+    assert!(
         String::from_utf8(objects)?
             .lines()
-            .any(|object| object == historical_blob),
-        !partial_fetches
+            .any(|object| object == historical_blob)
     );
 
     // Recreate the checkout from the cache with no source repository available.
-    clear_source_metadata()?;
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    for entry in fs_err::read_dir(context.cache_dir.path())? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
+            fs_err::remove_dir_all(entry.path())?;
+        }
+    }
     fs_err::remove_dir_all(checkout_root.path())?;
     fs_err::rename(
         repository.path(),
         context.temp_dir.child("unavailable-repository").path(),
     )?;
-    lock();
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--no-preview")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
     assert_eq!(
         fs_err::read_to_string(checkout_root.child("module.py"))?,
         "VALUE = True\n"
     );
 
     // Older uv versions must be able to reconstruct the same checkout.
-    clear_source_metadata()?;
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    for entry in fs_err::read_dir(context.cache_dir.path())? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
+            fs_err::remove_dir_all(entry.path())?;
+        }
+    }
     fs_err::remove_dir_all(checkout_root.path())?;
 
-    let mut old_uv = context.command();
-    old_uv
+    uv_snapshot!(context.filters(), context.command()
         .arg("tool")
         .arg("run")
         .arg("uv@0.12.23")
         .arg("lock")
         .arg("--cache-dir")
         .arg(context.cache_dir.path())
-        .arg("--offline")
-        .assert()
-        .success();
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 package in [TIME]
+    Resolved 2 packages in [TIME]
+    ");
 
     assert_eq!(
         fs_err::read_to_string(checkout_root.child("module.py"))?,
@@ -1364,14 +1355,210 @@ fn git_lfs_cache_recovery(partial_fetches: bool) -> Result<()> {
 
 #[test]
 #[cfg(all(feature = "test-git-lfs", feature = "test-pypi"))]
-fn add_git_cache_recovery_lfs() -> Result<()> {
-    git_lfs_cache_recovery(false)
-}
-
-#[test]
-#[cfg(all(feature = "test-git-lfs", feature = "test-pypi"))]
 fn add_git_cache_compat_downgrade_lfs() -> Result<()> {
-    git_lfs_cache_recovery(true)
+    let context = uv_test::test_context!("3.13")
+        // The old `uv` binary is installed from PyPI by `uv tool run`.
+        .with_exclude_newer("2026-10-04T00:00:00Z")
+        .with_git_lfs_config();
+
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    let git = |arguments: &[&str]| -> Result<String> {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(repository.path())
+            .output()?
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        Ok(String::from_utf8(output)?.trim().to_owned())
+    };
+    git(&["init", "--template="])?;
+    git(&["config", "user.name", "Alice"])?;
+    git(&["config", "user.email", "alice@example.com"])?;
+    git(&["config", "commit.gpgsign", "false"])?;
+    git(&["config", "uploadpack.allowFilter", "true"])?;
+    git(&["lfs", "install", "--local", "--skip-repo"])?;
+    repository
+        .child("historical.txt")
+        .write_str("historical data\n")?;
+    git(&["add", "."])?;
+    git(&["commit", "-m", "Historical data"])?;
+    let historical_blob = git(&["rev-parse", "HEAD:historical.txt"])?;
+    fs_err::remove_file(repository.child("historical.txt"))?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+    "#})?;
+    repository
+        .child(".gitattributes")
+        .write_str("module.py filter=lfs diff=lfs merge=lfs -text\n")?;
+    repository.child("module.py").write_str("VALUE = True\n")?;
+    git(&["add", "."])?;
+    git(&["commit", "-m", "Initial version"])?;
+    let revision = git(&["rev-parse", "HEAD"])?;
+    let short_revision = git(&["rev-parse", "--short", "HEAD"])?;
+    let url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository path"))?;
+    // LFS and non-LFS sources share a database. Prime a partial cache without LFS objects.
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["dependency"]
+
+        [tool.uv.sources]
+        dependency = {{ git = "{url}", rev = "{revision}", lfs = false }}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "git-partial-fetches"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    for entry in fs_err::read_dir(context.cache_dir.path())? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
+            fs_err::remove_dir_all(entry.path())?;
+        }
+    }
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.13"
+        dependencies = ["dependency"]
+
+        [tool.uv.sources]
+        dependency = {{ git = "{url}", rev = "{revision}", lfs = true }}
+    "#})?;
+
+    let repo_url = RepositoryUrl::parse(url.as_str())?;
+    let git_cache = context.cache_dir.child("git-v1");
+    let db_root = git_cache.child("db").child(cache_digest(&repo_url));
+    let db_config = db_root.child(".git").child("config");
+    let checkout_root = git_cache
+        .child("checkouts")
+        .child(cache_digest(&repo_url.with_lfs(Some(true))))
+        .child(short_revision);
+    let lfs_checkout_objects = checkout_root.child(".git").child("lfs");
+    let ok_checkout_file = checkout_root.path().with_extension("ok");
+
+    // Fetching LFS objects must materialize them even without smudge filters.
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "git-partial-fetches"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // LFS objects and the selected Git tree are retained in the database.
+    let db_config_contents = fs_err::read_to_string(&db_config)?;
+    assert!(db_config_contents.contains("promisor = true"));
+    assert!(ok_checkout_file.exists());
+    assert!(lfs_checkout_objects.exists());
+    assert!(db_root.child(".git/lfs/objects").exists());
+    assert_eq!(
+        fs_err::read_to_string(checkout_root.child("module.py"))?,
+        "VALUE = True\n"
+    );
+    let objects = Command::new("git")
+        .args([
+            "cat-file",
+            "--batch-check=%(objectname)",
+            "--batch-all-objects",
+        ])
+        .current_dir(db_root.path())
+        .output()?
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        !String::from_utf8(objects)?
+            .lines()
+            .any(|object| object == historical_blob)
+    );
+
+    // Recreate the checkout from the cache with no source repository available.
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    for entry in fs_err::read_dir(context.cache_dir.path())? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
+            fs_err::remove_dir_all(entry.path())?;
+        }
+    }
+    fs_err::remove_dir_all(checkout_root.path())?;
+    fs_err::rename(
+        repository.path(),
+        context.temp_dir.child("unavailable-repository").path(),
+    )?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "git-partial-fetches"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(
+        fs_err::read_to_string(checkout_root.child("module.py"))?,
+        "VALUE = True\n"
+    );
+
+    // Older uv versions must be able to reconstruct the same checkout.
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    for entry in fs_err::read_dir(context.cache_dir.path())? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with("sdists-v") {
+            fs_err::remove_dir_all(entry.path())?;
+        }
+    }
+    fs_err::remove_dir_all(checkout_root.path())?;
+
+    uv_snapshot!(context.filters(), context.command()
+        .arg("tool")
+        .arg("run")
+        .arg("uv@0.12.23")
+        .arg("lock")
+        .arg("--cache-dir")
+        .arg(context.cache_dir.path())
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed 1 package in [TIME]
+    Resolved 2 packages in [TIME]
+    ");
+
+    assert_eq!(
+        fs_err::read_to_string(checkout_root.child("module.py"))?,
+        "VALUE = True\n"
+    );
+
+    Ok(())
 }
 
 #[test]
