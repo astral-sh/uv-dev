@@ -1139,31 +1139,8 @@ impl MarkerTree {
 
     /// Returns true if this marker simplifies to true if the given set of extras is activated.
     pub fn evaluate_only_extras(self, extras: &[ExtraName]) -> bool {
-        match self.kind() {
-            MarkerTreeKind::True => true,
-            MarkerTreeKind::False => false,
-            MarkerTreeKind::Version(marker) => marker
-                .edges()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::VersionString(marker) => marker
-                .edges()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::String(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::In(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::Contains(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::List(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::Extra(marker) => marker
-                .edge(extras.contains(marker.name().extra()))
-                .evaluate_only_extras(extras),
-        }
+        // With extras fixed, the marker is always true if its negation cannot be true in any environment.
+        !self.negate().evaluate_extras(extras)
     }
 
     /// Find a top level `extra == "..."` name.
