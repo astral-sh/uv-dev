@@ -836,16 +836,26 @@ fn add_git_lfs() -> Result<()> {
     assert!(ok_checkout_file.exists());
     assert!(lfs_db_bucket_objects.exists());
 
-    // Exercise the sdist cache
+    // Reinstall offline to require the recovered cache instead of accepting the existing package.
+    context
+        .pip_uninstall()
+        .arg("test-lfs-repo")
+        .assert()
+        .success();
     uv_snapshot!(context.filters(), context.add()
         .arg("git+https://github.com/astral-sh/test-lfs-repo")
         .arg("--rev").arg("261c828b8e05251f3a3e4f6b47b149d691c7efbb")
+        .arg("--offline")
         .arg("--lfs"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Checked 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + test-lfs-repo==0.1.0 (from git+https://github.com/astral-sh/test-lfs-repo@261c828b8e05251f3a3e4f6b47b149d691c7efbb#lfs=true)
     ");
+    context
+        .assert_command("import test_lfs_repo.lfs_module")
+        .success();
 
     Ok(())
 }
