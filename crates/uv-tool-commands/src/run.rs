@@ -930,7 +930,7 @@ async fn get_or_create_environment(
         }
     };
 
-    let latest = resolve_latest::<ToolError>(
+    let latest = resolve_latest(
         request,
         &interpreter,
         &settings.resolver,
