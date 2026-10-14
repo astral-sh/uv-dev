@@ -11601,13 +11601,20 @@ fn sync_python_version() -> Result<()> {
 /// `requires-python` is ignored, falling back to the project's requirement.
 #[test]
 fn sync_ignores_incompatible_global_python_version() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.10", "3.11"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.10"]);
 
     // Create a global pin before creating the project (to avoid pin compatibility check)
     uv_snapshot!(context.filters(), context.python_pin().arg("--global").arg("3.10"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Pinned `[UV_USER_CONFIG_DIR]/.python-version` to `3.10`
+    ");
+
+    // The global pin must override the default interpreter search order.
+    uv_snapshot!(context.filters(), context.python_find(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.10]
     ");
 
     // Now create a project that requires a different Python version
