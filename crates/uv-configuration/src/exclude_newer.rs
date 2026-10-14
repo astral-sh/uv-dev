@@ -517,26 +517,18 @@ impl ExcludeNewer {
 
 impl std::fmt::Display for ExcludeNewer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut separator = "";
         if let Some(global) = &self.global {
             write!(f, "global: {global}")?;
-            if !self.package.is_empty() {
-                write!(f, ", ")?;
-            }
+            separator = ", ";
         }
-        let mut first = true;
         for (name, setting) in &self.package {
-            if !first {
-                write!(f, ", ")?;
-            }
+            write!(f, "{separator}{name}: ")?;
             match setting {
-                ExcludeNewerOverride::Enabled(timestamp) => {
-                    write!(f, "{name}: {}", timestamp.as_ref())?;
-                }
-                ExcludeNewerOverride::Disabled => {
-                    write!(f, "{name}: disabled")?;
-                }
+                ExcludeNewerOverride::Enabled(timestamp) => write!(f, "{}", timestamp.as_ref())?,
+                ExcludeNewerOverride::Disabled => f.write_str("disabled")?,
             }
-            first = false;
+            separator = ", ";
         }
         Ok(())
     }
