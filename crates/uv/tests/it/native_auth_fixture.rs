@@ -40,7 +40,40 @@ impl NativeAuthFixture {
         Self::login(context, service, None, token)
     }
 
+    /// Guard a vacant native credential entry while a test exercises login itself.
+    pub(super) fn guard_vacant_entry(
+        service: String,
+        username: Option<&str>,
+        secret: &'static str,
+    ) -> Result<Self> {
+        let context = uv_test::test_context_with_versions!(&[]).with_real_home();
+        Self::guard_vacant_with_context(context, service, username.map(str::to_owned), secret)
+    }
+
     fn login(
+        context: TestContext,
+        service: String,
+        username: Option<String>,
+        secret: &'static str,
+    ) -> Result<Self> {
+        let fixture = Self::guard_vacant_with_context(context, service, username, secret)?;
+        let mut login = fixture.context.auth_login();
+        login.arg(&fixture.service);
+        if let Some(username) = &fixture.username {
+            login.args(["--username", username, "--password", secret]);
+        } else {
+            login.args(["--token", secret]);
+        }
+        login
+            .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
+            .assert()
+            .success()
+            .stdout("")
+            .stderr(format!("Stored credentials for {}\n", fixture.label()));
+        Ok(fixture)
+    }
+
+    fn guard_vacant_with_context(
         context: TestContext,
         service: String,
         username: Option<String>,
@@ -65,19 +98,6 @@ impl NativeAuthFixture {
             fixture.label()
         );
         fixture.armed = true;
-        let mut login = fixture.context.auth_login();
-        login.arg(&fixture.service);
-        if let Some(username) = &fixture.username {
-            login.args(["--username", username, "--password", secret]);
-        } else {
-            login.args(["--token", secret]);
-        }
-        login
-            .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-            .assert()
-            .success()
-            .stdout("")
-            .stderr(format!("Stored credentials for {}\n", fixture.label()));
         Ok(fixture)
     }
 
