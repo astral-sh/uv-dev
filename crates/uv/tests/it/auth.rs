@@ -298,15 +298,6 @@ async fn token_native_auth() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_real_home();
     let proxy = crate::pypi_proxy::start().await;
 
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
-
     // Without persisted credentials
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.url("/basic-auth/simple"))
@@ -327,7 +318,11 @@ async fn token_native_auth() -> Result<()> {
     error: Failed to fetch credentials for `public@http://[LOCALHOST]/basic-auth/simple`
     ");
 
-    // Login to the index
+    let account = NativeAuthFixture::guard_vacant_entry(
+        proxy.url("/basic-auth/simple"),
+        Some("public"),
+        "heron",
+    )?;
     uv_snapshot!(context.filters(), context.auth_login()
         .arg(proxy.url("/basic-auth/simple"))
         .arg("--username")
@@ -374,11 +369,15 @@ async fn token_native_auth() -> Result<()> {
     error: Failed to fetch credentials for `private@http://[LOCALHOST]/basic-auth/simple`
     ");
 
-    // Login to the index with a token
+    let token = NativeAuthFixture::guard_vacant_entry(
+        proxy.url("/basic-auth/simple"),
+        None,
+        "token-secret",
+    )?;
     uv_snapshot!(context.filters(), context.auth_login()
         .arg(proxy.url("/basic-auth/simple"))
         .arg("--token")
-        .arg("heron")
+        .arg("token-secret")
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 0 (success)
     ----- stderr -----
@@ -392,17 +391,10 @@ async fn token_native_auth() -> Result<()> {
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 0 (success)
     ----- stdout -----
-    heron
+    token-secret
     ");
 
-    context
-        .auth_logout()
-        .arg(proxy.url("/basic-auth/simple"))
-        .arg("--username")
-        .arg("public")
-        .status()?;
-
-    // Retrieve token using URL with embedded username (no --username needed)
+    // An embedded username selects the account credential instead of the token credential.
     uv_snapshot!(context.filters(), context.auth_token()
         .arg(proxy.username_url("public", "/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
@@ -422,7 +414,8 @@ async fn token_native_auth() -> Result<()> {
     error: Cannot specify a username both via the URL and CLI; found `--username different` and `public`
     ");
 
-    Ok(())
+    token.finish()?;
+    account.finish()
 }
 
 #[tokio::test]
