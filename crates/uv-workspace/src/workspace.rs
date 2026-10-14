@@ -928,22 +928,13 @@ impl Workspace {
     pub fn workspace_dependency_groups(
         &self,
     ) -> Result<BTreeMap<GroupName, FlatDependencyGroup>, DependencyGroupError> {
-        if self
-            .packages
-            .values()
-            .any(|member| *member.root() == self.install_path)
-        {
-            // If the workspace has an explicit root, the root is a member, so we don't need to
-            // include any root-only requirements.
-            Ok(BTreeMap::default())
-        } else {
-            // Otherwise, return the dependency groups in the non-project workspace root.
-            let dependency_groups = FlatDependencyGroups::from_pyproject_toml(
-                &self.install_path,
-                &self.pyproject_toml,
-            )?;
-            Ok(dependency_groups.into_inner())
+        if !self.is_non_project() {
+            // A project root's dependency groups are already included with the workspace member.
+            return Ok(BTreeMap::default());
         }
+
+        FlatDependencyGroups::from_pyproject_toml(&self.install_path, &self.pyproject_toml)
+            .map(FlatDependencyGroups::into_inner)
     }
 
     /// Returns the set of overrides for the workspace.
