@@ -118,6 +118,24 @@ impl BackendPath {
     fn iter(&self) -> impl Iterator<Item = &str> {
         self.0.iter().map(String::as_str)
     }
+
+    /// Validate that every backend path refers to a directory within the source tree.
+    fn validate(&self, source_tree: &Path) -> Result<(), Error> {
+        let source_tree = fs_err::canonicalize(source_tree)?;
+        for path in self.iter() {
+            if Path::new(path).is_absolute() {
+                return Err(Error::BackendPathOutsideSourceTree(path.to_string()));
+            }
+            let backend_path = source_tree.join(path);
+            if !backend_path.is_dir() {
+                return Err(Error::InvalidBackendPath(path.to_string()));
+            }
+            if !fs_err::canonicalize(backend_path)?.starts_with(&source_tree) {
+                return Err(Error::BackendPathOutsideSourceTree(path.to_string()));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -693,26 +711,7 @@ impl SourceBuild {
             .and_then(|build_system| build_system.backend_path.as_ref());
 
         if let Some(backend_path) = backend_path {
-            let source_tree = fs_err::canonicalize(source_tree).map_err(Error::Io)?;
-            for path in backend_path.iter() {
-                if Path::new(path).is_absolute() {
-                    return Err(Box::new(Error::BackendPathOutsideSourceTree(
-                        path.to_string(),
-                    )));
-                }
-                let backend_path = source_tree.join(path);
-                if !backend_path.is_dir() {
-                    return Err(Box::new(Error::InvalidBackendPath(path.to_string())));
-                }
-                if !fs_err::canonicalize(backend_path)
-                    .map_err(Error::Io)?
-                    .starts_with(&source_tree)
-                {
-                    return Err(Box::new(Error::BackendPathOutsideSourceTree(
-                        path.to_string(),
-                    )));
-                }
-            }
+            backend_path.validate(source_tree)?;
         }
 
         // Only show the warning for first party and URL dependencies, not for registry dependencies
