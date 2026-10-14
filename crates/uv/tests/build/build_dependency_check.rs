@@ -7,7 +7,9 @@ use indoc::{formatdoc, indoc};
 use predicates::prelude::predicate;
 use uv_test::{TestContext, assert_path_missing, uv_snapshot};
 
-fn project_with_missing_backend(context: &TestContext) -> Result<ChildPath> {
+#[test]
+fn build_dependency_check_missing_declared_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -23,13 +25,7 @@ fn project_with_missing_backend(context: &TestContext) -> Result<ChildPath> {
     project.child("backend.py").write_str(indoc! {r#"
         raise RuntimeError("backend must not be imported")
     "#})?;
-    Ok(project)
-}
 
-#[test]
-fn build_dependency_check_missing_declared_requirement() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let project = project_with_missing_backend(&context)?;
     uv_snapshot!(context.filters(), context.build().args([
         "--preview-features", "build-dependency-check", "--no-build-isolation",
     ]).arg("--offline").current_dir(&project), @"
@@ -113,6 +109,7 @@ fn project_with_forbidden_dependency_hook(context: &TestContext) -> Result<Child
 fn build_dependency_check_disabled_without_preview() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let project = project_with_forbidden_dependency_hook(&context)?;
+    // The backend hook raises if dependency checks run without the preview feature.
     uv_snapshot!(context.filters(), context.build().args(["--wheel", "--no-build-isolation", "--offline"])
         .current_dir(&project), @"
     exit_code: 0 (success)
@@ -205,7 +202,22 @@ fn build_dependency_check_checks_extracted_sdist() -> Result<()> {
 #[test]
 fn build_dependency_check_package_specific_isolation() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let project = project_with_missing_backend(&context)?;
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["missing-backend>=1"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc! {r#"
+        raise RuntimeError("backend must not be imported")
+    "#})?;
+
     uv_snapshot!(context.filters(), context.build().args([
         "--wheel", "--offline", "--preview-features", "build-dependency-check",
         "--no-build-isolation-package", "project",
