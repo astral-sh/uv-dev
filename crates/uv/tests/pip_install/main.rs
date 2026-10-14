@@ -28,6 +28,8 @@ mod entrypoints;
 mod environment_metadata;
 #[cfg(feature = "test-python")]
 mod exact;
+#[cfg(all(feature = "test-python", feature = "test-git"))]
+mod git;
 #[cfg(feature = "test-python")]
 mod index;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
