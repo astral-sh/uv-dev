@@ -18982,6 +18982,47 @@ fn handle_record_mismatches() -> Result<()> {
     Ok(())
 }
 
+/// Relocated wheel data must match the non-canonical `RECORD` paths accepted during extraction.
+#[test]
+fn install_wheel_with_noncanonical_data_record_path() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context.temp_dir.join("foo-0.1.0-py3-none-any.whl");
+    let record = indoc! {"
+        foo-0.1.0.dist-info/METADATA,,
+        foo-0.1.0.dist-info/WHEEL,,
+        foo-0.1.0.dist-info/RECORD,,
+        ./foo-0.1.0.data/data/share/foo.txt,,
+    "};
+    let mut writer = ZipFileWriter::new(Vec::new());
+    for (name, contents) in [
+        (
+            "foo-0.1.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: foo\nVersion: 0.1.0\n",
+        ),
+        (
+            "foo-0.1.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        ),
+        ("foo-0.1.0.dist-info/RECORD", record),
+        ("foo-0.1.0.data/data/share/foo.txt", "payload\n"),
+    ] {
+        let entry = ZipEntryBuilder::new(name.into(), Compression::Stored);
+        block_on(writer.write_entry_whole(entry, contents.as_bytes()))?;
+    }
+    fs_err::write(&wheel, block_on(writer.close())?)?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg(&wheel), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + foo==0.1.0 (from file://[TEMP_DIR]/foo-0.1.0-py3-none-any.whl)
+    ");
+    context.venv.child("share/foo.txt").assert("payload\n");
+    Ok(())
+}
+
 /// Compile installed packages without compiling the Python standard library.
 #[test]
 fn compile_bytecode_excludes_stdlib() -> Result<()> {
