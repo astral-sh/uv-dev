@@ -558,14 +558,9 @@ async fn render_export<'output>(
     // Write the resolved dependencies to the output channel.
     let mut writer = OutputWriter::new(!quiet || output_file.is_none(), output_file);
 
-    // Determine the output format.
+    // Infer PEP 751 from its recognized filenames; otherwise, use requirements text.
     let format = format.unwrap_or_else(|| {
         if output_file
-            .and_then(Path::extension)
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
-        {
-            ExportFormat::RequirementsTxt
-        } else if output_file
             .and_then(Path::file_name)
             .and_then(OsStr::to_str)
             .is_some_and(is_pylock_toml)
