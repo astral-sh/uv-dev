@@ -94,15 +94,7 @@ async fn cloud_auth_challenge() -> wiremock::MockServer {
 async fn add_package_native_auth_realm() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_real_home();
     let proxy = crate::pypi_proxy::start().await;
-
-    // Clear state before the test
-    context
-        .auth_logout()
-        .arg(proxy.uri())
-        .arg("--username")
-        .arg("public")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth")
-        .status()?;
+    let credential = NativeAuthFixture::guard_vacant_entry(proxy.uri(), Some("public"), "heron")?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(indoc::indoc! { r#"
@@ -144,7 +136,7 @@ async fn add_package_native_auth_realm() -> Result<()> {
     );
 
     // Try to add the original package without credentials again. This should use credentials
-    // storied in the system keyring.
+    // stored in the system keyring.
     uv_snapshot!(context.filters(), context.add().arg("anyio").arg("--default-index").arg(proxy.username_url("public", "/basic-auth/simple"))
         .env(EnvVars::UV_PREVIEW_FEATURES, "native-auth"), @r"
     exit_code: 0 (success)
@@ -169,6 +161,7 @@ async fn add_package_native_auth_realm() -> Result<()> {
     Removed credentials for public@http://[LOCALHOST]/
     "
     );
+    credential.finish_after_logout()?;
 
     // Authentication should fail again
     uv_snapshot!(context.filters(), context.add().arg("iniconfig").arg("--default-index").arg(proxy.username_url("public", "/basic-auth/simple"))
