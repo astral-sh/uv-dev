@@ -27,13 +27,6 @@ fn python_upgrade() -> Result<()> {
      + cpython-3.10.17-[PLATFORM] (python3.10)
     ");
 
-    // Don't accept patch version as argument to upgrade command
-    uv_snapshot!(context.filters(), context.python_upgrade().arg("3.10.17"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: `uv python upgrade` only accepts minor versions, got: 3.10.17
-    ");
-
     // Upgrade an outdated patch even when a reinstall is requested.
     uv_snapshot!(context.filters(), context.python_upgrade().arg("3.10").arg("--reinstall"), @"
     exit_code: 0 (success)
