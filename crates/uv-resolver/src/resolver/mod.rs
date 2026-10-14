@@ -2990,25 +2990,31 @@ impl<'index> ForkState<'index> {
         self
     }
 
-    /// Returns the URL or index for a package and version.
-    ///
-    /// In practice, exactly one of the returned values will be `Some`.
-    fn source(
+    /// Construct a resolution package from the source selected for its pinned version.
+    fn resolution_package(
         &self,
         name: &PackageName,
         version: &Version,
-    ) -> (Option<&VerbatimParsedUrl>, Option<&IndexUrl>) {
-        let url = self.fork_urls.get(name);
-        let index = url
-            .is_none()
-            .then(|| {
+        kind: PackageNodeKind,
+    ) -> ResolutionPackage {
+        let (url, index) = if let Some(url) = self.fork_urls.get(name) {
+            (Some(url.clone()), None)
+        } else {
+            (
+                None,
                 self.pins
                     .get(name, version)
                     .expect("Every package should be pinned")
                     .index()
-            })
-            .flatten();
-        (url, index)
+                    .cloned(),
+            )
+        };
+        ResolutionPackage {
+            name: name.clone(),
+            kind,
+            url,
+            index,
+        }
     }
 
     fn into_resolution(self) -> Resolution<'index> {
@@ -3094,27 +3100,13 @@ impl<'index> ForkState<'index> {
                     | PubGrubPackageInner::Python(_)
                     | PubGrubPackageInner::System(_) => continue,
                 };
-                let from = self_name.map(|name| {
-                    let (url, index) = self.source(name, self_version);
-                    ResolutionNode {
-                        package: ResolutionPackage {
-                            name: name.clone(),
-                            kind: self_kind.clone(),
-                            url: url.cloned(),
-                            index: index.cloned(),
-                        },
-                        version: self_version.clone(),
-                    }
+                let from = self_name.map(|name| ResolutionNode {
+                    package: self.resolution_package(name, self_version, self_kind.clone()),
+                    version: self_version.clone(),
                 });
 
-                let (url, index) = self.source(name, dependency_version);
                 let to = ResolutionNode {
-                    package: ResolutionPackage {
-                        name: name.clone(),
-                        kind,
-                        url: url.cloned(),
-                        index: index.cloned(),
-                    },
+                    package: self.resolution_package(name, dependency_version, kind),
                     version: dependency_version.clone(),
                 };
                 let edge = ResolutionDependencyEdge { from, to, marker };
@@ -3141,14 +3133,8 @@ impl<'index> ForkState<'index> {
                     marker: MarkerTree::TRUE,
                 } = &*self.pubgrub.package_store[package]
                 {
-                    let (url, index) = self.source(name, &version);
                     Some((
-                        ResolutionPackage {
-                            name: name.clone(),
-                            kind: kind.clone(),
-                            url: url.cloned(),
-                            index: index.cloned(),
-                        },
+                        self.resolution_package(name, &version, kind.clone()),
                         version,
                     ))
                 } else {
