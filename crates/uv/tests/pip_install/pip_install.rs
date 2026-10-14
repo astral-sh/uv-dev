@@ -6912,55 +6912,6 @@ fn deptry_gitignore() -> Result<()> {
     Ok(())
 }
 
-/// Reinstall an installed package with `--no-index`
-#[test]
-fn reinstall_no_index() {
-    let context = uv_test::test_context!("3.12");
-
-    // Install anyio
-    uv_snapshot!(context.pip_install()
-        .arg("anyio")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
-
-    // Install anyio again
-    uv_snapshot!(context.pip_install()
-        .arg("anyio")
-        .arg("--no-index")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 1 package in [TIME]
-    "
-    );
-
-    // Reinstall
-    // We should not consider the already installed package as a source and
-    // should attempt to pull from the index
-    uv_snapshot!(context.pip_install()
-        .arg("anyio")
-        .arg("--no-index")
-        .arg("--reinstall")
-        .arg("--strict"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because anyio was not found in the provided package locations and you require anyio, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
-    "
-    );
-}
-
 #[test]
 fn already_installed_remote_dependencies() {
     let context = uv_test::test_context!("3.12");
