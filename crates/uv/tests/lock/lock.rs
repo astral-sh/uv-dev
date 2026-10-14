@@ -38344,25 +38344,17 @@ fn lock_script_editable_path_dependency_change() -> Result<()> {
         "#,
     )?;
 
-    // Expected behavior: this should fail because the script lockfile is stale.
-    let output = context
-        .lock()
-        .arg("--script")
-        .arg("script.py")
-        .arg("--locked")
-        .output()?;
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !output.status.success(),
-        indoc! {"
-            expected `uv lock --script script.py --locked` to fail after editable dependency changes, but it succeeded
-            {}"
-        },
-        stderr
-    );
-    assert!(stderr.contains("needs to be updated"), "{stderr}");
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    // Expected behavior: re-locking should pick up the new transitive dependency.
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("script.py.lock"), lock);
+
+    // Re-locking picks up the editable dependency's new transitive requirement.
     context
         .lock()
         .arg("--script")
