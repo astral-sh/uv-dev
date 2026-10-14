@@ -3259,7 +3259,8 @@ fn pip_entrypoints() -> Result<()> {
 /// pip changed its launcher entry points in 24.1b1. See astral-sh/uv#1982.
 #[test]
 fn pip_entrypoints_24_1() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    // The default test cutoff predates pip's changed entry-point format.
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
     context
         .temp_dir
         .child("requirements.txt")
