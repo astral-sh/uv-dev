@@ -1032,8 +1032,10 @@ pub fn validate_and_heal_record<'a>(
         files.remove(Path::new(&dist_info_dir).join("RECORD.p7s").as_path());
     }
 
-    // If the RECORD was correct, there were no extra entries in the record and no missing entries
-    // that weren't removed from files.
+    if extra_record_entries.is_empty() && files.is_empty() {
+        return Ok(None);
+    }
+
     if !extra_record_entries.is_empty() {
         debug!(
             "Files `{}` are listed in `RECORD` but missing from the wheel archive for `{dist}`",
@@ -1052,27 +1054,22 @@ pub fn validate_and_heal_record<'a>(
                 .join("`, `")
         );
     }
-    let healed = !extra_record_entries.is_empty() || !files.is_empty();
-    if healed {
-        debug!("Rewriting `RECORD` to match actual wheel contents for {dist}");
-        // We already removed RECORD entries with no matching unpacked file, now add files that
-        // were unpacked but not listed in the archive.
-        for (path, size) in files {
-            record.push(RecordEntry {
-                // RECORD entries always use forward slashes, even on Windows.
-                path: PortablePath::from(path).to_string(),
-                // We don't heal the hash. It's not validated anyway (pip doesn't), and by rules of
-                // the spec the wheel would have been rejected anyway (if the spec would have been
-                // enforced).
-                hash: None,
-                size: Some(size),
-            });
-        }
-
-        write_record(wheel_dir, &dist_info_prefix, record)?;
+    debug!("Rewriting `RECORD` to match actual wheel contents for {dist}");
+    // Add files from the archive that were not listed in `RECORD`.
+    for (path, size) in files {
+        record.push(RecordEntry {
+            // RECORD entries always use forward slashes, even on Windows.
+            path: PortablePath::from(path).to_string(),
+            // We don't heal the hash. It's not validated anyway (pip doesn't), and by rules of
+            // the spec the wheel would have been rejected anyway (if the spec would have been
+            // enforced).
+            hash: None,
+            size: Some(size),
+        });
     }
 
-    Ok(healed.then(|| PathBuf::from(dist_info_dir).join("RECORD")))
+    write_record(wheel_dir, &dist_info_prefix, record)?;
+    Ok(Some(PathBuf::from(dist_info_dir).join("RECORD")))
 }
 
 /// Parse metadata in email message format, such as WHEEL and METADATA.
