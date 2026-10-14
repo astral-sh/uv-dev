@@ -18,7 +18,7 @@ use uv_types::InstalledPackagesProvider;
 use crate::preferences::{Entry, PreferenceSource, Preferences};
 use crate::prerelease::{PrereleaseSelection, PrereleaseStrategy};
 use crate::prioritized_distribution::{
-    CompatibleDist, IncompatibleDist, IncompatibleSource, IncompatibleWheel, PrioritizedDist,
+    CompatibleDist, IncompatibleDistRef, IncompatibleSource, IncompatibleWheel, PrioritizedDist,
 };
 use crate::pubgrub::Range;
 use crate::resolution_mode::ResolutionStrategy;
@@ -650,9 +650,9 @@ impl CandidateSelector {
             if matches!(
                 candidate.dist(),
                 CandidateDist::Incompatible {
-                    incompatible_dist: IncompatibleDist::Source(IncompatibleSource::ExcludeNewer(
-                        _
-                    )) | IncompatibleDist::Wheel(
+                    incompatible_dist: IncompatibleDistRef::Source(
+                        IncompatibleSource::ExcludeNewer(_)
+                    ) | IncompatibleDistRef::Wheel(
                         IncompatibleWheel::ExcludeNewer(_)
                     ),
                     ..
@@ -839,7 +839,7 @@ pub(crate) enum CandidateDist<'a> {
     Compatible(CompatibleDist<'a>),
     Incompatible {
         /// The reason the prioritized distribution is incompatible.
-        incompatible_dist: IncompatibleDist,
+        incompatible_dist: IncompatibleDistRef<'a>,
         /// The prioritized distribution that had no compatible wheelr or sdist.
         prioritized_dist: &'a PrioritizedDist,
     },
@@ -868,11 +868,11 @@ impl<'a> From<&'a PrioritizedDist> for CandidateDist<'a> {
             // but in the future we may want to return both so the resolver can explain
             // why neither distribution kind can be used.
             let dist = if let Some(incompatibility) = value.incompatible_source() {
-                IncompatibleDist::Source(incompatibility.clone())
+                IncompatibleDistRef::Source(incompatibility)
             } else if let Some(incompatibility) = value.incompatible_wheel() {
-                IncompatibleDist::Wheel(incompatibility.clone())
+                IncompatibleDistRef::Wheel(incompatibility)
             } else {
-                IncompatibleDist::Unavailable
+                IncompatibleDistRef::Unavailable
             };
             CandidateDist::Incompatible {
                 incompatible_dist: dist,
