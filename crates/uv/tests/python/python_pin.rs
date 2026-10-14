@@ -412,6 +412,7 @@ fn python_pin_no_python() {
     ----- stderr -----
     warning: No interpreter found for Python 3.12 in [PYTHON SOURCES]
     ");
+    assert_eq!(context.read(PYTHON_VERSION_FILENAME), "3.12\n");
 }
 
 #[test]
@@ -616,6 +617,7 @@ fn python_pin_resolve_no_python() {
 
     hint: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
     ");
+    assert_path_missing(context.temp_dir.child(PYTHON_VERSION_FILENAME));
 }
 
 #[test]
