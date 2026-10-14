@@ -553,7 +553,7 @@ fn install_script(
     site_packages: &Path,
     record: &mut [RecordEntry],
     file: &DirEntry,
-    #[allow(unused)] rename_or_copy: &mut RenameOrCopy,
+    #[cfg_attr(not(unix), expect(unused_variables))] rename_or_copy: &mut RenameOrCopy,
 ) -> Result<(), Error> {
     const PLACEHOLDER_PYTHON: &[u8; 8] = b"#!python";
 
