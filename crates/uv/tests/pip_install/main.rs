@@ -7,6 +7,8 @@ use uv_test::pypi_proxy;
 mod binary_policy;
 #[cfg(feature = "test-python")]
 mod direct_url_hashes;
+#[cfg(feature = "test-python")]
+mod index;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod json;
 #[cfg(feature = "test-python")]
