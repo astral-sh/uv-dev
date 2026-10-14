@@ -516,9 +516,7 @@ impl<'a> Planner<'a> {
                 Dist::Source(SourceDist::DirectUrl(sdist)) => {
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    if let Some(wheel) = source_wheel_cache_hit(built_index.url(sdist), sdist)
-                        && cached_wheel_matches_source(wheel.filename(), sdist)
-                    {
+                    if let Some(wheel) = source_wheel_cache_hit(built_index.url(sdist), sdist) {
                         let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
                             parsed_url: sdist.to_parsed_url(),
                             verbatim: sdist.url.clone(),
@@ -531,9 +529,7 @@ impl<'a> Planner<'a> {
                 Dist::Source(SourceDist::GitPath(sdist)) => {
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    if let Some(wheel) = built_index.git_path(sdist)?
-                        && cached_wheel_matches_source(wheel.filename(), sdist)
-                    {
+                    if let Some(wheel) = built_index.git_path(sdist)? {
                         let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
                             parsed_url: sdist.to_parsed_url(),
                             verbatim: sdist.url.clone(),
@@ -546,9 +542,7 @@ impl<'a> Planner<'a> {
                 Dist::Source(SourceDist::GitDirectory(sdist)) => {
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    if let Some(wheel) = built_index.git_directory(sdist)
-                        && cached_wheel_matches_source(wheel.filename(), sdist)
-                    {
+                    if let Some(wheel) = built_index.git_directory(sdist) {
                         let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
                             parsed_url: sdist.to_parsed_url(),
                             verbatim: sdist.url.clone(),
@@ -566,9 +560,7 @@ impl<'a> Planner<'a> {
 
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
-                    if let Some(wheel) = source_wheel_cache_hit(built_index.path(sdist), sdist)
-                        && cached_wheel_matches_source(wheel.filename(), sdist)
-                    {
+                    if let Some(wheel) = source_wheel_cache_hit(built_index.path(sdist), sdist) {
                         let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
                             parsed_url: sdist.to_parsed_url(),
                             verbatim: sdist.url.clone(),
@@ -587,7 +579,6 @@ impl<'a> Planner<'a> {
                     // Find the most-compatible wheel from the cache, since we don't know
                     // the filename in advance.
                     if let Some(wheel) = source_wheel_cache_hit(built_index.directory(sdist), sdist)
-                        && cached_wheel_matches_source(wheel.filename(), sdist)
                     {
                         let cached_dist = wheel.into_url_dist(VerbatimParsedUrl {
                             parsed_url: sdist.to_parsed_url(),
@@ -638,21 +629,6 @@ fn source_wheel_cache_hit<T>(
         debug!("Failed to deserialize cached wheel filename for: {source} ({err})");
         None
     })
-}
-
-/// Check that a cached wheel belongs to the requested source distribution, warning on mismatch.
-fn cached_wheel_matches_source(
-    filename: &WheelFilename,
-    source: &(impl Name + fmt::Display),
-) -> bool {
-    if &filename.name == source.name() {
-        true
-    } else {
-        warn!(
-            "Cached wheel filename does not match requested distribution `{source}` (found `{filename}`)"
-        );
-        false
-    }
 }
 
 /// Returns `true` if the given distribution is a seed package.
