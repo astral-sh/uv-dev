@@ -14,7 +14,6 @@ fn python_find_script_python_not_found() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_env(EnvVars::UV_PYTHON_PREFERENCE, "only-managed")
         .with_env(EnvVars::UV_INTERNAL__TEST_PYTHON_MANAGED, "");
-    context.temp_dir.child(".python-version").touch().unwrap();
 
     let script = context.temp_dir.child("foo.py");
 
