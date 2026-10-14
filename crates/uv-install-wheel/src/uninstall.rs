@@ -47,11 +47,10 @@ pub fn uninstall_wheel(
     // Uninstall the files, keeping track of any directories that are left empty.
     let mut visited = BTreeSet::new();
     for entry in &record {
-        let path = site_packages.join(&entry.path);
-
-        if !is_path_in_scheme(&entry.path, site_packages, &distribution, layout) {
+        let Some(path) = record_path_in_scheme(&entry.path, site_packages, &distribution, layout)
+        else {
             continue;
-        }
+        };
 
         // On Windows, deleting the current executable is a special case.
         #[cfg(windows)]
@@ -164,19 +163,19 @@ pub fn uninstall_wheel(
 static WARNED_FOR_RECORD_ENTRY_PACKAGE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static WARNED_FOR_EGG_TOP_LEVEL_PACKAGE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
-/// Check if the path is inside the venv or a system interpreter path, and warn if it isn't.
+/// Resolve a `RECORD` entry to a path inside the installation scheme, warning otherwise.
 ///
-/// Returns `false` is a path is outside the paths that files from a wheel can be installed into,
-/// so that the caller can reject RECORD entries that escape site-packages via path traversal (e.g.,
-/// `../../../etc/passwd`). A malicious wheel could otherwise include such entries to cause deletion
-/// of arbitrary files on uninstall.
-fn is_path_in_scheme(
+/// Reject entries that escape site-packages via path traversal (e.g., `../../../etc/passwd`). A
+/// malicious wheel could otherwise include such entries to cause deletion of arbitrary files on
+/// uninstall.
+fn record_path_in_scheme(
     path: &str,
     site_packages: &Path,
     distribution: impl Display,
     layout: &Layout,
-) -> bool {
-    let normalized = normalize_path(&site_packages.join(path));
+) -> Option<PathBuf> {
+    let target = site_packages.join(path);
+    let normalized = normalize_path(&target);
 
     // `purelib` or `platlib` are site-packages (depending on `Root-Is-Purelib`). As
     // `.data/*` goes into the directories of `scheme`, `.dist-info` goes into site-packages
@@ -193,7 +192,7 @@ fn is_path_in_scheme(
         || normalized.starts_with(&layout.scheme.scripts)
         || normalized.starts_with(&layout.scheme.include)
     {
-        true
+        Some(target)
     } else {
         // A package that does this is malformed to the point of being a risk to the user, be
         // annoying about it, but only once per package.
@@ -209,7 +208,7 @@ fn is_path_in_scheme(
                 path
             );
         }
-        false
+        None
     }
 }
 
