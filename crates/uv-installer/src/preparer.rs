@@ -128,15 +128,15 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             }
         }
 
-        let download = match DownloadRegistration::register(in_flight, dist.distribution_id()).await
-        {
-            DownloadRegistration::Completed(result) => {
+        let id = dist.distribution_id();
+        let download = match in_flight.downloads.register_or_wait(&id).await {
+            Some(result) => {
                 let cached = result.map_err(Error::Thread)?;
                 validate_in_flight_wheel(&dist, cached.filename())
                     .map_err(|err| Error::from_dist(dist, err, resolution))?;
                 return Ok(cached);
             }
-            DownloadRegistration::Started(download) => download,
+            None => PendingDownload::new(in_flight, id),
         };
 
         let policy = self.hashes.archive_policy(&dist);
@@ -163,31 +163,20 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
     }
 }
 
-/// Either a completed download or ownership of a newly registered download.
-enum DownloadRegistration<'a> {
-    Completed(Result<CachedDist, String>),
-    Started(PendingDownload<'a>),
-}
-
-impl<'a> DownloadRegistration<'a> {
-    async fn register(in_flight: &'a InFlight, id: DistributionId) -> Self {
-        match in_flight.downloads.register_or_wait(&id).await {
-            Some(result) => Self::Completed(result),
-            None => Self::Started(PendingDownload {
-                in_flight,
-                id: Some(id),
-            }),
-        }
-    }
-}
-
 /// Publish a result for a registered download, including when its owner is cancelled.
 struct PendingDownload<'a> {
     in_flight: &'a InFlight,
     id: Option<DistributionId>,
 }
 
-impl PendingDownload<'_> {
+impl<'a> PendingDownload<'a> {
+    fn new(in_flight: &'a InFlight, id: DistributionId) -> Self {
+        Self {
+            in_flight,
+            id: Some(id),
+        }
+    }
+
     fn complete(mut self, result: Result<CachedDist, String>) {
         let id = self.id.take().expect("download has not been completed");
         self.in_flight.downloads.done(id, result);
@@ -354,20 +343,17 @@ mod tests {
     use uv_distribution_types::DistributionId;
     use uv_types::InFlight;
 
-    use super::DownloadRegistration;
+    use super::PendingDownload;
 
     #[tokio::test]
     async fn cancelled_download_wakes_waiters() {
         let in_flight = InFlight::default();
         let id = DistributionId::PathBuf("example.whl".into());
-        let DownloadRegistration::Started(download) =
-            DownloadRegistration::register(&in_flight, id.clone()).await
-        else {
-            panic!("expected to register a new download");
-        };
+        assert!(in_flight.downloads.register_or_wait(&id).await.is_none());
+        let download = PendingDownload::new(&in_flight, id.clone());
 
         let (registration, ()) = tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(biased; DownloadRegistration::register(&in_flight, id), async {
+            tokio::join!(biased; in_flight.downloads.register_or_wait(&id), async {
                 drop(download);
             })
         })
@@ -376,7 +362,7 @@ mod tests {
 
         assert!(matches!(
             registration,
-            DownloadRegistration::Completed(Err(message))
+            Some(Err(message))
                 if message == "Distribution preparation was cancelled"
         ));
     }
