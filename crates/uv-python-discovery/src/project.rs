@@ -431,30 +431,33 @@ fn validate_python_requirement(
         }
     };
 
-    match source {
+    let version = interpreter.python_version().clone();
+    let requires_python = requires_python.clone();
+    let requires_python_sources = Box::new(conflicting_requires);
+    Err(match source {
         PythonRequestSource::UserRequest => {
-            Err(PythonSelectionError::RequestedPythonProjectIncompatibility(
-                interpreter.python_version().clone(),
-                requires_python.clone(),
-                Box::new(conflicting_requires),
-            ))
+            PythonSelectionError::RequestedPythonProjectIncompatibility(
+                version,
+                requires_python,
+                requires_python_sources,
+            )
         }
-        PythonRequestSource::DotPythonVersion(file) => Err(
+        PythonRequestSource::DotPythonVersion(file) => {
             PythonSelectionError::DotPythonVersionProjectIncompatibility {
                 python_request: file.path().user_display().to_string(),
-                version: interpreter.python_version().clone(),
-                requires_python: requires_python.clone(),
-                requires_python_sources: Box::new(conflicting_requires),
-            },
-        ),
-        PythonRequestSource::RequiresPython => {
-            Err(PythonSelectionError::RequiresPythonProjectIncompatibility(
-                interpreter.python_version().clone(),
-                requires_python.clone(),
-                Box::new(conflicting_requires),
-            ))
+                version,
+                requires_python,
+                requires_python_sources,
+            }
         }
-    }
+        PythonRequestSource::RequiresPython => {
+            PythonSelectionError::RequiresPythonProjectIncompatibility(
+                version,
+                requires_python,
+                requires_python_sources,
+            )
+        }
+    })
 }
 
 pub fn format_requires_python_sources(conflicts: &RequiresPythonSources) -> String {
