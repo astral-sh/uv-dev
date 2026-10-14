@@ -11546,41 +11546,34 @@ fn install_relocatable() -> Result<()> {
         .assert()
         .success();
 
-    // Script should run correctly in-situ.
-    let script_path = if cfg!(windows) {
-        context.venv.child(r"Scripts\black.exe")
-    } else {
-        context.venv.child("bin/black")
-    };
-    Command::new(script_path.as_os_str())
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Hello world!"));
+    let script_name = format!("black{}", std::env::consts::EXE_SUFFIX);
+    let script = venv_bin_path(&context.venv).join(&script_name);
+    uv_snapshot!(Command::new(&script), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello world!
+    ");
 
-    // Relocate the venv, and see if it still works.
-    let new_venv_path = context.venv.with_file_name("relocated");
-    fs::rename(context.venv, new_venv_path.clone())?;
-
-    let script_path = if cfg!(windows) {
-        new_venv_path.join(r"Scripts\black.exe")
-    } else {
-        new_venv_path.join("bin/black")
-    };
-    Command::new(script_path.as_os_str())
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Hello world!"));
+    let relocated = context.venv.with_file_name("relocated");
+    fs::rename(&context.venv, &relocated)?;
+    let relocated_script = venv_bin_path(&relocated).join(&script_name);
+    uv_snapshot!(Command::new(&relocated_script), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello world!
+    ");
 
     // Relocatable entrypoint should still be usable even if symlinked.
     // Only testable on POSIX since symlinks require elevated privilege on Windows
     #[cfg(unix)]
     {
-        let script_symlink_path = context.temp_dir.join("black");
-        fs_err::os::unix::fs::symlink(script_path, script_symlink_path.clone())?;
-        Command::new(script_symlink_path.as_os_str())
-            .assert()
-            .success()
-            .stdout(predicate::str::contains("Hello world!"));
+        let script_symlink = context.temp_dir.join("black");
+        symlink(&relocated_script, &script_symlink)?;
+        uv_snapshot!(Command::new(&script_symlink), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        Hello world!
+        ");
     }
 
     Ok(())
