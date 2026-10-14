@@ -4927,7 +4927,7 @@ fn compile_editable() -> Result<()> {
     Ok(())
 }
 
-/// If an editable is repeated, it should only be built once.
+/// Resolve repeated editable paths once while retaining self-referential extras.
 #[test]
 fn deduplicate_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
