@@ -557,12 +557,19 @@ fn python_upgrade_implementation() {
     // Install pypy
     context.python_install().arg("pypy@3.11").assert().success();
 
-    // Run the upgrade, we should not install cpython
+    // Upgrading PyPy should not install CPython.
     uv_snapshot!(context.filters(), context.python_upgrade(), @"
     exit_code: 0 (success)
     ----- stderr -----
     All versions already on latest supported patch release
     ");
+
+    context
+        .python_list()
+        .args(["cpython", "--only-installed", "--managed-python"])
+        .assert()
+        .success()
+        .stdout("");
 }
 
 #[test]
