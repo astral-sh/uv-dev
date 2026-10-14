@@ -181,16 +181,18 @@ impl<'de> Deserialize<'de> for BackendPath {
     }
 }
 
-/// `[build-backend]` from pyproject.toml
+/// The selected PEP 517 build backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Pep517Backend {
-    /// The build backend string such as `setuptools.build_meta:__legacy__` or `maturin` from
-    /// `build-backend.backend` in pyproject.toml
+    /// The `build-system.build-backend` identifier, such as `setuptools.build_meta:__legacy__` or
+    /// `maturin`.
     ///
     /// <https://peps.python.org/pep-0517/#build-wheel>
     backend: String,
-    /// `build-backend.requirements` in pyproject.toml
+    /// Requirements from `build-system.requires`, or the default backend's requirements.
     requirements: Vec<Requirement>,
+    /// In-tree directories listed in `build-system.backend-path`.
+    ///
     /// <https://peps.python.org/pep-0517/#in-tree-build-backends>
     backend_path: Option<BackendPath>,
 }
