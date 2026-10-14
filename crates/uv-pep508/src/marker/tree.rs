@@ -1339,6 +1339,10 @@ impl MarkerTree {
         ) {
             let mut seen = FxHashSet::default();
             for (_, tree) in edges {
+                // Terminal nodes contain no extras and do not need deduplication.
+                if tree.is_true() || tree.is_false() {
+                    continue;
+                }
                 if seen.insert(tree) {
                     imp(tree, f);
                 }
