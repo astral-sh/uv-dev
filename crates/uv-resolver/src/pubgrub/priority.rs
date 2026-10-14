@@ -53,45 +53,30 @@ impl PubGrubPriorities {
         };
 
         let len = self.package_priority.len();
+        let classify = |index| {
+            let index = Reverse(index);
+            if urls.get(name).is_some() {
+                PubGrubPriority::DirectUrl(index)
+            } else if version.is_singleton_constraint() {
+                PubGrubPriority::Singleton(index)
+            } else {
+                PubGrubPriority::Unspecified(index)
+            }
+        };
         match self.package_priority.entry_ref(name) {
             EntryRef::Occupied(mut entry) => {
                 // Preserve the original index.
                 let index = Self::get_index(&entry).unwrap_or(len);
+                let priority = classify(index);
 
-                // Compute the priority.
-                let priority = if urls.get(name).is_some() {
-                    PubGrubPriority::DirectUrl(Reverse(index))
-                } else if version.is_singleton_constraint() {
-                    PubGrubPriority::Singleton(Reverse(index))
-                } else {
-                    // Keep the conflict-causing packages to avoid loops where we seesaw between
-                    // `Unspecified` and `Conflict*`.
-                    if matches!(
-                        entry.get(),
-                        PubGrubPriority::ConflictEarly(_) | PubGrubPriority::ConflictLate(_)
-                    ) {
-                        return;
-                    }
-                    PubGrubPriority::Unspecified(Reverse(index))
-                };
-
-                // Take the maximum of the new and existing priorities.
+                // Retain higher priorities, including conflict priorities, to avoid
+                // reprioritization loops.
                 if priority > *entry.get() {
                     entry.insert(priority);
                 }
             }
             EntryRef::Vacant(entry) => {
-                // Compute the priority.
-                let priority = if urls.get(name).is_some() {
-                    PubGrubPriority::DirectUrl(Reverse(len))
-                } else if version.is_singleton_constraint() {
-                    PubGrubPriority::Singleton(Reverse(len))
-                } else {
-                    PubGrubPriority::Unspecified(Reverse(len))
-                };
-
-                // Insert the priority.
-                entry.insert(priority);
+                entry.insert(classify(len));
             }
         }
     }
