@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::Result;
@@ -165,7 +166,7 @@ fn python_upgrade_transparent_from_venv() {
     Activate with: source .venv/[BIN]/activate
     ");
 
-    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, context.interpreter()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -185,7 +186,7 @@ fn python_upgrade_transparent_from_venv() {
 
     let second_interpreter = venv_bin_path(context.temp_dir.join(second_venv))
         .join(format!("python{}", std::env::consts::EXE_SUFFIX));
-    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, &second_interpreter), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -201,7 +202,7 @@ fn python_upgrade_transparent_from_venv() {
     ");
 
     // First virtual environment should reflect upgraded patch
-    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, context.interpreter()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.[LATEST]
@@ -209,7 +210,7 @@ fn python_upgrade_transparent_from_venv() {
     );
 
     // Second virtual environment should reflect upgraded patch
-    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, &second_interpreter), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.[LATEST]
@@ -293,7 +294,7 @@ fn python_no_transparent_upgrade_with_venv_patch_specification() {
     Activate with: source .venv/[BIN]/activate
     ");
 
-    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, context.interpreter()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -309,7 +310,7 @@ fn python_no_transparent_upgrade_with_venv_patch_specification() {
     ");
 
     // The virtual environment Python version remains the same.
-    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, context.interpreter()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -366,7 +367,7 @@ fn python_transparent_upgrade_venv_venv() {
 
     let second_interpreter = venv_bin_path(context.temp_dir.join(second_venv))
         .join(format!("python{}", std::env::consts::EXE_SUFFIX));
-    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, &second_interpreter), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -382,7 +383,7 @@ fn python_transparent_upgrade_venv_venv() {
     ");
 
     // Should have transparently upgraded in second virtual environment
-    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, &second_interpreter), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.[LATEST]
@@ -417,7 +418,7 @@ fn python_upgrade_transparent_from_venv_module() {
     exit_code: 0 (success)
     ");
 
-    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, context.interpreter()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.9
@@ -434,7 +435,7 @@ fn python_upgrade_transparent_from_venv_module() {
     );
 
     // Virtual environment should reflect upgraded patch
-    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, context.interpreter()), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.12.[LATEST]
@@ -479,7 +480,7 @@ fn python_upgrade_transparent_from_venv_module_in_venv() {
 
     let second_interpreter = venv_bin_path(context.temp_dir.join(second_venv))
         .join(format!("python{}", std::env::consts::EXE_SUFFIX));
-    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, &second_interpreter), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -496,7 +497,7 @@ fn python_upgrade_transparent_from_venv_module_in_venv() {
     );
 
     // Second virtual environment should reflect upgraded patch.
-    uv_snapshot!(context.filters(), context.external_command(&second_interpreter).arg("--version"), @"
+    uv_snapshot!(context.filters(), venv_version(&context, &second_interpreter), @"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.[LATEST]
@@ -672,7 +673,7 @@ fn python_sync_transparent_patch_upgrade_reuses_environment() -> Result<()> {
     assert_eq!(context.read(marker), "pre-upgrade environment\n");
 
     // The reused environment should run the upgraded Python patch.
-    uv_snapshot!(context.filters(), context.python_command().arg("--version"), @r"
+    uv_snapshot!(context.filters(), venv_version(&context, context.interpreter()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.[LATEST]
@@ -754,7 +755,7 @@ fn python_sync_honors_pinned_patch_version() -> Result<()> {
     ");
 
     // Query the synced environment directly so a project command cannot repair it first.
-    uv_snapshot!(context.filters(), context.external_command(context.interpreter()).arg("--version"), @r"
+    uv_snapshot!(context.filters(), venv_version(&context, context.interpreter()), @r"
     exit_code: 0 (success)
     ----- stdout -----
     Python 3.10.17
@@ -859,16 +860,22 @@ print(sys.executable)
 
     context.python_upgrade().arg("3.10").assert().success();
 
-    let mut probe = context.external_command(python);
-    probe.args([
+    let probe = venv_version(&context, python);
+    Ok((context, probe))
+}
+
+/// Run the interpreter to verify it initializes as a virtual environment and print its version.
+fn venv_version(context: &TestContext, interpreter: impl AsRef<Path>) -> Command {
+    let mut command = context.external_command(interpreter);
+    command.args([
         "-I",
         "-c",
         indoc! {"
             import sys
             if sys.prefix == sys.base_prefix:
-                raise RuntimeError('the script interpreter is no longer in a virtual environment')
+                raise RuntimeError('the interpreter is not in a virtual environment')
             print('Python ' + sys.version.split()[0])
         "},
     ]);
-    Ok((context, probe))
+    command
 }
