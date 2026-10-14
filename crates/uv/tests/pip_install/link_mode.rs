@@ -7,13 +7,12 @@ use assert_cmd::prelude::*;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
-use uv_test::venv_bin_path;
+use uv_test::{TestContext, venv_bin_path};
 
 const ARCHIVE_SCRIPT: &str = "#!/bin/sh\necho 'archive payload'\n";
 
 /// Install a wheel with both an executable archive member and a generated console script.
-fn install_executable(link_mode: Option<&str>) -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+fn install_executable(context: &TestContext, link_mode: Option<&str>) -> Result<()> {
     let wheel = context
         .temp_dir
         .join("executable_file-1.0.0-py3-none-any.whl");
@@ -45,17 +44,34 @@ fn install_executable(link_mode: Option<&str>) -> Result<()> {
 
 #[test]
 fn executable_default() -> Result<()> {
-    install_executable(None)
+    install_executable(&uv_test::test_context!("3.12"), None)
 }
 
 #[test]
 fn executable_copy() -> Result<()> {
-    install_executable(Some("copy"))
+    install_executable(&uv_test::test_context!("3.12"), Some("copy"))
 }
 
 #[test]
 fn executable_hardlink() -> Result<()> {
-    install_executable(Some("hardlink"))
+    install_executable(&uv_test::test_context!("3.12"), Some("hardlink"))
+}
+
+/// Cloning data blocks must retain executable permissions.
+///
+/// Requires `UV_INTERNAL__TEST_COW_FS`.
+/// See <https://github.com/astral-sh/uv/issues/18181>.
+#[test]
+#[cfg(unix)]
+fn executable_clone_on_cow_filesystem() -> Result<()> {
+    let Some(context) = uv_test::test_context!("3.12").with_cache_on_cow_fs()? else {
+        return Ok(());
+    };
+    let Some(context) = context.with_working_dir_on_cow_fs()? else {
+        return Ok(());
+    };
+    context.venv().assert().success();
+    install_executable(&context, Some("clone"))
 }
 
 fn write_executable_wheel(path: &Path) -> Result<()> {
