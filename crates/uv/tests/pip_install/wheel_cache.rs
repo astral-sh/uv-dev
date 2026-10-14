@@ -8,7 +8,40 @@ use indoc::indoc;
 
 use uv_test::packse::PackseServer;
 use uv_test::packse::scenario::Scenario;
-use uv_test::site_packages_path;
+use uv_test::{site_packages_path, uv_snapshot};
+
+/// Prefer the highest cached version even when an older version was cached more recently.
+#[test]
+fn cache_priority() {
+    let context = uv_test::test_context!("3.12");
+    let index = PackseServer::new("simple/single-package.toml");
+    let index_url = index.index_url();
+    for requirement in ["a==2.0.0", "a==1.0.0"] {
+        context
+            .pip_install()
+            .arg(requirement)
+            .arg("--index-url")
+            .arg(&index_url)
+            .assert()
+            .success();
+    }
+    context.assert_installed("a", "1.0.0");
+    context.reset_venv();
+    drop(index);
+
+    uv_snapshot!(context.pip_install()
+        .arg("a")
+        .arg("--index-url")
+        .arg(index_url)
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    ");
+    context.assert_installed("a", "2.0.0");
+}
 
 /// A cached compatible wheel must not displace a more specific wheel selected by the resolver.
 /// See astral-sh/uv#12273.
