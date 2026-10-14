@@ -3631,7 +3631,9 @@ fn assert_cpython_bytecode_compiled(context: &TestContext, version: &str) {
     context
         .external_command(bin_path.path())
         .args([
-            "-I",
+            // Keep compiler settings such as PYTHONOPTIMIZE, but exclude the user site and cwd.
+            "-s",
+            "-P",
             "-B",
             "-c",
             indoc! {r#"
