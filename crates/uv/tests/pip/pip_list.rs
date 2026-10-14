@@ -8,6 +8,8 @@ use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 
 use uv_static::EnvVars;
+#[cfg(feature = "test-python")]
+use uv_test::packse::PackseServer;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -396,39 +398,45 @@ fn list_outdated_git() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(feature = "test-python")]
 fn list_outdated_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    // The configured index has `a==3.0.0` and `b`; the explicit index has only `a<=2.0.0`.
+    let configured = PackseServer::new("extras/extra-does-not-exist-backtrack.toml");
+    let explicit = PackseServer::new("simple/single-package.toml");
+    context.temp_dir.child("uv.toml").write_str(&format!(
+        "[[index]]\nurl = \"{}\"\ndefault = true\n",
+        configured.index_url()
+    ))?;
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==3.0.0")?;
-
-    uv_snapshot!(context.pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
+    uv_snapshot!(context.pip_install().args(["a==1.0.0", "b==1.0.0", "--strict"]), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.0.0
-     + idna==3.6
-     + sniffio==1.3.1
-    "
-    );
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + a==1.0.0
+     + b==1.0.0
+    ");
 
-    uv_snapshot!(context.pip_list()
-        .arg("--outdated")
-        .arg("--index-url")
-        .arg("https://test.pypi.org/simple"), @"
+    uv_snapshot!(context.pip_list().arg("--outdated"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Package Version Latest Type
     ------- ------- ------ -----
-    anyio   3.0.0   3.5.0  wheel
-    "
-    );
+    a       1.0.0   3.0.0  wheel
+    ");
+
+    uv_snapshot!(context.pip_list()
+        .arg("--outdated")
+        .arg("--index-url")
+        .arg(explicit.index_url()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Package Version Latest Type
+    ------- ------- ------ -----
+    a       1.0.0   2.0.0  wheel
+    ");
 
     Ok(())
 }
