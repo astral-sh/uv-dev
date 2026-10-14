@@ -306,8 +306,6 @@ pub struct SourceBuild {
     version_id: Option<String>,
     /// Whether we do a regular PEP 517 build or a PEP 660 editable build
     build_kind: BuildKind,
-    /// Whether to send build output to `stderr` or `tracing`, etc.
-    level: BuildOutput,
     /// Modified PATH that contains the `venv_bin`, `user_path` and `system_path` variables in that order
     modified_path: OsString,
     /// Environment variables to be passed in during metadata or wheel building
@@ -468,7 +466,6 @@ impl SourceBuild {
             skip_metadata_hook,
             venv,
             build_kind,
-            level,
             config_settings,
             metadata_directory: None,
             package_name,
@@ -856,7 +853,7 @@ impl SourceBuild {
                 self.pep517_backend.backend, self.build_kind
             ),
             output,
-            self.level,
+            self.runner.level,
             self.package_name.as_ref(),
             self.package_version.as_ref(),
             self.version_id.as_deref(),
@@ -1031,7 +1028,7 @@ impl SourceBuild {
                         self.pep517_backend.backend, self.build_kind, err
                     ),
                     &output,
-                    self.level,
+                    self.runner.level,
                     self.package_name.as_ref(),
                     self.package_version.as_ref(),
                     self.version_id.as_deref(),
@@ -1084,6 +1081,7 @@ impl SourceBuildTrait for SourceBuild {
 #[derive(Debug)]
 struct PythonRunner {
     concurrent_build_slots: Arc<Semaphore>,
+    /// Controls live output and failure diagnostics.
     level: BuildOutput,
 }
 
