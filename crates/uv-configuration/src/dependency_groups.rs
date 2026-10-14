@@ -2,6 +2,8 @@ use std::{borrow::Cow, sync::Arc};
 
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName};
 
+use crate::flags::format_repeated_flag;
+
 /// Manager of all dependency-group decisions and settings history.
 ///
 /// This is an Arc mostly just to avoid size bloat on things that contain these.
@@ -214,21 +216,15 @@ impl DependencyGroupsHistory {
         if let Some(dev_mode) = dev_mode {
             flags.push(Cow::Borrowed(dev_mode.as_flag()));
         }
-        match &**group {
-            [] => {}
-            [group] => flags.push(Cow::Owned(format!("--group {group}"))),
-            [..] => flags.push(Cow::Borrowed("--group")),
-        }
-        match &**only_group {
-            [] => {}
-            [group] => flags.push(Cow::Owned(format!("--only-group {group}"))),
-            [..] => flags.push(Cow::Borrowed("--only-group")),
-        }
-        match &**no_group {
-            [] => {}
-            [group] => flags.push(Cow::Owned(format!("--no-group {group}"))),
-            [..] => flags.push(Cow::Borrowed("--no-group")),
-        }
+        flags.extend(
+            [
+                ("--group", group),
+                ("--only-group", only_group),
+                ("--no-group", no_group),
+            ]
+            .into_iter()
+            .filter_map(|(flag, values)| format_repeated_flag(flag, values)),
+        );
         flags
     }
 }
