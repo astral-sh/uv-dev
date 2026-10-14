@@ -813,6 +813,13 @@ impl SourceBuild {
         Ok((backend, pyproject_toml.project))
     }
 
+    /// Return a backend hook's result file, separate from its stdout.
+    fn hook_result_path(&self, hook_prefix: &str) -> PathBuf {
+        self.temp_dir
+            .path()
+            .join(format!("{hook_prefix}_{}.txt", self.build_kind))
+    }
+
     /// Run a hook in the source build environment and require a successful exit status.
     async fn run_build_hook(
         &self,
@@ -874,14 +881,11 @@ impl SourceBuild {
         let metadata_directory = self.temp_dir.path().join("metadata_directory");
         fs::create_dir(&metadata_directory)?;
 
-        // Write the hook output to a file so that we can read it back reliably.
-        let outfile = self.temp_dir.path().join(format!(
-            "prepare_metadata_for_build_{}.txt",
-            self.build_kind
-        ));
+        let hook_prefix = "prepare_metadata_for_build";
+        let outfile = self.hook_result_path(hook_prefix);
 
         debug!(
-            "Calling `{}.prepare_metadata_for_build_{}()`",
+            "Calling `{}.{hook_prefix}_{}()`",
             self.pep517_backend.backend, self.build_kind,
         );
         let script = formatdoc! {
@@ -889,7 +893,7 @@ impl SourceBuild {
             {}
             import json
 
-            prepare_metadata_for_build = getattr(backend, "prepare_metadata_for_build_{}", None)
+            prepare_metadata_for_build = getattr(backend, "{hook_prefix}_{}", None)
             if prepare_metadata_for_build:
                 dirname = prepare_metadata_for_build({}, {})
             else:
@@ -904,8 +908,7 @@ impl SourceBuild {
             self.config_settings.escape_for_python(),
             outfile.escape_for_python(),
         };
-        self.run_build_hook("prepare_metadata_for_build", &script)
-            .await?;
+        self.run_build_hook(hook_prefix, &script).await?;
 
         let dirname = fs::read_to_string(&outfile)?;
         if dirname.is_empty() {
@@ -935,17 +938,14 @@ impl SourceBuild {
         // Lock the source tree, if necessary.
         let _lock = self.acquire_lock().await?;
 
-        // Write the hook output to a file so that we can read it back reliably.
-        let outfile = self
-            .temp_dir
-            .path()
-            .join(format!("build_{}.txt", self.build_kind));
+        let hook_prefix = "build";
+        let outfile = self.hook_result_path(hook_prefix);
 
         let output_dir_arg = output_dir.escape_for_python();
         let config_settings_arg = self.config_settings.escape_for_python();
 
         let mut hook_call = format!(
-            "build_{}({output_dir_arg}, {config_settings_arg}",
+            "{hook_prefix}_{}({output_dir_arg}, {config_settings_arg}",
             self.build_kind
         );
         let filename_variable = match self.build_kind {
@@ -974,7 +974,6 @@ impl SourceBuild {
             outfile.escape_for_python()
         };
 
-        let hook_prefix = "build";
         let output = self.run_build_hook(hook_prefix, &script).await?;
         let distribution_filename = fs::read_to_string(&outfile)?;
         if output_dir.join(&distribution_filename).is_file() {
@@ -995,14 +994,11 @@ impl SourceBuild {
         workspace_cache: &WorkspaceCache,
         credentials_cache: &CredentialsCache,
     ) -> Result<Vec<Requirement>, Error> {
-        // Write the hook output to a file so that we can read it back reliably.
-        let outfile = self
-            .temp_dir
-            .path()
-            .join(format!("get_requires_for_build_{}.txt", self.build_kind));
+        let hook_prefix = "get_requires_for_build";
+        let outfile = self.hook_result_path(hook_prefix);
 
         debug!(
-            "Calling `{}.get_requires_for_build_{}()`",
+            "Calling `{}.{hook_prefix}_{}()`",
             self.pep517_backend.backend, self.build_kind
         );
 
@@ -1011,7 +1007,7 @@ impl SourceBuild {
             {}
             import json
 
-            get_requires_for_build = getattr(backend, "get_requires_for_build_{}", None)
+            get_requires_for_build = getattr(backend, "{hook_prefix}_{}", None)
             if get_requires_for_build:
                 requires = get_requires_for_build({})
             else:
@@ -1025,9 +1021,7 @@ impl SourceBuild {
             self.config_settings.escape_for_python(),
             outfile.escape_for_python()
         };
-        let output = self
-            .run_build_hook("get_requires_for_build", &script)
-            .await?;
+        let output = self.run_build_hook(hook_prefix, &script).await?;
 
         // Read and deserialize the requirements from the output file.
         let extra_requires: Vec<uv_pep508::Requirement<VerbatimParsedUrl>> = fs_err::read(&outfile)
@@ -1036,7 +1030,7 @@ impl SourceBuild {
             .map_err(|err| {
                 Error::from_command_output(
                     format!(
-                        "Call to `{}.get_requires_for_build_{}` failed: {}",
+                        "Call to `{}.{hook_prefix}_{}` failed: {}",
                         self.pep517_backend.backend, self.build_kind, err
                     ),
                     &output,
