@@ -1045,17 +1045,15 @@ enum GitDiscoveryResult {
     Repository,
     /// Git is not initialized at the path.
     NoRepository,
-    /// There is no `git[.exe]` binary in PATH.
-    NoGit,
-    /// There is a `git[.exe]` binary in PATH, but it returned an unexpected output.
-    BrokenGit,
+    /// Git repository discovery did not produce a definitive result.
+    Unknown,
 }
 
 /// Checks if there is a Git work tree at the given path.
 fn detect_git_repository(path: &Path) -> GitDiscoveryResult {
     // Determine whether the path is inside a Git work tree.
     let Ok(git) = GIT.as_ref() else {
-        return GitDiscoveryResult::NoGit;
+        return GitDiscoveryResult::Unknown;
     };
     let Ok(output) = git
         .build_command()
@@ -1069,7 +1067,7 @@ fn detect_git_repository(path: &Path) -> GitDiscoveryResult {
             "`git rev-parse --is-inside-work-tree` failed to launch for `{}`",
             path.display()
         );
-        return GitDiscoveryResult::BrokenGit;
+        return GitDiscoveryResult::Unknown;
     };
     if output.status.success() {
         if std::str::from_utf8(&output.stdout).map(str::trim) == Ok("true") {
@@ -1084,7 +1082,7 @@ fn detect_git_repository(path: &Path) -> GitDiscoveryResult {
                 "`git rev-parse --is-inside-work-tree` stdout: {:?}",
                 String::from_utf8_lossy(&output.stdout)
             );
-            GitDiscoveryResult::BrokenGit
+            GitDiscoveryResult::Unknown
         }
     } else {
         if std::str::from_utf8(&output.stderr).is_ok_and(|err| err.contains("not a git repository"))
@@ -1096,7 +1094,7 @@ fn detect_git_repository(path: &Path) -> GitDiscoveryResult {
                 "`git rev-parse --is-inside-work-tree` failed but didn't contain `not a git repository` in stderr for `{}`",
                 path.display()
             );
-            GitDiscoveryResult::BrokenGit
+            GitDiscoveryResult::Unknown
         }
     }
 }
