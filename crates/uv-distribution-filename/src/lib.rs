@@ -58,33 +58,29 @@ impl DistFilename {
         filename: &str,
         package_name: &PackageName,
     ) -> Result<Self, DistFilenameError> {
-        match DistExtension::from_path(filename) {
-            Ok(DistExtension::Wheel) => match WheelFilename::from_hint(filename, package_name) {
-                Ok(filename) => Ok(Self::WheelFilename(filename)),
-                Err(err) => Err(DistFilenameError::InvalidWheel(err)),
-            },
-            Ok(DistExtension::Source(extension)) => {
-                match SourceDistFilename::parse(filename, extension, package_name) {
-                    Ok(filename) => Ok(Self::SourceDistFilename(filename)),
-                    Err(err) => Err(DistFilenameError::InvalidSourceDist(err)),
-                }
+        let extension =
+            DistExtension::from_path(filename).map_err(DistFilenameError::NoRecognizedExtension)?;
+        Ok(match extension {
+            DistExtension::Wheel => {
+                Self::WheelFilename(WheelFilename::from_hint(filename, package_name)?)
             }
-            Err(err) => Err(DistFilenameError::NoRecognizedExtension(err)),
-        }
+            DistExtension::Source(extension) => Self::SourceDistFilename(
+                SourceDistFilename::parse(filename, extension, package_name)?,
+            ),
+        })
     }
 
-    /// Like [`DistFilename::try_from_normalized_filename`], but without knowing the package name.
+    /// Like [`DistFilename::try_from_filename`], but without knowing the package name.
     ///
     /// Source dist filenames can be ambiguous, e.g. `a-1-1.tar.gz`. Without knowing the package name, we assume that
     /// source dist filename version doesn't contain minus (the version is normalized).
     pub fn try_from_normalized_filename(filename: &str) -> Option<Self> {
-        if let Ok(filename) = WheelFilename::from_str(filename) {
-            Some(Self::WheelFilename(filename))
-        } else if let Ok(filename) = SourceDistFilename::parsed_normalized_filename(filename) {
-            Some(Self::SourceDistFilename(filename))
-        } else {
-            None
-        }
+        Some(match DistExtension::from_path(filename).ok()? {
+            DistExtension::Wheel => Self::WheelFilename(WheelFilename::from_str(filename).ok()?),
+            DistExtension::Source(extension) => Self::SourceDistFilename(
+                SourceDistFilename::parse_normalized(filename, extension).ok()?,
+            ),
+        })
     }
 
     pub fn name(&self) -> &PackageName {

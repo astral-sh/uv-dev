@@ -169,10 +169,7 @@ impl InstalledDist {
     pub fn try_from_path(path: &Path) -> Result<Option<Self>, InstalledDistError> {
         // Ex) `cffi-1.16.0.dist-info`
         if path.extension().is_some_and(|ext| ext == "dist-info") {
-            let Some(file_stem) = path.file_stem() else {
-                return Ok(None);
-            };
-            let Some(file_stem) = file_stem.to_str() else {
+            let Some(file_stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
                 return Ok(None);
             };
             let Some((name, version)) = file_stem.split_once('-') else {
@@ -184,44 +181,34 @@ impl InstalledDist {
             let cache_info = Self::read_cache_info(path)?;
             let build_info = Self::read_build_info(path)?;
 
-            return if let Some(direct_url) = Self::read_direct_url(path)? {
+            if let Some(direct_url) = Self::read_direct_url(path)? {
                 match DisplaySafeUrl::try_from(&direct_url) {
-                    Ok(url) => Ok(Some(Self::from(InstalledDistKind::Url(
-                        InstalledDirectUrlDist {
-                            name,
-                            version,
-                            editable: matches!(&direct_url, DirectUrl::LocalDirectory { dir_info, .. } if dir_info.editable == Some(true)),
-                            direct_url: Box::new(direct_url),
-                            url,
-                            path: path.to_path_buf().into_boxed_path(),
-                            cache_info,
-                            build_info,
-                        },
-                    )))),
-                    Err(err) => {
-                        warn!("Failed to parse direct URL: {err}");
-                        Ok(Some(Self::from(InstalledDistKind::Registry(
-                            InstalledRegistryDist {
+                    Ok(url) => {
+                        return Ok(Some(Self::from(InstalledDistKind::Url(
+                            InstalledDirectUrlDist {
                                 name,
                                 version,
+                                editable: matches!(&direct_url, DirectUrl::LocalDirectory { dir_info, .. } if dir_info.editable == Some(true)),
+                                direct_url: Box::new(direct_url),
+                                url,
                                 path: path.to_path_buf().into_boxed_path(),
                                 cache_info,
                                 build_info,
                             },
-                        ))))
+                        ))));
                     }
+                    Err(err) => warn!("Failed to parse direct URL: {err}"),
                 }
-            } else {
-                Ok(Some(Self::from(InstalledDistKind::Registry(
-                    InstalledRegistryDist {
-                        name,
-                        version,
-                        path: path.to_path_buf().into_boxed_path(),
-                        cache_info,
-                        build_info,
-                    },
-                ))))
-            };
+            }
+            return Ok(Some(Self::from(InstalledDistKind::Registry(
+                InstalledRegistryDist {
+                    name,
+                    version,
+                    path: path.to_path_buf().into_boxed_path(),
+                    cache_info,
+                    build_info,
+                },
+            ))));
         }
 
         // Ex) `zstandard-0.22.0-py3.12.egg-info` or `vtk-9.2.6.egg-info`
@@ -234,10 +221,7 @@ impl InstalledDist {
                 }
             };
 
-            let Some(file_stem) = path.file_stem() else {
-                return Ok(None);
-            };
-            let Some(file_stem) = file_stem.to_str() else {
+            let Some(file_stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
                 return Ok(None);
             };
             let file_name = EggInfoFilename::parse(file_stem)?;
@@ -293,24 +277,18 @@ impl InstalledDist {
 
         // Ex) `zstandard.egg-link`
         if path.extension().is_some_and(|ext| ext == "egg-link") {
-            let Some(file_stem) = path.file_stem() else {
-                return Ok(None);
-            };
-            let Some(file_stem) = file_stem.to_str() else {
+            let Some(file_stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
                 return Ok(None);
             };
 
             // https://setuptools.pypa.io/en/latest/deprecated/python_eggs.html#egg-links
             // https://github.com/pypa/pip/blob/946f95d17431f645da8e2e0bf4054a72db5be766/src/pip/_internal/metadata/importlib/_envs.py#L86-L108
             let contents = fs::read_to_string(path)?;
-            let Some(target) = contents.lines().find_map(|line| {
-                let line = line.trim();
-                if line.is_empty() {
-                    None
-                } else {
-                    Some(PathBuf::from(line))
-                }
-            }) else {
+            let Some(target) = contents
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+            else {
                 warn!("Invalid `.egg-link` file: {path:?}");
                 return Ok(None);
             };

@@ -51,7 +51,11 @@ impl IndexUrl {
     /// For indexes with a `/simple` endpoint, this is simply the URL with the final segment
     /// removed. This is useful, e.g., for credential propagation to other endpoints on the index.
     pub fn root(&self) -> Option<DisplaySafeUrl> {
-        let mut segments = self.url().path_segments()?;
+        Self::root_from_url(self.url())
+    }
+
+    fn root_from_url(url: &DisplaySafeUrl) -> Option<DisplaySafeUrl> {
+        let mut segments = url.path_segments()?;
         let last = match segments.next_back()? {
             // If the last segment is empty due to a trailing `/`, skip it (as in `pop_if_empty`)
             "" => segments.next_back()?,
@@ -63,7 +67,7 @@ impl IndexUrl {
             return None;
         }
 
-        let mut url = self.url().clone();
+        let mut url = url.clone();
         url.path_segments_mut().ok()?.pop_if_empty().pop();
         Some(url)
     }
@@ -522,12 +526,8 @@ impl<'a> IndexLocations {
 impl From<&IndexLocations> for uv_auth::Indexes {
     fn from(index_locations: &IndexLocations) -> Self {
         Self::from_indexes(index_locations.allowed_indexes().into_iter().map(|index| {
-            let mut url = index.url().url().clone();
-            url.set_username("").ok();
-            url.set_password(None).ok();
-            let mut root_url = index.url().root().unwrap_or_else(|| url.clone());
-            root_url.set_username("").ok();
-            root_url.set_password(None).ok();
+            let url = index.url().without_credentials().into_owned();
+            let root_url = IndexUrl::root_from_url(&url).unwrap_or_else(|| url.clone());
             uv_auth::Index {
                 url,
                 root_url,
@@ -560,60 +560,49 @@ pub struct IndexCapabilities(Arc<RwLock<FxHashMap<IndexUrl, Flags>>>);
 impl IndexCapabilities {
     /// Returns `true` if the given [`IndexUrl`] supports range requests.
     pub fn supports_range_requests(&self, index_url: &IndexUrl) -> bool {
-        !self
-            .0
-            .read()
-            .unwrap()
-            .get(index_url)
-            .is_some_and(|flags| flags.intersects(Flags::NO_RANGE_REQUESTS))
+        !self.has_flag(index_url, Flags::NO_RANGE_REQUESTS)
     }
 
     /// Mark an [`IndexUrl`] as not supporting range requests.
     pub fn set_no_range_requests(&self, index_url: IndexUrl) {
-        self.0
-            .write()
-            .unwrap()
-            .entry(index_url)
-            .or_insert(Flags::empty())
-            .insert(Flags::NO_RANGE_REQUESTS);
+        self.set_flag(index_url, Flags::NO_RANGE_REQUESTS);
     }
 
     /// Returns `true` if the given [`IndexUrl`] returns a `401 Unauthorized` status code.
     pub fn unauthorized(&self, index_url: &IndexUrl) -> bool {
-        self.0
-            .read()
-            .unwrap()
-            .get(index_url)
-            .is_some_and(|flags| flags.intersects(Flags::UNAUTHORIZED))
+        self.has_flag(index_url, Flags::UNAUTHORIZED)
     }
 
     /// Mark an [`IndexUrl`] as returning a `401 Unauthorized` status code.
     pub(crate) fn set_unauthorized(&self, index_url: IndexUrl) {
-        self.0
-            .write()
-            .unwrap()
-            .entry(index_url)
-            .or_insert(Flags::empty())
-            .insert(Flags::UNAUTHORIZED);
+        self.set_flag(index_url, Flags::UNAUTHORIZED);
     }
 
     /// Returns `true` if the given [`IndexUrl`] returns a `403 Forbidden` status code.
     pub fn forbidden(&self, index_url: &IndexUrl) -> bool {
-        self.0
-            .read()
-            .unwrap()
-            .get(index_url)
-            .is_some_and(|flags| flags.intersects(Flags::FORBIDDEN))
+        self.has_flag(index_url, Flags::FORBIDDEN)
     }
 
     /// Mark an [`IndexUrl`] as returning a `403 Forbidden` status code.
     pub(crate) fn set_forbidden(&self, index_url: IndexUrl) {
+        self.set_flag(index_url, Flags::FORBIDDEN);
+    }
+
+    fn has_flag(&self, index_url: &IndexUrl, flag: Flags) -> bool {
+        self.0
+            .read()
+            .unwrap()
+            .get(index_url)
+            .is_some_and(|flags| flags.intersects(flag))
+    }
+
+    fn set_flag(&self, index_url: IndexUrl, flag: Flags) {
         self.0
             .write()
             .unwrap()
             .entry(index_url)
             .or_insert(Flags::empty())
-            .insert(Flags::FORBIDDEN);
+            .insert(flag);
     }
 }
 

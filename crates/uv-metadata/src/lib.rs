@@ -68,39 +68,34 @@ impl From<async_zip::error::ZipError> for Error {
 /// Returns the validated [`DistInfoStem`].
 ///
 /// Reference implementation: <https://github.com/pypa/pip/blob/36823099a9cdd83261fdbc8c1d2a24fa2eea72ca/src/pip/_internal/utils/wheel.py#L38>
-pub fn find_archive_dist_info<'a, T: Copy>(
+pub fn find_archive_dist_info<'a, T>(
     filename: &WheelFilename,
     files: impl Iterator<Item = (T, &'a str)>,
 ) -> Result<(T, DistInfoStem<'a>), Error> {
-    let metadatas: Vec<_> = files
-        .filter_map(|(payload, path)| {
-            let (dist_info_dir, file) = path.split_once('/')?;
-            if file != "METADATA" {
-                return None;
-            }
-            let dist_info_stem = dist_info_dir.strip_suffix(".dist-info")?;
-            Some((payload, dist_info_stem))
-        })
-        .collect();
+    let mut entries = files
+        .filter_map(|(payload, path)| dist_info_stem(path, "METADATA").map(|stem| (payload, stem)));
 
     // Like `pip`, assert that there is exactly one `.dist-info` directory.
-    let (payload, dist_info_stem) = match metadatas[..] {
-        [] => {
-            return Err(Error::MissingDistInfo);
-        }
-        [(payload, path)] => (payload, path),
-        _ => {
-            return Err(Error::MultipleDistInfo(
-                metadatas
-                    .into_iter()
-                    .map(|(_, dist_info_dir)| dist_info_dir.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ));
-        }
-    };
+    let (payload, stem) = entries.next().ok_or(Error::MissingDistInfo)?;
+    if let Some((_, second_stem)) = entries.next() {
+        let stems = [stem, second_stem]
+            .into_iter()
+            .chain(entries.map(|(_, stem)| stem))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(Error::MultipleDistInfo(stems));
+    }
 
-    Ok((payload, DistInfoStem::new(dist_info_stem, &filename.name)?))
+    Ok((payload, DistInfoStem::new(stem, &filename.name)?))
+}
+
+/// Return the directory stem if `path` identifies the requested `.dist-info` entry.
+fn dist_info_stem<'a>(path: &'a str, entry_name: &str) -> Option<&'a str> {
+    let (directory, file) = path.split_once('/')?;
+    if file != entry_name {
+        return None;
+    }
+    directory.strip_suffix(".dist-info")
 }
 
 /// Return the validated [`DistInfoStem`] if the path is the requested entry.
@@ -109,13 +104,7 @@ fn dist_info_entry<'a>(
     filename: &WheelFilename,
     entry_name: &str,
 ) -> Result<Option<DistInfoStem<'a>>, Error> {
-    let Some((dist_info_dir, file)) = path.split_once('/') else {
-        return Ok(None);
-    };
-    if file != entry_name {
-        return Ok(None);
-    }
-    let Some(dist_info_stem) = dist_info_dir.strip_suffix(".dist-info") else {
+    let Some(dist_info_stem) = dist_info_stem(path, entry_name) else {
         return Ok(None);
     };
 
@@ -219,9 +208,9 @@ async fn read_dist_info_file_async_stream<R: futures::AsyncRead + Unpin>(
 
     while let Some(mut entry) = zip.next_with_entry().await? {
         // Find the requested `.dist-info` entry.
-        let path = entry.reader().entry().filename().as_str()?.to_owned();
+        let path = entry.reader().entry().filename().as_str()?;
 
-        if dist_info_entry(&path, filename, entry_name)?.is_some() {
+        if dist_info_entry(path, filename, entry_name)?.is_some() {
             let mut reader = entry.reader_mut().compat();
             let mut contents = Vec::new();
             reader.read_to_end(&mut contents).await.map_err(Error::Io)?;
@@ -233,7 +222,7 @@ async fn read_dist_info_file_async_stream<R: futures::AsyncRead + Unpin>(
             let expected = reader.entry().crc32();
             if computed != expected {
                 let error = Error::BadCrc32 {
-                    path,
+                    path: reader.entry().filename().as_str()?.to_owned(),
                     computed,
                     expected,
                 };
@@ -365,12 +354,13 @@ mod test {
                 [
                     ((), path.as_str()),
                     ((), "friendly_bard-1.0.dist-info/METADATA"),
+                    ((), "another_package-2.0.dist-info/METADATA"),
                 ]
                 .into_iter(),
             )
             .expect_err("multiple metadata directories")
             .to_string(),
-            "Multiple .dist-info directories found: other_package-1.0, friendly_bard-1.0"
+            "Multiple .dist-info directories found: other_package-1.0, friendly_bard-1.0, another_package-2.0"
         );
     }
 }

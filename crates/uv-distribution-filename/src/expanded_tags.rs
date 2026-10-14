@@ -112,17 +112,8 @@ fn parse_expanded_tag(tag: &str) -> Result<WheelTag, ExpandedTagError> {
     let abi_tag = &tag[python_tag_index + 1..abi_tag_index];
     let platform_tag = &tag[abi_tag_index + 1..];
 
-    let is_small = memchr(b'.', tag.as_bytes()).is_none();
-
-    if let Some(small) = is_small
-        .then(|| {
-            Some(WheelTagSmall {
-                python_tag: LanguageTag::from_str(python_tag).ok()?,
-                abi_tag: AbiTag::from_str(abi_tag).ok()?,
-                platform_tag: PlatformTag::from_str(platform_tag).ok()?,
-            })
-        })
-        .flatten()
+    if memchr(b'.', tag.as_bytes()).is_none()
+        && let Some(small) = WheelTagSmall::parse(python_tag, abi_tag, platform_tag)
     {
         Ok(WheelTag::Small { small })
     } else {
