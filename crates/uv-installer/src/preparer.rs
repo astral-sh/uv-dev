@@ -1,12 +1,12 @@
 use std::cmp::Reverse;
 use std::sync::Arc;
 
-use futures::{FutureExt, Stream, TryFutureExt, TryStreamExt, stream::FuturesUnordered};
+use futures::{FutureExt, Stream, TryStreamExt, stream::FuturesUnordered};
 use tracing::{debug, instrument};
 
 use uv_cache::Cache;
 use uv_configuration::BuildOptions;
-use uv_distribution::{DistributionDatabase, LocalWheel};
+use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{
     BuildableSource, CachedDist, DerivationChain, Dist, DistErrorKind, Hashed, Identifier, Name,
     RemoteSource, Resolution,
@@ -136,73 +136,61 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
 
         let id = dist.distribution_id();
         if let Some(result) = in_flight.downloads.register_or_wait(&id).await {
-            match result.as_ref() {
-                Ok(cached) => {
-                    // Validate that the wheel is compatible with the distribution.
-                    //
-                    // `get_or_build_wheel` is guaranteed to return a wheel that matches the
-                    // distribution. But there could be multiple requested distributions that share
-                    // a cache entry in `in_flight`, so we need to double-check here.
-                    //
-                    // For example, if two requirements are based on the same local path, but use
-                    // different names, then they'll share an `in_flight` entry, but one of the two
-                    // should be rejected (since at least one of the names will not match the
-                    // package name).
-                    if *dist.name() != cached.filename().name {
-                        let err = uv_distribution::Error::WheelMetadataNameMismatch {
-                            given: dist.name().clone(),
-                            metadata: cached.filename().name.clone(),
-                        };
-                        return Err(Error::from_dist(dist, err, resolution));
-                    }
-                    if let Some(version) = dist.version() {
-                        if *version != cached.filename().version
-                            && *version != cached.filename().version.clone().without_local()
-                        {
-                            let err = uv_distribution::Error::WheelMetadataVersionMismatch {
-                                given: version.clone(),
-                                metadata: cached.filename().version.clone(),
-                            };
-                            return Err(Error::from_dist(dist, err, resolution));
-                        }
-                    }
-                    Ok(cached.clone())
-                }
-                Err(err) => Err(Error::Thread(err.to_owned())),
-            }
-        } else {
-            let policy = self.hashes.archive_policy(&dist);
+            let cached = result.map_err(Error::Thread)?;
 
-            let result = self
-                .database
-                .get_or_build_wheel(&dist, self.tags, policy)
-                .boxed_local()
-                .map_err(|err| Error::from_dist(dist.clone(), err, resolution))
-                .await
-                .and_then(|wheel: LocalWheel| {
-                    if wheel.satisfies(policy) {
-                        Ok(wheel)
-                    } else {
-                        let err = uv_distribution::Error::hash_mismatch(
-                            dist.to_string(),
-                            policy.digests(),
-                            wheel.hashes(),
-                        );
-                        Err(Error::from_dist(dist, err, resolution))
-                    }
-                })
-                .map(CachedDist::from);
-            match result {
-                Ok(cached) => {
-                    in_flight.downloads.done(id, Ok(cached.clone()));
-                    Ok(cached)
-                }
-                Err(err) => {
-                    in_flight.downloads.done(id, Err(err.to_string()));
-                    Err(err)
-                }
+            // Validate that the wheel is compatible with the distribution.
+            //
+            // `get_or_build_wheel` is guaranteed to return a wheel that matches the
+            // distribution. But there could be multiple requested distributions that share
+            // a cache entry in `in_flight`, so we need to double-check here.
+            //
+            // For example, if two requirements are based on the same local path, but use
+            // different names, then they'll share an `in_flight` entry, but one of the two
+            // should be rejected (since at least one of the names will not match the
+            // package name).
+            if *dist.name() != cached.filename().name {
+                let err = uv_distribution::Error::WheelMetadataNameMismatch {
+                    given: dist.name().clone(),
+                    metadata: cached.filename().name.clone(),
+                };
+                return Err(Error::from_dist(dist, err, resolution));
             }
+            if let Some(version) = dist.version()
+                && *version != cached.filename().version
+                && *version != cached.filename().version.clone().without_local()
+            {
+                let err = uv_distribution::Error::WheelMetadataVersionMismatch {
+                    given: version.clone(),
+                    metadata: cached.filename().version.clone(),
+                };
+                return Err(Error::from_dist(dist, err, resolution));
+            }
+            return Ok(cached);
         }
+
+        let policy = self.hashes.archive_policy(&dist);
+        let result = self
+            .database
+            .get_or_build_wheel(&dist, self.tags, policy)
+            .boxed_local()
+            .await
+            .and_then(|wheel| {
+                if wheel.satisfies(policy) {
+                    Ok(CachedDist::from(wheel))
+                } else {
+                    Err(uv_distribution::Error::hash_mismatch(
+                        dist.to_string(),
+                        policy.digests(),
+                        wheel.hashes(),
+                    ))
+                }
+            })
+            .map_err(|err| Error::from_dist(dist, err, resolution));
+
+        in_flight
+            .downloads
+            .done(id, result.as_ref().cloned().map_err(ToString::to_string));
+        result
     }
 }
 
