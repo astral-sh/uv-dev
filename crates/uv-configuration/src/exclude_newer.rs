@@ -428,12 +428,6 @@ impl ExcludeNewer {
         Self { global, package }
     }
 
-    /// Returns the effective exclude-newer timestamp for a specific package, falling back to the
-    /// global value if no package-specific setting exists.
-    pub fn exclude_newer_package(&self, package_name: &PackageName) -> Option<Timestamp> {
-        self.exclude_newer_package_for_index(package_name, None)
-    }
-
     /// Returns the effective exclude-newer timestamp for a package resolved from a specific index.
     pub fn exclude_newer_package_for_index(
         &self,
