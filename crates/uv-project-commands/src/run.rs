@@ -1051,9 +1051,12 @@ pub async fn run(
                     .chain(base_site_packages)
                     .dedup()
                     .inspect(|path| debug!("Adding `{}` to site packages", path.display()))
-                    .map(|path| format!("site.addsitedir({})", path.escape_for_python()))
-                    .collect::<Vec<_>>()
-                    .join("; ")
+                    .format_with("; ", |path, write| {
+                        write(&format_args!(
+                            "site.addsitedir({})",
+                            path.escape_for_python()
+                        ))
+                    })
             );
 
             set_overlay(ephemeral_env, &overlay_content)?;
