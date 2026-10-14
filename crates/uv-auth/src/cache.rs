@@ -1,20 +1,18 @@
 use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
-use std::hash::BuildHasherDefault;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
 
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::FxHashMap;
+use tokio::sync::OnceCell;
 use tracing::trace;
 use url::Url;
 
-use uv_once_map::OnceMap;
 use uv_redacted::DisplaySafeUrl;
 
 use crate::credentials::{Authentication, CredentialsFromUrlError, Username};
 use crate::{Credentials, Realm, RealmRef};
 
-type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
+type CredentialFetch = OnceCell<Option<Arc<Authentication>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum FetchUrl {
@@ -38,7 +36,7 @@ pub struct CredentialsCache {
     /// A cache per realm and username
     realms: RwLock<FxHashMap<(Realm, Username), Arc<Authentication>>>,
     /// A cache tracking the result of realm or index URL fetches from external services
-    pub(crate) fetches: FxOnceMap<(FetchUrl, Username), Option<Arc<Authentication>>>,
+    fetches: Mutex<FxHashMap<(FetchUrl, Username), Arc<CredentialFetch>>>,
     /// A cache per URL, uses a trie for efficient prefix queries.
     urls: RwLock<UrlTrie<Arc<Authentication>>>,
 }
@@ -53,10 +51,44 @@ impl CredentialsCache {
     /// Create a new cache.
     pub fn new() -> Self {
         Self {
-            fetches: FxOnceMap::default(),
+            fetches: Mutex::default(),
             realms: RwLock::new(FxHashMap::default()),
             urls: RwLock::new(UrlTrie::new()),
         }
+    }
+
+    /// Share a credential fetch among requests for the same URL and username. A cancelled fetch
+    /// leaves the cell uninitialized so another request can retry.
+    pub(crate) async fn get_or_fetch(
+        &self,
+        key: (FetchUrl, Username),
+        fetch: impl Future<Output = Option<Arc<Authentication>>>,
+    ) -> Option<Arc<Authentication>> {
+        let cell = self
+            .fetches
+            .lock()
+            .unwrap()
+            .entry(key.clone())
+            .or_default()
+            .clone();
+        let mut reused = true;
+        let credentials = cell
+            .get_or_init(|| {
+                reused = false;
+                fetch
+            })
+            .await;
+        if reused {
+            if credentials.is_some() {
+                trace!("Using credentials from previous fetch for {}", key.0);
+            } else {
+                trace!(
+                    "Skipping fetch of credentials for {}, previous attempt failed",
+                    key.0
+                );
+            }
+        }
+        credentials.clone()
     }
 
     /// Populate the global authentication store with credentials on a URL, if there are any.
