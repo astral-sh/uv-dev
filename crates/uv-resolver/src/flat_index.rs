@@ -196,13 +196,7 @@ impl FlatDistributions {
         // Check if hashes line up
         let hash_policy = hasher.archive_policy_for_package(&filename.name, &filename.version);
         let hash = if hash_policy.requires_validation() {
-            if hashes.is_empty() {
-                HashComparison::Missing
-            } else if hash_policy.matches(hashes) {
-                HashComparison::Matched
-            } else {
-                HashComparison::Mismatched
-            }
+            HashComparison::compare(hash_policy, hashes)
         } else {
             HashComparison::Matched
         };
@@ -242,13 +236,7 @@ impl FlatDistributions {
         // Check if hashes line up.
         let hash_policy = hasher.archive_policy_for_package(&filename.name, &filename.version);
         let hash = if hash_policy.requires_validation() {
-            if hashes.is_empty() {
-                HashComparison::Missing
-            } else if hash_policy.matches(hashes) {
-                HashComparison::Matched
-            } else {
-                HashComparison::Mismatched
-            }
+            HashComparison::compare(hash_policy, hashes)
         } else {
             HashComparison::Matched
         };
