@@ -148,11 +148,7 @@ impl MacCredential {
     /// This will fail if the service or user strings are empty,
     /// because empty attribute values act as wildcards in the
     /// Keychain Services API.
-    fn new_with_target(
-        target: Option<MacKeychainDomain>,
-        service: &str,
-        user: &str,
-    ) -> Result<Self> {
+    fn new(domain: MacKeychainDomain, service: &str, user: &str) -> Result<Self> {
         if service.is_empty() {
             return Err(ErrorCode::Invalid(
                 "service".to_string(),
@@ -165,11 +161,6 @@ impl MacCredential {
                 "cannot be empty".to_string(),
             ));
         }
-        let domain = if let Some(target) = target {
-            target
-        } else {
-            MacKeychainDomain::User
-        };
         Ok(Self {
             domain,
             service: service.to_string(),
@@ -195,16 +186,10 @@ impl CredentialBuilderApi for MacCredentialBuilder {
     /// If a target is specified but not recognized as a keychain name,
     /// the User keychain is selected.
     fn build(&self, target: Option<&str>, service: &str, user: &str) -> Result<Box<Credential>> {
-        let domain: MacKeychainDomain = if let Some(target) = target {
-            target.parse().unwrap_or(MacKeychainDomain::User)
-        } else {
-            MacKeychainDomain::User
-        };
-        Ok(Box::new(MacCredential::new_with_target(
-            Some(domain),
-            service,
-            user,
-        )?))
+        let domain = target
+            .and_then(|target| target.parse().ok())
+            .unwrap_or(MacKeychainDomain::User);
+        Ok(Box::new(MacCredential::new(domain, service, user)?))
     }
 }
 
@@ -291,11 +276,11 @@ mod tests {
 
     use crate::{Entry, Error, tests::generate_random_string};
 
-    use super::MacCredential;
+    use super::{MacCredential, MacKeychainDomain};
 
     fn entry_new(service: &str, user: &str) -> Entry {
         crate::tests::entry_from_constructor(
-            |_, s, u| MacCredential::new_with_target(None, s, u),
+            |_, s, u| MacCredential::new(MacKeychainDomain::User, s, u),
             service,
             user,
         )
@@ -303,13 +288,13 @@ mod tests {
 
     #[test]
     fn test_invalid_parameter() {
-        let credential = MacCredential::new_with_target(None, "", "user");
+        let credential = MacCredential::new(MacKeychainDomain::User, "", "user");
         assert_matches!(
             credential,
             Err(Error::Invalid(_, _)),
             "Created credential with empty service"
         );
-        let credential = MacCredential::new_with_target(None, "service", "");
+        let credential = MacCredential::new(MacKeychainDomain::User, "service", "");
         assert_matches!(
             credential,
             Err(Error::Invalid(_, _)),
@@ -390,7 +375,7 @@ mod tests {
             if name == "unknown" {
                 assert_matches!(
                     mac_cred.domain,
-                    super::MacKeychainDomain::User,
+                    MacKeychainDomain::User,
                     "wrong domain for unknown specifier"
                 );
             }
