@@ -4359,6 +4359,7 @@ fn run_script_explicit_no_file() {
         .arg("--script")
         .arg("script")
         .assert()
+        .failure()
         .stderr(contains("can't open file"))
         .stderr(contains("[Errno 2] No such file or directory"));
 }
