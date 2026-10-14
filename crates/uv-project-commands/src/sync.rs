@@ -424,7 +424,7 @@ pub async fn sync(
     let mode = if let Some(frozen_source) = frozen {
         LockMode::Frozen(frozen_source.into())
     } else {
-        crate::lock::resolve_lock_mode(environment.interpreter(), lock_check, dry_run.enabled())
+        LockMode::from_settings(environment.interpreter(), lock_check, dry_run.enabled())
     };
 
     let (outcome, lock_report) = match &target {

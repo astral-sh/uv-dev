@@ -30,7 +30,7 @@ use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::{
     FlatIndex, OptionsBuilder, PythonRequirement, ResolverEnvironment, UniversalMarker,
 };
-use uv_settings::{LockedSource, ResolverSettings};
+use uv_settings::{LockCheck, LockedSource, ResolverSettings};
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
@@ -77,6 +77,21 @@ pub enum LockMode<'env> {
     Locked(&'env Interpreter, LockedSource),
     /// Use the existing lockfile without performing a resolution.
     Frozen(MissingLockfileSource),
+}
+
+impl<'env> LockMode<'env> {
+    /// Select whether to write, check, or only resolve a lockfile.
+    pub fn from_settings(
+        interpreter: &'env Interpreter,
+        lock_check: LockCheck,
+        dry_run: bool,
+    ) -> Self {
+        match lock_check {
+            LockCheck::Enabled(source) => Self::Locked(interpreter, source),
+            LockCheck::Disabled if dry_run => Self::DryRun(interpreter),
+            LockCheck::Disabled => Self::Write(interpreter),
+        }
+    }
 }
 
 /// A lock operation.

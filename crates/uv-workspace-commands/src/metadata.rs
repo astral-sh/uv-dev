@@ -154,15 +154,11 @@ pub async fn metadata(
                     }
                 };
 
-                if let LockCheck::Enabled(lock_check) = lock_check {
-                    LockMode::Locked(&interpreter, lock_check)
-                } else if sync.is_none()
-                    || (matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file())
-                {
-                    LockMode::DryRun(&interpreter)
-                } else {
-                    LockMode::Write(&interpreter)
-                }
+                let dry_run = matches!(lock_check, LockCheck::Disabled)
+                    && (sync.is_none()
+                        || (matches!(target, LockTarget::Script(_))
+                            && !target.lock_path().is_file()));
+                LockMode::from_settings(&interpreter, lock_check, dry_run)
             };
 
             resolved_lock = match Box::pin(
