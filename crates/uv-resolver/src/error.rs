@@ -4,7 +4,7 @@ use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
 
 use indexmap::IndexSet;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use owo_colors::OwoColorize;
 use pubgrub::{DerivationTree, Derived, External, Map, Ranges, Term};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1094,7 +1094,6 @@ fn unlisted_versions(
         (package, concluded.clone(), reported)
     });
     let resolved = cause_packages(cause1)
-        .into_iter()
         .chain(cause_packages(cause2))
         .filter(|package| !terms.contains_key(*package))
         .map(|package| {
@@ -1158,18 +1157,19 @@ fn concluded_package(terms: &ErrorTerms) -> Option<(&PubGrubPackage, &Range<Vers
 }
 
 /// The packages a cause states something about.
-fn cause_packages(cause: &ErrorTree) -> Vec<&PubGrubPackage> {
-    match cause {
-        DerivationTree::Derived(derived) => derived.terms.keys().collect(),
+fn cause_packages(cause: &ErrorTree) -> impl Iterator<Item = &PubGrubPackage> {
+    let (package, dependency) = match cause {
+        DerivationTree::Derived(derived) => return Either::Left(derived.terms.keys()),
         DerivationTree::External(
             External::Custom(package, ..)
             | External::NoVersions(package, ..)
             | External::NotRoot(package, ..),
-        ) => vec![package],
+        ) => (package, None),
         DerivationTree::External(External::FromDependencyOf(package, _, dependency, _)) => {
-            vec![package, dependency]
+            (package, Some(dependency))
         }
-    }
+    };
+    Either::Right(std::iter::once(package).chain(dependency))
 }
 
 /// The versions of `package` that a cause requires to remain usable.
