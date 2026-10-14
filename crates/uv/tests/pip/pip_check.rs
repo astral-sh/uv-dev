@@ -436,67 +436,47 @@ fn check_python_version_upper_bound() -> Result<()> {
 #[test]
 fn check_dependency_metadata_from_config_file() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    let wheel = indoc! {"
+        Wheel-Version: 1.0
+        Root-Is-Purelib: true
+        Tag: py3-none-any
+    "};
+    let consumer = site_packages.child("consumer-1.0.0.dist-info");
+    consumer.child("METADATA").write_str(indoc! {"
+        Metadata-Version: 2.4
+        Name: consumer
+        Version: 1.0.0
+        Requires-Dist: dependency>=2
+    "})?;
+    consumer.child("WHEEL").write_str(wheel)?;
+    let dependency = site_packages.child("dependency-1.0.0.dist-info");
+    dependency.child("METADATA").write_str(indoc! {"
+        Metadata-Version: 2.4
+        Name: dependency
+        Version: 1.0.0
+    "})?;
+    dependency.child("WHEEL").write_str(wheel)?;
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("requests==2.31.0")?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
+    uv_snapshot!(context.pip_check(), @"
+    exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Prepared 5 packages in [TIME]
-    Installed 5 packages in [TIME]
-     + certifi==2024.2.2
-     + charset-normalizer==3.3.2
-     + idna==3.6
-     + requests==2.31.0
-     + urllib3==2.2.1
-    "
-    );
+    Checked 2 packages in [TIME]
+    Found 1 incompatibility
+    The package `consumer` requires `dependency>=2`, but `1.0.0` is installed
+    ");
 
-    let requirements_txt_idna = context.temp_dir.child("requirements_idna.txt");
-    requirements_txt_idna.write_str("idna==2.4")?;
-
-    uv_snapshot!(context
-        .pip_install()
-        .arg("-r")
-        .arg("requirements_idna.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - idna==3.6
-     + idna==2.4
-    warning: The package `requests` requires `idna>=2.5,<4`, but `2.4` is installed
-    "
-    );
-
-    let uv_toml = context.temp_dir.child("uv.toml");
-    uv_toml.write_str(
-        r#"
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
         dependency-metadata = [
-          { name = "requests", version = "2.31.0", requires-dist = ["certifi>=2017.4.17", "charset-normalizer>=2,<4", "idna>=2.4,<4", "urllib3>=1.21.1,<3"] },
+            { name = "consumer", version = "1.0.0", requires-dist = ["dependency>=1"] },
         ]
-        "#,
-    )?;
-
-    uv_snapshot!(context
-        .pip_check()
-        .arg("--config-file")
-        .arg("uv.toml"), @"
+    "#})?;
+    uv_snapshot!(context.pip_check().arg("--config-file").arg("uv.toml"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Checked 5 packages in [TIME]
+    Checked 2 packages in [TIME]
     All installed packages are compatible
-    "
-    );
+    ");
 
     Ok(())
 }
