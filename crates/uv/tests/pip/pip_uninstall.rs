@@ -100,7 +100,7 @@ fn uninstall() -> Result<()> {
     "
     );
 
-    context.assert_command("import markupsafe").failure();
+    context.assert_not_installed("markupsafe");
 
     Ok(())
 }
@@ -171,7 +171,7 @@ fn uninstall_editable_by_name() -> Result<()> {
     "
     );
 
-    context.assert_command("import flit_editable").failure();
+    context.assert_not_installed("flit_editable");
 
     Ok(())
 }
@@ -209,7 +209,7 @@ fn uninstall_by_path() -> Result<()> {
     "
     );
 
-    context.assert_command("import flit_editable").failure();
+    context.assert_not_installed("flit_editable");
 
     Ok(())
 }
@@ -248,7 +248,7 @@ fn uninstall_duplicate_by_path() -> Result<()> {
     "
     );
 
-    context.assert_command("import flit_editable").failure();
+    context.assert_not_installed("flit_editable");
 
     Ok(())
 }
