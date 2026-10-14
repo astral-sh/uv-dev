@@ -259,6 +259,47 @@ fn show_required_by_multiple() -> Result<()> {
     Ok(())
 }
 
+/// Strict validation reports problems throughout the environment, including packages not shown.
+#[test]
+#[cfg(feature = "test-python")]
+fn show_strict_validates_entire_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    let wheel_metadata = indoc! {"
+        Wheel-Version: 1.0
+        Root-Is-Purelib: true
+        Tag: py3-none-any
+    "};
+    let visible = site_packages.child("visible-1.0.0.dist-info");
+    visible
+        .child("METADATA")
+        .write_str("Metadata-Version: 2.1\nName: visible\nVersion: 1.0.0\n")?;
+    visible.child("WHEEL").write_str(wheel_metadata)?;
+    let broken = site_packages.child("broken-1.0.0.dist-info");
+    broken.child("METADATA").write_str(indoc! {"
+        Metadata-Version: 2.1
+        Name: broken
+        Version: 1.0.0
+        Requires-Dist: missing-dependency>=2
+    "})?;
+    broken.child("WHEEL").write_str(wheel_metadata)?;
+
+    uv_snapshot!(context.filters(), context.pip_show().args(["visible", "--strict"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Name: visible
+    Version: 1.0.0
+    Location: [SITE_PACKAGES]/
+    Requires:
+    Required-by:
+
+    ----- stderr -----
+    warning: The package `broken` requires `missing-dependency>=2`, but it's not installed
+    ");
+
+    Ok(())
+}
+
 #[test]
 #[cfg(feature = "test-pypi")]
 fn show_files() {
