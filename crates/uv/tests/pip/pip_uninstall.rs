@@ -568,7 +568,11 @@ fn uninstall_egg_info_top_level_path_traversal() -> Result<()> {
         .components()
         .count();
     let traversal_entry = format!("{}traversal_target", "../".repeat(depth));
-    assert!(context.site_packages().join(&traversal_entry).exists());
+    assert_eq!(
+        site_packages.child(&traversal_entry).canonicalize()?,
+        target_dir.canonicalize()?,
+        "the traversal entry must resolve to the protected target"
+    );
 
     egg_info.child("top_level.txt").write_str(&formatdoc! {"
         evilpkg
@@ -587,10 +591,9 @@ fn uninstall_egg_info_top_level_path_traversal() -> Result<()> {
      - evilpkg==0.1.0
     ");
 
-    assert!(target_dir.exists());
-    assert!(target_file.exists());
-    assert!(!init_py.exists());
-    assert!(!egg_info.exists());
+    target_file.assert("I should not be deleted");
+    init_py.assert(predicates::path::missing());
+    egg_info.assert(predicates::path::missing());
 
     Ok(())
 }
@@ -639,9 +642,9 @@ fn uninstall_egg_info_top_level_drive_relative() -> Result<()> {
      - evilpkg==0.1.0
     ");
 
-    assert!(target_file.exists());
-    assert!(!init_py.exists());
-    assert!(!egg_info.exists());
+    target_file.assert("I should not be deleted");
+    init_py.assert(predicates::path::missing());
+    egg_info.assert(predicates::path::missing());
 
     Ok(())
 }
