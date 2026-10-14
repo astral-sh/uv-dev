@@ -1717,25 +1717,22 @@ impl Edges {
     }
 
     // Returns the complement of this [`Edges`].
-    fn not(self) -> Self {
-        match self {
-            Self::Version { edges: map } => Self::Version {
-                edges: map
-                    .into_iter()
-                    .map(|(range, node)| (range, node.not()))
-                    .collect(),
-            },
-            Self::String { edges: map } => Self::String {
-                edges: map
-                    .into_iter()
-                    .map(|(range, node)| (range, node.not()))
-                    .collect(),
-            },
-            Self::Boolean { high, low } => Self::Boolean {
-                high: high.not(),
-                low: low.not(),
-            },
+    fn not(mut self) -> Self {
+        fn complement_range_edges<T>(edges: &mut [(T, NodeId)]) {
+            for (_, node) in edges {
+                *node = node.not();
+            }
         }
+
+        match &mut self {
+            Self::Version { edges } => complement_range_edges(edges),
+            Self::String { edges } => complement_range_edges(edges),
+            Self::Boolean { high, low } => {
+                *high = high.not();
+                *low = low.not();
+            }
+        }
+        self
     }
 }
 
