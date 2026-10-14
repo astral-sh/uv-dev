@@ -383,34 +383,34 @@ pub async fn run(
 
     // Check if the provided command is not part of the executables for the `from` package,
     // and if it's provided by another package in the environment.
-    let provider_hints = match &from {
+    let deferred_provider_hints = match &from {
         ToolRequirement::Python { .. } => None,
-        ToolRequirement::Package { requirement, .. } => Some(ExecutableProviderHints::new(
-            executable,
-            requirement,
-            &site_packages,
-            invocation_source,
-        )),
-    };
-
-    if let Some(ref provider_hints) = provider_hints {
-        if provider_hints.not_from_any() {
-            if !explicit_from {
-                // If the user didn't use `--from` and the command isn't in the environment, we're now
-                // just invoking an arbitrary executable on the `PATH` and should exit instead.
-                writeln!(printer.stderr(), "{provider_hints}")?;
-                return Ok(ExitStatus::Failure);
+        ToolRequirement::Package { requirement, .. } => {
+            let provider_hints = ExecutableProviderHints::new(
+                executable,
+                requirement,
+                &site_packages,
+                invocation_source,
+            );
+            if provider_hints.not_from_any() {
+                if !explicit_from {
+                    // Without `--from`, invoking an arbitrary executable on `PATH` would be unexpected.
+                    writeln!(printer.stderr(), "{provider_hints}")?;
+                    return Ok(ExitStatus::Failure);
+                }
+                // With `--from`, the executable may be on `PATH`; defer the hint until it cannot be found.
+                // TODO(zanieb): Consider if we should require `--with` instead of `--from` in this case?
+                // It'd be a breaking change but would make `uvx` invocations safer.
+                Some(provider_hints)
+            } else {
+                if provider_hints.not_from_expected() {
+                    // The executable is available through another package, which could be confusing.
+                    warn_user_once!("{provider_hints}");
+                }
+                None
             }
-            // In the case where `--from` is used, we'll warn on failure if the command is not found
-            // TODO(zanieb): Consider if we should require `--with` instead of `--from` in this case?
-            // It'd be a breaking change but would make `uvx` invocations safer.
-        } else if provider_hints.not_from_expected() {
-            // However, if the user used `--from`, we shouldn't fail because they requested that the
-            // package and executable be different. We'll warn if the executable comes from another
-            // package though, because that could be confusing
-            warn_user_once!("{provider_hints}");
         }
-    }
+    };
 
     // Construct the command
     let mut process = if cfg!(windows) {
@@ -443,23 +443,14 @@ pub async fn run(
         args.iter().map(|arg| arg.to_string_lossy()).join(" ")
     );
 
-    let handle = match process.spawn() {
-        Ok(handle) => Ok(handle),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            if let Some(ref provider_hints) = provider_hints {
-                if provider_hints.not_from_any() && explicit_from {
-                    // We deferred this warning earlier, because `--from` was used and the command
-                    // could have come from the `PATH`. Display a more helpful message instead of the
-                    // OS error.
-                    writeln!(printer.stderr(), "{provider_hints}")?;
-                    return Ok(ExitStatus::Failure);
-                }
-            }
-            Err(err)
+    let handle = match (process.spawn(), deferred_provider_hints) {
+        (Ok(handle), _) => handle,
+        (Err(err), Some(provider_hints)) if err.kind() == std::io::ErrorKind::NotFound => {
+            writeln!(printer.stderr(), "{provider_hints}")?;
+            return Ok(ExitStatus::Failure);
         }
-        Err(err) => Err(err),
-    }
-    .with_context(|| format!("Failed to spawn: {executable}"))?;
+        (Err(err), _) => return Err(err).with_context(|| format!("Failed to spawn: {executable}")),
+    };
 
     run_to_completion(handle).await
 }
