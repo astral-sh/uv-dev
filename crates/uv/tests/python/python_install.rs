@@ -27,6 +27,8 @@ use uv_static::EnvVars;
 use walkdir::WalkDir;
 
 use crate::build_upgrade::OutdatedPythonBuild;
+#[cfg(all(windows, feature = "test-windows-registry"))]
+use crate::windows_registry::RegistryFixture;
 
 #[track_caller]
 fn assert_python_launcher(context: &TestContext, launcher: &Path) {
@@ -1186,15 +1188,9 @@ fn python_install_freethreaded() {
 /// on Windows when registry discovery is enabled.
 ///
 /// Regression test for <https://github.com/astral-sh/uv/issues/18795>.
-///
-/// IMPORTANT: this test writes to the shared `HKCU` registry. The trailing uninstall is
-/// best-effort cleanup; panics will leak entries. These registry tests still share global state,
-/// so adding more will probably require isolation.
 #[cfg(all(windows, feature = "test-windows-registry"))]
-#[test]
-fn python_install_freethreaded_and_gil_list() {
-    use assert_cmd::assert::OutputAssertExt;
-
+#[tokio::test]
+async fn python_install_freethreaded_and_gil_list() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_latest_python_versions()
@@ -1203,6 +1199,7 @@ fn python_install_freethreaded_and_gil_list() {
         .with_filtered_python_names()
         .with_filtered_exe_suffix()
         .with_collapsed_whitespace();
+    let registry = RegistryFixture::acquire(&context).await?;
 
     // Install both the GIL and free-threaded versions, with registry enabled
     context
@@ -1257,20 +1254,12 @@ fn python_install_freethreaded_and_gil_list() {
     cpython-3.13.[LATEST]+freethreaded-[PLATFORM] managed/cpython-3.13+freethreaded-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
-    // Clean up registry entries
-    context
-        .python_uninstall()
-        .arg("--all")
-        .env(EnvVars::UV_PYTHON_INSTALL_REGISTRY, "1")
-        .assert()
-        .success();
+    registry.cleanup()
 }
 
 #[cfg(all(windows, feature = "test-windows-registry"))]
-#[test]
-fn python_install_registry_takes_precedence_over_no_registry() {
-    use assert_cmd::assert::OutputAssertExt;
-
+#[tokio::test]
+async fn python_install_registry_takes_precedence_over_no_registry() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_latest_python_versions()
@@ -1279,6 +1268,7 @@ fn python_install_registry_takes_precedence_over_no_registry() {
         .with_filtered_python_names()
         .with_filtered_exe_suffix()
         .with_collapsed_whitespace();
+    let registry = RegistryFixture::acquire(&context).await?;
 
     context
         .python_install()
@@ -1304,12 +1294,7 @@ fn python_install_registry_takes_precedence_over_no_registry() {
     cpython-3.13.[LATEST]-[PLATFORM] managed/cpython-3.13-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
     ");
 
-    context
-        .python_uninstall()
-        .arg("--all")
-        .env(EnvVars::UV_PYTHON_INSTALL_REGISTRY, "1")
-        .assert()
-        .success();
+    registry.cleanup()
 }
 
 #[test]
