@@ -18557,31 +18557,42 @@ async fn sync_malware_check_disabled() {
 
     context.lock().assert().success();
 
+    let server = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": [{"id": "MAL-CONFIG-ENABLED"}]}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
     let user_config_dir = context.user_config_dir.child("uv");
     user_config_dir.create_dir_all().unwrap();
     user_config_dir
         .child("uv.toml")
-        .write_str(indoc! {"
+        .write_str(&formatdoc! {r#"
             [audit]
             malware-check = true
-        "})
+            malware-check-url = "{}"
+        "#, server.uri()})
         .unwrap();
 
-    let server = MockServer::start().await;
-
-    Mock::given(any())
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{"vulns": []}]
-        })))
-        .expect(0)
-        .mount(&server)
-        .await;
+    // Confirm that the user configuration enables the check before overriding it.
+    context
+        .sync()
+        .arg("--preview-features")
+        .arg("malware-check")
+        .env_remove(EnvVars::UV_MALWARE_CHECK)
+        .env_remove(EnvVars::UV_MALWARE_CHECK_URL)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("MAL-CONFIG-ENABLED"));
 
     uv_snapshot!(context.filters(), context
         .sync()
         .arg("--preview-features").arg("malware-check")
         .env(EnvVars::UV_MALWARE_CHECK, "0")
-        .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri()), @"
+        .env_remove(EnvVars::UV_MALWARE_CHECK_URL), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
