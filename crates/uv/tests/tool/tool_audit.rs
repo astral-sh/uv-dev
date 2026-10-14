@@ -31,6 +31,7 @@ async fn mount_clean_service(server: &MockServer) {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "results": [{ "vulns": [] }]
         })))
+        .expect(1..)
         .mount(server)
         .await;
 }
@@ -41,6 +42,7 @@ async fn mount_vulnerable_service(server: &MockServer) {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "results": [{ "vulns": [{ "id": "PYSEC-2026-0001" }] }]
         })))
+        .expect(1..)
         .mount(server)
         .await;
 
@@ -68,6 +70,7 @@ async fn mount_vulnerable_service(server: &MockServer) {
                 "url": "https://example.com/advisory/PYSEC-2026-0001"
             }]
         })))
+        .expect(1..)
         .mount(server)
         .await;
 }
@@ -474,6 +477,7 @@ async fn tool_audit_shared_dependencies() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "results": [{ "vulns": [] }, { "vulns": [] }]
         })))
+        .expect(1..)
         .mount(&server)
         .await;
 
