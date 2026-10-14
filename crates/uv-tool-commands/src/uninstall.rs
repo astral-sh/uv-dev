@@ -7,7 +7,7 @@ use tracing::debug;
 
 use uv_fs::Simplified;
 use uv_normalize::PackageName;
-use uv_tool::{InstalledTools, Tool, ToolEntrypoint};
+use uv_tool::{InstalledTools, Tool};
 
 use uv_command_support::ExitStatus;
 use uv_command_support::Printer;
@@ -63,7 +63,7 @@ async fn do_uninstall(
         }))
     };
     let mut dangling = false;
-    let mut entrypoints = Vec::new();
+    let mut executable_names = Vec::new();
     for tool in tools {
         let (name, receipt) = tool?;
         let Some(receipt) = receipt else {
@@ -87,11 +87,17 @@ async fn do_uninstall(
             }
         };
 
-        entrypoints.extend(uninstall_tool(&name, &receipt, installed_tools).await?);
+        uninstall_tool(&name, &receipt, installed_tools).await?;
+        executable_names.extend(
+            receipt
+                .entrypoints()
+                .iter()
+                .map(|entrypoint| entrypoint.name.clone()),
+        );
     }
-    entrypoints.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+    executable_names.sort_unstable();
 
-    if entrypoints.is_empty() {
+    if executable_names.is_empty() {
         // If we removed at least one dangling environment, there's no need to summarize.
         if !dangling {
             writeln!(printer.stderr(), "Nothing to uninstall")?;
@@ -99,26 +105,19 @@ async fn do_uninstall(
         return Ok(());
     }
 
-    let s = if entrypoints.len() == 1 { "" } else { "s" };
+    let s = if executable_names.len() == 1 { "" } else { "s" };
     writeln!(
         printer.stderr(),
         "Uninstalled {} executable{s}: {}",
-        entrypoints.len(),
-        entrypoints
-            .iter()
-            .map(|entrypoint| entrypoint.name.bold())
-            .join(", ")
+        executable_names.len(),
+        executable_names.iter().map(|name| name.bold()).join(", ")
     )?;
 
     Ok(())
 }
 
 /// Uninstall a tool.
-async fn uninstall_tool(
-    name: &PackageName,
-    receipt: &Tool,
-    tools: &InstalledTools,
-) -> Result<Vec<ToolEntrypoint>> {
+async fn uninstall_tool(name: &PackageName, receipt: &Tool, tools: &InstalledTools) -> Result<()> {
     // Remove the tool itself.
     tools.remove_environment(name)?;
 
@@ -126,8 +125,7 @@ async fn uninstall_tool(
     let itself = std::env::current_exe().ok();
 
     // Remove the tool's entrypoints.
-    let entrypoints = receipt.entrypoints();
-    for entrypoint in entrypoints {
+    for entrypoint in receipt.entrypoints() {
         debug!(
             "Removing executable: {}",
             entrypoint.install_path.user_display()
@@ -155,5 +153,5 @@ async fn uninstall_tool(
         }
     }
 
-    Ok(entrypoints.to_vec())
+    Ok(())
 }
