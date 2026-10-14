@@ -362,11 +362,10 @@ impl RegistryClient {
             Either::Right(self.index_urls_for(package_name))
         };
 
-        let mut results = Vec::new();
-
-        match self.index_strategy_for(package_name) {
+        let results = match self.index_strategy_for(package_name) {
             // If we're searching for the first index that contains the package, fetch serially.
             IndexStrategy::FirstIndex => {
+                let mut results = Vec::new();
                 for index in indexes {
                     let _permit = download_concurrency.acquire().await;
                     match index.format {
@@ -407,11 +406,12 @@ impl RegistryClient {
                         }
                     }
                 }
+                results
             }
 
             // Otherwise, fetch concurrently.
             IndexStrategy::UnsafeBestMatch | IndexStrategy::UnsafeFirstMatch => {
-                results = futures::stream::iter(indexes)
+                futures::stream::iter(indexes)
                     .map(async |index| {
                         let _permit = download_concurrency.acquire().await;
                         match index.format {
@@ -445,9 +445,9 @@ impl RegistryClient {
                         Ok::<_, Error>(metadata.map(|metadata| (index, metadata)))
                     })
                     .try_collect::<Vec<_>>()
-                    .await?;
+                    .await?
             }
-        }
+        };
 
         if results.is_empty() {
             return match self.connectivity {
