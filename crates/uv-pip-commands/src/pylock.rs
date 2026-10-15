@@ -8,7 +8,7 @@ use anyhow::Context;
 use tracing::info_span;
 
 use uv_client::BaseClientBuilder;
-use uv_configuration::{BuildOptions, HashCheckingMode, RequirementsInput, TargetTriple};
+use uv_configuration::{BuildOptions, HashCheckingMode, TargetTriple};
 use uv_distribution_types::{RequiresPython, Resolution};
 use uv_lock::{PylockToml, PylockTomlError};
 use uv_normalize::{ExtraName, GroupName};
@@ -59,17 +59,9 @@ pub(crate) async fn read_pylock_toml(
     pylock: &PylockSource,
     client_builder: &BaseClientBuilder<'_>,
 ) -> anyhow::Result<(PathBuf, PylockToml)> {
-    let (install_path, content) = match &pylock.input {
-        RequirementsInput::Stdin => (
-            std::env::current_dir()?,
-            Cow::Borrowed(
-                pylock
-                    .content
-                    .as_deref()
-                    .context("Missing contents for `pylock.toml` on stdin")?,
-            ),
-        ),
-        RequirementsInput::Remote(url) => {
+    let (install_path, content) = match pylock {
+        PylockSource::Stdin(content) => (std::env::current_dir()?, Cow::Borrowed(content.as_str())),
+        PylockSource::Remote(url) => {
             let client = client_builder.build()?;
             let response = client
                 .for_host(url)
@@ -80,7 +72,7 @@ pub(crate) async fn read_pylock_toml(
             let content = response.text().await?;
             (std::env::current_dir()?, Cow::Owned(content))
         }
-        RequirementsInput::Local(path) => {
+        PylockSource::Local(path) => {
             let absolute = std::path::absolute(path)?;
             let install_path = absolute
                 .parent()
@@ -91,7 +83,7 @@ pub(crate) async fn read_pylock_toml(
         }
     };
 
-    let input = pylock.input.user_display();
+    let input = pylock.user_display();
     let lock = info_span!("toml::from_str pylock.toml", path = %input)
         .in_scope(|| toml::from_str::<PylockToml>(&content))
         .with_context(|| format!("Not a valid `pylock.toml` file: {input}"))?;

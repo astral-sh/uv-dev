@@ -29,6 +29,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -50,6 +51,7 @@ use uv_distribution_types::{
 use uv_fs::{CWD, Simplified};
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pypi_types::PyProjectToml;
+use uv_redacted::DisplaySafeUrl;
 use uv_requirements_txt::{RequirementsTxt, RequirementsTxtRequirement, SourceCache};
 use uv_scripts::{OverrideDependency, Pep723Metadata};
 use uv_warnings::warn_user;
@@ -98,9 +100,21 @@ pub struct RequirementsSpecification {
 
 /// A `pylock.toml` input, with contents retained when format detection consumes stdin.
 #[derive(Debug, Clone)]
-pub struct PylockSource {
-    pub input: RequirementsInput,
-    pub content: Option<String>,
+pub enum PylockSource {
+    Stdin(String),
+    Local(PathBuf),
+    Remote(DisplaySafeUrl),
+}
+
+impl PylockSource {
+    /// Render this input for user-facing display.
+    pub fn user_display(&self) -> impl Display + '_ {
+        std::fmt::from_fn(|f| match self {
+            Self::Stdin(_) => f.write_str("-"),
+            Self::Local(path) => path.user_display().fmt(f),
+            Self::Remote(url) => url.fmt(f),
+        })
+    }
 }
 
 impl RequirementsSpecification {
@@ -369,15 +383,13 @@ impl RequirementsSpecification {
                 }
 
                 Self {
-                    pylock: Some(PylockSource {
-                        input: input.clone(),
-                        // Remote lockfiles are fetched after index credentials are initialized.
-                        content: match input {
-                            RequirementsInput::Stdin => {
-                                Some(read_cached_file(input, client_builder, cache).await?)
-                            }
-                            RequirementsInput::Local(_) | RequirementsInput::Remote(_) => None,
-                        },
+                    // Remote lockfiles are fetched after index credentials are initialized.
+                    pylock: Some(match input {
+                        RequirementsInput::Stdin => PylockSource::Stdin(
+                            read_cached_file(input, client_builder, cache).await?,
+                        ),
+                        RequirementsInput::Local(path) => PylockSource::Local(path.clone()),
+                        RequirementsInput::Remote(url) => PylockSource::Remote(url.clone()),
                     }),
                     ..Self::default()
                 }
@@ -584,8 +596,8 @@ impl RequirementsSpecification {
                 if let Some(existing) = spec.pylock {
                     return Err(anyhow::anyhow!(
                         "Multiple `pylock.toml` files specified: `{}` vs. `{}`",
-                        existing.input.user_display(),
-                        pylock.input.user_display(),
+                        existing.user_display(),
+                        pylock.user_display(),
                     ));
                 }
                 spec.pylock = Some(pylock);
