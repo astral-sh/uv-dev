@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -17,6 +20,25 @@ def command_output(command: list[str], source: Path) -> str:
 
 
 def build(source: Path) -> dict[str, float]:
+    source = source.resolve()
+    environment = os.environ | {"CARGO_INCREMENTAL": "0"}
+    pgo_directory = source / "target-pgo"
+    start = time.perf_counter()
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_uv_pgo.py",
+            "--target",
+            TARGET,
+            "--target-dir",
+            str(pgo_directory),
+            "--train-only",
+        ],
+        cwd=source,
+        env=environment,
+        check=True,
+    )
+    durations = {"pgo_training": round(time.perf_counter() - start, 3)}
     commands = {
         "uv": (
             source,
@@ -37,8 +59,13 @@ def build(source: Path) -> dict[str, float]:
             ["--profile", "minimal-size", "-p", "uv-build", "--bin", "uv-build"],
         ),
     }
-    durations = {}
     for binary, (directory, arguments) in commands.items():
+        build_environment = environment.copy()
+        if binary == "uv":
+            build_environment["RUSTFLAGS"] = (
+                f"{environment.get('RUSTFLAGS', '')} "
+                f"-Cprofile-use={pgo_directory / 'uv.profdata'}"
+            ).strip()
         start = time.perf_counter()
         subprocess.run(
             [
@@ -52,6 +79,7 @@ def build(source: Path) -> dict[str, float]:
                 *arguments,
             ],
             cwd=directory,
+            env=build_environment,
             check=True,
         )
         durations[binary] = round(time.perf_counter() - start, 3)
@@ -78,6 +106,10 @@ def measure(
             ),
         },
         "sizes": sizes,
+        "pgo": True,
+        "pgo_profile_sha256": hashlib.sha256(
+            (source / "target-pgo" / "uv.profdata").read_bytes()
+        ).hexdigest(),
         "build_seconds": build_seconds,
     }
 
@@ -135,8 +167,9 @@ def report(
         "",
         (
             "Native Cargo builds with `release` for `uv` and `uvx`, and `minimal-size` "
-            "for `uv-build`. Sizes are uncompressed bytes. These builds exclude the "
-            "release pipeline's PGO, SBOM embedding, and manylinux packaging."
+            "for `uv-build`. `uv` and `uvx` use the release PGO training corpus and flags. "
+            "Incremental compilation is disabled. Sizes are uncompressed bytes; "
+            "SBOM embedding and manylinux packaging are excluded."
         ),
         "",
         "</details>",
@@ -148,12 +181,13 @@ def report(
             "### Build time",
             "",
             (
-                "Elapsed `cargo build` time for the current revision, excluding setup, "
-                "cache transfers, and artifact uploads. The `uv` build includes `uvx`."
+                "Elapsed build and PGO preparation time for the current revision, excluding "
+                "job setup, cache transfers, and artifact uploads. The `uv` build includes `uvx`."
             ),
             "",
             "| Build | Seconds |",
             "| --- | ---: |",
+            f"| PGO instrumentation and training | {durations['pgo_training']:.3f} |",
             f"| `uv` and `uvx` | {durations['uv']:.3f} |",
             f"| `uv-build` | {durations['uv-build']:.3f} |",
         ]

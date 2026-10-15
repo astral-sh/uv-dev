@@ -32,7 +32,7 @@ jobs:
         id: plan
         env:
           EVENT_NAME: ${{ github.event_name }}
-          RECIPE: ${{ hashFiles('.github/workflows/binary-size.yml', 'scripts/binary_size.py', 'scripts/prune_cargo_workspace_cache.py') }}
+          RECIPE: ${{ hashFiles('.github/workflows/binary-size.yml', 'scripts/binary_size.py', 'scripts/build_uv_pgo.py', 'scripts/prune_cargo_workspace_cache.py', 'test/ecosystem/**') }}
         run: |
           current="$(git rev-parse HEAD)"
           matrix="$(jq -cn --arg sha "$current" '{include: [{name: "current", sha: $sha}]}')"
@@ -48,7 +48,7 @@ jobs:
     name: "Measure ${{ matrix.name }}"
     needs: plan
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-8' || 'ubuntu-latest' }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       RUSTC_BOOTSTRAP: 1
     strategy:
@@ -82,6 +82,7 @@ jobs:
         run: |
           rustup show
           rustup target add "$TARGET"
+          rustup component add llvm-tools-preview
           cd crates/uv-build
           rustup show
           rustup target add "$TARGET"
@@ -100,8 +101,10 @@ jobs:
         id: rust-cache
         with:
           prefix-key: v1-rust-workspace
-          key: binary-size-release-${{ matrix.name }}-${{ hashFiles('source/Cargo.toml') }}
-          workspaces: source -> target
+          key: binary-size-pgo-${{ matrix.name }}-${{ hashFiles('source/Cargo.toml') }}
+          workspaces: |
+            source -> target
+            source -> target-pgo/instrumented
           cache-workspace-crates: "true"
           save-if: ${{ inputs.save-rust-cache == 'true' }}
 
@@ -112,6 +115,7 @@ jobs:
       - name: "Build binaries"
         if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
         env:
+          CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
           CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
         run: uv run --no-project tooling/scripts/binary_size.py build --source source --output build-times.json
 
@@ -125,6 +129,7 @@ jobs:
         run: |
           uv run --no-project ../tooling/scripts/prune_cargo_workspace_cache.py "target/$TARGET/release" "$RUNNER_TEMP/uv-cargo-cache-marker"
           uv run --no-project ../tooling/scripts/prune_cargo_workspace_cache.py "target/$TARGET/minimal-size" "$RUNNER_TEMP/uv-cargo-cache-marker"
+          uv run --no-project ../tooling/scripts/prune_cargo_workspace_cache.py "target-pgo/instrumented/$TARGET/release" "$RUNNER_TEMP/uv-cargo-cache-marker"
 
       - name: "Save main baseline"
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
