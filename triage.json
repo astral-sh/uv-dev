@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12136,
+        "title": "`uvx --from <path>` does not respect changes in subsequent invocations",
+        "url": "https://github.com/astral-sh/uv/issues/12136",
+        "state": "open",
+        "reason": "Direct match: local-path tool executions reuse an environment after source edits. The issue proposes editable installs by default or avoiding local-path caching, and remains open with needs-decision."
+      },
+      {
+        "kind": "issue",
+        "number": 16196,
+        "title": "uvx does not invalidate cache when source code changes with --from flag",
+        "url": "https://github.com/astral-sh/uv/issues/16196",
+        "state": "closed",
+        "reason": "Same local-source symptom, including requests for change detection, clearer documentation, or a caching warning. Maintainer replies recommend editable installs, reinstall-package, cache-keys, or no-cache. Its closure did not establish that a fix shipped."
+      },
+      {
+        "kind": "issue",
+        "number": 16974,
+        "title": "Can't convince uvx to update program from a local project",
+        "url": "https://github.com/astral-sh/uv/issues/16974",
+        "state": "closed",
+        "reason": "Reports the same stale local tool after source edits, additionally with --refresh on uv 0.9.14. One maintainer considered the refresh behavior a bug; later replies recommend editable installs and cache keys. This is corroborating history, not evidence of a completed fix."
+      },
+      {
+        "kind": "issue",
+        "number": 13431,
+        "title": "Ephemeral environments are not ephemeral",
+        "url": "https://github.com/astral-sh/uv/issues/13431",
+        "state": "open",
+        "reason": "Matches the separate terminology complaint: ephemeral was interpreted as deletion after execution. A maintainer explains that cached environments are disposable and may be recreated. Its reproduction concerns uv run script environments and disk usage, rather than local uvx source freshness."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests using authenticated gh. Separately searched local --from source edits/stale caches, Git refresh/recheck/branch/tag/git+file behavior, ephemeral/disposable environments, and cache warnings/documentation. Broadened to uv tool, editable installs, cache invalidation, cache-keys, and CachedEnvironment; searched historical fixes and references to astral-sh/uv#12136 and astral-sh/uv#16196. Inspected candidate comments and followed discussion links. Ruled out astral-sh/uv#6804 (registry-version and installed-tool selection), astral-sh/uv#13414 and its canonical astral-sh/uv#5815 (dependency lockfile support), and astral-sh/uv#5731 (cache size limits). Also inspected astral-sh/uv#10088 and merged astral-sh/uv#10068: these concern HTTP archive subdirectories and lockfile handling, not local-path freshness. No matching fixing pull request or evidence of a fixed-then-regressed bug was found."
+  },
+  "type": "duplicate",
+  "type_reason": "Open astral-sh/uv#12136 already tracks the same command, local-source edits being missed, and the requested change to default caching/editable behavior. The Git comparison and notice/documentation proposals add context to that existing discussion. The ephemeral terminology concern also has an existing discussion in astral-sh/uv#13431. There is no evidence of a previously shipped fix regressing; duplicate therefore takes precedence.",
+  "summary": "astral-sh/uv#12136 is the canonical open discussion. Closed astral-sh/uv#16196 and astral-sh/uv#16974 document the same local-source symptom; astral-sh/uv#13431 covers the ephemeral terminology concern.",
+  "draft_response": "The local-source behavior you describe is already tracked in astral-sh/uv#12136, which remains open with needs-decision and considers editable installs by default or avoiding local-path caching. Please keep the proposed default change and Git comparison in that discussion. For pure-Python development, you can use `uvx --from <path> --with-editable <path> <cmd>` so source edits are visible without rebuilding.\n\nA clarification: current local-path cache keys track project metadata and configured inputs, rather than every Python source file. Git builds are also cached by resolved commit; rechecking a ref does not mean rebuilding an unchanged commit. Tool environments are cached and disposable across source types, including PyPI. The concern about describing these as ephemeral is also discussed in astral-sh/uv#13431."
+}
