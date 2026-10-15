@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter, ReadBuf};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, trace};
 use url::Url;
 use zstd::stream::read::Decoder;
 
@@ -701,34 +701,53 @@ impl ManagedPythonDownload {
         );
 
         let (mut reader, size) = read_url(url, client).await?;
+        trace!(
+            "Creating temporary archive file in `{}`",
+            python_builds_dir.simplified_display()
+        );
         let temp_dir = tempfile::tempdir_in(python_builds_dir)?;
         let temp_file = temp_dir.path().join("download");
 
         // Download to a temporary file. We verify the hash when unpacking the file.
         {
             let mut archive_writer = BufWriter::new(fs_err::tokio::File::create(&temp_file).await?);
+            trace!(
+                "Created temporary archive file `{}`",
+                temp_file.simplified_display()
+            );
 
             // Download with or without progress bar.
             if let Some(reporter) = reporter {
                 let key = reporter.on_request_start(Direction::Download, &self.key, size);
-                tokio::io::copy(
+                trace!("Copying Python archive");
+                let copied = tokio::io::copy(
                     &mut ProgressReader::new(reader, key, reporter),
                     &mut archive_writer,
                 )
                 .await?;
+                trace!(bytes = copied, "Copied Python archive");
                 reporter.on_request_complete(Direction::Download, key);
             } else {
-                tokio::io::copy(&mut reader, &mut archive_writer).await?;
+                trace!("Copying Python archive");
+                let copied = tokio::io::copy(&mut reader, &mut archive_writer).await?;
+                trace!(bytes = copied, "Copied Python archive");
             }
 
+            trace!("Flushing temporary Python archive file");
             archive_writer.flush().await?;
+            trace!("Flushed temporary Python archive file");
         }
         // Move the completed file into place, invalidating the `File` instance.
+        trace!(
+            "Publishing Python archive to `{}`",
+            target_cache_file.simplified_display()
+        );
         match rename_with_retry(&temp_file, target_cache_file).await {
             Ok(()) => {}
             Err(_) if target_cache_file.is_file() => {}
             Err(err) => return Err(err.into()),
         }
+        trace!("Python archive cache entry is available");
         Ok(())
     }
 
@@ -1155,6 +1174,7 @@ async fn read_url(
         Ok((Either::Left(reader), Some(size)))
     } else {
         let start = Instant::now();
+        trace!("Sending Python download request to `{url}`");
         let response = client
             .for_host(url)
             .get(Url::from(url.clone()))
@@ -1162,6 +1182,11 @@ async fn read_url(
             .await
             .map_err(|err| Error::from_reqwest_middleware(url.clone(), err))?;
 
+        trace!(
+            status = %response.status(),
+            content_length = ?response.content_length(),
+            "Received Python download response headers from `{url}`"
+        );
         let retry_count = response
             .extensions()
             .get::<reqwest_retry::RetryCount>()

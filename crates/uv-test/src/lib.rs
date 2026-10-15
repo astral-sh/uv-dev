@@ -2144,8 +2144,11 @@ impl TestContext {
             env::var_os(EnvVars::UV_INTERNAL__TEST_LOG_DIR).filter(|value| !value.is_empty())
         {
             let thread = std::thread::current();
-            let name: String = thread
-                .name()
+            let test_name = env::var("NEXTEST_TEST_NAME").ok();
+            let name: String = test_name
+                .as_deref()
+                .filter(|name| !name.is_empty())
+                .or_else(|| thread.name())
                 .unwrap_or("unnamed")
                 .chars()
                 .map(|character| match character {
