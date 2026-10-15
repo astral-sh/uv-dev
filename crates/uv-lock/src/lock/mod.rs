@@ -38,7 +38,7 @@ use uv_distribution_types::{
     DirectorySourceDist, Dist, ExcludeNewerOverride, ExcludeNewerSpan, ExcludeNewerValue,
     FileLocation, FirstParty, GitDirectorySourceDist, GitPathBuiltDist, GitPathSourceDist,
     HashValidation, Identifier, IndexLocations, IndexMetadata, IndexUrl, MetadataHashPolicy,
-    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PathBuiltDist,
+    MinimumLibcVersion, Name, NameRequirementSpecification, PYPI_URL, PackageRole, PathBuiltDist,
     PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
     Requirement, RequirementSource, RequiresPython, ResolvedDist, SimplifiedMarkerTree,
     StaticMetadata, ToUrlError, UrlString, VersionId,
@@ -62,7 +62,7 @@ use uv_pypi_types::{
 };
 use uv_redacted::{SafeUrl, SafeUrlError};
 use uv_resolver_types::{
-    AnnotatedDist, ConflictMarker, DistributionMetadataIndex, MetadataResponse, PackageRole,
+    AnnotatedDist, ConflictMarker, DistributionMetadataIndex, MetadataResponse,
     ResolutionGraphNode, ResolverOutput, UniversalMarker,
 };
 use uv_small_str::SmallString;
@@ -7454,7 +7454,9 @@ impl PackageMetadata {
         let relative_requirement = |requirement: &Requirement| {
             let mut requirement = requirement.clone();
             match package_role {
-                PackageRole::Project | PackageRole::WorkspaceMember => {
+                PackageRole::Project
+                | PackageRole::WorkspaceProject
+                | PackageRole::WorkspaceMember => {
                     requirement.set_force_relative(false);
                 }
                 PackageRole::Dependency => {}
