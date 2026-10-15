@@ -111,6 +111,36 @@ impl Preference {
         })
     }
 
+    /// Return the environments where this preference applies, including its fork markers.
+    pub fn marker(&self) -> MarkerTree {
+        let forks = if self.fork_markers.is_empty() {
+            MarkerTree::TRUE
+        } else {
+            self.fork_markers
+                .iter()
+                .fold(MarkerTree::FALSE, |marker, fork| marker.or(fork.combined()))
+        };
+        self.marker.and(forks)
+    }
+
+    /// Restrict this preference to the given environments, discarding an empty intersection.
+    pub fn with_marker(mut self, marker: MarkerTree) -> Option<Self> {
+        self.marker = self.marker.and(marker);
+        if self.fork_markers.is_empty() {
+            self.fork_markers
+                .push(UniversalMarker::from_combined(self.marker));
+        } else {
+            for fork in &mut self.fork_markers {
+                fork.and(UniversalMarker::from_combined(marker));
+            }
+            self.fork_markers.retain(|fork| !fork.is_false());
+            if self.fork_markers.is_empty() {
+                return None;
+            }
+        }
+        (!self.marker.is_false()).then_some(self)
+    }
+
     /// Return the [`PackageName`] of the package for this [`Preference`].
     pub fn name(&self) -> &PackageName {
         &self.name

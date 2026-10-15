@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -10,7 +10,7 @@ use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
 use uv_normalize::{ExtraName, GroupName};
-use uv_pep508::VerbatimUrl;
+use uv_pep508::{MarkerEnvironment, MarkerTree, VerbatimUrl};
 use uv_requirements_txt::RequirementsTxt;
 use uv_resolver::{Preference, PreferenceError, UniversalMarker, UpgradePackages};
 
@@ -23,20 +23,25 @@ pub struct LockedRequirements {
 }
 
 impl LockedRequirements {
-    /// Add fallback version preferences for new package names and prepend fallback Git references.
+    /// Retain fallback version preferences outside each package's imported marker domains,
+    /// and prepend fallback Git references.
     #[must_use]
     pub fn with_fallback(mut self, fallback: Self) -> Self {
-        let names = self
-            .preferences
-            .iter()
-            .map(|preference| preference.name().clone())
-            .collect::<BTreeSet<_>>();
-        self.preferences.extend(
-            fallback
-                .preferences
-                .into_iter()
-                .filter(|preference| !names.contains(preference.name())),
-        );
+        let mut markers = BTreeMap::new();
+        for preference in &self.preferences {
+            let marker = markers
+                .entry(preference.name().clone())
+                .or_insert(MarkerTree::FALSE);
+            *marker = marker.or(preference.marker());
+        }
+        self.preferences
+            .extend(fallback.preferences.into_iter().filter_map(|preference| {
+                if let Some(marker) = markers.get(preference.name()) {
+                    preference.with_marker(marker.negate())
+                } else {
+                    Some(preference)
+                }
+            }));
         self.git.splice(0..0, fallback.git);
         self
     }
@@ -56,33 +61,43 @@ impl LockedRequirements {
         extras: &[ExtraName],
         groups: &[GroupName],
         upgrade: &Upgrade,
-    ) -> Result<Self, PylockTomlErrorKind> {
+        environment: Option<&MarkerEnvironment>,
+    ) -> Result<Self> {
         if upgrade.is_all() {
             return Ok(Self::default());
         }
         let upgrade_packages = UpgradePackages::for_non_project(upgrade);
         let mut preferences = Vec::new();
-        let mut git = Vec::new();
+        let mut git: Vec<ResolvedRepositoryReference> = Vec::new();
         for package in &lock.packages {
             if upgrade_packages.contains(&package.name) {
                 continue;
             }
             let marker = package.marker().simplify_pep751(extras, groups);
-            if marker.is_false() {
+            if marker.is_false()
+                || environment.is_some_and(|environment| !marker.evaluate(environment, &[]))
+            {
                 continue;
             }
             if let Some(version) = &package.version {
                 preferences.push(Preference::from_locked(
                     package.name.clone(),
                     version.clone(),
-                    package
-                        .index
-                        .as_ref()
-                        .map(|index| IndexUrl::from(VerbatimUrl::from(index.clone()))),
+                    package.index.as_ref().map(|index| {
+                        IndexUrl::from(VerbatimUrl::from(index.without_credentials().into_owned()))
+                    }),
                     vec![UniversalMarker::from_combined(marker)],
                 ));
             }
             if let Some(git_ref) = package.as_git_ref(install_path)? {
+                if git.iter().any(|existing| {
+                    existing.reference == git_ref.reference && existing.sha != git_ref.sha
+                }) {
+                    anyhow::bail!(
+                        "Cannot import conflicting Git commits for the repository reference used by `{}`",
+                        package.name
+                    );
+                }
                 git.push(git_ref);
             }
         }

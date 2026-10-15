@@ -22,7 +22,7 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_installer::SitePackages;
-use uv_normalize::PackageName;
+use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::{MarkerEnvironment, RequirementOrigin};
 use uv_platform_tags::Tags;
 use uv_pypi_types::Conflicts;
@@ -118,6 +118,7 @@ pub async fn resolve(
     mut project: Option<PackageName>,
     workspace_members: BTreeMap<PackageName, RequirementSource>,
     extras: &ExtrasSpecification,
+    available_extras: &[ExtraName],
     groups: &BTreeMap<PathBuf, DependencyGroups>,
     preferences: Vec<Preference>,
     installed_packages: Option<SitePackages>,
@@ -205,9 +206,10 @@ pub async fn resolve(
             let mut unused_extras = extras
                 .explicit_names()
                 .filter(|extra| {
-                    !resolutions
-                        .iter()
-                        .any(|resolution| resolution.extras().contains(extra))
+                    !available_extras.contains(extra)
+                        && !resolutions
+                            .iter()
+                            .any(|resolution| resolution.extras().contains(extra))
                 })
                 .collect::<Vec<_>>();
             if !unused_extras.is_empty() {

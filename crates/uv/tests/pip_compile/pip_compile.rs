@@ -373,6 +373,13 @@ fn compile_pylock_local_git_preference() -> Result<()> {
         ])
         .assert()
         .success();
+    let other_commit = Command::new("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    assert!(other_commit.status.success());
+    let other_commit = String::from_utf8(other_commit.stdout)?;
+    let other_commit = other_commit.trim();
     context
         .temp_dir
         .child("locks/pylock.toml")
@@ -383,7 +390,13 @@ fn compile_pylock_local_git_preference() -> Result<()> {
         [[packages]]
         name = "local-project"
         version = "1.0.0"
+        marker = "python_version >= '3.12'"
         vcs = {{ type = "git", path = "repository", commit-id = "{commit}" }}
+        [[packages]]
+        name = "local-project"
+        version = "2.0.0"
+        marker = "python_version < '3.12'"
+        vcs = {{ type = "git", path = "repository", commit-id = "{other_commit}" }}
     "#
         ))?;
 
@@ -427,6 +440,134 @@ fn compile_pylock_preference_existing_output() -> Result<()> {
 
     ----- stderr -----
     Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// Extras are validated across all input files while still selecting dependencies from each input.
+#[test]
+fn compile_pylock_mixed_extras() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        extras = ["test"]
+        [[packages]]
+        name = "sniffio"
+        version = "1.3.0"
+        marker = "'test' in extras"
+        wheels = [{ url = "https://example.com/sniffio-1.3.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        dependencies = ["iniconfig"]
+        [project.optional-dependencies]
+        local = ["idna==3.6"]
+    "#})?;
+    uv_snapshot!(context.pip_compile().args(["pylock.toml", "pyproject.toml", "--extra", "test", "--extra", "local", "--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    idna==3.6
+    iniconfig==2.0.0
+    sniffio==1.3.0
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A preference outside the target environment must not discard the existing output pin.
+#[test]
+fn compile_pylock_inactive_preference() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "2.0.0"
+        marker = "python_version < '3.11'"
+        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("iniconfig")?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig==1.1.1")?;
+    uv_snapshot!(context.pip_compile().args(["pylock.toml", "requirements.in", "-o", "requirements.txt", "--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==1.1.1
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// Universal fallback preferences apply only outside the imported preference's marker domain.
+#[test]
+#[cfg(feature = "test-universal")]
+fn compile_pylock_fallback_markers() -> Result<()> {
+    let context = uv_test::test_context!("3.10");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "2.0.0"
+        marker = "python_version < '3.11'"
+        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("iniconfig")?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig==1.1.1")?;
+    uv_snapshot!(context.pip_compile().args(["pylock.toml", "requirements.in", "-o", "requirements.txt", "--universal", "--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==1.1.1 ; python_full_version >= '3.11'
+    iniconfig==2.0.0 ; python_full_version < '3.11'
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(all(feature = "test-git", feature = "test-universal"))]
+fn compile_pylock_conditional_git_universal() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "uv-public-pypackage"
+        marker = "python_version >= '3.12'"
+        vcs = { type = "git", url = "https://github.com/astral-test/uv-public-pypackage", commit-id = "0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
+        [[packages]]
+        name = "uv-public-pypackage"
+        marker = "python_version < '3.12'"
+        vcs = { type = "git", url = "https://github.com/astral-test/uv-public-pypackage", commit-id = "9d01a806f17ddacb9c7b66b1b68574adf790b63f" }
+    "#})?;
+    uv_snapshot!(context.pip_compile().args(["pylock.toml", "--universal", "--no-header"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot import conflicting Git commits for the repository reference used by `uv-public-pypackage`
     ");
     Ok(())
 }

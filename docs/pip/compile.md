@@ -70,7 +70,8 @@ environment markers, but resolves registry artifacts again without retaining the
 Recorded artifact sizes and hashes are not enforced, including for direct sources. Use
 `uv pip install` or `uv pip sync` to install the locked artifacts.
 
-Local archives with a `subdirectory` are not supported as imported requirements.
+Local archives with a `subdirectory` are not supported as imported requirements. Universal
+resolutions reject conflicting Git commit preferences for the same repository reference.
 
 To lock with optional dependencies enabled, e.g., the "foo" extra:
 

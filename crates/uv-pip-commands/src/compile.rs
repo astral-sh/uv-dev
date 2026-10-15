@@ -64,7 +64,7 @@ use uv_resolve_operations::locked_requirements::{
     LockedRequirements, read_pylock_toml_requirements, read_requirements_txt,
 };
 use uv_resolve_operations::loggers::DefaultResolveLogger;
-use uv_resolve_operations::pylock::import_pylock_toml;
+use uv_resolve_operations::pylock::{PylockRequirements, import_pylock_toml};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
 /// Resolve a set of requirements into a set of pinned versions.
@@ -460,13 +460,24 @@ pub async fn pip_compile(
         .platform(interpreter.platform())
         .build()?;
 
-    let imported = if let Some(pylock) = &pylock {
-        let (imported, locked) =
-            import_pylock_toml(pylock, &extras, &pylock_groups, &upgrade, &client_builder).await?;
+    let (imported, available_extras) = if let Some(pylock) = &pylock {
+        let PylockRequirements {
+            requirements: imported,
+            locked,
+            available_extras,
+        } = import_pylock_toml(
+            pylock,
+            &extras,
+            &pylock_groups,
+            &upgrade,
+            resolver_env.marker_environment(),
+            &client_builder,
+        )
+        .await?;
         requirements.extend(imported);
-        locked
+        (locked, available_extras)
     } else {
-        LockedRequirements::default()
+        (LockedRequirements::default(), Vec::new())
     };
 
     // Prefer imported versions over versions recorded in the existing output file.
@@ -587,6 +598,7 @@ pub async fn pip_compile(
         project,
         BTreeMap::default(),
         &extras,
+        &available_extras,
         &groups,
         preferences,
         None,
