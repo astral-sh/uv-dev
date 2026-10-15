@@ -6574,3 +6574,131 @@ fn tool_install_pylock_stdin() -> Result<()> {
 
     Ok(())
 }
+
+/// Dependencies imported from stdin must survive upgrades that read the tool receipt.
+#[test]
+fn tool_install_pyproject_stdin_receipt() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        [project]
+        name = "stdin-project"
+        version = "1.0"
+        dependencies = ["iniconfig==2.0.0"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["cowsay", "--with-requirements", "-"])
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + cowsay==6.1
+     + iniconfig==2.0.0
+    Installed 1 executable: cowsay
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/cowsay/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [
+            { name = "cowsay" },
+            { name = "iniconfig", specifier = "==2.0.0" },
+        ]
+        entrypoints = [
+            { name = "cowsay", install-path = "[TEMP_DIR]/bin/cowsay", from = "cowsay" },
+        ]
+
+        [tool.options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
+
+    fs_err::remove_file(input)?;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("cowsay")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_list()
+        .arg("--python").arg(context.temp_dir.child("tools/cowsay").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Package   Version
+    --------- -------
+    cowsay    6.1
+    iniconfig 2.0.0
+    ");
+    Ok(())
+}
+
+/// Tool locks must record imported project dependencies in their manifest.
+#[test]
+fn tool_install_pyproject_stdin_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        [project]
+        name = "stdin-project"
+        version = "1.0"
+        dependencies = ["iniconfig==2.0.0"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["cowsay", "--with-requirements", "-"])
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + cowsay==6.1
+     + iniconfig==2.0.0
+    Installed 1 executable: cowsay
+    ");
+
+    let lock: toml::Value = toml::from_str(&context.read("tools/cowsay/uv.lock"))?;
+    assert_snapshot!(toml::to_string_pretty(&lock["manifest"])?, @r#"
+    [[requirements]]
+    name = "cowsay"
+
+    [[requirements]]
+    name = "iniconfig"
+    specifier = "==2.0.0"
+    "#);
+
+    fs_err::remove_file(input)?;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("cowsay")
+        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_list()
+        .arg("--python").arg(context.temp_dir.child("tools/cowsay").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Package   Version
+    --------- -------
+    cowsay    6.1
+    iniconfig 2.0.0
+    ");
+    Ok(())
+}

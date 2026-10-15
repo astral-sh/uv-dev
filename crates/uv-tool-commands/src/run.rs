@@ -53,7 +53,7 @@ use uv_command_support::{
 
 use crate::common::{ToolPython, matching_packages, refine_interpreter};
 use crate::error::ToolError;
-use crate::requirements::resolve_names;
+use crate::requirements::resolve_requirements;
 use crate::{Target, ToolRequest};
 use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
@@ -875,8 +875,9 @@ async fn get_or_create_environment(
                         UnresolvedRequirement::Unnamed(..) => None,
                     };
 
-                    let requirement = resolve_names(
+                    let requirement = resolve_requirements(
                         vec![spec],
+                        &[],
                         &interpreter,
                         &settings.resolver,
                         &build_constraints,
@@ -1047,8 +1048,9 @@ async fn get_or_create_environment(
             ToolRequirement::Package { requirement, .. } => requirements.push(requirement.clone()),
         }
         requirements.extend(
-            resolve_names(
+            resolve_requirements(
                 spec.requirements.clone(),
+                &[],
                 &interpreter,
                 &settings.resolver,
                 &build_constraints,
@@ -1075,8 +1077,9 @@ async fn get_or_create_environment(
         .collect::<Vec<_>>();
 
     // Resolve the overrides.
-    let overrides = resolve_names(
+    let overrides = resolve_requirements(
         spec.overrides.clone(),
+        &[],
         &interpreter,
         &settings.resolver,
         &build_constraints,

@@ -5,7 +5,7 @@ use itertools::Itertools;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
-use uv_configuration::{Concurrency, Constraints, GitLfsSetting};
+use uv_configuration::{Concurrency, Constraints, ExtrasSpecification, GitLfsSetting};
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
@@ -13,7 +13,7 @@ use uv_distribution_types::{
 };
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
-use uv_requirements::NamedRequirementsResolver;
+use uv_requirements::{NamedRequirementsResolver, SourceTree, SourceTreeResolver};
 use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::FlatIndex;
 use uv_settings::ResolverSettings;
@@ -23,9 +23,10 @@ use uv_workspace::WorkspaceCache;
 
 use crate::error::ToolError;
 
-/// Resolve any [`UnresolvedRequirementSpecification`] into a fully-qualified [`Requirement`].
-pub(super) async fn resolve_names(
+/// Resolve project metadata and unnamed requirements into fully-qualified [`Requirement`] entries.
+pub(super) async fn resolve_requirements(
     requirements: Vec<UnresolvedRequirementSpecification>,
+    source_trees: &[SourceTree],
     interpreter: &Interpreter,
     settings: &ResolverSettings,
     build_constraints: &Constraints,
@@ -38,20 +39,29 @@ pub(super) async fn resolve_names(
     preview: Preview,
     lfs: GitLfsSetting,
 ) -> Result<Vec<Requirement>, ToolError> {
-    // Partition the requirements into named and unnamed requirements.
-    let (mut requirements, unnamed): (Vec<_>, Vec<_>) = requirements
-        .into_iter()
-        .map(|spec| {
-            spec.requirement
-                .augment_requirement(None, None, None, lfs.into(), None)
-        })
-        .partition_map(|requirement| match requirement {
-            UnresolvedRequirement::Named(requirement) => itertools::Either::Left(requirement),
-            UnresolvedRequirement::Unnamed(requirement) => itertools::Either::Right(requirement),
-        });
+    let partition_requirements = |requirements: Vec<UnresolvedRequirementSpecification>| {
+        requirements
+            .into_iter()
+            .map(|spec| {
+                spec.requirement
+                    .augment_requirement(None, None, None, lfs.into(), None)
+            })
+            .partition_map(|requirement| match requirement {
+                UnresolvedRequirement::Named(requirement) => itertools::Either::Left(requirement),
+                UnresolvedRequirement::Unnamed(requirement) => {
+                    itertools::Either::Right(requirement)
+                }
+            })
+    };
 
-    // Short-circuit if there are no unnamed requirements.
-    if unnamed.is_empty() {
+    // Named requirements without project metadata need no build context.
+    if source_trees.is_empty()
+        && requirements.iter().all(|spec| match spec.requirement {
+            UnresolvedRequirement::Named(_) => true,
+            UnresolvedRequirement::Unnamed(_) => false,
+        })
+    {
+        let (requirements, _): (Vec<_>, Vec<_>) = partition_requirements(requirements);
         return Ok(requirements);
     }
 
@@ -162,6 +172,29 @@ pub(super) async fn resolve_names(
         workspace_cache.clone(),
         concurrency.clone(),
         preview,
+    );
+
+    let source_requirements = SourceTreeResolver::new(
+        &ExtrasSpecification::default(),
+        &hasher,
+        state.index(),
+        DistributionDatabase::new(
+            &client,
+            &build_dispatch,
+            concurrency.downloads_semaphore.clone(),
+        ),
+    )
+    .with_reporter(Arc::new(ResolverReporter::from(printer)))
+    .resolve(source_trees.iter())
+    .await?;
+    let (mut requirements, unnamed): (Vec<_>, Vec<_>) = partition_requirements(
+        requirements
+            .into_iter()
+            .chain(source_requirements.into_iter().flat_map(|source| {
+                Box::into_iter(source.into_requirements())
+                    .map(UnresolvedRequirementSpecification::from)
+            }))
+            .collect(),
     );
 
     // Resolve the unnamed requirements.

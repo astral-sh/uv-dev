@@ -721,7 +721,7 @@ fn uninstall_pylock_stdin() -> Result<()> {
 
 #[test]
 fn uninstall_pyproject_stdin() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let input = context.temp_dir.child("input");
     input.write_str(indoc! {r#"
         [project]
