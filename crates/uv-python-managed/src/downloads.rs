@@ -1,5 +1,7 @@
 //! Discover available Python downloads and fetch their distributions.
 
+mod copy_diagnostics;
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -719,17 +721,45 @@ impl ManagedPythonDownload {
             // Download with or without progress bar.
             if let Some(reporter) = reporter {
                 let key = reporter.on_request_start(Direction::Download, &self.key, size);
+                let diagnostics = env::var_os(EnvVars::UV_INTERNAL__TEST_LOG_DIR)
+                    .filter(|directory| !directory.is_empty())
+                    .map(|_| copy_diagnostics::CopyDiagnostics::new(self.key.to_string()));
                 trace!("Copying Python archive");
-                let copied = tokio::io::copy(
-                    &mut ProgressReader::new(reader, key, reporter),
-                    &mut archive_writer,
-                )
-                .await?;
+                let copied = if let Some(diagnostics) = diagnostics {
+                    let reporter = DiagnosticReporter {
+                        reporter,
+                        diagnostics: &diagnostics,
+                    };
+                    diagnostics
+                        .copy(
+                            &mut ProgressReader::new(diagnostics.reader(reader), key, &reporter),
+                            &mut diagnostics.writer(&mut archive_writer),
+                        )
+                        .await?
+                } else {
+                    tokio::io::copy(
+                        &mut ProgressReader::new(reader, key, reporter),
+                        &mut archive_writer,
+                    )
+                    .await?
+                };
                 trace!(bytes = copied, "Copied Python archive");
                 reporter.on_request_complete(Direction::Download, key);
             } else {
+                let diagnostics = env::var_os(EnvVars::UV_INTERNAL__TEST_LOG_DIR)
+                    .filter(|directory| !directory.is_empty())
+                    .map(|_| copy_diagnostics::CopyDiagnostics::new(self.key.to_string()));
                 trace!("Copying Python archive");
-                let copied = tokio::io::copy(&mut reader, &mut archive_writer).await?;
+                let copied = if let Some(diagnostics) = diagnostics {
+                    diagnostics
+                        .copy(
+                            &mut diagnostics.reader(&mut reader),
+                            &mut diagnostics.writer(&mut archive_writer),
+                        )
+                        .await?
+                } else {
+                    tokio::io::copy(&mut reader, &mut archive_writer).await?
+                };
                 trace!(bytes = copied, "Copied Python archive");
             }
 
@@ -1121,6 +1151,31 @@ pub trait Reporter: Send + Sync {
     fn on_request_complete(&self, direction: Direction, id: usize);
 }
 
+struct DiagnosticReporter<'a> {
+    reporter: &'a dyn Reporter,
+    diagnostics: &'a copy_diagnostics::CopyDiagnostics,
+}
+
+impl Reporter for DiagnosticReporter<'_> {
+    fn on_request_start(
+        &self,
+        direction: Direction,
+        name: &PythonInstallationKey,
+        size: Option<u64>,
+    ) -> usize {
+        self.reporter.on_request_start(direction, name, size)
+    }
+
+    fn on_request_progress(&self, id: usize, inc: u64) {
+        self.diagnostics
+            .progress(|| self.reporter.on_request_progress(id, inc));
+    }
+
+    fn on_request_complete(&self, direction: Direction, id: usize) {
+        self.reporter.on_request_complete(direction, id);
+    }
+}
+
 /// An asynchronous reader that reports progress as bytes are read.
 struct ProgressReader<'a, R> {
     reader: R,
@@ -1184,6 +1239,7 @@ async fn read_url(
 
         trace!(
             status = %response.status(),
+            version = ?response.version(),
             content_length = ?response.content_length(),
             "Received Python download response headers from `{url}`"
         );
