@@ -1,4 +1,4 @@
-# Support reading `pylock.toml` from `stdin` in `uv pip install --requirements -`
+# Bug: `uv pip install -r -` fails to parse `pylock.toml` passed via `stdin`
 
 Issue: astral-sh/uv#22598
 
@@ -9,6 +9,12 @@ Classification: duplicate
 The reporter can install from a named `pylock.toml` file, but supplying the same content through `uv pip install --requirements -` fails with “Couldn't parse requirement in `-`” and `no such comparison operator "="` at `lock-version = "1.0"`. They request an explicit input-format option, such as `--format pylock.toml`, or content-based detection. The report shows CPython 3.14.0 but does not specify a uv version.
 
 astral-sh/uv#13400 is the closest prior discussion of the same pylock stdin parsing limitation. Related fixes distinguish named-file and URL support from stdin and do not establish a regression.
+
+## Open compatibility question
+
+Maintainer woodruffw asks what pip does with this input and suggests that matching pip may be desirable for the `uv pip` interface. This introduces a compatibility consideration for choosing whether and how to support pylock stdin input. It is a question and tentative preference, not a confirmed statement about pip's behavior or a decision on input-format flags or detection.
+
+The supplied discussion contains no versioned pip reproduction for this case. A useful investigation would compare pip's handling of named `pylock.toml` files and the same content through `pip install -r -`, recording the pip version and results. uv's existing support for named pylock files alone does not establish pip parity. The duplicate classification above remains the prior triage assessment; the new comment neither confirms that classification nor establishes a regression. The issue's updated title uses “Bug,” but the comment supplies no new reproduction evidence.
 
 ## Draft response
 
