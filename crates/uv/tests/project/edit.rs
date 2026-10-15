@@ -15594,3 +15594,34 @@ fn add_pylock_stdin() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn add_pyproject_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        [project]
+        name = "stdin-project"
+        version = "1.0"
+        dependencies = ["iniconfig"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("--offline").arg("--no-sync").arg("-r").arg("-")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Adding requirements from a `pyproject.toml` is not supported in `uv add`
+    ");
+
+    Ok(())
+}

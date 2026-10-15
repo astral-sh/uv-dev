@@ -8,6 +8,29 @@ use uv_fs::{Simplified, is_windows_absolute_path};
 use uv_pep508::split_scheme;
 use uv_redacted::{DisplaySafeUrl, DisplaySafeUrlError};
 
+/// The format of requirements read from stdin.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+pub enum RequirementsFormat {
+    /// A requirements file.
+    #[cfg_attr(feature = "clap", value(name = "requirements.txt"))]
+    RequirementsTxt,
+    /// A PEP 751 lockfile.
+    #[cfg_attr(feature = "clap", value(name = "pylock.toml"))]
+    PylockToml,
+    /// Project metadata in a `pyproject.toml` file.
+    #[cfg_attr(feature = "clap", value(name = "pyproject.toml"))]
+    PyprojectToml,
+    /// Project metadata in a `setup.py` file. Runs Python to extract dependencies.
+    #[cfg_attr(feature = "clap", value(name = "setup.py"))]
+    SetupPy,
+    /// Project metadata in a `setup.cfg` file.
+    #[cfg_attr(feature = "clap", value(name = "setup.cfg"))]
+    SetupCfg,
+    /// A Python script with PEP 723 inline metadata.
+    Script,
+}
+
 /// A requirements input.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum RequirementsInput {

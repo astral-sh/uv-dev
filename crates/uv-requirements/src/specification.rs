@@ -33,6 +33,7 @@ use std::fmt::Display;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use astral_ini::Options;
 use rustc_hash::FxHashSet;
 use tracing::instrument;
 use url::Url;
@@ -317,25 +318,33 @@ impl RequirementsSpecification {
 
                 Self::from_requirements_txt(requirements_txt)
             }
-            RequirementsSource::PyprojectToml(path) => {
-                let content = match fs_err::tokio::read_to_string(&path).await {
-                    Ok(content) => content,
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                        return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
+            RequirementsSource::PyprojectToml(input) => {
+                if let RequirementsInput::Local(path) = input
+                    && !path.is_file()
+                {
+                    return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
+                }
+                let content = read_cached_file(input, client_builder, cache).await?;
+                let pyproject_toml = PyProjectToml::from_toml(&content, input.user_display())
+                    .with_context(|| format!("Failed to parse: {}", input.user_display()))?;
+                let source_tree = match input {
+                    RequirementsInput::Local(path) => {
+                        SourceTree::PyProjectToml(path.clone(), pyproject_toml)
                     }
-                    Err(err) => {
+                    RequirementsInput::Stdin => {
+                        SourceTree::from_stdin(&content, "pyproject.toml", |path| {
+                            SourceTree::PyProjectToml(path, pyproject_toml)
+                        })?
+                    }
+                    RequirementsInput::Remote(url) => {
                         return Err(anyhow::anyhow!(
-                            "Failed to read `{}`: {}",
-                            path.user_display(),
-                            err
+                            "Remote `pyproject.toml` inputs are not supported: {url}"
                         ));
                     }
                 };
-                let pyproject_toml = PyProjectToml::from_toml(&content, path.user_display())
-                    .with_context(|| format!("Failed to parse: {}", path.user_display()))?;
 
                 Self {
-                    source_trees: vec![SourceTree::PyProjectToml(path.clone(), pyproject_toml)],
+                    source_trees: vec![source_tree],
                     ..Self::default()
                 }
             }
@@ -355,23 +364,32 @@ impl RequirementsSpecification {
 
                 Self::from_pep723_metadata(&metadata)
             }
-            RequirementsSource::SetupPy(path) => {
-                if !path.is_file() {
-                    return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
-                }
-
+            RequirementsSource::SetupPy(input) | RequirementsSource::SetupCfg(input) => {
+                let (filename, constructor): (&str, fn(PathBuf) -> SourceTree) =
+                    if let RequirementsSource::SetupPy(_) = source {
+                        ("setup.py", SourceTree::SetupPy)
+                    } else {
+                        ("setup.cfg", SourceTree::SetupCfg)
+                    };
+                let source_tree = match input {
+                    RequirementsInput::Local(path) => {
+                        if !path.is_file() {
+                            return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
+                        }
+                        constructor(path.clone())
+                    }
+                    RequirementsInput::Stdin => {
+                        let content = read_cached_file(input, client_builder, cache).await?;
+                        SourceTree::from_stdin(&content, filename, constructor)?
+                    }
+                    RequirementsInput::Remote(url) => {
+                        return Err(anyhow::anyhow!(
+                            "Remote `{filename}` inputs are not supported: {url}"
+                        ));
+                    }
+                };
                 Self {
-                    source_trees: vec![SourceTree::SetupPy(path.clone())],
-                    ..Self::default()
-                }
-            }
-            RequirementsSource::SetupCfg(path) => {
-                if !path.is_file() {
-                    return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
-                }
-
-                Self {
-                    source_trees: vec![SourceTree::SetupCfg(path.clone())],
+                    source_trees: vec![source_tree],
                     ..Self::default()
                 }
             }
@@ -453,6 +471,30 @@ impl RequirementsSpecification {
         let constraints = resolve_sources(constraints, client_builder, &mut cache).await?;
         let overrides = resolve_sources(overrides, client_builder, &mut cache).await?;
         let excludes = resolve_sources(excludes, client_builder, &mut cache).await?;
+
+        for (sources, kind) in [
+            (&constraints, "constraints"),
+            (&overrides, "overrides"),
+            (&excludes, "excludes"),
+        ] {
+            for source in sources {
+                let filename = match source.as_ref() {
+                    RequirementsSource::PyprojectToml(_) => "pyproject.toml",
+                    RequirementsSource::SetupPy(_) => "setup.py",
+                    RequirementsSource::SetupCfg(_) => "setup.cfg",
+                    RequirementsSource::Package(_)
+                    | RequirementsSource::Editable(_)
+                    | RequirementsSource::Pep723Script(_)
+                    | RequirementsSource::PylockToml(_)
+                    | RequirementsSource::RequirementsTxt(_)
+                    | RequirementsSource::EnvironmentYml(_)
+                    | RequirementsSource::Extensionless(_) => continue,
+                };
+                return Err(anyhow::anyhow!(
+                    "The input `{source}` appears to be a `{filename}` file, but {kind} must be specified in `requirements.txt` format"
+                ));
+            }
+        }
 
         // Disallow `pylock.toml` files as constraints.
         if let Some(pylock_toml) = constraints.iter().find_map(|source| {
@@ -788,10 +830,31 @@ async fn resolve_source<'a>(
 ) -> Result<Cow<'a, RequirementsSource>> {
     if let RequirementsSource::Extensionless(input @ RequirementsInput::Stdin) = source {
         let content = read_cached_file(input, client_builder, cache).await?;
-        if toml::from_str::<toml::Table>(&content)
-            .is_ok_and(|table| table.contains_key("lock-version"))
+        if Pep723Metadata::parse(content.as_bytes())?.is_some() {
+            return Ok(Cow::Borrowed(source));
+        }
+        if let Ok(table) = toml::from_str::<toml::Table>(&content) {
+            if table.contains_key("lock-version") {
+                return Ok(Cow::Owned(RequirementsSource::PylockToml(input.clone())));
+            }
+            if table.contains_key("project")
+                || table.contains_key("build-system")
+                || table.contains_key("dependency-groups")
+                || table.contains_key("tool")
+            {
+                return Ok(Cow::Owned(RequirementsSource::PyprojectToml(input.clone())));
+            }
+        }
+        if Options::default()
+            .case_sensitive(true)
+            .parse(&content)
+            .is_ok_and(|ini| {
+                ini.sections().any(|(section, _)| {
+                    section == "metadata" || section == "options" || section.starts_with("options.")
+                })
+            })
         {
-            return Ok(Cow::Owned(RequirementsSource::PylockToml(input.clone())));
+            return Ok(Cow::Owned(RequirementsSource::SetupCfg(input.clone())));
         }
     }
     Ok(Cow::Borrowed(source))

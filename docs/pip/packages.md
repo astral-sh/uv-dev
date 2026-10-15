@@ -95,8 +95,8 @@ Install from a `pylock.toml` file:
 $ uv pip install -r pylock.toml
 ```
 
-Use `-r -` to read from stdin. uv detects `pylock.toml` and PEP 723 script metadata from the input
-contents and otherwise parses the input as `requirements.txt`:
+Use `-r -` to read from stdin. uv detects `pylock.toml`, `pyproject.toml`, `setup.cfg`, and PEP 723
+script metadata from the input contents and otherwise parses the input as `requirements.txt`:
 
 ```console
 $ uv export --format pylock.toml | uv pip install -r -
@@ -104,6 +104,17 @@ $ uv export --format pylock.toml | uv pip install -r -
 
 Relative paths in a `pylock.toml` read from stdin are resolved against the current working
 directory.
+
+Use `--input-format` to select a format explicitly. Reading `setup.py` from stdin requires this
+option, since it executes Python to extract the project's dependencies:
+
+```console
+$ cat setup.py | uv pip install -r - --input-format setup.py
+```
+
+Project metadata read from stdin must be self-contained. uv reads it as a standalone project in a
+temporary directory; sibling files, relative project sources, and workspace members are not copied
+from the current directory. Use a named file when the metadata depends on other project files.
 
 Install from a `pyproject.toml` file:
 

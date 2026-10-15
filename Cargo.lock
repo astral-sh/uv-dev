@@ -7648,6 +7648,7 @@ dependencies = [
  "fs-err",
  "futures",
  "rustc-hash",
+ "tempfile",
  "thiserror",
  "toml",
  "tracing",

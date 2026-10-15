@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
 use futures::stream::FuturesOrdered;
+use tempfile::TempDir;
 use url::Url;
 
 use uv_configuration::ExtrasSpecification;
@@ -26,15 +27,51 @@ pub enum SourceTree {
     PyProjectToml(PathBuf, PyProjectToml),
     SetupPy(PathBuf),
     SetupCfg(PathBuf),
+    Stdin {
+        source: Box<Self>,
+        _directory: Arc<TempDir>,
+    },
 }
 
 impl SourceTree {
+    /// Materialize standalone project metadata so build backends can read its expected filename.
+    pub(crate) fn from_stdin(
+        content: &str,
+        filename: &str,
+        source: impl FnOnce(PathBuf) -> Self,
+    ) -> Result<Self> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join(filename);
+        fs_err::write(&path, content)?;
+        if filename == "setup.cfg" {
+            fs_err::write(
+                directory.path().join("setup.py"),
+                "from setuptools import setup\nsetup()\n",
+            )?;
+        }
+        Ok(Self::Stdin {
+            source: Box::new(source(path)),
+            _directory: Arc::new(directory),
+        })
+    }
+
+    /// Return the filename identifying this project's metadata format.
+    pub fn filename(&self) -> &'static str {
+        match self {
+            Self::PyProjectToml(..) => "pyproject.toml",
+            Self::SetupPy(_) => "setup.py",
+            Self::SetupCfg(_) => "setup.cfg",
+            Self::Stdin { source, .. } => source.filename(),
+        }
+    }
+
     /// Return the [`Path`] to the file representing the source tree (e.g., the `pyproject.toml`).
     fn path(&self) -> &Path {
         match self {
             Self::PyProjectToml(path, ..) => path,
             Self::SetupPy(path) => path,
             Self::SetupCfg(path) => path,
+            Self::Stdin { source, .. } => source.path(),
         }
     }
 
@@ -42,7 +79,8 @@ impl SourceTree {
     fn pyproject_toml(&self) -> Option<&PyProjectToml> {
         match self {
             Self::PyProjectToml(.., toml) => Some(toml),
-            _ => None,
+            Self::SetupPy(_) | Self::SetupCfg(_) => None,
+            Self::Stdin { source, .. } => source.pyproject_toml(),
         }
     }
 }
@@ -130,8 +168,13 @@ impl<'a, Context: BuildContext> SourceTreeResolver<'a, Context> {
     /// Infer the dependencies for a directory dependency.
     async fn resolve_source_tree(&self, source_tree: &SourceTree) -> Result<SourceTreeResolution> {
         let metadata = self.resolve_requires_dist(source_tree).await?;
-        let origin =
-            RequirementOrigin::Project(source_tree.path().to_path_buf(), metadata.name.clone());
+        let origin_path = match source_tree {
+            SourceTree::Stdin { .. } => PathBuf::from("-"),
+            SourceTree::PyProjectToml(..) | SourceTree::SetupPy(_) | SourceTree::SetupCfg(_) => {
+                source_tree.path().to_path_buf()
+            }
+        };
+        let origin = RequirementOrigin::Project(origin_path, metadata.name.clone());
 
         // Determine the extras to include when resolving the requirements.
         let extras = self

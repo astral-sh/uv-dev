@@ -732,7 +732,9 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             let requirements = args
                 .src_file
                 .into_iter()
-                .map(RequirementsSource::from_requirements_file)
+                .map(|input| {
+                    RequirementsSource::from_requirements_file_with_format(input, args.input_format)
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let constraints = args
                 .constraints
@@ -855,7 +857,9 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             let requirements = args
                 .src_file
                 .into_iter()
-                .map(RequirementsSource::from_requirements_file)
+                .map(|input| {
+                    RequirementsSource::from_requirements_file_with_format(input, args.input_format)
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             let constraints = args
                 .constraints
@@ -945,7 +949,12 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             requirements.extend(
                 args.requirements
                     .into_iter()
-                    .map(RequirementsSource::from_requirements_file)
+                    .map(|input| {
+                        RequirementsSource::from_requirements_file_with_format(
+                            input,
+                            args.input_format,
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?,
             );
             let constraints = args

@@ -7945,3 +7945,26 @@ fn run_pylock_stdin() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn run_setup_cfg_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r"
+        [metadata]
+        name = stdin-project
+        version = 1.0
+        [options]
+        install_requires = iniconfig
+    "})?;
+
+    uv_snapshot!(context.filters(), context.run().arg("--offline").arg("--no-project")
+        .arg("--with-requirements").arg("-").arg("python").arg("-c").arg("")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Adding requirements from a `setup.cfg` is not supported in `uv run`
+    ");
+
+    Ok(())
+}

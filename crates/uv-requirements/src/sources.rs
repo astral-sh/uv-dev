@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use console::Term;
 
-use uv_configuration::RequirementsInput;
+use uv_configuration::{RequirementsFormat, RequirementsInput};
 use uv_fs::{CWD, Simplified};
 use uv_requirements_txt::RequirementsTxtRequirement;
 
@@ -21,19 +21,40 @@ pub enum RequirementsSource {
     /// Dependencies were provided via a `requirements.txt` file (e.g., `pip install -r requirements.txt`).
     RequirementsTxt(RequirementsInput),
     /// Dependencies were provided via a `pyproject.toml` file (e.g., `pip-compile pyproject.toml`).
-    PyprojectToml(PathBuf),
+    PyprojectToml(RequirementsInput),
     /// Dependencies were provided via a `setup.py` file (e.g., `pip-compile setup.py`).
-    SetupPy(PathBuf),
+    SetupPy(RequirementsInput),
     /// Dependencies were provided via a `setup.cfg` file (e.g., `pip-compile setup.cfg`).
-    SetupCfg(PathBuf),
+    SetupCfg(RequirementsInput),
     /// Dependencies were provided via an unsupported Conda `environment.yml` file (e.g., `pip install -r environment.yml`).
     EnvironmentYml(RequirementsInput),
     /// An extensionless file or stdin input whose format is detected when reading it.
-    /// Stdin also supports `pylock.toml`, alongside PEP 723 scripts and requirements files.
+    /// Stdin also supports declarative project metadata and `pylock.toml`, alongside PEP 723
+    /// scripts and requirements files.
     Extensionless(RequirementsInput),
 }
 
 impl RequirementsSource {
+    /// Parse a requirements input, overriding format detection for stdin when a format is provided.
+    pub fn from_requirements_file_with_format(
+        input: RequirementsInput,
+        format: Option<RequirementsFormat>,
+    ) -> Result<Self> {
+        if let RequirementsInput::Stdin = input
+            && let Some(format) = format
+        {
+            return Ok(match format {
+                RequirementsFormat::RequirementsTxt => Self::RequirementsTxt(input),
+                RequirementsFormat::PylockToml => Self::PylockToml(input),
+                RequirementsFormat::PyprojectToml => Self::PyprojectToml(input),
+                RequirementsFormat::SetupPy => Self::SetupPy(input),
+                RequirementsFormat::SetupCfg => Self::SetupCfg(input),
+                RequirementsFormat::Script => Self::Pep723Script(input),
+            });
+        }
+        Self::from_requirements_file(input)
+    }
+
     /// Parse a [`RequirementsSource`] from a [`RequirementsInput`]. The file type is determined by
     /// the file extension and, in some cases, the file contents.
     pub fn from_requirements_file(input: impl Into<RequirementsInput>) -> Result<Self> {
@@ -87,11 +108,11 @@ impl RequirementsSource {
 
     fn from_local_requirements_file(path: PathBuf) -> Result<Self> {
         if path.ends_with("pyproject.toml") {
-            Ok(Self::PyprojectToml(path))
+            Ok(Self::PyprojectToml(path.into()))
         } else if path.ends_with("setup.py") {
-            Ok(Self::SetupPy(path))
+            Ok(Self::SetupPy(path.into()))
         } else if path.ends_with("setup.cfg") {
-            Ok(Self::SetupCfg(path))
+            Ok(Self::SetupCfg(path.into()))
         } else if path.ends_with("environment.yml") {
             Ok(Self::EnvironmentYml(path.into()))
         } else if path
@@ -293,11 +314,11 @@ impl std::fmt::Display for RequirementsSource {
             Self::PylockToml(path)
             | Self::RequirementsTxt(path)
             | Self::Pep723Script(path)
+            | Self::PyprojectToml(path)
+            | Self::SetupPy(path)
+            | Self::SetupCfg(path)
             | Self::EnvironmentYml(path)
             | Self::Extensionless(path) => path.user_display().fmt(f),
-            Self::PyprojectToml(path) | Self::SetupPy(path) | Self::SetupCfg(path) => {
-                path.display().fmt(f)
-            }
         }
     }
 }

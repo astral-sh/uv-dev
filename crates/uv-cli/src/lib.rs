@@ -13,7 +13,6 @@ use clap::{ValueEnum, ValueHint};
 use uv_audit::VulnerabilityServiceFormat;
 use uv_auth::Service;
 use uv_cache::CacheArgs;
-use uv_configuration::RequirementsInput;
 use uv_configuration::{
     AddBoundsKind, AnnotationStyle, AuditOutputFormat, AuthorFrom, ColorChoice,
     ExcludeNewerPackageEntry, ExportFormat, ForkStrategy, IndexStrategy, KeyringProviderType,
@@ -22,6 +21,7 @@ use uv_configuration::{
     TargetTriple, TreeFormat, TrustedHost, TrustedPublishing, VersionBump, VersionBumpSpec,
     VersionControlSystem, VersionFormat,
 };
+use uv_configuration::{RequirementsFormat, RequirementsInput};
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, ExcludeNewerOverride, Index, IndexName,
     IndexSourceError, IndexUrl, Origin, PipExtraIndex, PipFindLinks, PipIndex,
@@ -1383,6 +1383,16 @@ pub struct PipCompileArgs {
     #[arg(group = "sources", value_hint = ValueHint::FilePath)]
     pub src_file: Vec<RequirementsInput>,
 
+    /// The format of requirements read from stdin.
+    ///
+    /// By default, uv detects `pylock.toml`, `pyproject.toml`, `setup.cfg`, and PEP 723 script
+    /// metadata, and otherwise reads `requirements.txt`. Select `setup.py` explicitly to execute
+    /// Python and extract dependencies. Project metadata from stdin must be self-contained.
+    ///
+    /// Requires a requirements input of `-`. Named files keep their inferred format.
+    #[arg(long, value_enum)]
+    pub input_format: Option<RequirementsFormat>,
+
     #[command(flatten)]
     pub constraints: DependencyConstraintsArgs,
 
@@ -1722,6 +1732,16 @@ pub struct PipSyncArgs {
     #[arg(required(true), value_hint = ValueHint::FilePath)]
     pub src_file: Vec<RequirementsInput>,
 
+    /// The format of requirements read from stdin.
+    ///
+    /// By default, uv detects `pylock.toml`, `pyproject.toml`, `setup.cfg`, and PEP 723 script
+    /// metadata, and otherwise reads `requirements.txt`. Select `setup.py` explicitly to execute
+    /// Python and extract dependencies. Project metadata from stdin must be self-contained.
+    ///
+    /// Requires a requirements input of `-`. Named files keep their inferred format.
+    #[arg(long, value_enum)]
+    pub input_format: Option<RequirementsFormat>,
+
     /// Constrain versions using the given requirements files [env: `UV_CONSTRAINT`=]
     ///
     /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
@@ -2031,6 +2051,16 @@ pub struct PipInstallArgs {
         value_hint = ValueHint::FilePath,
     )]
     pub requirements: Vec<RequirementsInput>,
+
+    /// The format of requirements read from stdin.
+    ///
+    /// By default, uv detects `pylock.toml`, `pyproject.toml`, `setup.cfg`, and PEP 723 script
+    /// metadata, and otherwise reads `requirements.txt`. Select `setup.py` explicitly to execute
+    /// Python and extract dependencies. Project metadata from stdin must be self-contained.
+    ///
+    /// Requires a requirements input of `-`. Named files keep their inferred format.
+    #[arg(long, value_enum)]
+    pub input_format: Option<RequirementsFormat>,
 
     /// Install the editable package based on the provided local file path.
     #[arg(long, short, group = "sources")]

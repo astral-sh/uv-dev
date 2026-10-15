@@ -919,6 +919,12 @@ pub async fn run(
         if spec.pylock.is_some() {
             bail!("Adding requirements from a `pylock.toml` is not supported in `uv run`");
         }
+        if let Some(source_tree) = spec.source_trees.first() {
+            bail!(
+                "Adding requirements from a `{}` is not supported in `uv run`",
+                source_tree.filename()
+            );
+        }
 
         Some(spec)
     };
