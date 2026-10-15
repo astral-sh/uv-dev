@@ -7,6 +7,7 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
+#[cfg(feature = "test-pypi")]
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 

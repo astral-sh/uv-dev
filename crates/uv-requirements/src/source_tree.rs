@@ -58,16 +58,6 @@ impl SourceTree {
         })
     }
 
-    /// Return the filename identifying this project's metadata format.
-    pub fn filename(&self) -> &'static str {
-        match self {
-            Self::PyProjectToml(..) => "pyproject.toml",
-            Self::SetupPy(_) => "setup.py",
-            Self::SetupCfg(_) => "setup.cfg",
-            Self::Stdin { source, .. } => source.filename(),
-        }
-    }
-
     /// Return the [`Path`] to the file representing the source tree (e.g., the `pyproject.toml`).
     fn path(&self) -> &Path {
         match self {
