@@ -10,11 +10,13 @@ The reporter can install from a named `pylock.toml` file, but supplying the same
 
 astral-sh/uv#13400 is the closest prior discussion of the same pylock stdin parsing limitation. Related fixes distinguish named-file and URL support from stdin and do not establish a regression.
 
-## Open compatibility question
+## Pip compatibility findings
 
-Maintainer woodruffw asks what pip does with this input and suggests that matching pip may be desirable for the `uv pip` interface. This introduces a compatibility consideration for choosing whether and how to support pylock stdin input. It is a question and tentative preference, not a confirmed statement about pip's behavior or a decision on input-format flags or detection.
+Maintainer woodruffw reports that pip does not support `pip install -r -`, citing pypa/pip#7822. They also report that `pip install -r /dev/stdin < pylock.toml` fails similarly to uv: pip selects the requirements parser based on the filename. The `/dev/stdin` command is a comparison case, not a working workaround for pylock input.
 
-The supplied discussion contains no versioned pip reproduction for this case. A useful investigation would compare pip's handling of named `pylock.toml` files and the same content through `pip install -r -`, recording the pip version and results. uv's existing support for named pylock files alone does not establish pip parity. The duplicate classification above remains the prior triage assessment; the new comment neither confirms that classification nor establishes a regression. The issue's updated title uses “Bug,” but the comment supplies no new reproduction evidence.
+The maintainer cites pip's `src/pip/_internal/cli/req_command.py`, lines 361–385, at commit `634a6ec1a5d9dcc2433571cdb2f4c58a4bb29caf` as the parser-selection reference: https://github.com/pypa/pip/blob/634a6ec1a5d9dcc2433571cdb2f4c58a4bb29caf/src/pip/_internal/cli/req_command.py#L361-L385. These are attributed maintainer findings; this handoff update did not independently inspect pip's source or run either command. No pip release version or command output is supplied in the discussion.
+
+These findings address the earlier compatibility question: the discussion does not establish a working pip pylock-stdin behavior for uv to match. The maintainer's preference for compatibility remains tentative, with no decision accepting or rejecting an input-format flag or content detection. The duplicate classification remains the prior triage assessment; the comments do not confirm that classification or establish a regression.
 
 ## Draft response
 
@@ -33,6 +35,8 @@ The duplicate relationship rests on the exact stdin capability, error, and maint
 - astral-sh/uv#13117 — Better error message when a non-PEP-751-compatible filename lock file is used (issue, closed). Reports the same lock-version comparison-operator error when a pylock file is named test.toml, demonstrating the related filename-based format-selection behavior. Its request concerns invalid filenames and diagnostics, rather than reading stdin.
 - astral-sh/uv#12992 — Add `pylock.toml` to `uv pip install` and `uv pip sync` (pull request, merged). Introduced installation from named pylock.toml files, establishing the working file-based capability described in the report. Its discussion does not establish support for pylock content supplied through stdin.
 - astral-sh/uv#17119 — Support remote `pylock.toml` files (pull request, merged). Fixed astral-sh/uv#17112 by adding HTTP(S) pylock inputs. The diff handles files and URLs, which retain filenames; it does not add stdin detection and is not a historical fix for this report.
+
+- pypa/pip#7822 — Cited by the maintainer for pip’s lack of support for the `-r -` stdin convention. This is an adjacent input-handling issue, not evidence that pip supports pylock streams. Its current status and discussion were not independently checked in this update.
 
 ## Supporting evidence
 
