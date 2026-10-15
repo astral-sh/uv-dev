@@ -17644,7 +17644,8 @@ fn lock_find_links_explicit_index() -> Result<()> {
         );
     });
 
-    // Re-run with `--locked`.
+    // Re-run with `--locked`. The timestamp-less `--find-links` artifact remains valid under the
+    // global `exclude-newer` setting captured in the lockfile.
     uv_snapshot!(context.filters(), context.lock().arg("--locked").current_dir(&workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -42696,6 +42697,397 @@ async fn lock_exclude_newer_index_value() -> Result<()> {
     ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Tightening an index-specific cutoff must invalidate artifacts captured by an existing lock.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_locked() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna"]
+
+        [tool.uv.sources]
+        idna = { index = "internal" }
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = false
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna"]
+
+        [tool.uv.sources]
+        idna = { index = "internal" }
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = "2022-01-01T00:00:00Z"
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
+/// Legacy locks have no upload timestamps to revalidate an unchanged saved global cutoff.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_legacy_global_cutoff() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna==3.6"]
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        default = true
+    "#})?;
+    context.lock().assert().success();
+    let mut lock = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
+    lock["revision"] = toml_edit::value(1);
+    for package in lock["package"]
+        .as_array_of_tables_mut()
+        .expect("packages")
+        .iter_mut()
+    {
+        if let Some(sdist) = package
+            .get_mut("sdist")
+            .and_then(toml_edit::Item::as_inline_table_mut)
+        {
+            sdist.remove("upload-time");
+        }
+        if let Some(wheels) = package
+            .get_mut("wheels")
+            .and_then(toml_edit::Item::as_array_mut)
+        {
+            for wheel in wheels.iter_mut() {
+                wheel
+                    .as_inline_table_mut()
+                    .expect("wheel")
+                    .remove("upload-time");
+            }
+        }
+    }
+    let lockfile = context.temp_dir.child("uv.lock");
+    lockfile.write_str(&lock.to_string())?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    lock.remove("revision");
+    lockfile.write_str(&lock.to_string())?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache")
+        .env(EnvVars::UV_EXCLUDE_NEWER, "2024-03-26T00:00:00Z"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    // A new per-index cutoff still rejects the untimestamped legacy artifacts.
+    pyproject.write_str(&format!(
+        r#"{}
+exclude-newer = "2022-01-01T00:00:00Z"
+"#,
+        context.read("pyproject.toml")
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").args(["--preview-features", "index-exclude-newer"]), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because idna>3.3 was published after the exclude newer time and your project depends on idna==3.6, we can conclude that your project's requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
+
+/// Removing an index exemption restores the effective global cutoff for locked artifacts.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_removed_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2022-01-01T00:00:00Z");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let contents = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna==3.6"]
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        default = true
+        exclude-newer = false
+    "#};
+    pyproject.write_str(contents)?;
+    context
+        .lock()
+        .arg("--preview-features")
+        .arg("index-exclude-newer")
+        .assert()
+        .success();
+    pyproject.write_str(&contents.replace("exclude-newer = false\n", ""))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @r#"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because idna>3.3 was published after the exclude newer time and your project depends on idna==3.6, we can conclude that your project's requirements are unsatisfiable.
+    "#);
+    Ok(())
+}
+
+/// A newly configured package exemption takes precedence over a tightened index cutoff.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_current_package_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna==3.6"]
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        default = true
+        exclude-newer = false
+    "#})?;
+    context
+        .lock()
+        .arg("--preview-features")
+        .arg("index-exclude-newer")
+        .assert()
+        .success();
+    let lock = context.read("uv.lock");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["idna==3.6"]
+        [tool.uv]
+        exclude-newer-package = { idna = false }
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        default = true
+        exclude-newer = "2022-01-01T00:00:00Z"
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache").arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
+    Ok(())
+}
+
+/// An index cutoff also applies to transitive artifacts, and excludes an artifact uploaded at
+/// exactly the cutoff.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_index_locked_transitive_boundary() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio==3.7.0"]
+
+        [tool.uv]
+        override-dependencies = ["idna==3.6"]
+
+        [tool.uv.sources]
+        anyio = { index = "internal" }
+        idna = { index = "internal" }
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = false
+        "#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    pyproject_toml.write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["anyio==3.7.0"]
+
+        [tool.uv]
+        override-dependencies = ["idna==3.6"]
+
+        [tool.uv.sources]
+        anyio = { index = "internal" }
+        idna = { index = "internal" }
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://pypi.org/simple"
+        explicit = true
+        exclude-newer = "2024-03-01T00:00:00.000001Z"
+        "#,
+    )?;
+
+    let lockfile = context.temp_dir.child("uv.lock");
+    let lock = context.read("uv.lock");
+
+    // A newer or missing upload time must not invalidate the package while another locked
+    // artifact remains usable.
+    let at_cutoff_with_usable = lock.replace(
+        r#"upload-time = "2023-11-25T15:40:54.902Z""#,
+        r#"upload-time = "2024-03-01T00:00:00Z""#,
+    );
+    assert_ne!(lock, at_cutoff_with_usable);
+    lockfile.write_str(&at_cutoff_with_usable)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    let missing_upload_time_with_usable =
+        lock.replace(r#", upload-time = "2023-11-25T15:40:54.902Z""#, "");
+    assert_ne!(lock, missing_upload_time_with_usable);
+    lockfile.write_str(&missing_upload_time_with_usable)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    let at_cutoff = lock
+        .replace(
+            r#"upload-time = "2023-11-25T15:40:54.902Z""#,
+            r#"upload-time = "2024-03-01T00:00:00Z""#,
+        )
+        .replace(
+            r#"upload-time = "2023-11-25T15:40:52.604Z""#,
+            r#"upload-time = "2024-03-01T00:00:00Z""#,
+        );
+    assert_ne!(lock, at_cutoff);
+    lockfile.write_str(&at_cutoff)?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    Ok(())
+}
+
+/// The resolver exempts flat-index artifacts from cutoffs, so their locks remain reusable.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_exclude_newer_flat_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        links.child("ok-1.0.0-py3-none-any.whl"),
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok"]
+
+        [tool.uv.sources]
+        ok = { index = "local" }
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "./links"
+        format = "flat"
+        explicit = true
+        exclude-newer = "2000-01-01T00:00:00Z"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("index-exclude-newer"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--preview-features").arg("index-exclude-newer")
+        .arg("--locked").arg("--offline").arg("--no-cache"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
