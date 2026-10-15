@@ -156,26 +156,6 @@ UV_INTERNAL__BUILD_GIT_INFO=1 cargo run -- --version
 
 Release builds, including profiles that inherit from `release`, include Git metadata by default.
 
-### Binary size
-
-The `build-binary-size` CI job records native Linux x86-64 release binary sizes on `main`. Add the
-`build:binary-size` label to a pull request and rerun CI to compare its merge commit with the target
-commit used in that merge. Results appear in the workflow summary, with raw measurements retained as
-artifacts. In `astral-sh/uv` and `astral-sh/uv-dev`, pull requests from a branch in the same
-repository also receive a size report comment. The comment is updated if the pull request still
-matches the run and retains the label. Size increases are informational.
-
-The summary includes elapsed `cargo build` time and the workspace and incremental cache status.
-Rerun the workflow on the same commit to compare build times with a warm cache. Timings exclude
-setup, cache transfers, and artifact uploads; cache hits can still require recompilation.
-
-Measurements enable incremental compilation with `release` for `uv` and `uvx`, and `minimal-size`
-for `uv-build`, without the release pipeline's PGO, SBOM embedding, or manylinux packaging. Rust
-build artifacts are cached separately from other CI builds. Baseline measurements are reused only
-for the exact commit and workflow recipe; missing baselines are rebuilt. Workspace artifacts use the
-same checksum freshness and pruning as the test jobs. Incremental artifacts are cached separately
-because the Rust cache action removes them during cleanup.
-
 ## Formatting
 
 ```shell
