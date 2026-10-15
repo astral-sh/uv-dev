@@ -57,6 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: tooling
           persist-credentials: false
 
       - name: "Restore baseline measurement"
@@ -112,18 +113,18 @@ jobs:
         if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
         env:
           CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
-        run: uv run --no-project scripts/binary_size.py build --source source --output build-times.json
+        run: uv run --no-project tooling/scripts/binary_size.py build --source source --output build-times.json
 
       - name: "Measure binaries"
         if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
-        run: uv run --no-project scripts/binary_size.py measure --source source --output measurement.json --build-times build-times.json
+        run: uv run --no-project tooling/scripts/binary_size.py measure --source source --output measurement.json --build-times build-times.json
 
       - name: "Prune superseded workspace artifacts"
         if: ${{ inputs.save-rust-cache == 'true' && steps.baseline.outputs.cache-hit != 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
         working-directory: source
         run: |
-          uv run --no-project ../scripts/prune_cargo_workspace_cache.py "target/$TARGET/release" "$RUNNER_TEMP/uv-cargo-cache-marker"
-          uv run --no-project ../scripts/prune_cargo_workspace_cache.py "target/$TARGET/minimal-size" "$RUNNER_TEMP/uv-cargo-cache-marker"
+          uv run --no-project ../tooling/scripts/prune_cargo_workspace_cache.py "target/$TARGET/release" "$RUNNER_TEMP/uv-cargo-cache-marker"
+          uv run --no-project ../tooling/scripts/prune_cargo_workspace_cache.py "target/$TARGET/minimal-size" "$RUNNER_TEMP/uv-cargo-cache-marker"
 
       - name: "Save main baseline"
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
