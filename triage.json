@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13621,
+        "title": "Doc improvement: add section to Docker integration that demonstrates system level install",
+        "url": "https://github.com/astral-sh/uv/issues/13621",
+        "state": "open",
+        "reason": "Closest documentation match: requests a complete Docker example using UV_PROJECT_ENVIRONMENT to install a project into system Python because the existing tip is insufficient. This report adds the runtime optional-package motivation and asks to favor system installation in the primary examples; that guidance discussion can be centralized here."
+      },
+      {
+        "kind": "issue",
+        "number": 13129,
+        "title": "Docker container: Install packages into system environment with `uv pip install --root` or `uv sync --root`",
+        "url": "https://github.com/astral-sh/uv/issues/13129",
+        "state": "open",
+        "reason": "Comments explicitly describe the same symptom: packages installed by container users in an entrypoint are unavailable to the application in its venv. This issue proposes a staging-root feature for multi-stage system installs, whereas the new report primarily requests documentation and changed examples. It remains open with the wish label; maintainers have questioned supporting --root."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18774,
+        "title": "Add `--root` flag for `uv pip install`",
+        "url": "https://github.com/astral-sh/uv/pull/18774",
+        "state": "closed",
+        "reason": "Its discussion explicitly cites runtime-installed plugins landing in system Python while build-time dependencies live in an isolated venv. The proposed staging-root implementation was closed without merging on April 2, 2026, with maintainers directing discussion to astral-sh/uv#13129. It predates this report and does not provide an available fix."
+      },
+      {
+        "kind": "issue",
+        "number": 8085,
+        "title": "uv sync: support `--system` to not install dependencies into venv",
+        "url": "https://github.com/astral-sh/uv/issues/8085",
+        "state": "open",
+        "reason": "Broader system-install discussion covering Docker and CI. Maintainers confirm that project commands do not support --system and recommend UV_PROJECT_ENVIRONMENT pointing to the Python installation prefix. It supports the workaround, but does not specifically track the Docker guide's runtime-extension explanation."
+      },
+      {
+        "kind": "pull_request",
+        "number": 6834,
+        "title": "Allow customizing the project environment path with `UV_PROJECT_ENVIRONMENT`",
+        "url": "https://github.com/astral-sh/uv/pull/6834",
+        "state": "merged",
+        "reason": "Merged September 3, 2024; implemented the supported system-environment targeting mechanism for project commands. A maintainer demonstrated installation into /usr/local in Docker and warned that exact synchronization removes unrelated packages. This establishes existing functionality, not a fix for default venv isolation or evidence of a regression."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues separately for runtime imports after global pip installs, missing Docker guidance, and system-install examples. Literal terms included pillow, ImportError, .venv, pip install, and system packages; conceptual searches used runtime extensions, global imports, container isolation, system-level installs, UV_PROJECT_ENVIRONMENT, and system-site-packages, including the documentation label. Removed package and platform details and followed comments and references. Attempted open, closed, and merged PR searches for Docker and environment settings; these returned no PR hits despite known matching PRs, so PR coverage relied on direct inspection of linked PRs and a recent all-state listing. Ruled out astral-sh/uv#2500 and astral-sh/uv#12800 as package-discovery/resolution issues, and astral-sh/uv#11829 with merged astral-sh/uv#11873 as a distinct layered-environment inheritance bug. Also followed astral-sh/uv#2265 to astral-sh/uv#1330 for the adjacent unseeded-pip behavior."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#13621 already tracks clearer Docker documentation and a complete system-install example, while astral-sh/uv#13129 explicitly records the same runtime-package isolation concern. The new runtime example and preference for changing the primary examples can be discussed in those existing threads. Source confirms that default project environments intentionally exclude system site-packages; no incorrect import behavior or regression of a previous fix is established.",
+  "summary": "Duplicate of the Docker system-install documentation request in astral-sh/uv#13621. The runtime-extension concern also appears in astral-sh/uv#13129 and closed astral-sh/uv#18774; astral-sh/uv#8085 and merged astral-sh/uv#6834 establish the supported UV_PROJECT_ENVIRONMENT alternative.",
+  "draft_response": "The copied `.venv` excludes system-installed packages by default, so the behavior you describe is expected virtual-environment isolation. Please add this runtime optional-package example to astral-sh/uv#13621, which already tracks a complete system-install example for the Docker guide. The same runtime-extension concern is also discussed in astral-sh/uv#13129.\n\nFor your image, you can install optional packages into the app's environment explicitly: `uv pip install --python /app/.venv/bin/python pillow`, if uv is available at runtime. For system installation, the guide already documents setting `UV_PROJECT_ENVIRONMENT` to the system Python prefix before `uv sync` (typically `/usr/local` in official Python images). The final stage must then receive the system-installed files instead of `.venv`. If you sync again after adding optional packages, use `--inexact` to retain packages outside the project's dependency set."
+}
