@@ -61,7 +61,6 @@ def build(source: Path) -> dict[str, float]:
 def measure(
     source: Path,
     build_seconds: dict | None = None,
-    cache_hit: bool = False,
 ) -> dict:
     sizes = {
         binary: (source / "target" / TARGET / profile / binary).stat().st_size
@@ -80,7 +79,6 @@ def measure(
         },
         "sizes": sizes,
         "build_seconds": build_seconds,
-        "rust_cache_hit": cache_hit,
     }
 
 
@@ -145,17 +143,13 @@ def report(
     ]
 
     if not sizes_only and (durations := current.get("build_seconds")):
-        cache_match = "yes" if current["rust_cache_hit"] else "no"
         lines += [
             "",
             "### Build time",
             "",
-            f"Exact Rust cache match: {cache_match}.",
-            "",
             (
                 "Elapsed `cargo build` time for the current revision, excluding setup, "
-                "cache transfers, and artifact uploads. The `uv` build includes `uvx`. "
-                "An exact cache match can still require recompiling changed crates."
+                "cache transfers, and artifact uploads. The `uv` build includes `uvx`."
             ),
             "",
             "| Build | Seconds |",
@@ -176,7 +170,6 @@ def main() -> None:
     measurement.add_argument("--source", type=Path, required=True)
     measurement.add_argument("--output", type=Path, required=True)
     measurement.add_argument("--build-times", type=Path)
-    measurement.add_argument("--cache-hit", choices=["true", "false"], default="false")
     summary = commands.add_parser("report")
     summary.add_argument("current", type=Path)
     summary.add_argument("--base", type=Path)
@@ -190,7 +183,7 @@ def main() -> None:
         durations = (
             json.loads(args.build_times.read_text()) if args.build_times else None
         )
-        result = measure(args.source, durations, args.cache_hit == "true")
+        result = measure(args.source, durations)
         args.output.write_text(json.dumps(result, indent=2) + "\n")
     elif args.command == "report":
         current = json.loads(args.current.read_text())
