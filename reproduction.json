@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced on Linux x86_64 with installed uv 0.13.0, Python 3.12.3, and uv_build 0.13.1 resolved from the reported requirement. With license-files = [\"LICENSE.txt\", \"src/zzz/_vendor/**/LICENSE.txt\"] and an unrelated thing.bin containing byte 0xff, `uv build --wheel` exits 2: “License file `src/zzz/_vendor/thing.bin` must be UTF-8 encoded”. Real cached bytecode triggers the same error. Replacing the recursive glob with the exact license path succeeds and retains the binary unchanged. UTF-8 non-license content is incorrectly included in license metadata and .dist-info/licenses. Updated $RUNNER_TEMP/issue-context/README.md with commands, controls, and existing test coverage. The reported uv 0.11.25 frontend was not tested; checkout files and GitHub were unchanged."
+}
