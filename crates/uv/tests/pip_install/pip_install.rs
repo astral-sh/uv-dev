@@ -19283,3 +19283,36 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
 
     Ok(())
 }
+
+/// Remote lockfiles can use credentials supplied by an index on the same host.
+#[tokio::test]
+async fn pep_751_remote_index_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .and(basic_auth("user", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {r#"
+            lock-version = "1.0"
+            created-by = "uv"
+            packages = []
+        "#}))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview")
+        .arg("--index-url").arg(format!("{}/simple", server.uri().replace("http://", "http://user:password@")))
+        .arg("-r").arg(format!("{}/pylock.toml", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+
+    Ok(())
+}

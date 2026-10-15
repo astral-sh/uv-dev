@@ -96,11 +96,11 @@ pub struct RequirementsSpecification {
     pub no_build: NoBuild,
 }
 
-/// A `pylock.toml` input and its contents, retained when format detection consumes stdin.
+/// A `pylock.toml` input, with contents retained when format detection consumes stdin.
 #[derive(Debug, Clone)]
 pub struct PylockSource {
     pub input: RequirementsInput,
-    pub content: String,
+    pub content: Option<String>,
 }
 
 impl RequirementsSpecification {
@@ -371,7 +371,13 @@ impl RequirementsSpecification {
                 Self {
                     pylock: Some(PylockSource {
                         input: input.clone(),
-                        content: read_cached_file(input, client_builder, cache).await?,
+                        // Remote lockfiles are fetched after index credentials are initialized.
+                        content: match input {
+                            RequirementsInput::Stdin => {
+                                Some(read_cached_file(input, client_builder, cache).await?)
+                            }
+                            RequirementsInput::Local(_) | RequirementsInput::Remote(_) => None,
+                        },
                     }),
                     ..Self::default()
                 }
