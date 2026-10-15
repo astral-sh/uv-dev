@@ -174,7 +174,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          args=()
+          args=(--repository-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY")
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             args+=(--base measurements/binary-size-base/measurement.json)
           fi

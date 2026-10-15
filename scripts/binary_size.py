@@ -86,26 +86,19 @@ def measure(
     }
 
 
-def report(current: dict, base: dict | None, *, sizes_only: bool = False) -> str:
+def report(
+    current: dict,
+    base: dict | None,
+    *,
+    repository_url: str,
+    sizes_only: bool = False,
+) -> str:
     if current["target"] != TARGET or (base and base["target"] != TARGET):
         raise ValueError(f"Expected measurements for {TARGET}")
 
-    lines = [
-        "## Binary size",
-        "",
-        f"Target: `{TARGET}`. Current revision: `{current['revision']}`.",
-        "",
-        (
-            "Incremental native Cargo builds with `release` for `uv` and `uvx`, and `minimal-size` "
-            "for `uv-build`. Sizes are uncompressed bytes. These builds exclude the "
-            "release pipeline's PGO, SBOM embedding, and manylinux packaging."
-        ),
-        "",
-    ]
+    lines = ["## Binary size", ""]
     if base:
         lines += [
-            f"Baseline revision: `{base['revision']}`.",
-            "",
             "| Binary | Base (bytes) | Current (bytes) | Change (bytes) | Change (%) |",
             "| --- | ---: | ---: | ---: | ---: |",
         ]
@@ -128,13 +121,30 @@ def report(current: dict, base: dict | None, *, sizes_only: bool = False) -> str
         else:
             lines.append(f"| `{binary}` | {size:,} |")
 
-    lines += ["", "Compiler versions:", ""]
-    for binary in ("uv", "uv-build"):
-        compiler = current["rustc"][binary]
-        line = f"- `{binary}`: `{compiler}`"
-        if base and base["rustc"][binary] != compiler:
-            line += f" (baseline: `{base['rustc'][binary]}`)"
-        lines.append(line)
+    repository_url = repository_url.rstrip("/")
+    lines += [
+        "",
+        "<details>",
+        "<summary>Build details</summary>",
+        "",
+        f"Target: `{TARGET}`.",
+        "",
+        f"Current revision: [{current['revision'][:8]}]({repository_url}/commit/{current['revision']}).",
+    ]
+    if base:
+        lines.append(
+            f"Baseline revision: [{base['revision'][:8]}]({repository_url}/commit/{base['revision']})."
+        )
+    lines += [
+        "",
+        (
+            "Incremental native Cargo builds with `release` for `uv` and `uvx`, and `minimal-size` "
+            "for `uv-build`. Sizes are uncompressed bytes. These builds exclude the "
+            "release pipeline's PGO, SBOM embedding, and manylinux packaging."
+        ),
+        "",
+        "</details>",
+    ]
 
     if not sizes_only and (durations := current.get("build_seconds")):
         cache_match = "yes" if current["rust_cache_hit"] else "no"
@@ -176,6 +186,7 @@ def main() -> None:
     summary = commands.add_parser("report")
     summary.add_argument("current", type=Path)
     summary.add_argument("--base", type=Path)
+    summary.add_argument("--repository-url", required=True)
     summary.add_argument("--sizes-only", action="store_true")
     args = parser.parse_args()
 
@@ -192,7 +203,15 @@ def main() -> None:
     elif args.command == "report":
         current = json.loads(args.current.read_text())
         base = json.loads(args.base.read_text()) if args.base else None
-        print(report(current, base, sizes_only=args.sizes_only), end="")
+        print(
+            report(
+                current,
+                base,
+                repository_url=args.repository_url,
+                sizes_only=args.sizes_only,
+            ),
+            end="",
+        )
 
 
 if __name__ == "__main__":
