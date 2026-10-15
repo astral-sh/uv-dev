@@ -1397,7 +1397,7 @@ pub async fn resolve_environment(
         project,
         requirements,
         preferences: imported_preferences,
-        git_references,
+        git_preferences,
         constraints,
         overrides,
         override_dependencies,
@@ -1525,10 +1525,11 @@ pub async fn resolve_environment(
         }
         None => LockedRequirements::default(),
     };
-    let LockedRequirements { preferences, git } = LockedRequirements {
-        preferences: imported_preferences,
-        git: git_references,
-    }
+    let LockedRequirements { preferences, git } = LockedRequirements::from_imported(
+        imported_preferences,
+        git_preferences,
+        resolver_environment.marker_environment(),
+    )?
     .with_fallback(fallback);
     for ResolvedRepositoryReference { reference, sha } in git {
         debug!("Inserting Git reference into resolver: `{reference:?}` at `{sha}`");
@@ -1814,7 +1815,7 @@ pub async fn update_environment(
         project,
         requirements,
         preferences: imported_preferences,
-        git_references,
+        git_preferences,
         constraints,
         overrides,
         override_dependencies,
@@ -1834,7 +1835,7 @@ pub async fn update_environment(
         && upgrade.is_none()
         && source_trees.is_empty()
         && imported_preferences.is_empty()
-        && git_references.is_empty()
+        && git_preferences.is_empty()
         && matches!(modifications, Modifications::Sufficient)
     {
         match site_packages.satisfies_spec(
@@ -1933,8 +1934,12 @@ pub async fn update_environment(
     let extras = ExtrasSpecification::default();
     let groups = BTreeMap::new();
     let hasher = HashStrategy::default();
-    let preferences = imported_preferences;
-    for ResolvedRepositoryReference { reference, sha } in git_references {
+    let LockedRequirements { preferences, git } = LockedRequirements::from_imported(
+        imported_preferences,
+        git_preferences,
+        Some(&marker_env),
+    )?;
+    for ResolvedRepositoryReference { reference, sha } in git {
         debug!("Inserting Git reference into resolver: `{reference:?}` at `{sha}`");
         state.git().insert(reference, sha);
     }

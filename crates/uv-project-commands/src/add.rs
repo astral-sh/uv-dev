@@ -40,7 +40,7 @@ use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, ExtraName, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
-use uv_project_edit::{ArrayEdit, DependencyTarget, PyProjectTomlMut};
+use uv_project_edit::{ArrayEdit, DependencyTarget, PyProjectTomlMut, index_urls_equal};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -378,11 +378,11 @@ pub async fn add(
         cache,
     )
     .await?;
+    let original_requirements_len = spec.requirements.len();
     import_pylock_requirements(
         &mut spec,
         &settings.resolver.index_locations,
         &settings.resolver.upgrade,
-        None,
         &client_builder,
         cache,
     )
@@ -411,12 +411,11 @@ pub async fn add(
         if imported_index_names.contains_key(metadata) {
             continue;
         }
-        let mut index = settings
-            .resolver
-            .index_locations
-            .defined_indexes()
+        let mut index = imported_indexes
+            .iter()
+            .chain(settings.resolver.index_locations.defined_indexes())
             .chain(indexes.iter())
-            .find(|index| index.url.without_credentials() == metadata.url.without_credentials())
+            .find(|index| index_urls_equal(&index.url, &metadata.url))
             .cloned()
             .unwrap_or_else(|| {
                 let mut index = Index::from_extra_index_url(metadata.url.clone());
@@ -436,7 +435,12 @@ pub async fn add(
         if let Some(name) = &index.name {
             imported_index_names.insert(metadata.clone(), name.clone());
         }
-        imported_indexes.push(index);
+        if !imported_indexes
+            .iter()
+            .any(|existing| index_urls_equal(&existing.url, &index.url))
+        {
+            imported_indexes.push(index);
+        }
     }
     if !imported_indexes.is_empty() {
         // Cache imported credentials before the project editor removes them from persisted URLs.
@@ -454,19 +458,17 @@ pub async fn add(
     let RequirementsSpecification {
         requirements,
         preferences,
-        git_references,
+        git_preferences,
         constraints,
         source_trees,
         ..
     } = spec;
-    let preferences = LockedRequirements {
-        preferences,
-        git: git_references,
-    };
+    let preferences = LockedRequirements::from_imported(preferences, git_preferences, None)?;
 
     let requirements = requirements
         .into_iter()
-        .map(|requirement| (requirement, false))
+        .enumerate()
+        .map(|(index, requirement)| (requirement, index >= original_requirements_len))
         .collect::<Vec<_>>();
 
     // Initialize any shared state.
@@ -1174,7 +1176,6 @@ fn edits(
             }
             _ => source,
         };
-
         let source = source.map(|source| {
             if import_sources {
                 let source = source.with_marker(requirement.marker);

@@ -65,7 +65,6 @@ use uv_requirements::{
 };
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::pylock::import_pylock_requirements;
-use uv_resolve_operations::resolution_markers;
 use uv_resolver::{DependencyMode, Preference};
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Metadata, Pep723Script};
 use uv_settings::{
@@ -912,11 +911,6 @@ pub async fn run(
             &mut spec,
             &settings.resolver.index_locations,
             &settings.resolver.upgrade,
-            Some(&resolution_markers(
-                None,
-                python_platform.as_ref(),
-                &base_interpreter,
-            )),
             &client_builder
                 .clone()
                 .keyring(settings.resolver.keyring_provider),

@@ -33,7 +33,12 @@ fn index_locations_equal(existing: &str, incoming: &IndexUrl, root_dir: &Path) -
         return false;
     };
 
-    if let (IndexUrl::Path(existing), IndexUrl::Path(incoming)) = (&existing, incoming)
+    index_urls_equal(&existing, incoming)
+}
+
+/// Compare index locations by file identity or canonical URL.
+pub fn index_urls_equal(existing: &IndexUrl, incoming: &IndexUrl) -> bool {
+    if let (IndexUrl::Path(existing), IndexUrl::Path(incoming)) = (existing, incoming)
         && let (Ok(existing), Ok(incoming)) = (existing.to_file_path(), incoming.to_file_path())
         && let Some(equal) = is_same_file_allow_missing(&existing, &incoming)
     {

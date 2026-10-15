@@ -387,12 +387,10 @@ pub async fn install(
     )
     .await?;
 
-    let markers = resolution_markers(None, python_platform.as_ref(), &interpreter);
     import_pylock_requirements(
         &mut spec,
         &settings.resolver.index_locations,
         &settings.resolver.upgrade,
-        (!tool_locks).then_some(&markers),
         &client_builder
             .clone()
             .keyring(settings.resolver.keyring_provider),

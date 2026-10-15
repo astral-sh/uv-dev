@@ -6864,3 +6864,54 @@ fn tool_install_pylock_existing_lock() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Re-select conditional preferences when installing a tool requires a newer interpreter.
+#[test]
+fn tool_install_pylock_reresolve_python() -> Result<()> {
+    let index = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "pylock-python-retry"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.pylock-tool.versions."1.0.0"]
+        requires_python = ">=3.12"
+        sdist = false
+        entry_points = ["pylock-tool"]
+        [packages.imported.versions."1.0.0"]
+        sdist = false
+        [packages.imported.versions."2.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "imported"
+        version = "1.0.0"
+        marker = "python_version >= '3.12'"
+        wheels = [{ url = "https://example.com/imported-1.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+        [[packages]]
+        name = "imported"
+        version = "2.0.0"
+        marker = "python_version < '3.12'"
+        wheels = [{ url = "https://example.com/imported-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["pylock-tool", "--with-requirements", "pylock.toml", "--no-preview"])
+        .arg("--default-index").arg(index.index_url())
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + imported==1.0.0
+     + pylock-tool==1.0.0
+    Installed 1 executable: pylock-tool
+    "#);
+    Ok(())
+}

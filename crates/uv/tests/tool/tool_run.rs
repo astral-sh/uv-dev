@@ -8,6 +8,7 @@ use assert_fs::prelude::*;
 use fs_err::{metadata, set_permissions};
 use indoc::indoc;
 use uv_static::EnvVars;
+use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{copy_dir_ignore, uv_snapshot, venv_bin_path};
 
 #[test]
@@ -3796,6 +3797,101 @@ fn tool_run_pylock_installed() -> Result<()> {
     Installed 2 packages in [TIME]
      + cowsay==6.1
      + iniconfig==1.1.1
+    ");
+    Ok(())
+}
+
+/// Re-select conditional preferences when a tool requires a newer interpreter.
+#[test]
+fn tool_run_pylock_reresolve_python() -> Result<()> {
+    let index = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "pylock-python-retry"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.pylock-tool.versions."1.0.0"]
+        requires_python = ">=3.12"
+        sdist = false
+        entry_points = ["pylock-tool"]
+        [packages.imported.versions."1.0.0"]
+        sdist = false
+        [packages.imported.versions."2.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_tool_dirs();
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "imported"
+        version = "1.0.0"
+        marker = "python_version >= '3.12'"
+        wheels = [{ url = "https://example.com/imported-1.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+        [[packages]]
+        name = "imported"
+        version = "2.0.0"
+        marker = "python_version < '3.12'"
+        wheels = [{ url = "https://example.com/imported-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--from", "pylock-tool", "--with-requirements", "pylock.toml"])
+        .arg("--default-index").arg(index.index_url())
+        .args(["python", "-c", "import sys; from importlib.metadata import version; print(sys.version_info.minor, version('imported'))"]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    12 1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + imported==1.0.0
+     + pylock-tool==1.0.0
+    "#);
+    Ok(())
+}
+
+/// A Python retry must select the Git commit for the new environment.
+#[test]
+#[cfg(feature = "test-git")]
+fn tool_run_pylock_reresolve_git() -> Result<()> {
+    let index = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "pylock-git-retry"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.pylock-tool.versions."1.0.0"]
+        requires_python = ">=3.12"
+        sdist = false
+        entry_points = ["pylock-tool"]
+    "#})?);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_tool_dirs();
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "uv-public-pypackage"
+        marker = "python_version >= '3.12'"
+        vcs = { type = "git", url = "https://github.com/astral-test/uv-public-pypackage", commit-id = "0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
+        [[packages]]
+        name = "uv-public-pypackage"
+        marker = "python_version < '3.12'"
+        vcs = { type = "git", url = "https://github.com/astral-test/uv-public-pypackage", commit-id = "9d01a806f17ddacb9c7b66b1b68574adf790b63f" }
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--from", "pylock-tool", "--with-requirements", "pylock.toml"])
+        .arg("--default-index").arg(index.index_url())
+        .args(["python", "-c", "import json; from importlib.metadata import distribution; print(json.loads(distribution('uv-public-pypackage').read_text('direct_url.json'))['vcs_info']['commit_id'])"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    0dacfd662c64cb4ceb16e6cf65a157a8b715b979
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + pylock-tool==1.0.0
+     + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
     ");
     Ok(())
 }

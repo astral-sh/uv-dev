@@ -1034,12 +1034,10 @@ async fn get_or_create_environment(
         cache,
     )
     .await?;
-    let markers = resolution_markers(None, python_platform.as_ref(), &interpreter);
     import_pylock_requirements(
         &mut spec,
         &settings.resolver.index_locations,
         &settings.resolver.upgrade,
-        Some(&markers),
         &client_builder
             .clone()
             .keyring(settings.resolver.keyring_provider),

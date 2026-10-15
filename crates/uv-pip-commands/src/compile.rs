@@ -212,7 +212,7 @@ pub async fn pip_compile(
         pylock,
         pylock_groups,
         preferences: _,
-        git_references: _,
+        git_preferences: _,
         source_trees,
         groups,
         extras: mut used_extras,
@@ -453,18 +453,16 @@ pub async fn pip_compile(
     let (imported, available_extras) = if let Some(pylock) = &pylock {
         let PylockRequirements {
             requirements: imported,
-            locked,
+            preferences,
+            git_preferences,
             available_extras,
-        } = import_pylock_toml(
-            pylock,
-            &extras,
-            &pylock_groups,
-            &upgrade,
-            resolver_env.marker_environment(),
-            &client_builder,
-        )
-        .await?;
+        } = import_pylock_toml(pylock, &extras, &pylock_groups, &upgrade, &client_builder).await?;
         requirements.extend(imported);
+        let locked = LockedRequirements::from_imported(
+            preferences,
+            git_preferences,
+            resolver_env.marker_environment(),
+        )?;
         (locked, available_extras)
     } else {
         (LockedRequirements::default(), Vec::new())

@@ -53,6 +53,7 @@ use uv_distribution_types::{
 use uv_fs::{CWD, Simplified};
 use uv_git::ResolvedRepositoryReference;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
+use uv_pep508::MarkerTree;
 use uv_pypi_types::PyProjectToml;
 use uv_redacted::DisplaySafeUrl;
 use uv_requirements_txt::{RequirementsTxt, RequirementsTxtRequirement, SourceCache};
@@ -71,7 +72,7 @@ pub struct RequirementsSpecification {
     /// Preferred package versions imported from a lockfile.
     pub preferences: Vec<Preference>,
     /// Preferred Git commits imported from a lockfile.
-    pub git_references: Vec<ResolvedRepositoryReference>,
+    pub git_preferences: Vec<GitPreference>,
     /// The constraints for the project.
     pub constraints: Vec<NameRequirementSpecification>,
     /// The overrides for the project.
@@ -106,6 +107,14 @@ pub struct RequirementsSpecification {
     pub no_build: NoBuild,
 }
 
+/// A preferred Git commit and the environments in which it applies.
+#[derive(Debug, Clone)]
+pub struct GitPreference {
+    pub name: PackageName,
+    pub marker: MarkerTree,
+    pub git: ResolvedRepositoryReference,
+}
+
 /// Whether a `pylock.toml` is installed directly or imported into a new resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PylockInputMode {
@@ -137,7 +146,7 @@ impl PylockSource {
 impl RequirementsSpecification {
     /// Whether imported preferences require resolving even if the requirements are satisfied.
     pub fn has_preferences(&self) -> bool {
-        !self.preferences.is_empty() || !self.git_references.is_empty()
+        !self.preferences.is_empty() || !self.git_preferences.is_empty()
     }
 
     /// Read the requirements and constraints from a source.
