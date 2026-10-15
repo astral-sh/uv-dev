@@ -11,7 +11,7 @@ permissions:
 
 env:
   AWS_LC_SYS_USE_SYSTEM: "0"
-  CARGO_INCREMENTAL: 1
+  CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   CARGO_TERM_COLOR: always
   RUSTUP_MAX_RETRIES: 10
@@ -85,59 +85,47 @@ jobs:
           rustup show
           rustup target add "$TARGET"
 
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
+        with:
+          # renovate: datasource=github-release-attachments depName=astral-sh/uv
+          version: "0.13.0"
+          checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
+          enable-cache: false
+          python-version: "3.11"
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
         id: rust-cache
         with:
           prefix-key: v1-rust-workspace
-          key: binary-size-${{ matrix.name }}-${{ hashFiles('source/Cargo.toml') }}
+          key: binary-size-release-${{ matrix.name }}-${{ hashFiles('source/Cargo.toml') }}
           workspaces: source -> target
           cache-workspace-crates: "true"
           save-if: ${{ inputs.save-rust-cache == 'true' }}
 
       - name: "Record Cargo cache freshness"
-        if: ${{ steps.baseline.outputs.cache-hit != 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        if: ${{ inputs.save-rust-cache == 'true' && steps.baseline.outputs.cache-hit != 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
         run: touch "$RUNNER_TEMP/uv-cargo-cache-marker"
-
-      # The Rust cache action removes incremental artifacts when it prunes target directories.
-      - name: "Restore incremental artifacts"
-        if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
-        id: incremental-cache
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: source/target/**/incremental
-          key: binary-size-incremental-${{ runner.os }}-${{ runner.arch }}-${{ needs.plan.outputs.recipe }}-${{ hashFiles('source/Cargo.toml', 'source/Cargo.lock', 'source/**/rust-toolchain.toml') }}-${{ matrix.sha }}
-          restore-keys: |
-            binary-size-incremental-${{ runner.os }}-${{ runner.arch }}-${{ needs.plan.outputs.recipe }}-${{ hashFiles('source/Cargo.toml', 'source/Cargo.lock', 'source/**/rust-toolchain.toml') }}-
 
       - name: "Build binaries"
         if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
         env:
-          # Override the Rust cache action's default for these incremental builds.
-          CARGO_INCREMENTAL: 1
-          CARGO_UNSTABLE_MTIME_ON_USE: ${{ steps.rust-cache.outputs.cache-hit != 'true' }}
-        run: python3 scripts/binary_size.py build --source source --output build-times.json
+          CARGO_UNSTABLE_MTIME_ON_USE: ${{ inputs.save-rust-cache == 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        run: uv run --no-project scripts/binary_size.py build --source source --output build-times.json
 
       - name: "Measure binaries"
         if: ${{ steps.baseline.outputs.cache-hit != 'true' }}
         env:
           RUST_CACHE_HIT: ${{ steps.rust-cache.outputs.cache-hit }}
-          INCREMENTAL_CACHE: ${{ steps.incremental-cache.outputs.cache-hit == 'true' && 'hit' || steps.incremental-cache.outputs.cache-matched-key != '' && 'partial' || 'miss' }}
-        run: python3 scripts/binary_size.py measure --source source --output measurement.json --build-times build-times.json --cache-hit "$RUST_CACHE_HIT" --incremental-cache "$INCREMENTAL_CACHE"
+        run: uv run --no-project scripts/binary_size.py measure --source source --output measurement.json --build-times build-times.json --cache-hit "$RUST_CACHE_HIT"
 
       - name: "Prune superseded workspace artifacts"
-        if: ${{ steps.baseline.outputs.cache-hit != 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
+        if: ${{ inputs.save-rust-cache == 'true' && steps.baseline.outputs.cache-hit != 'true' && steps.rust-cache.outputs.cache-hit != 'true' }}
         working-directory: source
         run: |
-          python3 ../scripts/prune_cargo_workspace_cache.py "target/$TARGET/release" "$RUNNER_TEMP/uv-cargo-cache-marker"
-          python3 ../scripts/prune_cargo_workspace_cache.py "target/$TARGET/minimal-size" "$RUNNER_TEMP/uv-cargo-cache-marker"
-
-      - name: "Save incremental artifacts"
-        if: ${{ inputs.save-rust-cache == 'true' && steps.baseline.outputs.cache-hit != 'true' && steps.incremental-cache.outputs.cache-hit != 'true' }}
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: source/target/**/incremental
-          key: ${{ steps.incremental-cache.outputs.cache-primary-key }}
+          uv run --no-project ../scripts/prune_cargo_workspace_cache.py "target/$TARGET/release" "$RUNNER_TEMP/uv-cargo-cache-marker"
+          uv run --no-project ../scripts/prune_cargo_workspace_cache.py "target/$TARGET/minimal-size" "$RUNNER_TEMP/uv-cargo-cache-marker"
 
       - name: "Save main baseline"
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -168,6 +156,12 @@ jobs:
         with:
           pattern: binary-size-*
           path: measurements
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          # renovate: datasource=github-release-attachments depName=astral-sh/uv
+          version: "0.13.0"
+          checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
+          enable-cache: false
       - name: "Summarize binary sizes"
         id: report
         shell: bash
@@ -178,8 +172,8 @@ jobs:
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             args+=(--base measurements/binary-size-base/measurement.json)
           fi
-          python3 scripts/binary_size.py report measurements/binary-size-current/measurement.json "${args[@]}" | tee "$GITHUB_STEP_SUMMARY"
-          comment="$(python3 scripts/binary_size.py report measurements/binary-size-current/measurement.json "${args[@]}" --sizes-only | jq -Rs .)"
+          uv run --no-project scripts/binary_size.py report measurements/binary-size-current/measurement.json "${args[@]}" | tee "$GITHUB_STEP_SUMMARY"
+          comment="$(uv run --no-project scripts/binary_size.py report measurements/binary-size-current/measurement.json "${args[@]}" --sizes-only | jq -Rs .)"
           echo "comment=$comment" >> "$GITHUB_OUTPUT"
 
   publish:
