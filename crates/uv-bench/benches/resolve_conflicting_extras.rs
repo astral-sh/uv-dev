@@ -13,9 +13,7 @@ use std::process::ExitCode;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use clap::Parser;
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime,
-};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main, measurement::WallTime};
 use futures::executor::block_on;
 use uv::GlobalInitialization;
 use uv_cli::Cli;
@@ -155,7 +153,8 @@ fn resolve_conflicting_extras(criterion: &mut Criterion<WallTime>) {
             (project, python, runtime)
         });
 
-        group.bench_function(BenchmarkId::from_parameter(count), |benchmark| {
+        let name = format!("uv_lock_no_lockfile_warm_metadata_cache_{count}_conflicting_extras");
+        group.bench_function(name, |benchmark| {
             let (project, python, runtime) = &*scenario;
             let lockfile = project.path().join("uv.lock");
             benchmark.iter_batched(
