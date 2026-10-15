@@ -6940,6 +6940,7 @@ fn tool_install_pylock_reresolve_git() -> Result<()> {
         sdist = false
     "#})?);
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+        .with_filtered_exe_suffix()
         .with_tool_dirs()
         .with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"));
     let repository = context.temp_dir.child("repository");
@@ -7072,6 +7073,7 @@ fn tool_install_pylock_unnamed_git() -> Result<()> {
         sdist = false
     "#})?);
     let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
         .with_tool_dirs()
         .with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"));
     let repository = context.temp_dir.child("repository");
