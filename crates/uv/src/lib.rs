@@ -1118,22 +1118,38 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
             sources.extend(
                 args.requirements
                     .into_iter()
-                    .map(RequirementsSource::from_requirements_file)
+                    .map(|input| {
+                        RequirementsSource::from_requirements_file_with_format(
+                            input,
+                            args.input_format,
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?,
             );
+            let resolver_settings = args.settings.resolver_settings(args.build_hash_checking);
+            let build_constraints = args
+                .build_constraints
+                .into_iter()
+                .map(RequirementsSource::from_requirements_file)
+                .collect::<Result<Vec<_>, _>>()?;
             commands::pip_uninstall(
                 globals.python_arch,
                 &sources,
+                &build_constraints,
+                args.build_constraints_from_workspace,
                 args.settings.python,
                 args.settings.system,
                 args.settings.break_system_packages,
                 args.settings.target,
                 args.settings.prefix,
                 cache,
-                args.settings.keyring_provider,
+                resolver_settings,
                 &client_builder.subcommand(vec!["pip".to_owned(), "uninstall".to_owned()]),
                 args.dry_run,
+                globals.concurrency,
+                workspace_cache,
                 printer,
+                globals.preview,
             )
             .await
         }

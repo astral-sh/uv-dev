@@ -46,7 +46,6 @@ use crate::common::{
     tool_environment_spec,
 };
 use crate::error::ToolLockError;
-use crate::requirements::resolve_requirements;
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
@@ -59,7 +58,7 @@ use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::locked_requirements::LockedRequirements;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::pylock::import_pylock_requirements;
-use uv_resolve_operations::{resolution_markers, resolution_tags};
+use uv_resolve_operations::{resolution_markers, resolution_tags, resolve_requirements};
 use uv_settings::{ResolverInstallerSettings, ResolverSettings};
 
 /// Install a tool.

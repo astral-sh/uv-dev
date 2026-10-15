@@ -7,6 +7,7 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
+use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -699,43 +700,216 @@ fn yes_short_flag() {
     );
 }
 
+/// Lockfile selection uses the current environment and synthetic default groups without reading artifacts.
 #[test]
+#[cfg(feature = "test-pypi")]
 fn uninstall_pylock_stdin() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context!("3.12");
+    context
+        .pip_install()
+        .args(["iniconfig==2.0.0", "idna==3.6", "sniffio==1.3.0"])
+        .assert()
+        .success();
     let input = context.temp_dir.child("input");
     input.write_str(indoc! {r#"
         lock-version = "1.0"
         created-by = "uv"
-        packages = []
+        default-groups = ["default"]
+        extras = ["test"]
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        marker = "'default' in dependency_groups"
+        archive = { path = "missing.tar.gz", subdirectory = "missing", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }
+        [[packages]]
+        name = "idna"
+        version = "3.6"
+        marker = "python_version < '3'"
+        [[packages]]
+        name = "sniffio"
+        version = "1.3.0"
+        marker = "'test' in extras"
     "#})?;
 
-    uv_snapshot!(context.filters(), context.pip_uninstall().arg("--offline").arg("-r").arg("-")
+    uv_snapshot!(context.filters(), context.pip_uninstall().args(["--offline", "-r", "-"])
         .stdin(fs_err::File::open(input.path())?.into_file()), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: `pylock.toml` is not a supported input format for `uv pip uninstall`
+    Uninstalled 1 package in [TIME]
+     - iniconfig==2.0.0
     ");
-
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    idna==3.6
+    sniffio==1.3.0
+    ");
     Ok(())
 }
 
+/// Base metadata dependencies follow requirements-file behavior: versions and markers are ignored.
 #[test]
+#[cfg(feature = "test-pypi")]
 fn uninstall_pyproject_stdin() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context!("3.12");
+    context
+        .pip_install()
+        .args(["iniconfig==2.0.0", "sniffio==1.3.0"])
+        .assert()
+        .success();
     let input = context.temp_dir.child("input");
     input.write_str(indoc! {r#"
         [project]
         name = "stdin-project"
         version = "1.0"
-        dependencies = ["iniconfig"]
+        dependencies = ["iniconfig>=99; python_version < '3'"]
+        [project.optional-dependencies]
+        test = ["sniffio"]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.pip_uninstall().arg("--offline").arg("-r").arg("-")
+    uv_snapshot!(context.filters(), context.pip_uninstall().args(["--offline", "-r", "-"])
         .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - iniconfig==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    sniffio==1.3.0
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-pypi")]
+fn uninstall_setup_cfg_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .pip_install()
+        .arg("iniconfig==2.0.0")
+        .assert()
+        .success();
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r"
+        [metadata]
+        name = stdin-project
+        version = 1.0
+        [options]
+        install_requires = iniconfig>=99
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_uninstall().args(["-r", "-"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - iniconfig==2.0.0
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-pypi")]
+fn uninstall_setup_py_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .pip_install()
+        .arg("iniconfig==2.0.0")
+        .assert()
+        .success();
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        from setuptools import setup
+        setup(name="stdin-project", version="1.0", install_requires=["iniconfig>=99"])
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_uninstall()
+        .args(["-r", "-", "--input-format", "setup.py"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - iniconfig==2.0.0
+    ");
+    Ok(())
+}
+
+/// Reading metadata must not resolve unrelated unnamed requirements before matching installed URLs.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn uninstall_pyproject_with_unnamed_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .pip_install()
+        .arg("iniconfig==2.0.0")
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "metadata-project"
+        version = "1.0"
+        dependencies = ["iniconfig"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_uninstall()
+        .args(["--offline", "-r", "pyproject.toml", "https://example.com/missing.tar.gz"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Skipping `https://example.com/missing.tar.gz` as it is not installed
+    Uninstalled 1 package in [TIME]
+     - iniconfig==2.0.0
+    ");
+    Ok(())
+}
+
+/// Metadata build settings are enforced before any installed distribution is removed.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn uninstall_setup_py_build_hashes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .pip_install()
+        .arg("iniconfig==2.0.0")
+        .assert()
+        .success();
+    context.temp_dir.child("uv.toml").write_str(indoc! {r"
+        [pip]
+        require-build-hashes = true
+    "})?;
+    context
+        .temp_dir
+        .child("build-constraints.txt")
+        .write_str("setuptools>=40")?;
+    context.temp_dir.child("setup.py").write_str(indoc! {r#"
+        from setuptools import setup
+        setup(name="metadata-project", version="1.0", install_requires=["iniconfig"])
+    "#})?;
+    uv_snapshot!(context.filters(), context.pip_uninstall()
+        .args(["--offline", "--preview-features", "build-dependency-hashes", "-r", "setup.py"])
+        .env(EnvVars::UV_BUILD_CONSTRAINT, "build-constraints.txt"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: `pyproject.toml` is not a supported input format for `uv pip uninstall`
+    error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: setuptools>=40
     ");
-
+    uv_snapshot!(context.filters(), context.pip_freeze().arg("--no-config"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==2.0.0
+    ");
     Ok(())
+}
+
+#[test]
+fn uninstall_input_format_requires_stdin() {
+    let context = uv_test::test_context_with_versions!(&[]);
+    uv_snapshot!(context.filters(), context.pip_uninstall()
+        .args(["iniconfig", "--input-format", "setup.py"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--input-format` requires a requirements input of `-`
+    ");
 }

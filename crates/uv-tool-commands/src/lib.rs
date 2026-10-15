@@ -12,7 +12,6 @@ pub mod dir;
 mod error;
 pub mod install;
 pub mod list;
-mod requirements;
 pub mod run;
 pub mod uninstall;
 pub mod update_shell;

@@ -172,3 +172,17 @@ To uninstall multiple packages, e.g., Flask and Ruff:
 ```console
 $ uv pip uninstall flask ruff
 ```
+
+To uninstall packages listed in a requirements file, project metadata file, or `pylock.toml`:
+
+```console
+$ uv pip uninstall -r pyproject.toml
+```
+
+Use `-r -` to read from stdin. Reading `setup.py` from stdin requires `--input-format setup.py`;
+project metadata read from stdin must be [self-contained](#installing-packages-from-files).
+
+Project metadata contributes base dependencies, excluding optional dependencies. As with named
+requirements in `requirements.txt`, their versions and environment markers are ignored. Lockfiles
+select packages for the current environment and their default dependency groups. These dependencies
+and packages are uninstalled by name without enforcing recorded versions or reading their artifacts.

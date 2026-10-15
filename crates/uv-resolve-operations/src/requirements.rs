@@ -14,17 +14,17 @@ use uv_distribution_types::{
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::{NamedRequirementsResolver, SourceTree, SourceTreeResolver};
-use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::FlatIndex;
 use uv_settings::ResolverSettings;
 use uv_torch::TorchStrategy;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
-use crate::error::ToolError;
+use crate::Error;
+use crate::reporters::ResolverReporter;
 
 /// Resolve project metadata and unnamed requirements into fully-qualified [`Requirement`] entries.
-pub(super) async fn resolve_requirements(
+pub async fn resolve_requirements(
     requirements: Vec<UnresolvedRequirementSpecification>,
     source_trees: &[SourceTree],
     interpreter: &Interpreter,
@@ -38,7 +38,7 @@ pub(super) async fn resolve_requirements(
     printer: Printer,
     preview: Preview,
     lfs: GitLfsSetting,
-) -> Result<Vec<Requirement>, ToolError> {
+) -> Result<Vec<Requirement>, Error> {
     let partition_requirements = |requirements: Vec<UnresolvedRequirementSpecification>| {
         requirements
             .into_iter()
@@ -113,7 +113,8 @@ pub(super) async fn resolve_requirements(
         .torch_backend(torch_backend.clone())
         .markers(interpreter.markers())
         .platform(interpreter.platform())
-        .build()?;
+        .build()
+        .map_err(anyhow::Error::from)?;
 
     // Determine whether to enable build isolation.
     let environment;

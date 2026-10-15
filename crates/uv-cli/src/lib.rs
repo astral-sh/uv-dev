@@ -2360,8 +2360,22 @@ pub struct PipUninstallArgs {
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
     /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`.
+    ///
+    /// Use `-` to read from stdin. Lockfiles select packages for the current environment and their
+    /// default dependency groups; project metadata contributes base dependencies. Recorded versions
+    /// and artifacts are ignored.
     #[arg(long, short, alias = "requirement", group = "sources", value_hint = ValueHint::FilePath)]
     pub requirements: Vec<RequirementsInput>,
+
+    /// The format of requirements read from stdin.
+    ///
+    /// By default, uv detects `pylock.toml`, `pyproject.toml`, `setup.cfg`, and PEP 723 script
+    /// metadata, and otherwise reads `requirements.txt`. Select `setup.py` explicitly to execute
+    /// Python and extract dependencies. Project metadata from stdin must be self-contained.
+    ///
+    /// Requires a requirements input of `-`. Named files keep their inferred format.
+    #[arg(long, value_enum)]
+    pub input_format: Option<RequirementsFormat>,
 
     /// The Python interpreter from which packages should be uninstalled.
     ///

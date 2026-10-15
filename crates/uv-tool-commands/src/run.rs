@@ -54,7 +54,6 @@ use uv_command_support::{
 
 use crate::common::{ToolPython, matching_packages, refine_interpreter};
 use crate::error::ToolError;
-use crate::requirements::resolve_requirements;
 use crate::{Target, ToolRequest};
 use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
@@ -64,7 +63,7 @@ use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::locked_requirements::LockedRequirements;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::pylock::import_pylock_requirements;
-use uv_resolve_operations::{resolution_markers, resolution_tags};
+use uv_resolve_operations::{resolution_markers, resolution_tags, resolve_requirements};
 use uv_settings::ResolverInstallerSettings;
 use uv_settings::ResolverSettings;
 
