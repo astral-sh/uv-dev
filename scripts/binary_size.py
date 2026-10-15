@@ -62,7 +62,6 @@ def measure(
     source: Path,
     build_seconds: dict | None = None,
     cache_hit: bool = False,
-    incremental_cache: str = "miss",
 ) -> dict:
     sizes = {
         binary: (source / "target" / TARGET / profile / binary).stat().st_size
@@ -82,7 +81,6 @@ def measure(
         "sizes": sizes,
         "build_seconds": build_seconds,
         "rust_cache_hit": cache_hit,
-        "incremental_cache": incremental_cache,
     }
 
 
@@ -138,7 +136,7 @@ def report(
     lines += [
         "",
         (
-            "Incremental native Cargo builds with `release` for `uv` and `uvx`, and `minimal-size` "
+            "Native Cargo builds with `release` for `uv` and `uvx`, and `minimal-size` "
             "for `uv-build`. Sizes are uncompressed bytes. These builds exclude the "
             "release pipeline's PGO, SBOM embedding, and manylinux packaging."
         ),
@@ -153,7 +151,6 @@ def report(
             "### Build time",
             "",
             f"Exact Rust cache match: {cache_match}.",
-            f"Incremental cache: {current['incremental_cache']}.",
             "",
             (
                 "Elapsed `cargo build` time for the current revision, excluding setup, "
@@ -180,9 +177,6 @@ def main() -> None:
     measurement.add_argument("--output", type=Path, required=True)
     measurement.add_argument("--build-times", type=Path)
     measurement.add_argument("--cache-hit", choices=["true", "false"], default="false")
-    measurement.add_argument(
-        "--incremental-cache", choices=["hit", "partial", "miss"], default="miss"
-    )
     summary = commands.add_parser("report")
     summary.add_argument("current", type=Path)
     summary.add_argument("--base", type=Path)
@@ -196,9 +190,7 @@ def main() -> None:
         durations = (
             json.loads(args.build_times.read_text()) if args.build_times else None
         )
-        result = measure(
-            args.source, durations, args.cache_hit == "true", args.incremental_cache
-        )
+        result = measure(args.source, durations, args.cache_hit == "true")
         args.output.write_text(json.dumps(result, indent=2) + "\n")
     elif args.command == "report":
         current = json.loads(args.current.read_text())
