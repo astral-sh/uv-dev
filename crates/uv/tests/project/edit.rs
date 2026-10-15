@@ -15727,3 +15727,91 @@ fn add_setup_py_stdin() -> Result<()> {
 
     Ok(())
 }
+
+/// Source extras are not target extras, even when an optional requirement names the target.
+#[test]
+fn add_pyproject_stdin_base_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        [project]
+        name = "stdin-project"
+        version = "1.0"
+        dependencies = ["iniconfig==2.0.0; python_version >= '3.12'"]
+        [project.optional-dependencies]
+        test = ["project", "idna==3.6"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().args(["-r", "-", "--no-sync"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig==2.0.0 ; python_full_version >= '3.12'",
+    ]
+    "#);
+    Ok(())
+}
+
+#[test]
+fn add_pyproject_requirements_index_binding() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["iniconfig==2.0.0"]
+        [tool.uv.sources]
+        iniconfig = { index = "private" }
+        [[tool.uv.index]]
+        name = "private"
+        url = "https://example.org/simple"
+        explicit = true
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["-r", "source/pyproject.toml", "--frozen"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot import the index binding for `iniconfig` from project metadata. Use `--no-sources` to ignore source overrides.
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+    "#);
+    Ok(())
+}

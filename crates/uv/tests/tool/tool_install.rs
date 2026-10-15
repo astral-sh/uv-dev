@@ -6588,6 +6588,8 @@ fn tool_install_pyproject_stdin_receipt() -> Result<()> {
         name = "stdin-project"
         version = "1.0"
         dependencies = ["iniconfig==2.0.0"]
+        [project.optional-dependencies]
+        test = ["idna==3.6"]
     "#})?;
 
     uv_snapshot!(context.filters(), context.tool_install()

@@ -531,13 +531,32 @@ pub async fn add(
             .with_reporter(Arc::new(ResolverReporter::from(printer)))
             .resolve(source_trees.iter())
             .await?;
+
+            // Evaluate source extra markers with no extras selected.
+            let source_requirements = source_requirements
+                .into_iter()
+                .flat_map(|source| Box::into_iter(source.into_requirements()))
+                .filter_map(|mut requirement| {
+                    requirement.marker = requirement.marker.simplify_not_extras_with(|_| true);
+                    (!requirement.marker.is_false()).then_some(requirement)
+                })
+                .collect::<Vec<_>>();
+            for requirement in &source_requirements {
+                if let RequirementSource::Registry { index: Some(_), .. } = &requirement.source {
+                    bail!(
+                        "Cannot import the index binding for `{}` from project metadata. Use `--no-sources` to ignore source overrides.",
+                        requirement.name
+                    );
+                }
+            }
             let (mut requirements, unnamed): (Vec<_>, Vec<_>) = partition_requirements(
                 requirements
                     .into_iter()
-                    .chain(source_requirements.into_iter().flat_map(|source| {
-                        Box::into_iter(source.into_requirements())
-                            .map(UnresolvedRequirementSpecification::from)
-                    }))
+                    .chain(
+                        source_requirements
+                            .into_iter()
+                            .map(UnresolvedRequirementSpecification::from),
+                    )
                     .collect(),
             );
 

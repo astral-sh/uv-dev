@@ -1096,6 +1096,7 @@ fn tool_install_baseline() {
         from: None,
         with: [],
         with_requirements: [],
+        input_format: None,
         with_executables_from: [],
         with_editable: [],
         constraints: [],
