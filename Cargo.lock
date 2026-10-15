@@ -7661,6 +7661,7 @@ dependencies = [
  "uv-distribution-filename",
  "uv-distribution-types",
  "uv-fs",
+ "uv-git",
  "uv-normalize",
  "uv-pep508",
  "uv-pypi-types",

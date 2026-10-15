@@ -3647,16 +3647,24 @@ fn tool_run_pylock_stdin() -> Result<()> {
     input.write_str(indoc! {r#"
         lock-version = "1.0"
         created-by = "uv"
-        packages = []
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        wheels = [{ url = "https://example.com/iniconfig-1.1.1-py2.py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.tool_run().arg("--offline").arg("--with-requirements").arg("-").arg("iniconfig")
+    uv_snapshot!(context.filters(), context.tool_run().args(["--with-requirements", "-", "python", "-c", "from importlib.metadata import version; print(version('iniconfig'))"])
         .stdin(fs_err::File::open(input.path())?.into_file()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: `pylock.toml` is not a supported input format for `uv tool run`
-    ");
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.1.1
 
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==1.1.1
+    ");
     Ok(())
 }
 
@@ -3753,5 +3761,41 @@ fn tool_run_setup_py_stdin() -> Result<()> {
      + iniconfig==2.0.0
     ");
 
+    Ok(())
+}
+
+/// A compatible installed tool cannot bypass the imported version preference.
+#[test]
+fn tool_run_pylock_installed() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .args(["cowsay", "--with", "iniconfig"])
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        wheels = [{ url = "https://example.com/iniconfig-1.1.1-py2.py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_run().args(["--from", "cowsay", "--with-requirements", "-", "python", "-c", "from importlib.metadata import version; print(version('iniconfig'))"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.1.1
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     + cowsay==6.1
+     + iniconfig==1.1.1
+    ");
     Ok(())
 }

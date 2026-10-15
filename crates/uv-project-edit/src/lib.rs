@@ -418,6 +418,20 @@ impl PyProjectTomlMut {
             }
         }
 
+        // Imported indexes can be restricted to packages with explicit source bindings.
+        if index.explicit && table.get("explicit").and_then(Item::as_bool) != Some(true) {
+            let mut formatted = Formatted::new(true);
+            if let Some(value) = table.get("explicit").and_then(Item::as_value) {
+                if let Some(prefix) = value.decor().prefix() {
+                    formatted.decor_mut().set_prefix(prefix.clone());
+                }
+                if let Some(suffix) = value.decor().suffix() {
+                    formatted.decor_mut().set_suffix(suffix.clone());
+                }
+            }
+            table.insert("explicit", Value::Boolean(formatted).into());
+        }
+
         // If the index location changed, sync the format to match the incoming index.
         if index_location_changed {
             match index.format {

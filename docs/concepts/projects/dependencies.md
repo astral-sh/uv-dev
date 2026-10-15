@@ -97,6 +97,12 @@ dependency groups, and the source project itself are not added:
 $ uv add -r ../other-project/pyproject.toml
 ```
 
+A `pylock.toml` can also be imported with `uv add -r pylock.toml`. Its default-selected packages are
+added as dependencies, with recorded versions and Git commits used as preferences for the initial
+resolution. Registry artifacts are resolved again; recorded artifact sizes and hashes are not
+enforced. Registry requirements use the usual version bounds, allowing later upgrades. Recorded
+registry indexes are added as named sources in the target project.
+
 Use `-r -` to read dependencies from stdin. Project metadata from stdin must be
 [self-contained](../../pip/packages.md#installing-packages-from-files); reading `setup.py` requires
 selecting its format explicitly:

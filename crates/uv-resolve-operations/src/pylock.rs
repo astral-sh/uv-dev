@@ -7,15 +7,52 @@ use anyhow::Context;
 use itertools::Itertools;
 use tracing::info_span;
 
-use uv_client::BaseClientBuilder;
+use uv_cache::Cache;
+use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{DependencyGroups, ExtrasSpecification, Upgrade};
-use uv_distribution_types::UnresolvedRequirementSpecification;
+use uv_distribution_types::{IndexLocations, UnresolvedRequirementSpecification};
 use uv_lock::PylockToml;
 use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName};
 use uv_pep508::{MarkerEnvironment, RequirementOrigin};
-use uv_requirements::PylockSource;
+use uv_requirements::{PylockSource, RequirementsSpecification};
 
 use crate::locked_requirements::LockedRequirements;
+
+/// Import a specification's `pylock.toml` before checking or resolving its requirements.
+pub async fn import_pylock_requirements(
+    spec: &mut RequirementsSpecification,
+    index_locations: &IndexLocations,
+    upgrade: &Upgrade,
+    environment: Option<&MarkerEnvironment>,
+    client_builder: &BaseClientBuilder<'_>,
+    cache: &Cache,
+) -> anyhow::Result<()> {
+    let Some(source) = spec.pylock.take() else {
+        return Ok(());
+    };
+
+    // Cache index credentials before fetching a lockfile hosted on an authenticated index.
+    let _client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
+        .index_locations(index_locations.clone())
+        .build()?;
+    let PylockRequirements {
+        requirements,
+        locked,
+        available_extras: _,
+    } = import_pylock_toml(
+        &source,
+        &ExtrasSpecification::default(),
+        &spec.pylock_groups,
+        upgrade,
+        environment,
+        client_builder,
+    )
+    .await?;
+    spec.requirements.extend(requirements);
+    spec.preferences.extend(locked.preferences);
+    spec.git_references.extend(locked.git);
+    Ok(())
+}
 
 /// Read and parse a `pylock.toml` input, reusing the contents retained for stdin.
 ///

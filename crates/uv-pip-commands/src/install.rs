@@ -155,6 +155,8 @@ pub async fn pip_install(
         excludes,
         pylock,
         pylock_groups,
+        preferences: _,
+        git_references: _,
         source_trees,
         groups,
         index_url,

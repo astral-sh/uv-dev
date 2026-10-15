@@ -15617,7 +15617,7 @@ fn add_pylock_stdin() -> Result<()> {
         .write_str(indoc! {r#"
         [project]
         name = "project"
-        version = "0.1.0"
+        version = "1.0"
         requires-python = ">=3.12"
         dependencies = []
     "#})?;
@@ -15625,16 +15625,30 @@ fn add_pylock_stdin() -> Result<()> {
     input.write_str(indoc! {r#"
         lock-version = "1.0"
         created-by = "uv"
-        packages = []
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        wheels = [{ url = "https://example.com/iniconfig-1.1.1-py2.py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("--offline").arg("--no-sync").arg("-r").arg("-")
+    uv_snapshot!(context.filters(), context.add().args(["-r", "-"])
         .stdin(fs_err::File::open(input.path())?.into_file()), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: Adding requirements from a `pylock.toml` is not supported in `uv add`
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==1.1.1
     ");
-
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig>=1.1.1",
+    ]
+    "#);
     Ok(())
 }
 
@@ -16418,5 +16432,163 @@ fn add_pyproject_path_workspace() -> Result<()> {
     [tool.uv.sources]
     dependency = { workspace = true, editable = false }
     "#);
+    Ok(())
+}
+
+/// An imported preference must trigger resolution even when the existing lock satisfies the project.
+#[test]
+fn add_pylock_existing_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig"]
+    "#})?;
+    context.sync().assert().success();
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        wheels = [{ url = "https://example.com/iniconfig-1.1.1-py2.py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().args(["-r", "pylock.toml"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - iniconfig==2.0.0
+     + iniconfig==1.1.1
+    ");
+    Ok(())
+}
+
+/// Imported indexes need stable names that do not overwrite an existing index.
+#[test]
+fn add_pylock_index_binding() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "pylock-1"
+        url = "https://example.com/simple"
+        explicit = true
+    "#})?;
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        index = "https://pypi.org/simple"
+        wheels = [{ url = "https://example.com/iniconfig-1.1.1-py2.py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().args(["-r", "pylock.toml"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==1.1.1
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig>=1.1.1",
+    ]
+
+    [[tool.uv.index]]
+    name = "pylock-2"
+    url = "https://pypi.org/simple"
+    explicit = true
+
+    [tool.uv.sources]
+    iniconfig = { index = "pylock-2" }
+
+    [[tool.uv.index]]
+    name = "pylock-1"
+    url = "https://example.com/simple"
+    explicit = true
+    "#);
+    Ok(())
+}
+
+/// Reuse a configured index with imported credentials and resolve to an available version when
+/// the preferred version is absent.
+#[tokio::test]
+async fn add_pylock_index_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "{}/basic-auth/simple"
+        explicit = true
+    "#, proxy.uri()})?;
+    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        index = "{}"
+        wheels = [{{ url = "https://example.com/iniconfig-1.1.1-py2.py3-none-any.whl", hashes = {{ sha256 = "0000000000000000000000000000000000000000000000000000000000000000" }} }}]
+    "#, proxy.authenticated_url("public", "heron", "/basic-auth/simple")})?;
+    uv_snapshot!(context.filters(), context.add().args(["-r", "pylock.toml"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "iniconfig>=2.0.0",
+        ]
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "http://[LOCALHOST]/basic-auth/simple"
+        explicit = true
+
+        [tool.uv.sources]
+        iniconfig = { index = "internal" }
+        "#);
+    });
     Ok(())
 }

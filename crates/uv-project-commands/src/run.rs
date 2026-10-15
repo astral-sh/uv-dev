@@ -60,10 +60,12 @@ use uv_python_types::{
 };
 use uv_redacted::DisplaySafeUrl;
 use uv_requirements::{
-    RequirementsSource, RequirementsSpecification, script_extra_build_requires,
+    PylockInputMode, RequirementsSource, RequirementsSpecification, script_extra_build_requires,
     script_specification,
 };
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
+use uv_resolve_operations::pylock::import_pylock_requirements;
+use uv_resolve_operations::resolution_markers;
 use uv_resolver::{DependencyMode, Preference};
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Metadata, Pep723Script};
 use uv_settings::{
@@ -895,12 +897,32 @@ pub async fn run(
     let spec = if requirements.is_empty() {
         None
     } else {
-        let spec =
-            RequirementsSpecification::from_simple_sources(&requirements, &client_builder, &cache)
-                .await?;
-        if spec.pylock.is_some() {
-            bail!("Adding requirements from a `pylock.toml` is not supported in `uv run`");
-        }
+        let mut spec = RequirementsSpecification::from_sources(
+            &requirements,
+            &[],
+            &[],
+            &[],
+            None,
+            PylockInputMode::Import,
+            &client_builder,
+            &cache,
+        )
+        .await?;
+        import_pylock_requirements(
+            &mut spec,
+            &settings.resolver.index_locations,
+            &settings.resolver.upgrade,
+            Some(&resolution_markers(
+                None,
+                python_platform.as_ref(),
+                &base_interpreter,
+            )),
+            &client_builder
+                .clone()
+                .keyring(settings.resolver.keyring_provider),
+            &cache,
+        )
+        .await?;
         Some(spec)
     };
 
@@ -1314,8 +1336,8 @@ fn can_skip_ephemeral(
     site_packages: &SitePackages,
     settings: &ResolverInstallerSettings,
 ) -> bool {
-    // Source-tree dependencies must be extracted before checking the base environment.
-    if !spec.source_trees.is_empty() {
+    // Source trees and imported preferences require resolution before reusing the base environment.
+    if !spec.source_trees.is_empty() || spec.has_preferences() {
         return false;
     }
 

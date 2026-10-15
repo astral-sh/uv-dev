@@ -7933,16 +7933,24 @@ fn run_pylock_stdin() -> Result<()> {
     input.write_str(indoc! {r#"
         lock-version = "1.0"
         created-by = "uv"
-        packages = []
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        wheels = [{ url = "https://example.com/iniconfig-1.1.1-py2.py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
     "#})?;
 
-    uv_snapshot!(context.filters(), context.run().arg("--offline").arg("--no-project").arg("--with-requirements").arg("-").arg("python").arg("-c").arg("")
+    uv_snapshot!(context.filters(), context.run().args(["--no-project", "--with-requirements", "-", "python", "-c", "from importlib.metadata import version; print(version('iniconfig'))"])
         .stdin(fs_err::File::open(input.path())?.into_file()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Adding requirements from a `pylock.toml` is not supported in `uv run`
-    ");
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.1.1
 
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==1.1.1
+    ");
     Ok(())
 }
 
@@ -8057,4 +8065,45 @@ fn run_stdin_requirements_and_script() {
     ----- stderr -----
     error: Cannot read both requirements file and script from stdin
     ");
+}
+
+/// Imported preferences override base-environment preferences even when its packages satisfy the input.
+#[test]
+fn run_pylock_existing_environment() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+    "#})?;
+    context.sync().assert().success();
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        wheels = [{ url = "https://example.com/iniconfig-1.1.1-py2.py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    uv_snapshot!(context.filters(), context.run().args(["--with-requirements", "-", "python", "-c", "from importlib.metadata import version; print(version('iniconfig'))"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.1.1
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Checked 1 package in [TIME]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==1.1.1
+    ");
+    Ok(())
 }

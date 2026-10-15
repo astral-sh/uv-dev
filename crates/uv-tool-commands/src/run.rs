@@ -61,6 +61,7 @@ use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations as operations;
 use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
+use uv_resolve_operations::pylock::import_pylock_requirements;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::ResolverInstallerSettings;
 use uv_settings::ResolverSettings;
@@ -1022,23 +1023,29 @@ async fn get_or_create_environment(
     };
 
     // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
+    let mut spec = RequirementsSpecification::from_sources(
         with,
         constraints,
         overrides,
         &[],
         None,
-        PylockInputMode::Install,
+        PylockInputMode::Import,
         client_builder,
         cache,
     )
     .await?;
-    if spec.pylock.is_some() {
-        return Err(anyhow::anyhow!(
-            "`pylock.toml` is not a supported input format for `uv tool run`"
-        )
-        .into());
-    }
+    let markers = resolution_markers(None, python_platform.as_ref(), &interpreter);
+    import_pylock_requirements(
+        &mut spec,
+        &settings.resolver.index_locations,
+        &settings.resolver.upgrade,
+        Some(&markers),
+        &client_builder
+            .clone()
+            .keyring(settings.resolver.keyring_provider),
+        cache,
+    )
+    .await?;
     let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
 
     // Resolve the `--from` and `--with` requirements.
@@ -1096,7 +1103,8 @@ async fn get_or_create_environment(
     .await?;
 
     // Check if the tool is already installed in a compatible environment.
-    if !isolated && !request.is_latest() && spec.source_trees.is_empty() {
+    if !isolated && !request.is_latest() && spec.source_trees.is_empty() && !spec.has_preferences()
+    {
         let installed_tools = InstalledTools::from_settings()?.init()?;
         let _lock = installed_tools.lock().await?;
 

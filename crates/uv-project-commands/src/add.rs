@@ -22,8 +22,9 @@ use uv_configuration::{
 use uv_dispatch::{BuildDispatch, PlatformState, UniversalState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    Identifier, Index, IndexLocations, IndexName, IndexUrl, NameRequirementSpecification,
-    Requirement, RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    Identifier, Index, IndexLocations, IndexMetadata, IndexName, IndexUrl,
+    NameRequirementSpecification, Requirement, RequirementSource, UnresolvedRequirement,
+    UnresolvedRequirementSpecification,
 };
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
@@ -53,7 +54,9 @@ use uv_requirements::{
     SourceTreeResolver,
 };
 use uv_resolve_operations::Error as ResolveError;
+use uv_resolve_operations::locked_requirements::LockedRequirements;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
+use uv_resolve_operations::pylock::import_pylock_requirements;
 use uv_resolver::FlatIndex;
 use uv_scripts::Pep723Script;
 use uv_settings::{
@@ -142,12 +145,6 @@ pub async fn add(
     preview: Preview,
     malware_settings: &MalwareCheckSettings,
 ) -> Result<ExitStatus> {
-    for source in &requirements {
-        if let RequirementsSource::PylockToml(_) = source {
-            bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
-        }
-    }
-
     let reporter = PythonDownloadReporter::single(printer);
 
     // Determine what defaults/extras we're explicitly enabling
@@ -370,26 +367,102 @@ pub async fn add(
         .keyring(settings.resolver.keyring_provider);
 
     // Read the requirements.
-    let spec = RequirementsSpecification::from_sources(
+    let mut spec = RequirementsSpecification::from_sources(
         &requirements,
         &constraints,
         &[],
         &[],
         None,
-        PylockInputMode::Install,
+        PylockInputMode::Import,
         &client_builder,
         cache,
     )
     .await?;
-    if spec.pylock.is_some() {
-        bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
+    import_pylock_requirements(
+        &mut spec,
+        &settings.resolver.index_locations,
+        &settings.resolver.upgrade,
+        None,
+        &client_builder,
+        cache,
+    )
+    .await?;
+    // Persist imported registry locations as named sources so later locks use the same indexes.
+    let mut imported_indexes = Vec::new();
+    let mut imported_index_names = BTreeMap::new();
+    let mut index_names = settings
+        .resolver
+        .index_locations
+        .defined_indexes()
+        .chain(indexes.iter())
+        .filter_map(|index| index.name.clone())
+        .collect::<BTreeSet<_>>();
+    for requirement in &spec.requirements {
+        let UnresolvedRequirement::Named(requirement) = &requirement.requirement else {
+            continue;
+        };
+        let RequirementSource::Registry {
+            index: Some(metadata),
+            ..
+        } = &requirement.source
+        else {
+            continue;
+        };
+        if imported_index_names.contains_key(metadata) {
+            continue;
+        }
+        let mut index = settings
+            .resolver
+            .index_locations
+            .defined_indexes()
+            .chain(indexes.iter())
+            .find(|index| index.url.without_credentials() == metadata.url.without_credentials())
+            .cloned()
+            .unwrap_or_else(|| {
+                let mut index = Index::from_extra_index_url(metadata.url.clone());
+                index.explicit = true;
+                index.format = metadata.format;
+                index
+            });
+        if index.name.is_none() {
+            let name = (1..=index_names.len() + 1)
+                .map(|ordinal| format!("pylock-{ordinal}").parse::<IndexName>())
+                .find(|name| name.as_ref().is_ok_and(|name| !index_names.contains(name)))
+                .transpose()?
+                .context("Failed to assign a name to an imported index")?;
+            index_names.insert(name.clone());
+            index.name = Some(name);
+        }
+        if let Some(name) = &index.name {
+            imported_index_names.insert(metadata.clone(), name.clone());
+        }
+        imported_indexes.push(index);
+    }
+    if !imported_indexes.is_empty() {
+        // Cache imported credentials before the project editor removes them from persisted URLs.
+        let _client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
+            .index_locations(IndexLocations::new(
+                imported_index_names
+                    .keys()
+                    .map(|index| Index::from_extra_index_url(index.url.clone()))
+                    .collect(),
+                Vec::new(),
+                false,
+            ))
+            .build()?;
     }
     let RequirementsSpecification {
         requirements,
+        preferences,
+        git_references,
         constraints,
         source_trees,
         ..
     } = spec;
+    let preferences = LockedRequirements {
+        preferences,
+        git: git_references,
+    };
 
     let requirements = requirements
         .into_iter()
@@ -771,6 +844,7 @@ pub async fn add(
         lfs,
         &extras_of_dependency,
         index,
+        &imported_index_names,
         &mut toml,
     )?;
 
@@ -793,7 +867,7 @@ pub async fn add(
     // Validate any indexes that were provided on the command-line to ensure
     // they point to existing non-empty directories when using path URLs.
     let mut valid_indexes = Vec::with_capacity(indexes.len());
-    for index in indexes {
+    for index in indexes.into_iter().chain(imported_indexes) {
         if let IndexUrl::Path(url) = &index.url {
             let path = url
                 .to_file_path()
@@ -875,6 +949,7 @@ pub async fn add(
         bounds,
         dry_run,
         constraints,
+        preferences,
         &settings,
         &client_builder,
         installer_metadata,
@@ -952,11 +1027,21 @@ fn edits(
     lfs: GitLfsSetting,
     extras: &[ExtraName],
     index: Option<&IndexName>,
+    imported_index_names: &BTreeMap<IndexMetadata, IndexName>,
     toml: &mut PyProjectTomlMut,
 ) -> Result<Vec<DependencyEdit>> {
     let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
     let mut imported_sources = BTreeMap::<PackageName, Vec<Source>>::new();
     for (mut requirement, import_sources) in requirements {
+        let imported_index =
+            if let RequirementSource::Registry { index, .. } = &mut requirement.source {
+                index
+                    .take()
+                    .and_then(|metadata| imported_index_names.get(&metadata))
+            } else {
+                None
+            };
+        let index = imported_index.or(index);
         let imported_editable = if import_sources
             && let RequirementSource::Directory { editable, .. } = &requirement.source
         {
@@ -1221,6 +1306,7 @@ async fn lock_and_sync(
     bound_kind: Option<AddBoundsKind>,
     dry_run: bool,
     constraints: Vec<NameRequirementSpecification>,
+    preferences: LockedRequirements,
     settings: &ResolverInstallerSettings,
     client_builder: &BaseClientBuilder<'_>,
     installer_metadata: bool,
@@ -1270,6 +1356,7 @@ async fn lock_and_sync(
             preview,
         )
         .with_constraints(constraints)
+        .with_preferences(preferences)
         .with_first_party_exclusions(first_party_exclusions.clone())
         .execute((&target).into()),
     )

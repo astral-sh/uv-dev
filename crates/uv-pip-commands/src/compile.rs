@@ -211,6 +211,8 @@ pub async fn pip_compile(
         excludes,
         pylock,
         pylock_groups,
+        preferences: _,
+        git_references: _,
         source_trees,
         groups,
         extras: mut used_extras,

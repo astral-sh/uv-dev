@@ -56,6 +56,7 @@ use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_resolve_operations as operations;
 use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
+use uv_resolve_operations::pylock::import_pylock_requirements;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::{ResolverInstallerSettings, ResolverSettings};
 
@@ -380,15 +381,26 @@ pub async fn install(
         overrides,
         excludes,
         None,
-        PylockInputMode::Install,
+        PylockInputMode::Import,
         &client_builder,
         &cache,
     )
     .await?;
 
-    if spec.pylock.is_some() {
-        anyhow::bail!("`pylock.toml` is not a supported input format for `uv tool install`");
-    }
+    let markers = resolution_markers(None, python_platform.as_ref(), &interpreter);
+    import_pylock_requirements(
+        &mut spec,
+        &settings.resolver.index_locations,
+        &settings.resolver.upgrade,
+        (!tool_locks).then_some(&markers),
+        &client_builder
+            .clone()
+            .keyring(settings.resolver.keyring_provider),
+        &cache,
+    )
+    .await?;
+
+    let has_preferences = spec.has_preferences();
 
     // Extract project dependencies before constructing the receipt and tool-lock manifest.
     let source_trees = std::mem::take(&mut spec.source_trees);
@@ -593,7 +605,10 @@ pub async fn install(
     // If the requested and receipt requirements are the same...
     if let Some(environment) = existing_environment.as_ref().filter(|_| {
         // And the user didn't request a reinstall or upgrade...
-        !request.is_latest() && settings.reinstall.is_none() && settings.resolver.upgrade.is_none()
+        !request.is_latest()
+            && settings.reinstall.is_none()
+            && settings.resolver.upgrade.is_none()
+            && !has_preferences
     }) {
         if let Some(tool_receipt) = existing_tool_receipt.as_ref() {
             if !tool_locks
@@ -720,7 +735,7 @@ pub async fn install(
         let (environment, tool_lock) = if tool_locks {
             let site_packages = SitePackages::from_environment(&environment)?;
             let satisfied_tool_lock = match existing_tool_lock.take() {
-                Some(lock) if lock.is_satisfied() => Some(lock.into_lock()),
+                Some(lock) if lock.is_satisfied() && !has_preferences => Some(lock.into_lock()),
                 lock => {
                     existing_tool_lock = lock;
                     None
@@ -906,7 +921,7 @@ pub async fn install(
         (environment, tool_lock)
     } else {
         let satisfied_tool_lock = match existing_tool_lock.take() {
-            Some(lock) if lock.is_satisfied() => Some(lock.into_lock()),
+            Some(lock) if lock.is_satisfied() && !has_preferences => Some(lock.into_lock()),
             lock => {
                 existing_tool_lock = lock;
                 None
