@@ -13,7 +13,7 @@ pub enum PackageRole {
 
 impl PackageRole {
     /// Return whether the package belongs to the supplied workspace.
-    pub fn is_workspace_member(self) -> bool {
+    pub(crate) fn is_workspace_member(self) -> bool {
         match self {
             Self::WorkspaceProject | Self::WorkspaceMember => true,
             Self::Project | Self::Dependency => false,
