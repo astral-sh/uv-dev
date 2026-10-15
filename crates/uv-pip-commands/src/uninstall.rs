@@ -6,7 +6,7 @@ use owo_colors::OwoColorize;
 use tracing::{debug, warn};
 
 use uv_cache::Cache;
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::BaseClientBuilder;
 use uv_configuration::{Concurrency, Constraints, DryRun, ExtrasSpecification, GitLfsSetting};
 use uv_dispatch::SharedState;
 use uv_distribution_types::{Index, InstalledMetadata, Name, Origin, UnresolvedRequirement};
@@ -145,19 +145,9 @@ pub async fn pip_uninstall(
         })
         .ok();
 
-    // Cache index credentials before fetching lockfiles or metadata build constraints.
-    let client = if spec.pylock.is_some() || !spec.source_trees.is_empty() {
-        Some(
-            RegistryClientBuilder::new(client_builder.clone(), cache.clone())
-                .index_locations(settings.index_locations.clone())
-                .build()?,
-        )
-    } else {
-        None
-    };
-
     let mut locked_names = Vec::new();
     if let Some(source) = &spec.pylock {
+        client_builder.cache_index_credentials(&settings.index_locations)?;
         let (_, lock) = read_pylock_toml(source, &client_builder).await?;
         let selection =
             select_pylock_packages(&lock, &ExtrasSpecification::default(), &spec.pylock_groups);
@@ -170,18 +160,15 @@ pub async fn pip_uninstall(
         }));
     }
 
-    let (mut metadata_requirements, dynamic_sources) = if let Some(client) = &client {
+    let (mut metadata_requirements, dynamic_sources) =
         uv_resolve_operations::resolve_static_requirements(
             &spec.source_trees,
             &settings,
-            client,
+            &client_builder,
             &cache,
             &workspace_cache,
         )
-        .await?
-    } else {
-        (Vec::new(), Vec::new())
-    };
+        .await?;
     if !dynamic_sources.is_empty() {
         let build_constraints = Constraints::from_specifications(
             uv_resolve_operations::read_constraints(build_constraints, &client_builder, &cache)

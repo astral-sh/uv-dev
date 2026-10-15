@@ -3,7 +3,7 @@ use std::sync::Arc;
 use itertools::Itertools;
 
 use uv_cache::Cache;
-use uv_client::{BaseClientBuilder, RegistryClient, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
 use uv_configuration::{Concurrency, Constraints, ExtrasSpecification, GitLfsSetting};
 use uv_dispatch::{BuildDispatch, SharedState};
@@ -65,6 +65,29 @@ pub async fn resolve_requirements(
         return Ok(requirements);
     }
 
+    let (static_requirements, dynamic_sources) = resolve_static_requirements(
+        source_trees,
+        settings,
+        client_builder,
+        cache,
+        workspace_cache,
+    )
+    .await?;
+    requirements.extend(
+        static_requirements
+            .into_iter()
+            .map(UnresolvedRequirementSpecification::from),
+    );
+    if dynamic_sources.is_empty()
+        && requirements.iter().all(|spec| match spec.requirement {
+            UnresolvedRequirement::Named(_) => true,
+            UnresolvedRequirement::Unnamed(_) => false,
+        })
+    {
+        let (requirements, _): (Vec<_>, Vec<_>) = partition_requirements(requirements);
+        return Ok(requirements);
+    }
+
     // Extract the project settings.
     let ResolverSettings {
         build_options,
@@ -115,24 +138,6 @@ pub async fn resolve_requirements(
         .platform(interpreter.platform())
         .build()
         .map_err(anyhow::Error::from)?;
-
-    let (static_requirements, dynamic_sources) =
-        resolve_static_requirements(source_trees, settings, &client, cache, workspace_cache)
-            .await?;
-    requirements.extend(
-        static_requirements
-            .into_iter()
-            .map(UnresolvedRequirementSpecification::from),
-    );
-    if dynamic_sources.is_empty()
-        && requirements.iter().all(|spec| match spec.requirement {
-            UnresolvedRequirement::Named(_) => true,
-            UnresolvedRequirement::Unnamed(_) => false,
-        })
-    {
-        let (requirements, _): (Vec<_>, Vec<_>) = partition_requirements(requirements);
-        return Ok(requirements);
-    }
 
     // Determine whether to enable build isolation.
     let environment;
@@ -240,10 +245,16 @@ pub async fn resolve_requirements(
 pub async fn resolve_static_requirements(
     source_trees: &[SourceTree],
     settings: &ResolverSettings,
-    client: &RegistryClient,
+    client_builder: &BaseClientBuilder<'_>,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
 ) -> Result<(Vec<Requirement>, Vec<SourceTree>), Error> {
+    if source_trees.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    client_builder
+        .cache_index_credentials(&settings.index_locations)
+        .map_err(anyhow::Error::from)?;
     let extras = ExtrasSpecification::default();
     let mut requirements = Vec::new();
     let mut dynamic_sources = Vec::new();
@@ -256,7 +267,7 @@ pub async fn resolve_static_requirements(
                 SourceTreeEditablePolicy::Project.workspace_member_editable(None),
                 cache,
                 workspace_cache,
-                client.credentials_cache(),
+                client_builder.credentials_cache(),
             )
             .await?
         {
