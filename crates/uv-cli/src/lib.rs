@@ -2384,8 +2384,66 @@ pub struct PipUninstallArgs {
     #[command(flatten)]
     pub fetch: FetchArgs,
 
-    #[command(flatten)]
-    pub build: BuildOptionsArgs,
+    /// Don't build source distributions.
+    ///
+    /// When enabled, uv will reuse cached wheels from previously built source distributions, but
+    /// operations that require building a source distribution will exit with an error. uv may
+    /// still build editable requirements, and their build backends may run arbitrary Python code.
+    ///
+    /// Alias for `--only-binary :all:`.
+    #[arg(
+        long,
+        conflicts_with = "no_binary",
+        conflicts_with = "only_binary",
+        overrides_with("build")
+    )]
+    pub no_build: bool,
+
+    #[arg(
+        long,
+        conflicts_with = "no_binary",
+        conflicts_with = "only_binary",
+        overrides_with("no_build"),
+        hide = true
+    )]
+    pub build: bool,
+
+    /// Don't use pre-built wheels for build dependencies.
+    ///
+    /// When installing build dependencies to extract dynamic project metadata, build the specified
+    /// packages from source. The resolver will still use pre-built wheels to extract package metadata,
+    /// if available.
+    ///
+    /// Multiple packages may be provided. Disable binaries for all packages with `:all:`. Clear
+    /// previously specified packages with `:none:`.
+    #[arg(long, value_delimiter = ',', conflicts_with = "no_build")]
+    pub no_binary: Option<Vec<PackageNameSpecifier>>,
+
+    /// Only use pre-built wheels for build dependencies.
+    ///
+    /// When enabled, uv will reuse cached wheels from previously built source distributions, but
+    /// operations that require building a source distribution for the given packages will exit
+    /// with an error. uv may still build editable requirements, and their build backends may run
+    /// arbitrary Python code.
+    ///
+    /// Multiple packages may be provided. Require binaries for all packages with `:all:`. Clear
+    /// previously specified packages with `:none:`.
+    #[arg(long, value_delimiter = ',', conflicts_with = "no_build")]
+    pub only_binary: Option<Vec<PackageNameSpecifier>>,
+
+    /// Require hashes for all build dependencies.
+    ///
+    /// Provide requirements with hashes in a file passed to `--build-constraint`. This does not
+    /// require hashes for the packages being removed.
+    ///
+    /// No hash is required when uv uses its bundled `uv_build` backend, since it is part of the uv
+    /// executable. When build isolation is disabled, build dependencies must already be installed
+    /// and their hashes are not checked.
+    #[arg(long, overrides_with("no_require_build_hashes"))]
+    pub require_build_hashes: bool,
+
+    #[arg(long, overrides_with("require_build_hashes"), hide = true)]
+    pub no_require_build_hashes: bool,
 
     #[command(flatten)]
     pub build_isolation: PackageBuildIsolationArgs,

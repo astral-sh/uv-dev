@@ -145,14 +145,14 @@ pub async fn pip_uninstall(
         })
         .ok();
 
-    let mut locked_names = Vec::new();
+    let mut source_names = Vec::new();
     if let Some(source) = &spec.pylock {
         client_builder.cache_index_credentials(&settings.index_locations)?;
         let (_, lock) = read_pylock_toml(source, &client_builder).await?;
         let selection =
             select_pylock_packages(&lock, &ExtrasSpecification::default(), &spec.pylock_groups);
         let markers = environment.interpreter().to_resolver_marker_environment();
-        locked_names.extend(lock.packages.into_iter().filter_map(|package| {
+        source_names.extend(lock.packages.into_iter().filter_map(|package| {
             package
                 .marker()
                 .evaluate_pep751(&markers, &selection.extras, &selection.groups)
@@ -160,15 +160,14 @@ pub async fn pip_uninstall(
         }));
     }
 
-    let (mut metadata_requirements, dynamic_sources) =
-        uv_resolve_operations::resolve_static_requirements(
-            &spec.source_trees,
-            &settings,
-            &client_builder,
-            &cache,
-            &workspace_cache,
-        )
-        .await?;
+    let mut dynamic_sources = Vec::new();
+    for source in &spec.source_trees {
+        if let Some(names) = source.static_dependency_names()? {
+            source_names.extend(names);
+        } else {
+            dynamic_sources.push(source.clone());
+        }
+    }
     if !dynamic_sources.is_empty() {
         let build_constraints = Constraints::from_specifications(
             uv_resolve_operations::read_constraints(build_constraints, &client_builder, &cache)
@@ -176,7 +175,7 @@ pub async fn pip_uninstall(
                 .into_iter()
                 .chain(build_constraints_from_workspace),
         );
-        metadata_requirements.extend(
+        source_names.extend(
             uv_resolve_operations::resolve_requirements(
                 Vec::new(),
                 &dynamic_sources,
@@ -192,7 +191,9 @@ pub async fn pip_uninstall(
                 preview,
                 GitLfsSetting::default(),
             )
-            .await?,
+            .await?
+            .into_iter()
+            .map(|requirement| requirement.name),
         );
     }
 
@@ -200,7 +201,7 @@ pub async fn pip_uninstall(
     let site_packages = uv_installer::SitePackages::from_environment(&environment)?;
 
     // Partition the requirements into named and unnamed requirements.
-    let (mut named, unnamed): (Vec<Requirement>, Vec<UnnamedRequirement<VerbatimParsedUrl>>) = spec
+    let (named, unnamed): (Vec<Requirement>, Vec<UnnamedRequirement<VerbatimParsedUrl>>) = spec
         .requirements
         .into_iter()
         .partition_map(|entry| match entry.requirement {
@@ -208,15 +209,13 @@ pub async fn pip_uninstall(
             UnresolvedRequirement::Unnamed(requirement) => Either::Right(requirement),
         });
 
-    named.extend(metadata_requirements);
-
     // Sort and deduplicate the packages, which are keyed by name. Like `pip`, we ignore the
     // dependency specifier (even if it's a URL).
     let names = {
         let mut packages = named
             .into_iter()
             .map(|requirement| requirement.name)
-            .chain(locked_names)
+            .chain(source_names)
             .collect::<Vec<_>>();
         packages.sort_unstable();
         packages.dedup();

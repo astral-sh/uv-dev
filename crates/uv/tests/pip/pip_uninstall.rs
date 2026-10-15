@@ -751,7 +751,7 @@ fn uninstall_pylock_stdin() -> Result<()> {
 }
 
 /// Base metadata dependencies follow requirements-file behavior: versions and markers are ignored.
-/// Static metadata does not need configured build constraints or find-links directories to exist.
+/// Static metadata needs neither installation sources nor configured build inputs to be available.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn uninstall_pyproject_stdin() -> Result<()> {
@@ -769,6 +769,8 @@ fn uninstall_pyproject_stdin() -> Result<()> {
         dependencies = ["iniconfig>=99; python_version < '3'"]
         [project.optional-dependencies]
         test = ["sniffio"]
+        [tool.uv.sources]
+        iniconfig = { index = "private" }
     "#})?;
 
     uv_snapshot!(context.filters(), context.pip_uninstall().args(["--offline", "-r", "-"])
@@ -900,7 +902,7 @@ async fn uninstall_pyproject_build_index() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
-        .args(["--dry-run", "-r", "pyproject.toml", "-C", "dependency=simple-launcher"])
+        .args(["--dry-run", "-r", "pyproject.toml", "-C", "dependency=simple-launcher", "--only-binary", "uninstall-build-backend"])
         .env(EnvVars::UV_INDEX_URL, server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -1001,4 +1003,39 @@ fn uninstall_input_format_requires_stdin() {
     ----- stderr -----
     error: `--input-format` requires a requirements input of `-`
     ");
+}
+
+/// Pip build options consume package names without treating them as uninstall targets.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn uninstall_build_binary_options() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .pip_install()
+        .args(["iniconfig==2.0.0", "setuptools==69.2.0"])
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "metadata-project"
+        version = "1.0"
+        dependencies = ["iniconfig"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_uninstall()
+        .args(["--offline", "-r", "pyproject.toml", "--no-binary", "setuptools"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - iniconfig==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    setuptools==69.2.0
+    ");
+    Ok(())
 }

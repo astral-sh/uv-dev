@@ -19,7 +19,7 @@ use uv_distribution_types::{IndexLocations, Requirement};
 use uv_fs::Simplified;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::RequirementOrigin;
-use uv_pypi_types::PyProjectToml;
+use uv_pypi_types::{MetadataError, PyProjectToml, RequiresDist as MetadataRequiresDist};
 use uv_redacted::DisplaySafeUrl;
 use uv_resolver::{InMemoryIndex, MetadataResponse};
 use uv_types::{BuildContext, HashStrategy, HashVerification};
@@ -58,6 +58,38 @@ impl SourceTree {
             source: Box::new(source(path)),
             _directory: Arc::new(directory),
         })
+    }
+
+    /// Read static base dependency names without validating their installation sources.
+    pub fn static_dependency_names(&self) -> Result<Option<Vec<PackageName>>> {
+        let Some(pyproject_toml) = self.pyproject_toml() else {
+            return Ok(None);
+        };
+        let metadata = match MetadataRequiresDist::from_pyproject_toml(pyproject_toml.clone()) {
+            Ok(metadata) => metadata,
+            Err(
+                MetadataError::Pep508Error(_)
+                | MetadataError::DynamicField(_)
+                | MetadataError::FieldNotFound(_)
+                | MetadataError::PoetrySyntax,
+            ) => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        let requirements = Box::into_iter(metadata.requires_dist)
+            .map(Requirement::from)
+            .collect();
+        Ok(Some(
+            FlatRequiresDist::from_requirements(requirements, &metadata.name)
+                .into_iter()
+                .filter(|requirement| {
+                    !requirement
+                        .marker
+                        .simplify_not_extras_with(|_| true)
+                        .is_false()
+                })
+                .map(|requirement| requirement.name)
+                .collect(),
+        ))
     }
 
     /// Extract statically available requirements without initializing a build backend.

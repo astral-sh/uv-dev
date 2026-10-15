@@ -242,7 +242,7 @@ pub async fn resolve_requirements(
 }
 
 /// Extract base dependencies from static metadata and return source trees that need a backend.
-pub async fn resolve_static_requirements(
+async fn resolve_static_requirements(
     source_trees: &[SourceTree],
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,

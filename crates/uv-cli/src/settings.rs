@@ -21,11 +21,11 @@ use uv_configuration::{
     DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
     ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
-    KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override,
-    PackageNameSpecifier, PackageOverride, PipCompileFormat, Prerelease, ProjectBuildBackend,
-    ProxyUrl, PythonUpgrade, PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsFormat,
-    RequirementsInput, ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost,
-    TrustedPublishing, Upgrade, VersionControlSystem,
+    KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
+    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
+    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsFormat, RequirementsInput,
+    ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade,
+    VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
@@ -3973,17 +3973,12 @@ impl PipUninstallSettings {
             input_format,
             build_constraints,
             fetch,
-            build:
-                BuildOptionsArgs {
-                    no_build,
-                    build,
-                    no_build_package,
-                    no_binary,
-                    binary,
-                    no_binary_package,
-                    require_build_hashes,
-                    no_require_build_hashes,
-                },
+            no_build,
+            build,
+            no_binary,
+            only_binary,
+            require_build_hashes,
+            no_require_build_hashes,
             build_isolation:
                 PackageBuildIsolationArgs {
                     build_isolation:
@@ -4015,27 +4010,6 @@ impl PipUninstallSettings {
         if input_format.is_some() && !requirements.contains(&RequirementsInput::Stdin) {
             bail!("`--input-format` requires a requirements input of `-`");
         }
-
-        let no_binary_package = if no_binary_package.is_empty() {
-            environment.no_binary_package.clone()
-        } else {
-            Some(no_binary_package)
-        };
-        let no_binary = match flag(no_binary, binary, "binary")? {
-            Some(true) => Some(vec![PackageNameSpecifier::All]),
-            Some(false) => Some(vec![PackageNameSpecifier::None]),
-            None => no_binary_package.map(|packages| {
-                packages
-                    .into_iter()
-                    .map(PackageNameSpecifier::Package)
-                    .collect()
-            }),
-        };
-        let no_build_package = if no_build_package.is_empty() {
-            environment.no_build_package.clone()
-        } else {
-            Some(no_build_package)
-        };
 
         let build_constraints_from_workspace = filesystem
             .as_ref()
@@ -4085,12 +4059,7 @@ impl PipUninstallSettings {
                     prefix,
                     no_build: flag(no_build, build, "build")?,
                     no_binary,
-                    only_binary: no_build_package.map(|packages| {
-                        packages
-                            .into_iter()
-                            .map(PackageNameSpecifier::Package)
-                            .collect()
-                    }),
+                    only_binary,
                     no_build_isolation: flag(
                         no_build_isolation,
                         build_isolation,
