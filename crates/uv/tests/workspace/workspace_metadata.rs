@@ -745,6 +745,7 @@ fn workspace_metadata_shared_script_environment() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(metadata["environment"], @r#"
         {
+          "packages": {},
           "python": {
             "implementation": "cpython",
             "path": "[CACHE_DIR]/environments-v2/shared-script-[HASH]/[BIN]/[PYTHON]",
@@ -783,9 +784,9 @@ fn workspace_metadata_shared_script_module_owners() -> Result<()> {
         "overlay_dep-0.1.0",
         &[("overlay_dep.py", "")],
     )?;
-    let shared_url = Url::from_file_path(shared.path())
+    let shared_url = SafeUrl::from_file_path(shared.path())
         .map_err(|()| anyhow::anyhow!("failed to convert shared wheel path to file URL"))?;
-    let overlay_url = Url::from_file_path(base_overlay.path())
+    let overlay_url = SafeUrl::from_file_path(base_overlay.path())
         .map_err(|()| anyhow::anyhow!("failed to convert overlay wheel path to file URL"))?;
     let overlay_wheels = context.temp_dir.child("overlay-wheels");
     overlay_wheels.create_dir_all()?;
@@ -849,6 +850,20 @@ fn workspace_metadata_shared_script_module_owners() -> Result<()> {
         }), @r#"
         {
           "environment": {
+            "packages": {
+              "overlay-dep==0.1.0@path+[TEMP_DIR]/wheels/overlay_dep-0.1.0-py3-none-any.whl": {
+                "editable": false,
+                "name": "overlay-dep",
+                "path": "[CACHE_DIR]/environments-v2/shared-script-[HASH]/[PYTHON-LIB]/site-packages/overlay_dep-0.1.0.dist-info",
+                "version": "0.1.0"
+              },
+              "shared-dep==0.1.0@path+[TEMP_DIR]/wheels/shared_dep-0.1.0-py3-none-any.whl": {
+                "editable": false,
+                "name": "shared-dep",
+                "path": "[CACHE_DIR]/archive-v0/[HASH]/[PYTHON-LIB]/site-packages/shared_dep-0.1.0.dist-info",
+                "version": "0.1.0"
+              }
+            },
             "python": {
               "implementation": "cpython",
               "path": "[CACHE_DIR]/environments-v2/shared-script-[HASH]/[BIN]/[PYTHON]",
@@ -920,14 +935,10 @@ fn workspace_metadata_script_sync_reuses_cached_interpreter() -> Result<()> {
         .success();
 
     fs_err::write(
-        site_packages.join("sitecustomize.py"),
-        indoc! {r#"
-            from pathlib import Path
-
-            Path(__file__).with_name("interpreter-started").touch()
-        "#},
+        site_packages.join("interpreter-started.pth"),
+        "import pathlib, sys; pathlib.Path(sys.prefix, 'interpreter-started').touch()\n",
     )?;
-    let startup_marker = site_packages.join("interpreter-started");
+    let startup_marker = Path::new(root).join("interpreter-started");
 
     context
         .workspace_metadata()
@@ -3927,6 +3938,7 @@ fn workspace_metadata_shared_script_no_build_isolation() -> Result<()> {
     insta::with_settings!({ filters => context.filters() }, {
         insta::assert_json_snapshot!(metadata["environment"], @r#"
         {
+          "packages": {},
           "python": {
             "implementation": "cpython",
             "path": "[CACHE_DIR]/environments-v2/script-[HASH]/[BIN]/[PYTHON]",
