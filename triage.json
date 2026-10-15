@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 14870,
+        "title": "Sign published executables for macOS",
+        "url": "https://github.com/astral-sh/uv/issues/14870",
+        "state": "closed",
+        "reason": "The original request covers Developer ID signing of uv and uvx, including organizational allowlists and repeated approvals after upgrades. Maintainers closed it when signing shipped in 0.12.12 and confirmed that official archives and PyPI wheels contain signed binaries. The new report concerns changing identifiers in those signed binaries, so it is a distinct remaining defect."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21754,
+        "title": "Use shared release signing actions",
+        "url": "https://github.com/astral-sh/uv/pull/21754",
+        "state": "merged",
+        "reason": "Moved signing, notarization, assembly, and verification into astral-sh/github-actions, following astral-sh/github-actions#3. The currently pinned shared signer invokes rcodesign without --binary-identifier, identifying the implementation that needs investigation. This refactor did not establish stable identifiers."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21526,
+        "title": "Sign release binaries from the wheel inventory",
+        "url": "https://github.com/astral-sh/uv/pull/21526",
+        "state": "merged",
+        "reason": "Signs the executable inventory extracted from wheels and verifies the expected executables in both wheels and GitHub archives. This connects the report's two distribution formats to the same signing pipeline; it does not address identifier stability."
+      }
+    ],
+    "search_scope": "Used authenticated gh searches across open/closed issues and open/closed/merged PRs. Literal searches covered uv-12607afb3fd970b7, sh.astral.uv, signing Identifier, designated requirement, binary-identifier, Little Snitch, and program identity changed. Conceptual searches covered code identity, permissions after updates, firewall rules, allowlists, Santa, MDM/PPPC, and keychain approvals. Implementation/fix searches covered codesign, rcodesign, notarization, macOS signing, wheels, and release labels. PR search omitted known matching changes, so it was supplemented with signing-workflow commit history, all open PR titles, recent closed PR listings, and direct inspection of referenced PRs and comments. Compared the 0.12.12 and current signing source. Ruled out astral-sh/uv#16726 (managed Python SIGKILL), astral-sh/uv#8069 (self-update mirrors), astral-sh/uv#22219 (ad-hoc dylib signing), and astral-sh/uv#22246 (signature page size). Open signing prototypes astral-sh/uv#20660 and astral-sh/uv#20641 also omit explicit identifiers and do not track this request. No existing stable-identifier fix or duplicate was found."
+  },
+  "type": "bug",
+  "type_reason": "The report describes release identity changes that invalidate existing rules for already signed executables. Both the 0.12.12 signer and the currently pinned signer omit an explicit binary identifier, consistent with the supplied codesign output. The original signing request was completed, but identifier stability was not established; no previously fixed stability bug or existing duplicate was found. The reported macOS prompts were not independently reproduced.",
+  "summary": "astral-sh/uv#14870 establishes the signing history; astral-sh/uv#21754 and astral-sh/uv#21526 identify the shared archive/wheel signing pipeline. No existing issue or PR was found tracking stable identifiers.",
+  "draft_response": "The release signer currently calls rcodesign without --binary-identifier, consistent with the changing identifiers you reported. astral-sh/uv#14870 established Developer ID signing in 0.12.12, but the identifier-stability problem remains separate. Official release archives and PyPI wheels use the same signing pipeline. The next step is to configure distinct, stable identifiers for uv and uvx in the shared signing action and verify their identifiers and designated requirements across releases in both distribution formats."
+}
