@@ -4,6 +4,7 @@ use indoc::indoc;
 use std::path::Path;
 use url::Url;
 
+use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::RequirementsInput;
 use uv_redacted::DisplaySafeUrl;
@@ -109,6 +110,7 @@ async fn constraint_specifications_preserve_hashes() -> Result<()> {
         &[],
         None,
         &BaseClientBuilder::default(),
+        &Cache::temp()?,
     )
     .await?;
 

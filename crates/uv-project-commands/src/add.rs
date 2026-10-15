@@ -393,6 +393,7 @@ pub async fn add(
         &[],
         None,
         &client_builder,
+        cache,
     )
     .await?;
     if spec.pylock.is_some() {

@@ -837,7 +837,7 @@ async fn get_or_create_environment(
     .into_interpreter();
 
     let build_constraints = Constraints::from_specifications(
-        operations::read_constraints(build_constraints, client_builder).await?,
+        operations::read_constraints(build_constraints, client_builder, cache).await?,
     );
 
     let from = match request {
@@ -1028,6 +1028,7 @@ async fn get_or_create_environment(
         &[],
         None,
         client_builder,
+        cache,
     )
     .await?;
     if spec.pylock.is_some() {
@@ -1091,7 +1092,7 @@ async fn get_or_create_environment(
     .await?;
 
     // Check if the tool is already installed in a compatible environment.
-    if !isolated && !request.is_latest() {
+    if !isolated && !request.is_latest() && spec.source_trees.is_empty() {
         let installed_tools = InstalledTools::from_settings()?.init()?;
         let _lock = installed_tools.lock().await?;
 

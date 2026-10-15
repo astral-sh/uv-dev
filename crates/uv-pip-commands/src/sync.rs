@@ -146,6 +146,7 @@ pub async fn pip_sync(
         extras,
         Some(groups),
         &client_builder,
+        &cache,
     )
     .await?;
 
@@ -163,7 +164,7 @@ pub async fn pip_sync(
 
     // Read build constraints.
     let build_constraints = Constraints::from_specifications(
-        uv_resolve_operations::read_constraints(build_constraints, &client_builder).await?,
+        uv_resolve_operations::read_constraints(build_constraints, &client_builder, &cache).await?,
     );
 
     // Validate that the requirements are non-empty.

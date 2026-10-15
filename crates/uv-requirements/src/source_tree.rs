@@ -7,6 +7,7 @@ use futures::stream::FuturesOrdered;
 use tempfile::TempDir;
 use url::Url;
 
+use uv_cache::Cache;
 use uv_configuration::ExtrasSpecification;
 use uv_distribution::{DistributionDatabase, FlatRequiresDist, Reporter, RequiresDist};
 use uv_distribution_types::Requirement;
@@ -39,8 +40,10 @@ impl SourceTree {
         content: &str,
         filename: &str,
         source: impl FnOnce(PathBuf) -> Self,
+        cache: &Cache,
     ) -> Result<Self> {
-        let directory = tempfile::tempdir()?;
+        // Workspace discovery stops at the cache boundary, even when the cache is in a workspace.
+        let directory = cache.build_dir()?;
         let path = directory.path().join(filename);
         fs_err::write(&path, content)?;
         if filename == "setup.cfg" {

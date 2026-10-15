@@ -915,7 +915,8 @@ pub async fn run(
         None
     } else {
         let spec =
-            RequirementsSpecification::from_simple_sources(&requirements, &client_builder).await?;
+            RequirementsSpecification::from_simple_sources(&requirements, &client_builder, &cache)
+                .await?;
         if spec.pylock.is_some() {
             bail!("Adding requirements from a `pylock.toml` is not supported in `uv run`");
         }

@@ -116,7 +116,7 @@ pub async fn install(
                 RequirementsSource::from_package(requirement)?
             };
             Some(
-                RequirementsSpecification::from_source(&source, &client_builder)
+                RequirementsSpecification::from_source(&source, &client_builder, &cache)
                     .await?
                     .requirements,
             )
@@ -158,7 +158,7 @@ pub async fn install(
     .into_interpreter();
 
     let receipt_build_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+        operations::read_constraints(build_constraints, &client_builder, &cache).await?;
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
 
@@ -380,6 +380,7 @@ pub async fn install(
         excludes,
         None,
         &client_builder,
+        &cache,
     )
     .await?;
 

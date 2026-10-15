@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use owo_colors::OwoColorize;
+use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClient};
 use uv_command_support::Printer;
 use uv_configuration::{
@@ -57,6 +58,7 @@ pub async fn read_requirements(
     extras: &ExtrasSpecification,
     groups: Option<&GroupsSpecification>,
     client_builder: &BaseClientBuilder<'_>,
+    cache: &Cache,
 ) -> Result<RequirementsSpecification, Error> {
     // Read all requirements from the provided sources, including format detection for stdin.
     let spec = RequirementsSpecification::from_sources(
@@ -66,6 +68,7 @@ pub async fn read_requirements(
         excludes,
         groups,
         client_builder,
+        cache,
     )
     .await?;
 
@@ -85,12 +88,19 @@ pub async fn read_requirements(
 pub async fn read_constraints(
     constraints: &[RequirementsSource],
     client_builder: &BaseClientBuilder<'_>,
+    cache: &Cache,
 ) -> Result<Vec<NameRequirementSpecification>, Error> {
-    Ok(
-        RequirementsSpecification::from_sources(&[], constraints, &[], &[], None, client_builder)
-            .await?
-            .constraints,
+    Ok(RequirementsSpecification::from_sources(
+        &[],
+        constraints,
+        &[],
+        &[],
+        None,
+        client_builder,
+        cache,
     )
+    .await?
+    .constraints)
 }
 
 /// Resolve a set of requirements, similar to running `pip compile`.
