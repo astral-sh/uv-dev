@@ -10,15 +10,17 @@ The reporter lists nine private-Git integration-test failures on Gentoo Linux am
 
 **Reproduction outcome: not_reproducible.** All nine reported test scenarios passed against the published uv 0.13.1 binary on Ubuntu x86_64 with Git 2.55.0 and Python 3.12.3. The detailed multiple-PAT scenario also passed against the installed uv 0.13.0 binary. This does not rule out a Gentoo build, Git configuration, transport, or environment difference; no common root cause or uv-version regression has been established.
 
-Maintainer charliermarsh confirmed that fixture credentials are intentionally shipped in the repository and that the private repositories test behavior rather than protect confidential contents (astral-sh/uv#22584, comment ID 6190830431, October 15, 2026 at 11:19:58 UTC). This confirms the intent behind the inspected tests supplying their own fixture credentials: downstream users are not expected to obtain separate private-repository access. In the inspected source, the tests are gated by the default-enabled `test-git` feature. The two rate-limit tests simulate GitHub API responses locally and do not demonstrate actual GitHub rate limiting. The maintainer asked why these tests are now failing for the reporter; the comment supplies no failure mechanism or new reproduction details.
+Maintainer charliermarsh confirmed that fixture credentials are intentionally shipped in the repository and that the private repositories test behavior rather than protect confidential contents (astral-sh/uv#22584, comment ID 6190830431, October 15, 2026 at 11:19:58 UTC). This confirms the intent behind the inspected tests supplying their own fixture credentials: downstream users are not expected to obtain separate private-repository access. In the inspected source, the tests are gated by the default-enabled `test-git` feature. The two rate-limit tests simulate GitHub API responses locally and do not demonstrate actual GitHub rate limiting. The reporter has not yet supplied the downstream details needed to explain the failures.
 
 **Maintainer direction:** charliermarsh plans to gate these private-Git tests behind an additional feature beyond `test-git` (astral-sh/uv#22584, comment ID 6190687672, October 15, 2026 at 11:11:51 UTC). This is a stated implementation plan. The supplied discussion does not specify a feature name, default-enablement policy, implementation PR, or release target. The additional gate would give separate control over these tests; it does not establish why the authenticated fetches failed downstream.
+
+**Upstream investigation lead:** the maintainer linked curl 8.23.0 and a Git fix for incorrectly treating credential removal from the effective URL as a redirect. The inspected Git commit describes discarding authentication and prompting again, closely matching the reported redirect warning and username failure. Applicability to the reporter remains unconfirmed; see the upstream evidence below.
 
 ## Classification
 
 Retain the bug classification as a reported integration-test regression. The expected behavior is successful installation, dependency editing, and frozen synchronization, not failure merely because the fixtures are private. Current execution supports those success expectations and does not confirm the reported failures locally.
 
-No confirmed duplicate was found. In particular, failure of a regression test associated with astral-sh/uv#19419 would not by itself establish recurrence of its historical workspace-discovery bug. Credential expiry, redirect handling, Git-version changes, and downstream configuration remain unconfirmed hypotheses. The planned additional feature gate does not change the bug classification or the unsuccessful local reproduction outcome.
+No confirmed duplicate was found. In particular, failure of a regression test associated with astral-sh/uv#19419 would not by itself establish recurrence of its historical workspace-discovery bug. The Git/libcurl interaction described below is established by upstream source, but its applicability to this report remains unconfirmed. Credential expiry and other downstream configuration causes also remain unconfirmed. The planned additional feature gate does not change the bug classification or the unsuccessful local reproduction outcome.
 
 ## Reproduction
 
@@ -84,6 +86,19 @@ Credential-free controls used `uv pip install --python <temporary-venv>/bin/pyth
 
 Obtain the exact Cargo/nextest command and enabled features, Gentoo package recipe and patches, Git and libcurl versions, Python version, last passing uv version, and whether proxying or Git URL rewriting is involved. Request redacted full output from an edit test and the frozen-sync test, including whether the latter fails during `uv lock` or the subsequent frozen sync. A same-machine comparison of 0.13.0 and 0.13.1 using unchanged Git configuration would help isolate a version regression. Do not request credential values or unredacted configuration dumps.
 
+## Upstream Git/libcurl investigation lead
+
+In astral-sh/uv#22584, maintainer charliermarsh suggested a relationship to curl 8.23.0 and Git commit `76524c2604bceee48481909e7824494498c39a34` (comment ID 6192417103, October 15, 2026 at 12:47:36 UTC). Inspection of the linked upstream records establishes a concrete mechanism:
+
+- curl 8.23.0 was published on October 14, 2026, the same date as uv 0.13.1. Release: https://github.com/curl/curl/releases/tag/curl-8_23_0. This timing is consistent with a dependency change coinciding with the reported uv upgrade, but does not establish the reporter's installed curl version.
+- curl commit `7a6bd027d0de2b6857472d35da090ef60cc29f19`, dated September 21, changes `CURLINFO_EFFECTIVE_URL` to omit credentials. Source: https://github.com/curl/curl/commit/7a6bd027d0de2b6857472d35da090ef60cc29f19.
+- Git commit `76524c2604bceee48481909e7824494498c39a34`, dated September 28 and titled “http: handle curl stripping creds from effective url,” explains that Git compared the requested URL with curl's effective URL as strings. With curl 8.23.0, removing credentials alone can look like a redirect; Git then updates its base URL, clears HTTP authentication, and asks for credentials again on subsequent requests. The commit explicitly describes a redirect warning followed by authentication failure. Source: https://github.com/git/git/commit/76524c2604bceee48481909e7824494498c39a34.
+- The Git patch changes `update_url_from_redirect` to use `match_effective_url`, accepting either an exact match or a match after removing credentials from the requested URL. This prevents credential removal alone from being interpreted as a redirect.
+
+This mechanism closely matches the reporter's authenticated URL, redirect warning, and subsequent username error with terminal prompting disabled. It is a stronger lead than a generic authentication failure, but it has not been reproduced in the reporter's environment and does not independently explain every listed failure or establish the cause of the flush error. The reporter's Git build, linked libcurl version, and inclusion of this fix or a downstream backport are unknown. The recorded successful Ubuntu reproduction does not identify Git's linked libcurl version or patch status, so it does not settle this comparison.
+
+Prioritize checking the libcurl actually used by Git's HTTP transport, not only the standalone curl command's version, and whether the Git package contains the cited fix. If the affected combination is present, compare the same uv version and test environment with Git containing the fix or a downstream backport. This is a candidate remediation to validate, not an established workaround or a reason to change the reproduction outcome.
+
 ## Release and implementation evidence
 
 - `CHANGELOG.md` dates uv 0.13.1 to October 14, 2026. Release notes and the 0.13.0-to-0.13.1 commit/file comparison were reviewed before attributing behavior to an upgrade.
@@ -108,6 +123,6 @@ The earlier candidate exclusions remain appropriate: astral-sh/uv#15188 concerns
 
 ## Next maintainer action
 
-Track the planned additional feature gate and confirm its name, default behavior, and release availability before recommending downstream feature flags. For root-cause investigation, obtain the downstream details and redacted logs listed above. All nine authenticated scenarios passed on the tested Linux environment, so neither the reported error nor the gating plan establishes expired fixture credentials or a frozen-workspace regression.
+First check the reporter's Git package, the libcurl used by its HTTP transport, and whether Git commit `76524c2604bceee48481909e7824494498c39a34` or an equivalent backport is present. Obtain the downstream details and redacted logs listed above; validate the upstream lead with uv held constant before attributing the failures to uv 0.13.1. Independently track the planned additional feature gate and confirm its name, default behavior, and release availability before recommending downstream feature flags. The existing successful reproduction and bug classification remain unchanged; neither the upstream lead nor the gating plan is a confirmed fix for this report.
 
 No GitHub changes were made, and no checkout files were modified during reproduction. The pre-existing checkout status was left unchanged.
