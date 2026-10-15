@@ -168,6 +168,7 @@ where
                 .with_target("uv_python_interpreter", LevelFilter::TRACE)
                 .with_target("uv_python_commands", LevelFilter::TRACE)
                 .with_target("uv_fs::locked_file", LevelFilter::TRACE)
+                .with_target("uv_client::base_client", LevelFilter::DEBUG)
                 .with_target("uv_client::retry", LevelFilter::TRACE),
         ))
 }
