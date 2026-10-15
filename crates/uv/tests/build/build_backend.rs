@@ -1116,20 +1116,35 @@ fn license_glob_recursive_binary() -> Result<()> {
         .child("src/zzz/_vendor/thing.bin")
         .write_binary(&[0xff])?;
 
-    // Unrelated binary data should not cause a license encoding error (astral-sh/uv#22579).
     uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Building wheel...
-    error: Failed to build `[TEMP_DIR]/`
-      cause: Invalid project metadata
-      cause: License file `src/zzz/_vendor/thing.bin` must be UTF-8 encoded
+    Successfully built dist/zzz-0.1.0-py3-none-any.whl
     ");
+
+    context
+        .pip_install()
+        .arg("--offline")
+        .arg("dist/zzz-0.1.0-py3-none-any.whl")
+        .assert()
+        .success();
+
+    assert_eq!(
+        context.read_bytes(context.site_packages().join("zzz/_vendor/thing.bin")),
+        [0xff]
+    );
+    assert!(
+        !context
+            .site_packages()
+            .join("zzz-0.1.0.dist-info/licenses/src/zzz/_vendor/thing.bin")
+            .exists()
+    );
 
     Ok(())
 }
 
-/// License validation also visits bytecode that the build backend excludes by default.
+/// A recursive license glob must not validate cached bytecode as a license.
 #[test]
 fn license_glob_recursive_bytecode() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1164,20 +1179,18 @@ fn license_glob_recursive_bytecode() -> Result<()> {
         .assert()
         .success();
 
-    // Excluded bytecode should not cause a license encoding error (astral-sh/uv#22579).
     uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
     Building wheel...
-    error: Failed to build `[TEMP_DIR]/`
-      cause: Invalid project metadata
-      cause: License file `src/zzz/_vendor/__pycache__/__init__.cpython-312.pyc` must be UTF-8 encoded
+    Successfully built dist/zzz-0.1.0-py3-none-any.whl
     ");
 
     Ok(())
 }
 
-/// UTF-8 package data passes validation but is incorrectly recorded and packaged as a license.
+/// Recursive license globs must not add unrelated text to license metadata or wheel licenses.
+/// Files outside the package must not enter the source distribution through license globs either.
 #[test]
 fn license_glob_recursive_text() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1190,7 +1203,7 @@ fn license_glob_recursive_text() -> Result<()> {
         name = "zzz"
         version = "0.1.0"
         license = "MIT"
-        license-files = ["src/zzz/_vendor/**/LICENSE.txt"]
+        license-files = ["src/zzz/_vendor/**/LICENSE.txt", "licenses/**/LICENSE.txt"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -1205,12 +1218,43 @@ fn license_glob_recursive_text() -> Result<()> {
         .temp_dir
         .child("src/zzz/_vendor/data.txt")
         .write_str("Runtime data")?;
+    context
+        .temp_dir
+        .child("licenses/vendor/LICENSE.txt")
+        .write_str("External license")?;
+    context
+        .temp_dir
+        .child("licenses/vendor/data.txt")
+        .write_str("Not a license")?;
 
-    uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
+    uv_snapshot!(context.filters(), context.build(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Building wheel...
+    Building source distribution...
+    Building wheel from source distribution...
+    Successfully built dist/zzz-0.1.0.tar.gz
     Successfully built dist/zzz-0.1.0-py3-none-any.whl
+    ");
+
+    let source_tree = TempDir::new()?;
+    unpack_tar_gz(
+        &context.temp_dir.join("dist/zzz-0.1.0.tar.gz"),
+        source_tree.path(),
+    )?;
+    assert!(
+        !source_tree
+            .path()
+            .join("zzz-0.1.0/licenses/vendor/data.txt")
+            .exists()
+    );
+    let metadata = context.read(source_tree.path().join("zzz-0.1.0/PKG-INFO"));
+    assert_snapshot!(metadata, @"
+    Metadata-Version: 2.4
+    Name: zzz
+    Version: 0.1.0
+    License-Expression: MIT
+    License-File: licenses/vendor/LICENSE.txt
+    License-File: src/zzz/_vendor/LICENSE.txt
     ");
 
     context
@@ -1220,23 +1264,35 @@ fn license_glob_recursive_text() -> Result<()> {
         .assert()
         .success();
 
-    // Unmatched text files should not appear in license metadata or the license directory
-    // (astral-sh/uv#22579).
     let metadata = context.read(context.site_packages().join("zzz-0.1.0.dist-info/METADATA"));
     assert_snapshot!(metadata, @"
     Metadata-Version: 2.4
     Name: zzz
     Version: 0.1.0
     License-Expression: MIT
+    License-File: licenses/vendor/LICENSE.txt
     License-File: src/zzz/_vendor/LICENSE.txt
-    License-File: src/zzz/_vendor/data.txt
     ");
     let license = context.read(
         context
             .site_packages()
-            .join("zzz-0.1.0.dist-info/licenses/src/zzz/_vendor/data.txt"),
+            .join("zzz-0.1.0.dist-info/licenses/src/zzz/_vendor/LICENSE.txt"),
     );
-    assert_snapshot!(license, @"Runtime data");
+    assert_snapshot!(license, @"Vendored license");
+    let license = context.read(
+        context
+            .site_packages()
+            .join("zzz-0.1.0.dist-info/licenses/licenses/vendor/LICENSE.txt"),
+    );
+    assert_snapshot!(license, @"External license");
+    assert!(
+        !context
+            .site_packages()
+            .join("zzz-0.1.0.dist-info/licenses/src/zzz/_vendor/data.txt")
+            .exists()
+    );
+    let data = context.read(context.site_packages().join("zzz/_vendor/data.txt"));
+    assert_snapshot!(data, @"Runtime data");
 
     Ok(())
 }

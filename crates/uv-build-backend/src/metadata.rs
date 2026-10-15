@@ -805,7 +805,7 @@ impl PyProjectToml {
                     .strip_prefix(root)
                     .expect("walkdir starts with root");
 
-                if !license_globs.match_path(relative) {
+                if !license_globs.match_file(relative) {
                     trace!("Not a license files match: {}", relative.user_display());
                     continue;
                 }

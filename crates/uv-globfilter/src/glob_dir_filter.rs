@@ -76,7 +76,12 @@ impl GlobDirFilter {
     ///
     /// We include a directory if we are potentially including files it contains.
     pub fn match_path(&self, path: &Path) -> bool {
-        self.match_directory(path) || self.glob_set.is_match(path)
+        self.match_directory(path) || self.match_file(path)
+    }
+
+    /// Whether a file path matches any of the globs, without accepting directory prefixes.
+    pub fn match_file(&self, path: &Path) -> bool {
+        self.glob_set.is_match(path)
     }
 
     /// Check whether a directory or any of its children can be matched by any of the globs.
