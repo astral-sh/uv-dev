@@ -164,27 +164,30 @@ fn inspect_environment(
         let package_id = selected_package_id
             .cloned()
             .unwrap_or_else(|| Metadata::unmanaged_package_node_id(&dist));
-        let dist = match packages.entry(package_id.clone()) {
-            Entry::Vacant(entry) => entry.insert(dist),
+        let modules = dist.read_modules(venv.interpreter().extension_suffixes());
+        let distribution_name = dist.name().clone();
+        match packages.entry(package_id.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert(dist);
+            }
             Entry::Occupied(entry) => {
                 warn_user!(
                     "Multiple installed distributions match package `{}`; using metadata from `{}`",
-                    dist.name(),
+                    distribution_name,
                     entry.get().install_path().display()
                 );
-                continue;
             }
-        };
+        }
         // TODO: Editable installs often only record a `.pth` file; we'll
         // need to handle them specially.
-        let modules = match dist.read_modules(venv.interpreter().extension_suffixes()) {
+        let modules = match modules {
             Ok(modules) => modules,
             Err(err) if selected_package_id.is_none() => {
                 // Incomplete module metadata in an unmanaged package should not prevent
                 // inventory collection or module discovery for other packages.
                 tracing::warn!(
                     "Failed to discover modules for unmanaged package `{}`: {err}",
-                    dist.name()
+                    distribution_name
                 );
                 continue;
             }
