@@ -16,7 +16,9 @@ Maintainer woodruffw reports that pip does not support `pip install -r -`, citin
 
 The maintainer cites pip's `src/pip/_internal/cli/req_command.py`, lines 361–385, at commit `634a6ec1a5d9dcc2433571cdb2f4c58a4bb29caf` as the parser-selection reference: https://github.com/pypa/pip/blob/634a6ec1a5d9dcc2433571cdb2f4c58a4bb29caf/src/pip/_internal/cli/req_command.py#L361-L385. These are attributed maintainer findings; this handoff update did not independently inspect pip's source or run either command. No pip release version or command output is supplied in the discussion.
 
-These findings address the earlier compatibility question: the discussion does not establish a working pip pylock-stdin behavior for uv to match. The maintainer's preference for compatibility remains tentative, with no decision accepting or rejecting an input-format flag or content detection. The duplicate classification remains the prior triage assessment; the comments do not confirm that classification or establish a regression.
+The discussion does not establish a working pip pylock-stdin behavior for uv to match. Maintainer woodruffw raises pip compatibility as a consideration, while maintainer zanieb expresses openness to supporting `-r -` for consistency with the rest of uv. This gives a rationale for considering support despite pip's limitations; it is tentative support, not a final design decision.
+
+uv already reads requirements-format input through `-r -`; the unresolved capability in this report is selecting the pylock parser for that input. Zanieb's comment does not specify an input-format flag or content-detection approach. Neither maintainer has settled that choice in the supplied discussion. The duplicate classification remains the prior triage assessment; these comments do not confirm that classification or establish a regression.
 
 ## Draft response
 
