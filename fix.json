@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Require full glob matches when selecting files for license metadata, wheels, and source distributions, while preserving directory traversal. Updated all three parent regressions to verify successful builds with binary data and bytecode, correct license contents, and retained package data through a source-distribution-to-wheel round trip.",
+  "validation": [
+    "Focused license integration tests: 6 passed.",
+    "Archive-listing and symlinked-license integration tests: 2 passed.",
+    "Clippy passed for uv-build-backend and uv-globfilter with warnings denied.",
+    "cargo fmt --all and formatting check passed using the matching stable toolchain.",
+    "git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2760"
+}
