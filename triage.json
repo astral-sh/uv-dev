@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 19419,
+        "title": "Git credentials in workspace member `[tool.uv.sources]` not applied under `uv sync --frozen`",
+        "url": "https://github.com/astral-sh/uv/issues/19419",
+        "state": "closed",
+        "reason": "The reported sync_frozen_workspace_member_git_credentials test explicitly covers this historical bug. It produced the same Git username error when frozen sync omitted workspace-member credentials. It was fixed in May 2026; the new report also includes pip-install and edit failures, so recurrence of that specific mechanism is unconfirmed."
+      },
+      {
+        "kind": "pull_request",
+        "number": 19423,
+        "title": "Apply workspace-member `[tool.uv.sources]` credentials under `uv sync --frozen`",
+        "url": "https://github.com/astral-sh/uv/pull/19423",
+        "state": "merged",
+        "reason": "Merged May 17, 2026, fixing astral-sh/uv#19419 and adding the exact frozen-sync test now reported failing. The maintainer's final implementation discovers existing workspace members; that behavior remains in the checkout. This is historical context, not a confirmed fix for the new failures."
+      },
+      {
+        "kind": "issue",
+        "number": 8467,
+        "title": "Test `install_git_private_https_pat_at_ref` timed out",
+        "url": "https://github.com/astral-sh/uv/issues/8467",
+        "state": "open",
+        "reason": "Names one of the same private-Git integration tests, but reports a 90-second timeout with no output in October 2024. The new example exits with a Git authentication error and a failed success snapshot. No evidence establishes a shared cause."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and attempt open, closed, and merged PR searches. Searched the install, edit/rate-limit, and frozen-sync claims separately using exact test identifiers, uv-private-pypackage, 'could not read Username', 'expected flush after ref listing', and 0.13.1; broadened to private Git tests, test-git, internal:testing, credentials, Gentoo, and GitHub 403/rate limits. Kept possible token-expiry causes separate from symptom searches. PR search results were unreliable (empty results or issues despite PR filters), and some requests hit a rate limit; supplemented them by screening the 500 newest PR titles across all states and directly inspecting referenced fixes, comments, and issue timelines. Ruled out astral-sh/uv#15188 (snapshot filtering), astral-sh/uv#17509 (test environment/interpreter discovery), astral-sh/uv#1980 and astral-sh/uv#16895 (credential-helper side effects), and astral-sh/uv#10493 (publish prompting). Also inspected astral-sh/uv#22357, astral-sh/uv#22464, and astral-sh/uv#22519; none establishes the reported private-fixture failure. Historical sync discussions astral-sh/uv#7453 and astral-sh/uv#8529 do not establish a duplicate. No confirmed duplicate was found within this scope."
+  },
+  "type": "bug",
+  "type_reason": "The report shows a success-expected integration test failing during Git fetch, alongside eight other reported failures. Source confirms that these tests intentionally access private fixtures, supply fixture credentials, and are gated by the default-enabled test-git feature. This is a test-suite correctness report, not merely a request for access or clarification. No existing item was established to track the same failure. Although a regression test for the previously fixed astral-sh/uv#19419 is affected, recurrence of that particular bug and causation by uv 0.13.1 remain unconfirmed.",
+  "summary": "No confirmed duplicate found. astral-sh/uv#19419 and its merged fix astral-sh/uv#19423 explain the frozen-sync test's origin; astral-sh/uv#8467 concerns the same install test but a different failure mode.",
+  "draft_response": "These tests intentionally access private Git fixtures and supply their own test credentials; they are enabled by the test-git feature. The Git fetch failure you showed is not an expected result. The frozen-sync test was added by astral-sh/uv#19423, but its failure does not yet establish that the earlier workspace-credential bug has returned. Please share your Git version, exact test command and enabled Cargo features, last passing uv version, and redacted output from one edit failure and the frozen-sync failure. That will help determine whether all three groups fail at the same stage."
+}
