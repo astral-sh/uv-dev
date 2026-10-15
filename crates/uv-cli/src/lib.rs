@@ -3385,6 +3385,7 @@ pub struct RunArgs {
     ///
     /// The format is detected by default. Select `setup.py` explicitly to execute Python and
     /// extract dependencies. Project metadata from stdin must be self-contained.
+    /// `pylock.toml` is not supported by this command.
     #[arg(long, value_enum)]
     pub input_format: Option<RequirementsFormat>,
 
@@ -3989,6 +3990,7 @@ pub struct AddArgs {
     ///
     /// The format is detected by default. Select `setup.py` explicitly to execute Python and
     /// extract dependencies. Project metadata from stdin must be self-contained.
+    /// `pylock.toml` is not supported by this command.
     #[arg(long, value_enum)]
     pub input_format: Option<RequirementsFormat>,
 
@@ -5374,6 +5376,7 @@ pub struct ToolRunArgs {
     ///
     /// The format is detected by default. Select `setup.py` explicitly to execute Python and extract
     /// dependencies. Project metadata from stdin must be self-contained.
+    /// `pylock.toml` is not supported by this command.
     #[arg(long, value_enum)]
     pub input_format: Option<RequirementsFormat>,
 
@@ -5539,7 +5542,7 @@ pub struct ToolInstallArgs {
     #[arg(short = 'w', long, value_hint = ValueHint::Other)]
     with: Vec<comma::CommaSeparatedRequirements>,
 
-    /// Run with the packages listed in the given files.
+    /// Install with the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
     /// `pyproject.toml`, `setup.py`, and `setup.cfg`. Project metadata contributes its dependencies
@@ -5551,6 +5554,7 @@ pub struct ToolInstallArgs {
     ///
     /// The format is detected by default. Select `setup.py` explicitly to execute Python and extract
     /// dependencies. Project metadata from stdin must be self-contained.
+    /// `pylock.toml` is not supported by this command.
     #[arg(long, value_enum)]
     input_format: Option<RequirementsFormat>,
 
