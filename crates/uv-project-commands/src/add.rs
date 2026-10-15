@@ -10,6 +10,7 @@ use owo_colors::OwoColorize;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 use tracing::{debug, warn};
 
+use uv_auth::UrlCredentials;
 use uv_cache::Cache;
 use uv_cache_key::RepositoryUrl;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
@@ -967,7 +968,7 @@ fn edits(
                 extra,
                 group,
             }) => {
-                let credentials = uv_auth::Credentials::from_url(&git)?;
+                let credentials = UrlCredentials::from_url(&git)?;
                 if let Some(credentials) = credentials {
                     debug!("Caching credentials for: {git}");
                     store_credentials(RepositoryUrl::new(git.clone()), credentials);

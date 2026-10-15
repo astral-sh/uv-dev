@@ -12,7 +12,7 @@ use uv_redacted::DisplaySafeUrl;
 use uv_state::{StateBucket, StateStore};
 use uv_static::EnvVars;
 
-use crate::credentials::{Password, Token, Username};
+use crate::credentials::{CredentialsKind, InvalidCredentialsError, Password, Username};
 use crate::index::is_path_prefix;
 use crate::realm::Realm;
 use crate::service::Service;
@@ -84,6 +84,8 @@ pub enum TomlCredentialError {
     BasicAuthError(#[from] BasicAuthError),
     #[error(transparent)]
     BearerAuthError(#[from] BearerAuthError),
+    #[error(transparent)]
+    InvalidCredentials(#[from] InvalidCredentialsError),
     #[error("Failed to determine credentials directory")]
     CredentialsDirError,
     #[error("Token is not valid unicode")]
@@ -99,6 +101,7 @@ impl TomlCredentialError {
             | Self::SerializeError(_)
             | Self::BasicAuthError(_)
             | Self::BearerAuthError(_)
+            | Self::InvalidCredentials(_)
             | Self::CredentialsDirError
             | Self::TokenNotUnicode(_) => None,
         }
@@ -156,15 +159,15 @@ struct TomlCredentialWire {
 
 impl From<TomlCredential> for TomlCredentialWire {
     fn from(value: TomlCredential) -> Self {
-        match value.credentials {
-            Credentials::Basic { username, password } => Self {
+        match value.credentials.into_kind() {
+            CredentialsKind::Basic { username, password } => Self {
                 service: value.service,
                 username,
                 scheme: AuthScheme::Basic,
                 password,
                 token: None,
             },
-            Credentials::Bearer { token } => Self {
+            CredentialsKind::Bearer { token } => Self {
                 service: value.service,
                 username: Username::new(None),
                 scheme: AuthScheme::Bearer,
@@ -191,10 +194,7 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
                         BasicAuthError::UnexpectedToken,
                     ));
                 }
-                let credentials = Credentials::Basic {
-                    username: value.username,
-                    password: value.password,
-                };
+                let credentials = Credentials::from_basic_parts(value.username, value.password)?;
                 Ok(Self {
                     service: value.service,
                     credentials,
@@ -216,9 +216,7 @@ impl TryFrom<TomlCredentialWire> for TomlCredential {
                         BearerAuthError::MissingToken,
                     ));
                 }
-                let credentials = Credentials::Bearer {
-                    token: Token::new(value.token.unwrap().into_bytes()),
-                };
+                let credentials = Credentials::bearer(value.token.unwrap().into_bytes());
                 Ok(Self {
                     service: value.service,
                     credentials,
@@ -278,9 +276,9 @@ impl TextCredentialStore {
             .credentials
             .into_iter()
             .map(|credential| {
-                let username = match &credential.credentials {
-                    Credentials::Basic { username, .. } => username.clone(),
-                    Credentials::Bearer { .. } => Username::none(),
+                let username = match credential.credentials.kind() {
+                    CredentialsKind::Basic { username, .. } => username.clone(),
+                    CredentialsKind::Bearer { .. } => Username::none(),
                 };
                 (
                     (credential.service.clone(), username),
@@ -400,9 +398,9 @@ impl TextCredentialStore {
 
     /// Store credentials for a given service.
     pub fn insert(&mut self, service: Service, credentials: Credentials) -> Option<Credentials> {
-        let username = match &credentials {
-            Credentials::Basic { username, .. } => username.clone(),
-            Credentials::Bearer { .. } => Username::none(),
+        let username = match credentials.kind() {
+            CredentialsKind::Basic { username, .. } => username.clone(),
+            CredentialsKind::Bearer { .. } => Username::none(),
         };
         self.credentials.insert((service, username), credentials)
     }
@@ -429,17 +427,19 @@ mod tests {
             credentials: vec![
                 TomlCredential {
                     service: Service::from_str("https://example.com").unwrap(),
-                    credentials: Credentials::Basic {
-                        username: Username::new(Some("user1".to_string())),
-                        password: Some(Password::new("pass1".to_string())),
-                    },
+                    credentials: Credentials::basic(
+                        Some("user1".to_string()),
+                        Some("pass1".to_string()),
+                    )
+                    .unwrap(),
                 },
                 TomlCredential {
                     service: Service::from_str("https://test.org").unwrap(),
-                    credentials: Credentials::Basic {
-                        username: Username::new(Some("user2".to_string())),
-                        password: Some(Password::new("pass2".to_string())),
-                    },
+                    credentials: Credentials::basic(
+                        Some("user2".to_string()),
+                        Some("pass2".to_string()),
+                    )
+                    .unwrap(),
                 },
             ],
         };
@@ -459,9 +459,27 @@ mod tests {
     }
 
     #[test]
+    fn test_toml_rejects_invalid_basic_credentials() {
+        let error = TomlCredential::try_from(TomlCredentialWire {
+            service: Service::from_str("https://example.com").unwrap(),
+            username: Username::new(Some("user:name".to_string())),
+            scheme: AuthScheme::Basic,
+            password: Some(Password::new("password".to_string())),
+            token: None,
+        })
+        .unwrap_err();
+
+        insta::assert_snapshot!(
+            error,
+            @"HTTP Basic Authentication username cannot contain a colon"
+        );
+    }
+
+    #[test]
     fn test_credential_store_operations() {
         let mut store = TextCredentialStore::default();
-        let credentials = Credentials::basic(Some("user".to_string()), Some("pass".to_string()));
+        let credentials =
+            Credentials::basic(Some("user".to_string()), Some("pass".to_string())).unwrap();
 
         let service = Service::from_str("https://example.com").unwrap();
         store.insert(service.clone(), credentials.clone());
@@ -531,7 +549,8 @@ password = "pass2"
     #[test]
     fn test_prefix_matching() {
         let mut store = TextCredentialStore::default();
-        let credentials = Credentials::basic(Some("user".to_string()), Some("pass".to_string()));
+        let credentials =
+            Credentials::basic(Some("user".to_string()), Some("pass".to_string())).unwrap();
 
         // Store credentials for a specific path prefix
         let service = Service::from_str("https://example.com/api").unwrap();
@@ -569,7 +588,8 @@ password = "pass2"
     #[test]
     fn test_realm_based_matching() {
         let mut store = TextCredentialStore::default();
-        let credentials = Credentials::basic(Some("user".to_string()), Some("pass".to_string()));
+        let credentials =
+            Credentials::basic(Some("user".to_string()), Some("pass".to_string())).unwrap();
 
         // Store by full URL (realm)
         let service = Service::from_str("https://example.com").unwrap();
@@ -613,9 +633,9 @@ password = "pass2"
     fn test_most_specific_prefix_matching() {
         let mut store = TextCredentialStore::default();
         let general_cred =
-            Credentials::basic(Some("general".to_string()), Some("pass1".to_string()));
+            Credentials::basic(Some("general".to_string()), Some("pass1".to_string())).unwrap();
         let specific_cred =
-            Credentials::basic(Some("specific".to_string()), Some("pass2".to_string()));
+            Credentials::basic(Some("specific".to_string()), Some("pass2".to_string())).unwrap();
 
         // Store credentials with different prefix lengths
         let general_service = Service::from_str("https://example.com/api").unwrap();
@@ -639,7 +659,8 @@ password = "pass2"
         let mut store = TextCredentialStore::default();
         let url = DisplaySafeUrl::parse("https://example.com").unwrap();
         let service = Service::from_str("https://example.com").unwrap();
-        let user1_creds = Credentials::basic(Some("user1".to_string()), Some("pass1".to_string()));
+        let user1_creds =
+            Credentials::basic(Some("user1".to_string()), Some("pass1".to_string())).unwrap();
         store.insert(service.clone(), user1_creds.clone());
 
         // Should return credentials when username matches
@@ -669,11 +690,13 @@ password = "pass2"
         let general_creds = Credentials::basic(
             Some("general_user".to_string()),
             Some("general_pass".to_string()),
-        );
+        )
+        .unwrap();
         let specific_creds = Credentials::basic(
             Some("specific_user".to_string()),
             Some("specific_pass".to_string()),
-        );
+        )
+        .unwrap();
 
         store.insert(general_service, general_creds);
         store.insert(specific_service, specific_creds);
@@ -705,8 +728,10 @@ password = "pass2"
 
         // Add two credentials for the same service with different usernames
         let service = Service::from_str("https://example.com/api").unwrap();
-        let user1_creds = Credentials::basic(Some("user1".to_string()), Some("pass1".to_string()));
-        let user2_creds = Credentials::basic(Some("user2".to_string()), Some("pass2".to_string()));
+        let user1_creds =
+            Credentials::basic(Some("user1".to_string()), Some("pass1".to_string())).unwrap();
+        let user2_creds =
+            Credentials::basic(Some("user2".to_string()), Some("pass2".to_string())).unwrap();
 
         store.insert(service.clone(), user1_creds);
         store.insert(service.clone(), user2_creds);

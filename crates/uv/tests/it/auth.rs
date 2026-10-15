@@ -1822,7 +1822,8 @@ fn bazel_helper_invalid_bearer_token() -> Result<()> {
         @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Invalid authorization header
+    error: Invalid credentials
+      cause: Invalid authorization header
       cause: failed to parse header value
     "
     );
