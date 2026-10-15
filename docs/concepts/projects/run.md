@@ -49,8 +49,8 @@ $ uv run --with-requirements ../other-project/pyproject.toml python example.py
 ```
 
 Pass `-` to read the requirements from stdin. Project metadata from stdin must be
-[self-contained](../../pip/packages.md#installing-packages-from-files); use `--input-format setup.py`
-to execute a `setup.py` input and extract its dependencies:
+[self-contained](../../pip/packages.md#installing-packages-from-files); use
+`--input-format setup.py` to execute a `setup.py` input and extract its dependencies:
 
 ```console
 $ cat setup.py | uv run --with-requirements - --input-format setup.py python example.py

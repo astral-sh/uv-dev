@@ -1588,7 +1588,12 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 requirements.extend(
                     args.with_requirements
                         .into_iter()
-                        .map(RequirementsSource::from_requirements_file)
+                        .map(|input| {
+                            RequirementsSource::from_requirements_file_with_format(
+                                input,
+                                args.input_format,
+                            )
+                        })
                         .collect::<Result<Vec<_>, _>>()?,
                 );
                 requirements
@@ -1681,7 +1686,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 requirements.push(RequirementsSource::from_editable(&pkg)?);
             }
             for path in args.with_requirements {
-                requirements.push(RequirementsSource::from_requirements_file(path)?);
+                requirements.push(RequirementsSource::from_requirements_file_with_format(
+                    path,
+                    args.input_format,
+                )?);
             }
             for pkg in &args.with_executables_from {
                 let source = RequirementsSource::from_with_package_argument(pkg)?;

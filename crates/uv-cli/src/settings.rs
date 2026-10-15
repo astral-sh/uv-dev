@@ -899,6 +899,7 @@ pub struct ToolRunSettings {
     pub from: Option<String>,
     pub with: Vec<String>,
     pub with_requirements: Vec<RequirementsInput>,
+    pub input_format: Option<RequirementsFormat>,
     pub with_editable: Vec<String>,
     pub constraints: Vec<RequirementsInput>,
     pub overrides: Vec<RequirementsInput>,
@@ -930,6 +931,7 @@ impl ToolRunSettings {
             with,
             with_editable,
             with_requirements,
+            input_format,
             constraints,
             overrides,
             build_constraints,
@@ -1008,6 +1010,14 @@ impl ToolRunSettings {
         let show_resolution = show_resolution || environment.show_resolution.value == Some(true);
         let no_env_file = no_env_file || environment.no_env_file.value == Some(true);
 
+        let with_requirements = with_requirements
+            .into_iter()
+            .filter_map(Maybe::into_option)
+            .collect::<Vec<_>>();
+        if input_format.is_some() && !with_requirements.contains(&RequirementsInput::Stdin) {
+            anyhow::bail!("`--input-format` requires a requirements input of `-`");
+        }
+
         Ok(Self {
             command: command.map(|ExternalCommand::Cmd(command)| command),
             from,
@@ -1019,10 +1029,8 @@ impl ToolRunSettings {
                 .into_iter()
                 .flat_map(CommaSeparatedRequirements::into_iter)
                 .collect(),
-            with_requirements: with_requirements
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            with_requirements,
+            input_format,
             constraints: requirement_files(constraints, environment.constraints.clone()),
             overrides: requirement_files(overrides, environment.overrides.clone()),
             build_constraints: requirement_files(
@@ -1053,6 +1061,7 @@ pub struct ToolInstallSettings {
     pub from: Option<String>,
     pub with: Vec<String>,
     pub with_requirements: Vec<RequirementsInput>,
+    pub input_format: Option<RequirementsFormat>,
     pub with_executables_from: Vec<String>,
     pub with_editable: Vec<String>,
     pub constraints: Vec<RequirementsInput>,
@@ -1084,6 +1093,7 @@ impl ToolInstallSettings {
             with,
             with_editable,
             with_requirements,
+            input_format,
             with_executables_from,
             constraints:
                 DependencyConstraintsArgs {
@@ -1132,6 +1142,14 @@ impl ToolInstallSettings {
         }
         let lfs = GitLfsSetting::new(lfs.then_some(true), environment.lfs);
 
+        let with_requirements = with_requirements
+            .into_iter()
+            .filter_map(Maybe::into_option)
+            .collect::<Vec<_>>();
+        if input_format.is_some() && !with_requirements.contains(&RequirementsInput::Stdin) {
+            anyhow::bail!("`--input-format` requires a requirements input of `-`");
+        }
+
         Ok(Self {
             package,
             from,
@@ -1143,10 +1161,8 @@ impl ToolInstallSettings {
                 .into_iter()
                 .flat_map(CommaSeparatedRequirements::into_iter)
                 .collect(),
-            with_requirements: with_requirements
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            with_requirements,
+            input_format,
             with_executables_from: with_executables_from
                 .into_iter()
                 .flat_map(CommaSeparatedRequirements::into_iter)

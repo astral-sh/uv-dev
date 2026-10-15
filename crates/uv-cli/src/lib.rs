@@ -5361,13 +5361,21 @@ pub struct ToolRunArgs {
     /// Run with the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// and `pylock.toml`.
+    /// `pyproject.toml`, `setup.py`, and `setup.cfg`. Project metadata contributes its dependencies
+    /// without installing the source project.
     #[arg(
         long,
         value_delimiter = ',',
         value_hint = ValueHint::FilePath,
     )]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
+
+    /// The format of requirements read from stdin.
+    ///
+    /// The format is detected by default. Select `setup.py` explicitly to execute Python and extract
+    /// dependencies. Project metadata from stdin must be self-contained.
+    #[arg(long, value_enum)]
+    pub input_format: Option<RequirementsFormat>,
 
     /// Constrain versions using the given requirements files [env: `UV_CONSTRAINT`=]
     ///
@@ -5534,9 +5542,17 @@ pub struct ToolInstallArgs {
     /// Run with the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// and `pylock.toml`.
+    /// `pyproject.toml`, `setup.py`, and `setup.cfg`. Project metadata contributes its dependencies
+    /// without installing the source project.
     #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
     with_requirements: Vec<Maybe<RequirementsInput>>,
+
+    /// The format of requirements read from stdin.
+    ///
+    /// The format is detected by default. Select `setup.py` explicitly to execute Python and extract
+    /// dependencies. Project metadata from stdin must be self-contained.
+    #[arg(long, value_enum)]
+    input_format: Option<RequirementsFormat>,
 
     /// Install the target package in editable mode, such that changes in the package's source
     /// directory are reflected without reinstallation.
