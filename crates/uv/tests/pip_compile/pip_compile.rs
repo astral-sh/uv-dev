@@ -557,17 +557,35 @@ fn compile_pylock_conditional_git_universal() -> Result<()> {
         created-by = "uv"
         [[packages]]
         name = "uv-public-pypackage"
-        marker = "python_version >= '3.12'"
+        marker = "python_version >= '3.13'"
         vcs = { type = "git", url = "https://github.com/astral-test/uv-public-pypackage", commit-id = "0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
         [[packages]]
         name = "uv-public-pypackage"
-        marker = "python_version < '3.12'"
+        marker = "python_version < '3.13'"
         vcs = { type = "git", url = "https://github.com/astral-test/uv-public-pypackage", commit-id = "9d01a806f17ddacb9c7b66b1b68574adf790b63f" }
     "#})?;
     uv_snapshot!(context.pip_compile().args(["pylock.toml", "--universal", "--no-header"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Cannot import conflicting Git commits for the repository reference used by `uv-public-pypackage`
+    ");
+    Ok(())
+}
+
+#[test]
+fn compile_pylock_missing_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        extras = ["test"]
+        packages = []
+    "#})?;
+    uv_snapshot!(context.pip_compile()
+        .args(["pylock.toml", "--extra", "typo", "--offline", "--no-header"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Requested extra not found: typo
     ");
     Ok(())
 }
@@ -1819,7 +1837,7 @@ fn compile_requirements_file_extra() -> Result<()> {
             @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Requesting extras requires a `pyproject.toml`, `setup.cfg`, or `setup.py` file.
+    error: Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file.
     "
     );
 

@@ -30,7 +30,7 @@ use uv_fs::{CWD, Simplified};
 use uv_git::ResolvedRepositoryReference;
 use uv_install_wheel::LinkMode;
 use uv_lock::PylockToml;
-use uv_normalize::PackageName;
+use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::Version;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{Conflicts, SupportedEnvironments};
@@ -213,7 +213,7 @@ pub async fn pip_compile(
         pylock_groups,
         source_trees,
         groups,
-        extras: used_extras,
+        extras: mut used_extras,
         index_url,
         extra_index_urls,
         no_index,
@@ -237,7 +237,7 @@ pub async fn pip_compile(
 
     if !extras.is_empty() && source_trees.is_empty() && pylock.is_none() {
         return Err(anyhow!(
-            "Requesting extras requires a `pyproject.toml`, `setup.cfg`, or `setup.py` file."
+            "Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file."
         ));
     }
 
@@ -267,19 +267,7 @@ pub async fn pip_compile(
     // If all the metadata could be statically resolved, validate that every extra was used. If we
     // need to resolve metadata via PEP 517, we don't know which extras are used until much later.
     if source_trees.is_empty() && pylock.is_none() {
-        let mut unused_extras = extras
-            .explicit_names()
-            .filter(|extra| !used_extras.contains(extra))
-            .collect::<Vec<_>>();
-        if !unused_extras.is_empty() {
-            unused_extras.sort_unstable();
-            unused_extras.dedup();
-            let s = if unused_extras.len() == 1 { "" } else { "s" };
-            return Err(anyhow!(
-                "Requested extra{s} not found: {}",
-                unused_extras.iter().join(", ")
-            ));
-        }
+        validate_extras(&extras, &used_extras)?;
     }
 
     // Find an interpreter to use for building distributions
@@ -479,6 +467,11 @@ pub async fn pip_compile(
     } else {
         (LockedRequirements::default(), Vec::new())
     };
+
+    if source_trees.is_empty() && pylock.is_some() {
+        used_extras.extend(available_extras.iter().cloned());
+        validate_extras(&extras, &used_extras)?;
+    }
 
     // Prefer imported versions over versions recorded in the existing output file.
     let locked = if let Some(output_file) = output_file.filter(|output_file| output_file.is_file())
@@ -938,4 +931,22 @@ fn cmd(
         .flatten()
         .join(" ");
     format!("uv {args}")
+}
+
+/// Reject explicitly requested extras absent from all statically resolved inputs.
+fn validate_extras(extras: &ExtrasSpecification, available: &FxHashSet<ExtraName>) -> Result<()> {
+    let mut unused_extras = extras
+        .explicit_names()
+        .filter(|extra| !available.contains(extra))
+        .collect::<Vec<_>>();
+    if !unused_extras.is_empty() {
+        unused_extras.sort_unstable();
+        unused_extras.dedup();
+        let s = if unused_extras.len() == 1 { "" } else { "s" };
+        return Err(anyhow!(
+            "Requested extra{s} not found: {}",
+            unused_extras.iter().join(", ")
+        ));
+    }
+    Ok(())
 }

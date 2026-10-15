@@ -55,7 +55,7 @@ impl LockedRequirements {
     }
 
     /// Extract version and Git preferences from selected packages in a [`PylockToml`].
-    pub fn from_pylock(
+    pub(crate) fn from_pylock(
         lock: &PylockToml,
         install_path: &Path,
         extras: &[ExtraName],
