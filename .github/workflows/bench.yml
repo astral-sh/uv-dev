@@ -17,138 +17,67 @@ env:
   UV_LOCKED: 1
 
 jobs:
-  benchmarks-walltime-build:
-    name: "walltime build"
-    runs-on: depot-ubuntu-24.04-4
-    # uv-dev benchmarks pull requests but imports its main-branch measurements from uv.
-    if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
-    timeout-minutes: 30
-    steps:
-      - name: "Checkout Branch"
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ inputs.save-rust-cache == 'true' }}
-
-      - name: "Install Rust toolchain"
-        run: rustup show
-
-      - name: "Install uv"
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          # renovate: datasource=github-release-attachments depName=astral-sh/uv
-          version: "0.13.0"
-          checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
-
-      - name: "Install requirements and prime cache"
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsasl2-dev libldap2-dev libkrb5-dev
-          cargo run --locked --bin uv -- venv --cache-dir .cache
-          # Resolve benchmark fixtures without the repository's tooling build policy.
-          cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/jupyter.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
-          cargo run --locked --bin uv -- --config-file test/uv.toml pip compile test/requirements/airflow.in --universal --exclude-newer 2024-08-08 --cache-dir .cache
-
-      - name: "Build benchmarks"
-        run: |
-          # cargo-codspeed resolves metadata before passing --locked to Cargo.
-          cargo metadata --locked --format-version 1 > /dev/null
-          uv run --only-dev cargo codspeed build --locked -m walltime --profile profiling -p uv-bench --bench uv --bench workspace_discovery --bench git_fetch
-
-      - name: "Create artifact archive"
-        run: |
-          mkdir -p target/codspeed-bin
-          cp "$(uv run --only-dev which cargo-codspeed)" target/codspeed-bin/
-          tar -cvf benchmarks-walltime.tar target/codspeed target/codspeed-bin target/debug/uv .cache
-
-      - name: "Upload benchmark artifacts"
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: benchmarks-walltime
-          path: benchmarks-walltime.tar
-          retention-days: 1
-
-  benchmarks-walltime-run:
-    name: "walltime on x86_64 linux"
-    runs-on: codspeed-macro-x64-ryzen-9950x-ubuntu-24-04
-    needs: benchmarks-walltime-build
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write # for codspeed authentication
-    steps:
-      - name: "Checkout Branch"
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: "Install uv"
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          # renovate: datasource=github-release-attachments depName=astral-sh/uv
-          version: "0.13.0"
-          checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
-
-      - name: "Download benchmark artifacts"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: benchmarks-walltime
-
-      - name: "Extract artifact archive"
-        run: tar -xvf benchmarks-walltime.tar
-
-      - name: "Add codspeed to PATH"
-        run: echo "$GITHUB_WORKSPACE/target/codspeed-bin" >> "$GITHUB_PATH"
-
-      - name: "Create venv"
-        run: ./target/debug/uv venv --cache-dir .cache
-
-      - name: "Retain benchmark profiles"
-        id: profiles
-        # Only public main pushes produce reusable baseline profiles.
-        if: ${{ github.repository == 'astral-sh/uv' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: ./target/debug/uv run --script scripts/codspeed-profiles.py start "$RUNNER_TEMP/codspeed-walltime" walltime >> "$GITHUB_OUTPUT"
-
-      - name: "Run benchmarks"
-        uses: CodSpeedHQ/action@373d6868929f444bc08d901fd0eb0ad52a8875ea # v5.2.1
-        with:
-          run: uv run --only-dev cargo codspeed run
-          mode: walltime
-          upload-url: ${{ steps.profiles.outputs.upload-url }}
-
-      - name: "Finish profile capture"
-        if: ${{ always() && steps.profiles.outcome == 'success' }}
-        run: ./target/debug/uv run --script scripts/codspeed-profiles.py finish "$RUNNER_TEMP/codspeed-walltime"
-
-      - name: "Upload benchmark profiles"
-        if: ${{ steps.profiles.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: codspeed-profiles-walltime
-          path: |
-            ${{ runner.temp }}/codspeed-walltime/metadata.json
-            ${{ runner.temp }}/codspeed-walltime/profile.tar
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 30
-
   benchmarks-simulated:
     name: "simulated"
     runs-on: depot-ubuntu-24.04-4
-    # Only uv measures main; uv-dev reuses the resulting profiles.
-    if: ${{ github.repository == 'astral-sh/uv' || (github.repository == 'astral-sh/uv-dev' && github.ref != 'refs/heads/main') }}
+    if: ${{ github.repository == 'astral-sh/uv-dev' && github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
     timeout-minutes: 30
     permissions:
       contents: read
       id-token: write # for codspeed authentication
     steps:
-      - name: "Checkout Branch"
+      - name: "Checkout capture helper"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: "Prepare capture helper"
+        run: |
+          mkdir -p "$RUNNER_TEMP/codspeed-diagnostic-capture"
+          cp scripts/codspeed-profiles.py scripts/codspeed-profiles.py.lock "$RUNNER_TEMP/codspeed-diagnostic-capture/"
+
+      - name: "Checkout benchmark source"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: bd62096a572fea1cebd91e4006c7bc6669a70c65
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: "Record benchmark provenance"
+        env:
+          CAPTURE_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if head != "bd62096a572fea1cebd91e4006c7bc6669a70c65":
+              raise SystemExit("Unexpected benchmark source commit")
+          subprocess.run(["git", "diff", "--exit-code"], check=True)
+          source_tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip()
+          pr_head = "9b9827879d60c8ee0d01eebfc228c7dcd9a710ff"
+          pr_head_tree = subprocess.check_output(["git", "rev-parse", f"{pr_head}^{{tree}}"], text=True).strip()
+          if source_tree != pr_head_tree or source_tree != "25ea8657671546d567da847d74df271b8da638ec":
+              raise SystemExit("Unexpected benchmark source tree")
+          provenance = {
+              "source_merge_sha": head,
+              "source_merge_tree": source_tree,
+              "pr_head_sha": pr_head,
+              "pr_head_tree": pr_head_tree,
+              "workflow_sha": os.environ["CAPTURE_WORKFLOW_SHA"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "event": os.environ["GITHUB_EVENT_NAME"],
+              "ref": os.environ["GITHUB_REF"],
+              "cwd": os.getcwd(),
+              "temporary_environment": {key: os.environ.get(key) for key in ("RUNNER_TEMP", "TMPDIR", "TMP", "TEMP")},
+          }
+          target = Path(os.environ["RUNNER_TEMP"]) / "codspeed-diagnostic-capture" / "provenance.json"
+          target.write_text(json.dumps(provenance, indent=2) + "\n")
+          print(json.dumps(provenance, indent=2))
+          PYTHON
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -181,9 +110,8 @@ jobs:
 
       - name: "Retain benchmark profiles"
         id: profiles
-        # Only public main pushes produce reusable baseline profiles.
-        if: ${{ github.repository == 'astral-sh/uv' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: ./target/debug/uv run --script scripts/codspeed-profiles.py start "$RUNNER_TEMP/codspeed-simulation" simulation >> "$GITHUB_OUTPUT"
+        if: ${{ github.repository == 'astral-sh/uv-dev' && github.event_name == 'workflow_dispatch' }}
+        run: GITHUB_SHA=bd62096a572fea1cebd91e4006c7bc6669a70c65 ./target/debug/uv run --script "$RUNNER_TEMP/codspeed-diagnostic-capture/codspeed-profiles.py" start "$RUNNER_TEMP/codspeed-simulation" simulation --repository astral-sh/uv-dev >> "$GITHUB_OUTPUT"
 
       - name: "Run benchmarks"
         uses: CodSpeedHQ/action@373d6868929f444bc08d901fd0eb0ad52a8875ea # v5.2.1
@@ -194,16 +122,17 @@ jobs:
 
       - name: "Finish profile capture"
         if: ${{ always() && steps.profiles.outcome == 'success' }}
-        run: ./target/debug/uv run --script scripts/codspeed-profiles.py finish "$RUNNER_TEMP/codspeed-simulation"
+        run: ./target/debug/uv run --script "$RUNNER_TEMP/codspeed-diagnostic-capture/codspeed-profiles.py" finish "$RUNNER_TEMP/codspeed-simulation"
 
       - name: "Upload benchmark profiles"
         if: ${{ steps.profiles.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: codspeed-profiles-simulation
+          name: codspeed-diagnostic-simulation
           path: |
             ${{ runner.temp }}/codspeed-simulation/metadata.json
             ${{ runner.temp }}/codspeed-simulation/profile.tar
+            ${{ runner.temp }}/codspeed-diagnostic-capture/provenance.json
           compression-level: 0
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3

@@ -115,13 +115,21 @@ def verify_profile(profile: Path, metadata: dict) -> None:
 
 
 def verify_recording(
-    metadata: dict, sha: str, run_id: str, mode: str, ref: str, event: str
+    metadata: dict,
+    sha: str,
+    run_id: str,
+    mode: str,
+    ref: str,
+    event: str,
+    *,
+    repository: str = SOURCE_REPOSITORY,
 ) -> None:
+    owner, name = repository.split("/")
     expected = {
         "repositoryProvider": "GITHUB",
         "runEnvironment": "GITHUB_ACTIONS",
-        "owner": "astral-sh",
-        "repository": "uv",
+        "owner": owner,
+        "repository": name,
         "ref": ref,
         "event": event,
         "commitHash": sha,
@@ -144,7 +152,14 @@ class CaptureServer(ThreadingHTTPServer):
     """A write-through relay: retain exactly what the runner uploads to CodSpeed."""
 
     def __init__(
-        self, directory: Path, sha: str, run_id: str, mode: str, ref: str, event: str
+        self,
+        directory: Path,
+        sha: str,
+        run_id: str,
+        mode: str,
+        ref: str,
+        event: str,
+        repository: str = SOURCE_REPOSITORY,
     ):
         super().__init__(("127.0.0.1", 0), CaptureHandler)
         self.directory = directory
@@ -153,6 +168,7 @@ class CaptureServer(ThreadingHTTPServer):
         self.mode = mode
         self.ref = ref
         self.event = event
+        self.repository = repository
         self.nonce = secrets.token_urlsafe()
         self.pending: tuple[dict, str] | None = None
         self.complete = False
@@ -197,6 +213,7 @@ class CaptureHandler(BaseHTTPRequestHandler):
                 self.server.mode,
                 self.server.ref,
                 self.server.event,
+                repository=self.server.repository,
             )
             token = self.headers.get("Authorization")
             response = upload_request(metadata, token)
@@ -238,13 +255,13 @@ class CaptureHandler(BaseHTTPRequestHandler):
             self.respond(502, {"error": "Could not retain CodSpeed profile"})
 
 
-def start_capture(directory: Path, mode: str) -> None:
-    if os.environ["GITHUB_REPOSITORY"] != SOURCE_REPOSITORY:
-        raise ValueError("Only public uv runs may publish shared profiles")
+def start_capture(directory: Path, mode: str, repository: str = SOURCE_REPOSITORY) -> None:
+    if os.environ["GITHUB_REPOSITORY"] != repository:
+        raise ValueError("Capture repository does not match this workflow")
     directory.mkdir(parents=True, exist_ok=False)
     with (directory / "capture.log").open("wb") as log:
         process = subprocess.Popen(
-            [sys.executable, __file__, "serve", str(directory), mode],
+            [sys.executable, __file__, "serve", str(directory), mode, "--repository", repository],
             stdout=log,
             stderr=log,
             start_new_session=True,
@@ -261,7 +278,7 @@ def start_capture(directory: Path, mode: str) -> None:
     raise RuntimeError("CodSpeed capture did not become ready")
 
 
-def serve_capture(directory: Path, mode: str) -> None:
+def serve_capture(directory: Path, mode: str, repository: str = SOURCE_REPOSITORY) -> None:
     with CaptureServer(
         directory,
         os.environ["GITHUB_SHA"],
@@ -269,6 +286,7 @@ def serve_capture(directory: Path, mode: str) -> None:
         mode,
         os.environ["GITHUB_REF"],
         os.environ["GITHUB_EVENT_NAME"],
+        repository,
     ) as server:
         ready = directory / "endpoint.partial"
         ready.write_text(server.endpoint, encoding="utf-8")
@@ -434,6 +452,11 @@ def main() -> None:
         command = commands.add_parser(name)
         command.add_argument("directory", type=Path)
         command.add_argument("mode", choices=EXECUTORS)
+        command.add_argument(
+            "--repository",
+            choices=(SOURCE_REPOSITORY, DESTINATION_REPOSITORY),
+            default=SOURCE_REPOSITORY,
+        )
     commands.add_parser("finish").add_argument("directory", type=Path)
     command = commands.add_parser("find")
     command.add_argument("sha")
@@ -445,9 +468,9 @@ def main() -> None:
     args = parser.parse_args()
     match args.command:
         case "start":
-            start_capture(args.directory, args.mode)
+            start_capture(args.directory, args.mode, args.repository)
         case "serve":
-            serve_capture(args.directory, args.mode)
+            serve_capture(args.directory, args.mode, args.repository)
         case "finish":
             finish_capture(args.directory)
         case "find":
