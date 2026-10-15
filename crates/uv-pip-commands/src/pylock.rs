@@ -1,11 +1,13 @@
 //! Shared helpers for reading `pylock.toml` (PEP 751) files and deriving a [`Resolution`] and
 //! [`HashStrategy`] from them, used by `uv pip install` and `uv pip sync`.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use tracing::info_span;
 
+use uv_client::BaseClientBuilder;
 use uv_configuration::{BuildOptions, HashCheckingMode, RequirementsInput, TargetTriple};
 use uv_distribution_types::{RequiresPython, Resolution};
 use uv_lock::{PylockToml, PylockTomlError};
@@ -48,26 +50,50 @@ impl uv_errors::Hinted for PylockResolutionError {
     }
 }
 
-/// Parse a `pylock.toml` input.
+/// Read and parse a `pylock.toml` input, reusing the contents retained for stdin.
 ///
 /// Returns the `install_path` (used to resolve relative package sources in the lock) alongside
-/// the parsed [`PylockToml`]. For stdin and remote sources, the current working directory is used as the
-/// install path.
-pub(crate) fn parse_pylock_toml(pylock: &PylockSource) -> anyhow::Result<(PathBuf, PylockToml)> {
-    let install_path = match &pylock.input {
-        RequirementsInput::Stdin | RequirementsInput::Remote(_) => std::env::current_dir()?,
+/// the parsed [`PylockToml`]. For stdin and remote sources, the current working directory is used as
+/// the install path.
+pub(crate) async fn read_pylock_toml(
+    pylock: &PylockSource,
+    client_builder: &BaseClientBuilder<'_>,
+) -> anyhow::Result<(PathBuf, PylockToml)> {
+    let (install_path, content) = match &pylock.input {
+        RequirementsInput::Stdin => (
+            std::env::current_dir()?,
+            Cow::Borrowed(
+                pylock
+                    .content
+                    .as_deref()
+                    .context("Missing contents for `pylock.toml` on stdin")?,
+            ),
+        ),
+        RequirementsInput::Remote(url) => {
+            let client = client_builder.build()?;
+            let response = client
+                .for_host(url)
+                .get(url::Url::from(url.clone()))
+                .send()
+                .await?;
+            response.error_for_status_ref()?;
+            let content = response.text().await?;
+            (std::env::current_dir()?, Cow::Owned(content))
+        }
         RequirementsInput::Local(path) => {
             let absolute = std::path::absolute(path)?;
-            absolute
+            let install_path = absolute
                 .parent()
                 .map(Path::to_path_buf)
-                .unwrap_or_else(PathBuf::new)
+                .unwrap_or_else(PathBuf::new);
+            let content = fs_err::tokio::read_to_string(path).await?;
+            (install_path, Cow::Owned(content))
         }
     };
 
     let input = pylock.input.user_display();
     let lock = info_span!("toml::from_str pylock.toml", path = %input)
-        .in_scope(|| toml::from_str::<PylockToml>(&pylock.content))
+        .in_scope(|| toml::from_str::<PylockToml>(&content))
         .with_context(|| format!("Not a valid `pylock.toml` file: {input}"))?;
 
     Ok((install_path, lock))
