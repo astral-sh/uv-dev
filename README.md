@@ -6,62 +6,106 @@ Classification: bug
 
 ## Summary
 
-The reporter encounters nine integration-test failures while testing uv 0.13.1 on Gentoo Linux amd64, and asks whether tests involving private repositories should run for downstream users.
+The reporter lists nine private-Git integration-test failures on Gentoo Linux amd64 with uv 0.13.1 and asks whether these tests should run for downstream users. Only `pip_install::install_git_private_https_multiple_pat` has detailed output: a success snapshot becomes uv exit 1 after Git fetch exits 128, with a redirect warning, `could not read Username for 'https://github.com': terminal prompts disabled`, and `expected flush after ref listing`.
 
-The claims are:
+**Reproduction outcome: not_reproducible.** All nine reported test scenarios passed against the published uv 0.13.1 binary on Ubuntu x86_64 with Git 2.55.0 and Python 3.12.3. The detailed multiple-PAT scenario also passed against the installed uv 0.13.0 binary. This does not rule out a Gentoo build, Git configuration, transport, or environment difference; no common root cause or uv-version regression has been established.
 
-- Private Git installation: `install_git_private_https_multiple_pat`, `install_git_private_https_pat`, `install_git_private_https_pat_at_ref`, and `install_git_private_https_pat_mixed_with_public`.
-- Private Git dependency editing: `add_git_private_source`, `add_git_private_raw`, and the two `add_git_private_rate_limited_by_github_rest_api_403_response` / `429_response` tests.
-- Frozen workspace synchronization: `sync_frozen_workspace_member_git_credentials`.
-
-Only the multiple-PAT install failure has detailed output. Its success snapshot is replaced by an error: Git fetch exits 128, with a redirect warning, `could not read Username for 'https://github.com': terminal prompts disabled`, and `expected flush after ref listing`. uv exits 1 instead of installing the two expected fixture packages. The other tests are listed as failures without their individual logs.
-
-No confirmed duplicate found. astral-sh/uv#19419 and its merged fix astral-sh/uv#19423 explain the frozen-sync test's origin; astral-sh/uv#8467 concerns the same install test but a different failure mode.
-
-## Draft response
-
-These tests intentionally access private Git fixtures and supply their own test credentials; they are enabled by the test-git feature. The Git fetch failure you showed is not an expected result. The frozen-sync test was added by astral-sh/uv#19423, but its failure does not yet establish that the earlier workspace-credential bug has returned. Please share your Git version, exact test command and enabled Cargo features, last passing uv version, and redacted output from one edit failure and the frozen-sync failure. That will help determine whether all three groups fail at the same stage.
+These tests intentionally access private fixtures using credentials supplied by the test helpers. They are gated by the default-enabled `test-git` feature; private fixtures are not inherently unavailable to downstream test runs. The two rate-limit tests simulate GitHub API responses locally and do not demonstrate actual GitHub rate limiting.
 
 ## Classification
 
-The report shows a success-expected integration test failing during Git fetch, alongside eight other reported failures. Source confirms that these tests intentionally access private fixtures, supply fixture credentials, and are gated by the default-enabled test-git feature. This is a test-suite correctness report, not merely a request for access or clarification. No existing item was established to track the same failure. Although a regression test for the previously fixed astral-sh/uv#19419 is affected, recurrence of that particular bug and causation by uv 0.13.1 remain unconfirmed.
+Retain the bug classification as a reported integration-test regression. The expected behavior is successful installation, dependency editing, and frozen synchronization, not failure merely because the fixtures are private. Current execution supports those success expectations and does not confirm the reported failures locally.
 
-Treat the listed failures as reported evidence and the detailed install failure as the demonstrated failure mode. There is no verified common root cause across the nine tests. In particular, the evidence does not establish expired/revoked fixture credentials, a Git-version change, a redirect/authentication change, or a regression in frozen workspace discovery. The issue had no comments or linked follow-up fix when inspected.
+No confirmed duplicate was found. In particular, failure of a regression test associated with astral-sh/uv#19419 would not by itself establish recurrence of its historical workspace-discovery bug. Credential expiry, redirect handling, Git-version changes, and downstream configuration remain unconfirmed hypotheses. The issue was open with no comments when rechecked during reproduction.
+
+## Reproduction
+
+### Environment and method
+
+- Ubuntu 24.04.5 LTS, Linux x86_64; Git 2.55.0; system CPython 3.12.3.
+- Installed executable on PATH: `/opt/hostedtoolcache/uv/0.13.0/x86_64/uv`.
+- Comparison executable: `/tmp/uv-22584-j5bpqa/tools/bin/uv`, installed from the published `uv==0.13.1` wheel using the installed uv. Both executables reported their expected versions and `x86_64-unknown-linux-gnu`.
+- Temporary reproduction root: `/tmp/uv-22584-j5bpqa`. Environments, package caches, Cargo cache and build output, Python cache, configuration, and test directories were confined there.
+- Copied the nine existing test bodies into a temporary Rust harness with their original setup, command arguments, feature gates, and snapshots. Each function body was compared with the `0.13.1` release tag and was identical. The harness uses the checkout's `uv-test` helpers and the installed uv binaries; it does not build or run a replacement uv binary.
+- Built the harness with Rust 1.99.0 in the development test profile. Git system/global configuration and credential helpers were disabled for isolation. The original helpers supplied fixture authentication internally. The runner retained only test status and fixed error indicators, not credential-bearing command output.
+- Tests were invoked explicitly, one named scenario per invocation, with fresh `TestContext` directories and package caches. The multiple-PAT case was run on both uv versions; the other eight cases were run on 0.13.1.
+
+The reporter did not provide a last known-good version. Version 0.13.0 is a comparison version, not a confirmed downstream baseline. This harness does not recreate Gentoo's package recipe, downstream patches, full Cargo test invocation, or inherited Git configuration.
+
+### Commands and artifacts
+
+The setup used the installed uv to create temporary environments and install the comparison binary:
+
+```sh
+uv venv --python /usr/bin/python3 /tmp/uv-22584-j5bpqa/tools
+uv pip install --python /tmp/uv-22584-j5bpqa/tools/bin/python --only-binary :all: --no-deps 'uv==0.13.1'
+```
+
+The isolated environment used by these commands is defined in `/tmp/uv-22584-j5bpqa/control.py`. The harness is at `/tmp/uv-22584-j5bpqa/workspace/crates/probe`; its build command was:
+
+```sh
+RUSTUP_TOOLCHAIN=stable CARGO_HOME=/tmp/uv-22584-j5bpqa/cargo-home CARGO_TARGET_DIR=/tmp/uv-22584-j5bpqa/cargo-target cargo test --no-run --manifest-path /tmp/uv-22584-j5bpqa/workspace/crates/probe/Cargo.toml
+```
+
+Representative executed commands, covering the detailed failure and both other test groups:
+
+```sh
+python3 /tmp/uv-22584-j5bpqa/run_existing_test.py authenticated-multiple-0131 0.13.1 pip_install::install_git_private_https_multiple_pat
+python3 /tmp/uv-22584-j5bpqa/run_existing_test.py authenticated-multiple-0130 0.13.0 pip_install::install_git_private_https_multiple_pat
+python3 /tmp/uv-22584-j5bpqa/run_existing_test.py authenticated-add-source-0131 0.13.1 edit::add_git_private_source
+python3 /tmp/uv-22584-j5bpqa/run_existing_test.py authenticated-sync-0131 0.13.1 sync::sync_frozen_workspace_member_git_credentials
+```
+
+The runner supplies `CARGO_BIN_EXE_uv` and a temporary `CARGO_MANIFEST_DIR`, then executes the compiled harness with `--exact <test-name> --nocapture`, capturing output internally. Sanitized results are stored as `authenticated-*.json`; release-source comparisons are in `release-test-comparison.json`.
+
+### Observed results and existing coverage
+
+Every listed scenario passed its original snapshots on uv 0.13.1. None produced the reported authentication failure, redirect warning, or flush error. Test setup and assertions were read before making the following coverage claims.
+
+| Existing integration-test file | Test | Behavior verified |
+| --- | --- | --- |
+| `crates/uv/tests/pip_install/pip_install.rs` | `install_git_private_https_multiple_pat` | Installs both private fixture packages with separate PATs; expected two-package success snapshot and installed-package check pass. Also passes on uv 0.13.0. |
+| `crates/uv/tests/pip_install/pip_install.rs` | `install_git_private_https_pat` | Installs the private fixture using its PAT and checks installation. |
+| `crates/uv/tests/pip_install/pip_install.rs` | `install_git_private_https_pat_at_ref` | Installs the private fixture pinned to the test's specific commit. |
+| `crates/uv/tests/pip_install/pip_install.rs` | `install_git_private_https_pat_mixed_with_public` | Installs private and public fixtures together without incorrectly sharing authentication. |
+| `crates/uv/tests/project/edit.rs` | `add_git_private_source` | Adds the private Git dependency, checks credential-free project and lockfile snapshots, and successfully runs subsequent frozen sync. |
+| `crates/uv/tests/project/edit.rs` | `add_git_private_raw` | Adds with `--raw-sources`, checks the expected project and lockfile snapshots, and successfully runs subsequent frozen sync. |
+| `crates/uv/tests/project/edit.rs` | `add_git_private_rate_limited_by_github_rest_api_403_response` | A local mock returns 403 for the GitHub fast path; adding the private Git dependency still succeeds. |
+| `crates/uv/tests/project/edit.rs` | `add_git_private_rate_limited_by_github_rest_api_429_response` | A local mock returns 429, including the expected retries; adding the private Git dependency still succeeds. |
+| `crates/uv/tests/sync/sync.rs` | `sync_frozen_workspace_member_git_credentials` | Root and nested member both depend on the private fixture, with its authenticated source declared only in the member. `uv lock` succeeds, then root `uv sync --frozen --reinstall --no-cache` performs a fresh fetch and installs successfully. |
+
+The workspace test has no dependency groups. Its root/member source placement and forced uncached frozen execution were retained exactly; a simplified public-only workspace was not used as evidence for its success.
+
+Credential-free controls used `uv pip install --python <temporary-venv>/bin/python 'uv-private-pypackage @ git+https://github.com/astral-test/uv-private-pypackage'` with separate empty caches on 0.13.0 and 0.13.1. Both failed as expected with uv exit 1, Git exit 128, and terminal prompts disabled. A 0.13.1 `.git`-suffix variant failed the same way. Neither produced the redirect warning or flush error. The public fixture installed successfully on 0.13.1. These controls establish baseline behavior only: intentionally omitting authentication does not reproduce a failure of tests that supply authentication.
+
+### Information needed to reproduce the downstream failure
+
+Obtain the exact Cargo/nextest command and enabled features, Gentoo package recipe and patches, Git and libcurl versions, Python version, last passing uv version, and whether proxying or Git URL rewriting is involved. Request redacted full output from an edit test and the frozen-sync test, including whether the latter fails during `uv lock` or the subsequent frozen sync. A same-machine comparison of 0.13.0 and 0.13.1 using unchanged Git configuration would help isolate a version regression. Do not request credential values or unredacted configuration dumps.
+
+## Release and implementation evidence
+
+- `CHANGELOG.md` dates uv 0.13.1 to October 14, 2026. Release notes and the 0.13.0-to-0.13.1 commit/file comparison were reviewed before attributing behavior to an upgrade.
+- astral-sh/uv#22464, merged October 11, changes checks for already-installed Git dependencies pinned to full commits. Its diff does not change the reported private-install test bodies or Git authentication.
+- astral-sh/uv#22519, merged October 13, copies local repository fixtures into isolated test directories. Its diff does not alter the nine private-Git scenarios.
+- astral-sh/uv#22452 caches compiled snapshot filters; astral-sh/uv#22453 avoids loading the Python catalog for contexts that request no Python. Their descriptions were reviewed as test-helper changes in the release. The reported tests request Python 3.12.
+- `crates/uv/Cargo.toml` enables `test-git` through `test-defaults`. All nine reported tests require it; there is no separate private-Git feature. Three of the install tests additionally exclude Windows.
+- `crates/uv-git/src/git.rs::fetch_with_cli` invokes system Git and disables terminal prompting. That explains the form of an unauthenticated-fetch error but does not identify why the reporter's authenticated fetch failed.
+- `crates/uv-project-commands/src/sync.rs` uses `MemberDiscovery::Existing` for frozen sync, consistent with the final implementation of astral-sh/uv#19423. The original PR body describes an earlier implementation and should not be used as the current algorithm.
 
 ## Related
 
-- astral-sh/uv#19419 (issue, closed) — Git credentials in workspace member `[tool.uv.sources]` not applied under `uv sync --frozen`. The reported sync_frozen_workspace_member_git_credentials test explicitly covers this historical bug. It produced the same Git username error when frozen sync omitted workspace-member credentials. It was fixed in May 2026; the new report also includes pip-install and edit failures, so recurrence of that specific mechanism is unconfirmed.
-- astral-sh/uv#19423 (pull request, merged) — Apply workspace-member `[tool.uv.sources]` credentials under `uv sync --frozen`. Merged May 17, 2026, fixing astral-sh/uv#19419 and adding the exact frozen-sync test now reported failing. The maintainer's final implementation discovers existing workspace members; that behavior remains in the checkout. This is historical context, not a confirmed fix for the new failures.
-- astral-sh/uv#8467 (issue, open) — Test `install_git_private_https_pat_at_ref` timed out. Names one of the same private-Git integration tests, but reports a 90-second timeout with no output in October 2024. The new example exits with a Git authentication error and a failed success snapshot. No evidence establishes a shared cause.
-
-## Supporting evidence
-
-- `crates/uv/Cargo.toml:155` enables `test-defaults`; the feature list beginning at line 169 includes `test-git`. Its definition at line 185 introduces the Git testing dependency. There is no separate private-Git feature in that list.
-- `crates/uv/tests/pip_install/pip_install.rs:3891`, line 3916, line 3942, and line 3971 document the four reported install scenarios. Their attributes require `test-git`; three additionally exclude Windows. Their bodies call the fixture-token helper.
-- `crates/uv/tests/project/edit.rs:295` documents private-source resolution with credentials omitted from the resulting project file. Line 385 documents the raw-source variant retaining credentials. Both are gated by `test-git` and supply fixture credentials.
-- The rate-limit tests at `crates/uv/tests/project/edit.rs:475` and line 512 also require `test-git` and supply fixture credentials. They configure a local mock GitHub fast-path endpoint to return 403 or 429. Their names therefore do not establish that the reporter encountered actual GitHub API rate limiting.
-- `crates/uv/tests/sync/sync.rs:18777` explicitly identifies the frozen-sync test as a regression test for astral-sh/uv#19419. It supplies fixture credentials, first locks the project, then forces an uncached reinstall under frozen sync. The report does not show which invocation fails.
-- `crates/uv-project-commands/src/sync.rs:102` still selects `MemberDiscovery::Existing` for frozen sync. This matches the maintainer's final approach described in astral-sh/uv#19423; the PR's initial body describes an earlier implementation, so the maintainer comment and current source are the relevant evidence.
-- astral-sh/uv#19423 merged on May 17, 2026, and its test-inventory comment names the exact frozen-sync test. `CHANGELOG.md:6` dates uv 0.13.1 to October 14, 2026. This establishes chronology, not the cause of the newly reported failures.
-- Test structure, attributes, comments, and helper-call presence were inspected without displaying or decoding fixture credential values. No builds, test executions, or private-repository access checks were performed.
+- astral-sh/uv#19419 (issue, closed) — Workspace-member source credentials were omitted under frozen sync. The reported frozen-sync test covers this historical bug. Its passing execution here does not support recurrence.
+- astral-sh/uv#19423 (pull request, merged May 17, 2026) — Fixed astral-sh/uv#19419 and added the exact frozen-sync regression test. Historical context, not a confirmed fix for this report.
+- astral-sh/uv#8467 (issue, open when previously inspected) — The same private-at-ref install test timed out after 90 seconds in October 2024. Different observed failure mode; no shared cause established.
 
 ## Search scope and excluded candidates
 
-Used authenticated gh to search open and closed issues and attempt open, closed, and merged PR searches. Searched the install, edit/rate-limit, and frozen-sync claims separately using exact test identifiers, uv-private-pypackage, 'could not read Username', 'expected flush after ref listing', and 0.13.1; broadened to private Git tests, test-git, internal:testing, credentials, Gentoo, and GitHub 403/rate limits. Kept possible token-expiry causes separate from symptom searches. PR search results were unreliable (empty results or issues despite PR filters), and some requests hit a rate limit; supplemented them by screening the 500 newest PR titles across all states and directly inspecting referenced fixes, comments, and issue timelines. Ruled out astral-sh/uv#15188 (snapshot filtering), astral-sh/uv#17509 (test environment/interpreter discovery), astral-sh/uv#1980 and astral-sh/uv#16895 (credential-helper side effects), and astral-sh/uv#10493 (publish prompting). Also inspected astral-sh/uv#22357, astral-sh/uv#22464, and astral-sh/uv#22519; none establishes the reported private-fixture failure. Historical sync discussions astral-sh/uv#7453 and astral-sh/uv#8529 do not establish a duplicate. No confirmed duplicate was found within this scope.
+Earlier context gathering searched open and closed issues and PRs for the exact test identifiers, private fixture name, Git username and flush errors, uv 0.13.1, Gentoo, private-Git tests, and credentials. It also screened the 500 newest PR titles and inspected referenced fixes and discussions. PR keyword searches returned inconsistent results and some requests were rate-limited, so the negative duplicate result is qualified.
 
-The most plausible exclusions were:
-
-- astral-sh/uv#15188 includes the same Git username wording, but its confirmed problem was snapshot path filtering when system Python lived in `/usr/bin`; the new install example changes success into failure.
-- astral-sh/uv#17509 concerns Gentoo test-environment scrubbing and Python discovery. Its comments confirm resolution after environment and HOME fixes; the new example reaches Git fetch.
-- astral-sh/uv#1980 and its merged fix astral-sh/uv#16895 concern a different private-Git test writing credentials to a developer's global helper. They do not establish failure to authenticate the fixtures.
-- astral-sh/uv#10493 is a publish unit test waiting for interactive input, whereas the new example exits with terminal prompts disabled.
-- astral-sh/uv#22357 is an open URL-serialization refactor intended to preserve behavior. astral-sh/uv#22464 optimizes already-installed full-commit dependencies. astral-sh/uv#22519 isolates local repository fixtures. Their descriptions and changed-file lists do not establish a fix or shared mechanism for these failures.
-- astral-sh/uv#7453 is an older Git-source credential-propagation bug reported fixed in 0.4.11. astral-sh/uv#8529 requests a better way to provide Git credentials. Neither tracks this downstream test-suite failure.
-
-PR keyword-search inconsistencies limit confidence in a repository-wide negative result. The related list contains verified records, and the absence of a duplicate is qualified accordingly.
+The earlier candidate exclusions remain appropriate: astral-sh/uv#15188 concerns snapshot path filtering; astral-sh/uv#17509 concerns Gentoo environment/Python discovery; astral-sh/uv#1980 and astral-sh/uv#16895 concern credential-helper side effects; astral-sh/uv#10493 concerns interactive publish prompting. astral-sh/uv#22357 is a URL-serialization refactor; astral-sh/uv#7453 and astral-sh/uv#8529 discuss older Git credential propagation or configuration. None establishes the present failure mechanism.
 
 ## Next maintainer action
 
-Obtain the Git version, exact test invocation and feature selection, and last passing uv version. Request redacted logs for one edit test and the frozen-sync test to distinguish setup/lock failures from failures in the behavior each test targets. Compare the same environment across versions before attributing the failures to 0.13.1. Do not request credential values.
+Request the downstream details and redacted logs listed above. Report that all nine authenticated scenarios currently pass on the tested Linux environment, rather than diagnosing fixture access, expired credentials, or a frozen-workspace regression from the reported error alone.
 
-The requested handoff is recorded here. No GitHub changes were made, and no checkout files were modified.
+No GitHub changes were made, and no checkout files were modified during reproduction. The pre-existing checkout status was left unchanged.
