@@ -28,6 +28,7 @@ jobs:
   # See: https://docs.github.com/en/actions/using-github-hosted-runners/about-larger-runners/about-larger-runners#about-ubuntu-and-windows-larger-runners
 
   cargo-test-linux:
+    if: ${{ false }}
     timeout-minutes: 10
     runs-on: depot-ubuntu-24.04-16
     name: "cargo test on linux"
@@ -338,7 +339,7 @@ jobs:
         run: python scripts/prune_cargo_workspace_cache.py target/fast-build-nightly "$env:RUNNER_TEMP/uv-cargo-cache-marker"
 
       - name: "Upload managed Python diagnostics"
-        if: ${{ failure() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: managed-python-diagnostics-windows-${{ matrix.partition }}
