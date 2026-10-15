@@ -103,6 +103,15 @@ pub async fn import_pylock_toml(
     client_builder: &BaseClientBuilder<'_>,
 ) -> anyhow::Result<PylockRequirements> {
     let (install_path, lock) = read_pylock_toml(source, client_builder).await?;
+    for name in groups.explicit_names() {
+        if !lock.dependency_groups.contains(name) {
+            anyhow::bail!(
+                "The dependency group '{name}' was not declared in the lockfile's `dependency-groups`: {}",
+                source.user_display()
+            );
+        }
+    }
+
     let PylockSelection { extras, groups } = select_pylock_packages(&lock, extras, groups);
     let origin = match source {
         PylockSource::Stdin(_) => Some(RequirementOrigin::File(PathBuf::from("-"))),

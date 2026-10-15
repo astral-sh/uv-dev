@@ -26,6 +26,7 @@ use http::StatusCode;
 #[cfg(feature = "test-universal")]
 use indoc::formatdoc;
 use indoc::indoc;
+use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
 use regex::Regex;
 use sha2::{Digest, Sha256, Sha512};
@@ -184,6 +185,16 @@ fn compile_pylock_groups() -> Result<()> {
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.pip_compile()
+        .args(["pylock.toml", "--group", "dev", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    sniffio==1.3.0
+        # via -r pylock.toml
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
     ");
     Ok(())
 }
@@ -586,6 +597,33 @@ fn compile_pylock_missing_extra() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Requested extra not found: typo
+    ");
+    Ok(())
+}
+
+/// Reject unknown groups before replacing an existing output file.
+#[test]
+fn compile_pylock_missing_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        dependency-groups = ["dev"]
+        default-groups = ["base"]
+        packages = []
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig==1.1.1\n")?;
+    uv_snapshot!(context.pip_compile()
+        .args(["pylock.toml", "--group", "typo", "--offline", "--no-header", "-o", "requirements.txt"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The dependency group 'typo' was not declared in the lockfile's `dependency-groups`: pylock.toml
+    ");
+    assert_snapshot!(context.read("requirements.txt"), @"
+    iniconfig==1.1.1
     ");
     Ok(())
 }
