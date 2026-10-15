@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 13400,
+        "title": "uv add fails when providing a pylock.toml via stdin",
+        "url": "https://github.com/astral-sh/uv/issues/13400",
+        "state": "closed",
+        "reason": "Closest prior discussion: piping pylock.toml through -r - produces the identical comparison-operator error at lock-version. A maintainer explicitly explains the difficulty of identifying the format without a filename. The command was uv add, which also lacks pylock file support, but the stdin format-selection limitation is shared."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13421,
+        "title": "Reject `pylock.toml` in `uv add -r`",
+        "url": "https://github.com/astral-sh/uv/pull/13421",
+        "state": "merged",
+        "reason": "Follow-up to astral-sh/uv#13400 through astral-sh/uv#13420. Its diff only rejects pylock.toml inputs in uv add; it did not implement stdin format selection. The earlier issue's closure therefore does not establish a fixed stdin feature that has regressed."
+      },
+      {
+        "kind": "issue",
+        "number": 13117,
+        "title": "Better error message when a non-PEP-751-compatible filename lock file is used",
+        "url": "https://github.com/astral-sh/uv/issues/13117",
+        "state": "closed",
+        "reason": "Reports the same lock-version comparison-operator error when a pylock file is named test.toml, demonstrating the related filename-based format-selection behavior. Its request concerns invalid filenames and diagnostics, rather than reading stdin."
+      },
+      {
+        "kind": "pull_request",
+        "number": 12992,
+        "title": "Add `pylock.toml` to `uv pip install` and `uv pip sync`",
+        "url": "https://github.com/astral-sh/uv/pull/12992",
+        "state": "merged",
+        "reason": "Introduced installation from named pylock.toml files, establishing the working file-based capability described in the report. Its discussion does not establish support for pylock content supplied through stdin."
+      },
+      {
+        "kind": "pull_request",
+        "number": 17119,
+        "title": "Support remote `pylock.toml` files",
+        "url": "https://github.com/astral-sh/uv/pull/17119",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#17112 by adding HTTP(S) pylock inputs. The diff handles files and URLs, which retain filenames; it does not add stdin detection and is not a historical fix for this report."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Literal searches covered pylock, stdin, lock-version, and the comparison-operator error. Conceptual searches covered standard input, pipes, lockfiles, input format, format selection, detection, filenames, and extensionless requirements. PR keyword searches returned no candidates; relevant merged PRs were located through issue comments and timelines and inspected directly. Followed astral-sh/uv#13400 to astral-sh/uv#13420 and astral-sh/uv#13421, and reviewed filename-validation and remote-input fixes. Ruled out astral-sh/uv#17883, which concerns empty input after an upstream pipeline failure, and astral-sh/uv#7236, which concerns help text. No inspected fix established prior pylock stdin support."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#13400 already discusses the same pylock stdin format-selection limitation and identical parser error. Although its reproduction uses uv add, the maintainer explicitly addresses the absence of a filename for identifying stdin's format, and the current shared requirements-source code confirms that limitation for uv pip install. The proposed input-format flag or detection would revisit that discussion. The follow-up fix only rejected unsupported pylock inputs in uv add; no evidence establishes a previously fixed stdin feature or regression.",
+  "summary": "astral-sh/uv#13400 is the closest prior discussion of the same pylock stdin parsing limitation. Related fixes distinguish named-file and URL support from stdin and do not establish a regression.",
+  "draft_response": "This is the same stdin format-selection limitation discussed in astral-sh/uv#13400. That report used `uv add`, but the filename ambiguity also applies to `uv pip install`: stdin without inline script metadata is parsed as `requirements.txt`, so `lock-version` produces this error. An explicit input-format option or pylock detection would need a design decision; please continue that proposal in astral-sh/uv#13400. For now, save the stream to a file named `pylock.toml` and run `uv pip install --requirements pylock.toml`."
+}
