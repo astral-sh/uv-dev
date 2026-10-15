@@ -17,7 +17,7 @@ use reqwest_middleware::{ClientWithMiddleware, Middleware};
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{Jitter, RetryTransientMiddleware};
 use thiserror::Error;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 use url::ParseError;
 use url::Url;
 
@@ -26,7 +26,7 @@ use uv_auth::{
 };
 use uv_configuration::ProxyUrlKind;
 use uv_configuration::{Concurrency, KeyringProviderType, ProxyUrl, TrustedHost};
-use uv_distribution_types::IndexCredentialsError;
+use uv_distribution_types::{IndexCredentialsError, IndexLocations};
 use uv_git::GitHttpSettings;
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
@@ -449,6 +449,30 @@ impl<'a> BaseClientBuilder<'a> {
     /// See [`CredentialsCache::store_credentials`].
     pub fn store_credentials(&self, url: &DisplaySafeUrl, credentials: Credentials) {
         self.credentials_cache.store_credentials(url, credentials);
+    }
+
+    /// Cache credentials for each index URL and its root URL without creating an HTTP client.
+    pub fn cache_index_credentials(
+        &self,
+        index_locations: &IndexLocations,
+    ) -> Result<(), IndexCredentialsError> {
+        for index in index_locations.known_indexes() {
+            if let Some(credentials) = index.credentials()? {
+                trace!(
+                    "Read credentials for index `{}`",
+                    index
+                        .name
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| index.url.to_string())
+                );
+                if let Some(root_url) = index.root_url() {
+                    self.store_credentials(&root_url, credentials.clone());
+                }
+                self.store_credentials(index.raw_url(), credentials);
+            }
+        }
+        Ok(())
     }
 
     pub fn is_offline(&self) -> bool {

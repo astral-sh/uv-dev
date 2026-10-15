@@ -139,26 +139,46 @@ impl<'lock> LockTarget<'lock> {
         }
     }
 
-    /// Validate the dependency groups requested by `--upgrade-group`.
-    pub(crate) fn validate_upgrade_groups(self, upgrade: &Upgrade) -> Result<(), LockError> {
+    /// Resolve package and dependency-group upgrade selections against the project metadata.
+    pub(crate) fn upgrade_packages(
+        self,
+        upgrade: &Upgrade,
+    ) -> Result<FxHashSet<PackageName>, LockError> {
+        let mut upgrade_packages = upgrade.packages().cloned().unwrap_or_default();
         let Some(groups) = upgrade.groups() else {
-            return Ok(());
+            return Ok(upgrade_packages);
         };
 
         match self {
             Self::Workspace(workspace) => {
                 let mut known_groups = FxHashSet::default();
                 for member in workspace.packages().values() {
-                    known_groups.extend(
-                        FlatDependencyGroups::from_pyproject_toml(
-                            member.root(),
-                            member.pyproject_toml(),
-                        )?
-                        .into_iter()
-                        .map(|(group, _)| group),
-                    );
+                    for (group, dependencies) in FlatDependencyGroups::from_pyproject_toml(
+                        member.root(),
+                        member.pyproject_toml(),
+                    )? {
+                        if groups.contains(&group) {
+                            upgrade_packages.extend(
+                                dependencies
+                                    .requirements
+                                    .into_iter()
+                                    .map(|requirement| requirement.name),
+                            );
+                        }
+                        known_groups.insert(group);
+                    }
                 }
-                known_groups.extend(workspace.workspace_dependency_groups()?.into_keys());
+                for (group, dependencies) in workspace.workspace_dependency_groups()? {
+                    if groups.contains(&group) {
+                        upgrade_packages.extend(
+                            dependencies
+                                .requirements
+                                .into_iter()
+                                .map(|requirement| requirement.name),
+                        );
+                    }
+                    known_groups.insert(group);
+                }
 
                 for group in groups {
                     if !known_groups.contains(group) {
@@ -177,7 +197,7 @@ impl<'lock> LockTarget<'lock> {
             }
         }
 
-        Ok(())
+        Ok(upgrade_packages)
     }
 
     /// Returns the set of all members within the target.

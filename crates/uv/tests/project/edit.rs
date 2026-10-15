@@ -16473,6 +16473,74 @@ fn add_pylock_existing_lock() -> Result<()> {
     Ok(())
 }
 
+/// Group upgrades release imported preferences for both existing and newly added group members.
+#[test]
+fn add_pylock_upgrade_group() -> Result<()> {
+    let index = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "pylock-upgrade-group"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.imported.versions."1.0.0"]
+        sdist = false
+        [packages.imported.versions."2.0.0"]
+        sdist = false
+        [packages.fresh.versions."1.0.0"]
+        sdist = false
+        [packages.fresh.versions."2.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+        [dependency-groups]
+        dev = ["imported"]
+    "#})?;
+    context
+        .sync()
+        .arg("--default-index")
+        .arg(index.index_url())
+        .assert()
+        .success();
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "imported"
+        version = "1.0.0"
+        wheels = [{ url = "https://example.com/imported-1.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+        [[packages]]
+        name = "fresh"
+        version = "1.0.0"
+        wheels = [{ url = "https://example.com/fresh-1.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--dev", "-r", "pylock.toml", "--upgrade-group", "dev"])
+        .arg("--default-index").arg(index.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + fresh==2.0.0
+    ");
+    uv_snapshot!(context.filters(), context.pip_freeze(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    fresh==2.0.0
+    imported==2.0.0
+    ");
+    Ok(())
+}
+
 /// Imported indexes need stable names that do not overwrite an existing index.
 #[test]
 fn add_pylock_index_binding() -> Result<()> {

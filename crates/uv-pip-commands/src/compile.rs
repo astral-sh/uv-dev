@@ -490,7 +490,7 @@ pub async fn pip_compile(
     let LockedRequirements { preferences, git } = imported.with_fallback(locked);
 
     // Populate the Git resolver.
-    for ResolvedRepositoryReference { reference, sha } in git {
+    for (_, ResolvedRepositoryReference { reference, sha }) in git {
         debug!("Inserting Git reference into resolver: `{reference:?}` at `{sha}`");
         state.git().insert(reference, sha);
     }

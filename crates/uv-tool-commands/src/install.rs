@@ -101,7 +101,7 @@ pub async fn install(
     let reporter = PythonDownloadReporter::single(printer);
 
     // Initialize any shared state.
-    let state = PlatformState::default();
+    let mut state = PlatformState::default();
 
     // Parse the input requirement.
     let request = ToolRequest::parse(&package, from.as_deref())?;
@@ -394,7 +394,6 @@ pub async fn install(
         &client_builder
             .clone()
             .keyring(settings.resolver.keyring_provider),
-        &cache,
     )
     .await?;
 
@@ -1003,6 +1002,8 @@ pub async fn install(
                             interpreter.sys_executable().display()
                         );
 
+                        // The new interpreter can select different Git commits and distribution metadata.
+                        state = PlatformState::default();
                         match resolve_environment(
                             spec.clone(),
                             resolution_scope,

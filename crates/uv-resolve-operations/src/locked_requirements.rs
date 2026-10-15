@@ -9,6 +9,7 @@ use uv_distribution_types::IndexUrl;
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
+use uv_normalize::PackageName;
 use uv_pep508::{MarkerEnvironment, MarkerTree, VerbatimUrl};
 use uv_requirements::GitPreference;
 use uv_requirements_txt::RequirementsTxt;
@@ -19,10 +20,17 @@ pub struct LockedRequirements {
     /// The pinned versions from the lockfile.
     pub preferences: Vec<Preference>,
     /// The pinned Git SHAs from the lockfile.
-    pub git: Vec<ResolvedRepositoryReference>,
+    pub git: Vec<(PackageName, ResolvedRepositoryReference)>,
 }
 
 impl LockedRequirements {
+    /// Retain version and Git preferences for packages matching the predicate.
+    pub fn retain(&mut self, mut predicate: impl FnMut(&PackageName) -> bool) {
+        self.preferences
+            .retain(|preference| predicate(preference.name()));
+        self.git.retain(|(name, _)| predicate(name));
+    }
+
     /// Retain fallback version preferences outside each package's imported marker domains,
     /// and prepend fallback Git references.
     #[must_use]
@@ -66,13 +74,13 @@ impl LockedRequirements {
                 environment.is_none_or(|environment| preference.marker().evaluate(environment, &[]))
             })
             .collect();
-        let mut git: Vec<ResolvedRepositoryReference> = Vec::new();
+        let mut git: Vec<(PackageName, ResolvedRepositoryReference)> = Vec::new();
         for preference in git_preferences {
             if environment.is_some_and(|environment| !preference.marker.evaluate(environment, &[]))
             {
                 continue;
             }
-            if git.iter().any(|existing| {
+            if git.iter().any(|(_, existing)| {
                 existing.reference == preference.git.reference && existing.sha != preference.git.sha
             }) {
                 anyhow::bail!(
@@ -80,7 +88,7 @@ impl LockedRequirements {
                     preference.name
                 );
             }
-            git.push(preference.git);
+            git.push((preference.name, preference.git));
         }
         Ok(Self { preferences, git })
     }
@@ -157,7 +165,7 @@ pub fn read_lock_requirements(
 
         // Map each entry in the lockfile to a Git SHA.
         if let Some(git_ref) = package.as_git_ref()? {
-            git.push(git_ref);
+            git.push((package.name().clone(), git_ref));
         }
     }
 
@@ -207,7 +215,7 @@ pub async fn read_pylock_toml_requirements(
 
         // Map each entry in the lockfile to a Git SHA.
         if let Some(git_ref) = package.as_git_ref(install_path)? {
-            git.push(git_ref);
+            git.push((package.name.clone(), git_ref));
         }
     }
 

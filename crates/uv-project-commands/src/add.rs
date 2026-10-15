@@ -384,7 +384,6 @@ pub async fn add(
         &settings.resolver.index_locations,
         &settings.resolver.upgrade,
         &client_builder,
-        cache,
     )
     .await?;
     // Persist imported registry locations as named sources so later locks use the same indexes.
@@ -444,16 +443,14 @@ pub async fn add(
     }
     if !imported_indexes.is_empty() {
         // Cache imported credentials before the project editor removes them from persisted URLs.
-        let _client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
-            .index_locations(IndexLocations::new(
-                imported_index_names
-                    .keys()
-                    .map(|index| Index::from_extra_index_url(index.url.clone()))
-                    .collect(),
-                Vec::new(),
-                false,
-            ))
-            .build()?;
+        client_builder.cache_index_credentials(&IndexLocations::new(
+            imported_index_names
+                .keys()
+                .map(|index| Index::from_extra_index_url(index.url.clone()))
+                .collect(),
+            Vec::new(),
+            false,
+        ))?;
     }
     let RequirementsSpecification {
         requirements,

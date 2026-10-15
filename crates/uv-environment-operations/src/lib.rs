@@ -1531,7 +1531,7 @@ pub async fn resolve_environment(
         resolver_environment.marker_environment(),
     )?
     .with_fallback(fallback);
-    for ResolvedRepositoryReference { reference, sha } in git {
+    for (_, ResolvedRepositoryReference { reference, sha }) in git {
         debug!("Inserting Git reference into resolver: `{reference:?}` at `{sha}`");
         state.git().insert(reference, sha);
     }
@@ -1939,7 +1939,7 @@ pub async fn update_environment(
         git_preferences,
         Some(&marker_env),
     )?;
-    for ResolvedRepositoryReference { reference, sha } in git {
+    for (_, ResolvedRepositoryReference { reference, sha }) in git {
         debug!("Inserting Git reference into resolver: `{reference:?}` at `{sha}`");
         state.git().insert(reference, sha);
     }

@@ -7,8 +7,7 @@ use anyhow::Context;
 use itertools::Itertools;
 use tracing::info_span;
 
-use uv_cache::Cache;
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::BaseClientBuilder;
 use uv_configuration::{DependencyGroups, ExtrasSpecification, Upgrade};
 use uv_distribution_types::{IndexLocations, IndexUrl, UnresolvedRequirementSpecification};
 use uv_lock::PylockToml;
@@ -23,16 +22,13 @@ pub async fn import_pylock_requirements(
     index_locations: &IndexLocations,
     upgrade: &Upgrade,
     client_builder: &BaseClientBuilder<'_>,
-    cache: &Cache,
 ) -> anyhow::Result<()> {
     let Some(source) = spec.pylock.take() else {
         return Ok(());
     };
 
     // Cache index credentials before fetching a lockfile hosted on an authenticated index.
-    let _client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
-        .index_locations(index_locations.clone())
-        .build()?;
+    client_builder.cache_index_credentials(index_locations)?;
     let PylockRequirements {
         requirements,
         preferences,

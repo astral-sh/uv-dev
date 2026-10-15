@@ -167,9 +167,11 @@ impl<'env> LockOperation<'env> {
     }
 
     /// Perform a [`LockOperation`].
-    pub async fn execute(self, target: LockTarget<'_>) -> Result<LockResult, LockError> {
+    pub async fn execute(mut self, target: LockTarget<'_>) -> Result<LockResult, LockError> {
         if !matches!(&self.mode, LockMode::Frozen(_)) {
-            target.validate_upgrade_groups(&self.settings.upgrade)?;
+            let upgrade_packages = target.upgrade_packages(&self.settings.upgrade)?;
+            self.preferences
+                .retain(|name| !self.settings.upgrade.is_all() && !upgrade_packages.contains(name));
         }
 
         match self.mode {
@@ -897,7 +899,7 @@ async fn do_lock(
                 imported_preferences.with_fallback(fallback);
 
             // Populate the Git resolver.
-            for ResolvedRepositoryReference { reference, sha } in git {
+            for (_, ResolvedRepositoryReference { reference, sha }) in git {
                 debug!("Inserting Git reference into resolver: `{reference:?}` at `{sha}`");
                 state.git().insert(reference, sha);
             }

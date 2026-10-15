@@ -771,7 +771,7 @@ async fn get_or_create_environment(
     let reporter = PythonDownloadReporter::single(printer);
 
     // Initialize any shared state.
-    let state = PlatformState::default();
+    let mut state = PlatformState::default();
 
     let unresolved_target_requirement = match request {
         ToolRequest::Package {
@@ -1041,7 +1041,6 @@ async fn get_or_create_environment(
         &client_builder
             .clone()
             .keyring(settings.resolver.keyring_provider),
-        cache,
     )
     .await?;
     let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
@@ -1265,6 +1264,8 @@ async fn get_or_create_environment(
                     interpreter.sys_executable().display()
                 );
 
+                // The new interpreter can select different Git commits and distribution metadata.
+                state = PlatformState::default();
                 CachedEnvironment::from_spec(
                     spec,
                     build_constraints,

@@ -914,7 +914,6 @@ pub async fn run(
             &client_builder
                 .clone()
                 .keyring(settings.resolver.keyring_provider),
-            &cache,
         )
         .await?;
         Some(spec)
