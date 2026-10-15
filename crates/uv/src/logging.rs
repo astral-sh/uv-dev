@@ -157,6 +157,7 @@ where
     // subprocess.
     // A separate layer keeps diagnostics out of command output snapshots.
     Ok(tracing_subscriber::fmt::layer()
+        .fmt_fields(uv_fields())
         .with_ansi(false)
         .with_timer(uptime())
         .with_writer(Mutex::new(file))
@@ -232,7 +233,12 @@ mod tests {
         let guard = tracing::dispatcher::set_default(&dispatch);
 
         tracing::trace!(target: "uv_python_managed::downloads", "archive cache miss");
-        tracing::trace!(target: "uv_python_interpreter::interpreter", "querying interpreter");
+        tracing::trace!(
+            target: "uv_python_interpreter::interpreter",
+            executable = %"\x1b[1mpython.exe\x1b[0m",
+            "querying {}",
+            "\x1b[36minterpreter\x1b[0m"
+        );
         tracing::debug!(target: "uv_client::retry", "retrying request");
         tracing::trace!(target: "uv_auth", "authentication details");
 
@@ -250,7 +256,7 @@ mod tests {
             insta::assert_snapshot!(contents, @"
             pid=[PID] started_at_unix_ns=[TIMESTAMP] cwd=[CWD]
             [TIME] TRACE uv_python_managed::downloads: archive cache miss
-            [TIME] TRACE uv_python_interpreter::interpreter: querying interpreter
+            [TIME] TRACE uv_python_interpreter::interpreter: querying interpreter executable=python.exe
             [TIME] DEBUG uv_client::retry: retrying request
             ");
         });
