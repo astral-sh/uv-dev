@@ -7144,7 +7144,6 @@ dependencies = [
  "toml",
  "tracing",
  "unicode-width 0.2.2",
- "url",
  "uv-cache",
  "uv-cache-info",
  "uv-client",
