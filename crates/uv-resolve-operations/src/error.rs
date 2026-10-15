@@ -1,6 +1,11 @@
+use std::path::PathBuf;
+
+use itertools::Itertools;
 use uv_command_support::UvError;
 use uv_distribution::dist_hints;
 use uv_distribution_types::{DerivationChain, Name};
+use uv_fs::Simplified;
+use uv_normalize::{ExtraName, GroupName};
 use uv_resolver::{NoSolutionError, NoSolutionHeader, ResolveError};
 
 /// An error while reading requirements or resolving dependencies.
@@ -17,6 +22,8 @@ pub enum Error {
     #[error(transparent)]
     Hash(#[from] uv_types::HashStrategyError),
     #[error(transparent)]
+    ScopedOverride(#[from] uv_configuration::ScopedOverrideSourceError),
+    #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Fmt(#[from] std::fmt::Error),
@@ -27,6 +34,24 @@ pub enum Error {
         context: &'static str,
         #[source]
         source: uv_requirements::Error,
+    },
+    #[error(
+        "Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file"
+    )]
+    ExtrasWithoutSource { has_editable: bool },
+    #[error(
+        "Requested extra{} not found: {}",
+        if .0.len() == 1 { "" } else { "s" },
+        .0.iter().join(", ")
+    )]
+    MissingExtras(Vec<ExtraName>),
+    #[error("The dependency group '{name}' was not found in the project: {}", path.user_display())]
+    MissingGroup { name: GroupName, path: PathBuf },
+    #[error("Failed to read dependency groups from: {}", path.display())]
+    DependencyGroups {
+        path: PathBuf,
+        #[source]
+        source: Box<uv_distribution::MetadataError>,
     },
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
@@ -41,10 +66,15 @@ impl Error {
             }
             Self::Resolve(_)
             | Self::Hash(_)
+            | Self::ScopedOverride(_)
             | Self::Io(_)
             | Self::Fmt(_)
             | Self::Requirements(_)
             | Self::RequirementsWithContext { .. }
+            | Self::ExtrasWithoutSource { .. }
+            | Self::MissingExtras(_)
+            | Self::MissingGroup { .. }
+            | Self::DependencyGroups { .. }
             | Self::Anyhow(_) => None,
         }
     }
@@ -60,10 +90,15 @@ impl Error {
             error @ (Self::NoSolution { .. }
             | Self::Resolve(_)
             | Self::Hash(_)
+            | Self::ScopedOverride(_)
             | Self::Io(_)
             | Self::Fmt(_)
             | Self::Requirements(_)
             | Self::RequirementsWithContext { .. }
+            | Self::ExtrasWithoutSource { .. }
+            | Self::MissingExtras(_)
+            | Self::MissingGroup { .. }
+            | Self::DependencyGroups { .. }
             | Self::Anyhow(_)) => error,
         }
     }
@@ -81,8 +116,13 @@ impl Error {
             }
             error @ (Self::Resolve(_)
             | Self::Hash(_)
+            | Self::ScopedOverride(_)
             | Self::Io(_)
             | Self::Fmt(_)
+            | Self::ExtrasWithoutSource { .. }
+            | Self::MissingExtras(_)
+            | Self::MissingGroup { .. }
+            | Self::DependencyGroups { .. }
             | Self::Anyhow(_)) => error,
         }
     }
@@ -95,7 +135,14 @@ impl Error {
             Self::Requirements(error) | Self::RequirementsWithContext { source: error, .. } => {
                 error.is_user_failure()
             }
-            Self::Io(_) | Self::Fmt(_) | Self::Anyhow(_) => false,
+            Self::Io(_)
+            | Self::Fmt(_)
+            | Self::ScopedOverride(_)
+            | Self::ExtrasWithoutSource { .. }
+            | Self::MissingExtras(_)
+            | Self::MissingGroup { .. }
+            | Self::DependencyGroups { .. }
+            | Self::Anyhow(_) => false,
         }
     }
 }
@@ -132,38 +179,23 @@ impl uv_errors::Hinted for Error {
                 &DerivationChain::default(),
                 error.hints(),
             ),
-            Self::Anyhow(error) => {
-                for cause in error.chain() {
-                    if let Some(error) = cause.downcast_ref::<ExtrasWithoutSourceError>() {
-                        return uv_errors::Hinted::hints(error);
-                    }
-                }
-                uv_errors::Hints::none()
+            Self::ExtrasWithoutSource { has_editable } => {
+                uv_errors::Hints::from(if *has_editable {
+                    "Use `<dir>[extra]` syntax or `-r <file>` instead"
+                } else {
+                    "Use `package[extra]` syntax instead"
+                })
             }
             Self::Hash(_)
+            | Self::ScopedOverride(_)
             | Self::Io(_)
             | Self::Fmt(_)
             | Self::Requirements(_)
-            | Self::RequirementsWithContext { .. } => uv_errors::Hints::none(),
+            | Self::RequirementsWithContext { .. }
+            | Self::MissingExtras(_)
+            | Self::MissingGroup { .. }
+            | Self::DependencyGroups { .. }
+            | Self::Anyhow(_) => uv_errors::Hints::none(),
         }
-    }
-}
-
-/// Extras were requested but no valid source was provided.
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file"
-)]
-pub struct ExtrasWithoutSourceError {
-    pub(crate) has_editable: bool,
-}
-
-impl uv_errors::Hinted for ExtrasWithoutSourceError {
-    fn hints(&self) -> uv_errors::Hints<'_> {
-        uv_errors::Hints::from(if self.has_editable {
-            "Use `<dir>[extra]` syntax or `-r <file>` instead"
-        } else {
-            "Use `package[extra]` syntax instead"
-        })
     }
 }

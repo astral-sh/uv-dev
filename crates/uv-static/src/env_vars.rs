@@ -141,6 +141,10 @@ impl EnvVars {
     #[attr_added_in("0.1.34")]
     pub const UV_REQUIRE_HASHES: &'static str = "UV_REQUIRE_HASHES";
 
+    /// Require hashes for build dependencies across project, build, tool, and pip commands.
+    #[attr_added_in("0.13.0")]
+    pub const UV_REQUIRE_BUILD_HASHES: &'static str = "UV_REQUIRE_BUILD_HASHES";
+
     /// Require wheel metadata to be fetched with HTTP range requests when separate metadata is
     /// unavailable. If set to `true`, uv will fail instead of downloading the entire wheel.
     #[attr_hidden]
@@ -421,6 +425,11 @@ impl EnvVars {
     #[attr_added_in("0.8.6")]
     pub const UV_INSECURE_NO_ZIP_VALIDATION: &'static str = "UV_INSECURE_NO_ZIP_VALIDATION";
 
+    /// Use the legacy backend to read and write tar archives.
+    /// Set to a true value (e.g., `1`) to enable this compatibility fallback.
+    #[attr_added_in("0.13.0")]
+    pub const UV_LEGACY_TAR_BACKEND: &'static str = "UV_LEGACY_TAR_BACKEND";
+
     /// Sets the maximum number of in-flight concurrent downloads that uv will
     /// perform at any given time.
     #[attr_added_in("0.1.43")]
@@ -538,7 +547,7 @@ impl EnvVars {
     /// The provided URL will replace `https://github.com/oracle/graalpython/releases/download` in, e.g.,
     /// `https://github.com/oracle/graalpython/releases/download/graal-24.2.2/graalpy-24.2.2-macos-aarch64.tar.gz`.
     /// Distributions can be read from a local directory by using the `file://` URL scheme.
-    #[attr_added_in("next release")]
+    #[attr_added_in("0.12.24")]
     pub const UV_GRAALPY_INSTALL_MIRROR: &'static str = "UV_GRAALPY_INSTALL_MIRROR";
 
     /// Managed Pyodide installations are downloaded from [GitHub](https://github.com/pyodide/pyodide/releases).
@@ -547,7 +556,7 @@ impl EnvVars {
     /// The provided URL will replace `https://github.com/pyodide/pyodide/releases/download` in, e.g.,
     /// `https://github.com/pyodide/pyodide/releases/download/0.29.5/xbuildenv-0.29.5.tar.gz`.
     /// Distributions can be read from a local directory by using the `file://` URL scheme.
-    #[attr_added_in("next release")]
+    #[attr_added_in("0.12.24")]
     pub const UV_PYODIDE_INSTALL_MIRROR: &'static str = "UV_PYODIDE_INSTALL_MIRROR";
 
     /// Replaces the `https://releases.astral.sh` base URL for all Astral-mirrored

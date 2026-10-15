@@ -7,9 +7,10 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults};
 use uv_errors::ErrorWithHints;
 use uv_fs::Simplified;
-use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, PythonArchitecture, PythonDownloads,
-    PythonInstallation, PythonPreference, PythonRequest,
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::PythonInstallation;
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
 use uv_scripts::Pep723ItemRef;
 use uv_settings::PythonInstallMirrors;
@@ -18,7 +19,8 @@ use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceEr
 
 use uv_command_support::ExitStatus;
 use uv_command_support::Printer;
-use uv_python_context::{ProjectPythonRequest, ScriptInterpreter};
+use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::ScriptInterpreter;
 
 /// Find a Python interpreter.
 #[expect(clippy::fn_params_excessive_bools)]
@@ -161,7 +163,7 @@ pub async fn find_script(
             )?;
             return Ok(ExitStatus::Failure);
         }
-        Ok(ScriptInterpreter::Interpreter(interpreter)) => interpreter,
+        Ok(ScriptInterpreter::Interpreter(selection)) => selection.into_interpreter(),
         Ok(ScriptInterpreter::Environment(environment)) => environment.into_interpreter(),
     };
 

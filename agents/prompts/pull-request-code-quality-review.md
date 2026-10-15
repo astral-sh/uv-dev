@@ -19,10 +19,22 @@ defaults with the repository's instructions and concrete constraints:
    functions, inherent methods, and enums for closed sets of implementations. Do not force
    superficially similar operations to share an abstraction when their semantics differ.
 3. **Put behavior and invariants where they belong.** Keep domain operations on their owning type or
-   layer and shared operations outside command-specific code. Prefer validated construction over
-   checks every caller must remember. Use explicit modes instead of ambiguous booleans, types that
-   express cardinality and ownership, and resolved configuration passed through appropriate
-   boundaries.
+   layer and shared operations outside command-specific code. For each added or moved validation
+   check, inspect constructors, factories, public mutation, and consumers of the checked value. If
+   the inputs are available at construction and normal consumers require the invariant, prefer
+   fallible construction or a validated type over a required later `validate()` call. Check whether
+   public mutation can invalidate that guarantee. All current callers remembering the check does not
+   remove the maintenance hazard of an API that permits skipping it. Identify deliberate exceptions,
+   such as warning-only commands or reuse of an existing object, and look for explicit boundaries
+   that keep the normal path checked. Checks depending on state only available later, or on mutable
+   external state, may belong at use instead.
+
+   Use explicit modes instead of ambiguous booleans, types that express cardinality and ownership,
+   and resolved configuration passed through appropriate boundaries. Keep domain values structured
+   in internal APIs and error types; defer formatting to `Display` or another presentation boundary
+   where practical. Look for premature conversion to `String` that discards useful structure or
+   makes callers responsible for diagnostic formatting.
+
 4. **Prefer readable Rust.** Favor direct matching, exhaustive handling, early returns, and
    established library operations. Look for unnecessary wrappers, buffers, hidden clones, and
    duplicated representations. Follow local naming, import, and error conventions. Explain the
@@ -32,20 +44,34 @@ defaults with the repository's instructions and concrete constraints:
    actionable context. Follow validation through shortcuts as well as normal paths. For concurrency
    changes, reason about resource lifetimes, interprocess behavior, and consistency across related
    data; passing race tests do not establish those guarantees.
-6. **Require meaningful evidence.** Tests should exercise the changed behavior and reach the
+6. **Keep tests direct and focused.** Read neighboring tests and check existing coverage before
+   recommending more cases. Follow the repository's test style throughout setup, commands, and
+   assertions, and use the relevant existing test module. Integration scenarios should use explicit
+   command invocations and snapshots, not loops, case tables, or `insta::allow_duplicates!`. Do not
+   multiply cases across `-q`, `-qq`, flag aliases, boolean spellings, or unrelated options unless
+   each case exercises behavior specific to the change. Shared parsing and rendering should be
+   covered in their owning layer. Prefer readable repetition over local helpers that hide the
+   fixture inputs or command arguments; reuse existing `uv-test` helpers for common infrastructure.
+   Prefer `uv_snapshot!` and context filters over manually parsing, sorting, or reconstructing
+   command output. Check that filters do not hide the behavior being tested. Keep fixtures minimal
+   and representative, and explain non-obvious regression scenarios in test doc comments. Identify
+   the redundant coverage, hidden inputs, or departure from a concrete nearby pattern when reporting
+   a finding; do not request new helpers merely to remove duplication.
+7. **Require meaningful evidence.** Tests should exercise the changed behavior and reach the
    intended failure mode. Establish why a regression test would fail without the fix. Prefer focused
    fixtures and existing infrastructure over tests that mirror the implementation. Performance
    claims need representative workloads, comparable revisions and build settings, uncertainty, and
    adverse results. Verify that measurements detect the cost being discussed.
-7. **Keep explanations precise.** Comments should explain current rationale, invariants, and unusual
+8. **Keep explanations precise.** Comments should explain current rationale, invariants, and unusual
    constraints. Documentation and diagnostics should describe the user's task and actual behavior.
    Flag unsupported causal claims, conversation history, and distracting implementation detail when
    there is a concrete improvement to make.
 
-Before reporting, check whether the issue is handled by a caller, constructor, platform contract, or
-deliberate tradeoff. Respect corrections and withdrawn suggestions. Traits, clones, globals,
-duplication, and small helpers are contextual choices, not automatic findings. Do not repeat an
-existing finding or report unrelated pre-existing problems. No findings is a valid result.
+Before reporting a behavior defect, check whether the issue is handled by a caller, constructor,
+platform contract, or deliberate tradeoff. For design findings, distinguish guarantees enforced by
+the API from required call ordering. Respect corrections and withdrawn suggestions. Traits, clones,
+globals, duplication, and small helpers are contextual choices, not automatic findings. Do not
+repeat an existing finding or report unrelated pre-existing problems. No findings is a valid result.
 
 Return only JSON matching `$REVIEW_CONFIG/schema.json`. Each finding needs a precise diff location,
 triggering condition or concrete maintenance cost, evidence, and the smallest useful correction.

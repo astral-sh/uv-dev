@@ -15,9 +15,9 @@ use uv_auth::Service;
 use uv_cache::CacheArgs;
 use uv_configuration::RequirementsInput;
 use uv_configuration::{
-    AnnotationStyle, AuditOutputFormat, AuthorFrom, ColorChoice, ExcludeNewerPackageEntry,
-    ExportFormat, ForkStrategy, IndexStrategy, KeyringProviderType, ListFormat,
-    PackageNameSpecifier, PipCompileFormat, PipInstallFormat, PrereleaseMode,
+    AddBoundsKind, AnnotationStyle, AuditOutputFormat, AuthorFrom, ColorChoice,
+    ExcludeNewerPackageEntry, ExportFormat, ForkStrategy, IndexStrategy, KeyringProviderType,
+    ListFormat, PackageNameSpecifier, PipCompileFormat, PipInstallFormat, PrereleaseMode,
     PrereleasePackageEntry, ProjectBuildBackend, PythonListFormat, ResolutionMode, SyncFormat,
     TargetTriple, TreeFormat, TrustedHost, TrustedPublishing, VersionBump, VersionBumpSpec,
     VersionControlSystem, VersionFormat,
@@ -30,13 +30,12 @@ use uv_normalize::{ExtraName, GroupName, PackageName, PipGroupName};
 use uv_pep508::{MarkerTree, Requirement, VerbatimUrl};
 use uv_preview::{MaybePreviewFeature, PreviewFeature};
 use uv_pypi_types::VerbatimParsedUrl;
-use uv_python::{PythonDownloads, PythonPreference, PythonVersion};
+use uv_python_types::{PythonDownloads, PythonPreference, PythonVersion};
 use uv_redacted::DisplaySafeUrl;
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
 use uv_torch::TorchMode;
 use uv_warnings::warn_user_once;
-use uv_workspace::pyproject_mut::AddBoundsKind;
 
 pub mod comma;
 pub mod compat;
@@ -175,7 +174,7 @@ pub struct GlobalArgs {
     #[arg(global = true, long, help_heading = "Python options")]
     pub no_python_downloads: bool,
 
-    /// Deprecated version of [`Self::python_downloads`].
+    /// Deprecated option for configuring automatic Python downloads.
     #[arg(global = true, long, hide = true)]
     pub python_fetch: Option<PythonDownloads>,
 
@@ -1053,8 +1052,7 @@ pub enum ProjectCommand {
     Audit(AuditArgs),
 }
 
-/// A re-implementation of `Option`, used to avoid Clap's automatic `Option` flattening in
-/// [`parse_index_url`].
+/// A re-implementation of [`Option`], used to avoid `clap`'s automatic `Option` flattening.
 #[derive(Debug, Clone)]
 pub enum Maybe<T> {
     Some(T),
@@ -1276,7 +1274,7 @@ fn parse_default_index(input: &str) -> Result<Maybe<IndexArg>, String> {
     }
 }
 
-/// Parse a string into an [`Url`], mapping the empty string to `None`.
+/// Parse a string into a [`TrustedHost`], mapping the empty string to `None`.
 fn parse_insecure_host(input: &str) -> Result<Maybe<TrustedHost>, String> {
     if input.is_empty() {
         Ok(Maybe::None)
@@ -1303,6 +1301,70 @@ fn parse_file_path(input: &str) -> Result<PathBuf, String> {
     }
 }
 
+/// Arguments for constraining, overriding, and excluding dependencies with requirements files.
+#[derive(Args)]
+#[group(skip)]
+pub struct DependencyConstraintsArgs {
+    /// Constrain versions using the given requirements files [env: `UV_CONSTRAINT`=]
+    ///
+    /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
+    /// requirement that's installed. However, including a package in a constraints file will _not_
+    /// trigger the installation of that package.
+    ///
+    /// This is equivalent to pip's `--constraint` option.
+    #[arg(
+        long,
+        short,
+        alias = "constraint",
+        value_hint = ValueHint::FilePath,
+    )]
+    constraints: Vec<Maybe<RequirementsInput>>,
+
+    /// Override versions using the given requirements files [env: `UV_OVERRIDE`=]
+    ///
+    /// Overrides files are `requirements.txt`-like files that force a specific version of a
+    /// requirement to be installed, regardless of the requirements declared by any constituent
+    /// package, and regardless of whether this would be considered an invalid resolution.
+    ///
+    /// While constraints are _additive_, in that they're combined with the requirements of the
+    /// constituent packages, overrides are _absolute_, in that they completely replace the
+    /// requirements of the constituent packages.
+    #[arg(
+        long,
+        alias = "override",
+        value_hint = ValueHint::FilePath,
+    )]
+    overrides: Vec<Maybe<RequirementsInput>>,
+
+    /// Exclude packages from resolution using the given requirements files [env: `UV_EXCLUDE`=]
+    ///
+    /// Excludes files are `requirements.txt`-like files that specify packages to exclude
+    /// from the resolution. When a package is excluded, it will be omitted from the
+    /// dependency list entirely and its own dependencies will be ignored during the resolution
+    /// phase. Excludes are unconditional in that requirement specifiers and markers are ignored;
+    /// any package listed in the provided file will be omitted from all resolved environments.
+    #[arg(
+        long,
+        alias = "exclude",
+        value_hint = ValueHint::FilePath,
+    )]
+    excludes: Vec<Maybe<RequirementsInput>>,
+
+    /// Constrain build dependencies using the given requirements files when building source
+    /// distributions [env: `UV_BUILD_CONSTRAINT`=]
+    ///
+    /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
+    /// requirement that's installed. However, including a package in a constraints file will _not_
+    /// trigger the installation of that package.
+    #[arg(
+        long,
+        short,
+        alias = "build-constraint",
+        value_hint = ValueHint::FilePath,
+    )]
+    build_constraints: Vec<Maybe<RequirementsInput>>,
+}
+
 #[derive(Args)]
 #[command(group = clap::ArgGroup::new("sources").required(true).multiple(true))]
 pub struct PipCompileArgs {
@@ -1321,72 +1383,22 @@ pub struct PipCompileArgs {
     #[arg(group = "sources", value_hint = ValueHint::FilePath)]
     pub src_file: Vec<RequirementsInput>,
 
-    /// Constrain versions using the given requirements files.
-    ///
-    /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
-    /// requirement that's installed. However, including a package in a constraints file will _not_
-    /// trigger the installation of that package.
-    ///
-    /// This is equivalent to pip's `--constraint` option.
-    #[arg(
-        long,
-        short,
-        alias = "constraint",
-        env = EnvVars::UV_CONSTRAINT,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    pub constraints: Vec<Maybe<RequirementsInput>>,
+    #[command(flatten)]
+    pub constraints: DependencyConstraintsArgs,
 
-    /// Override versions using the given requirements files.
+    /// Require hashes for all build dependencies.
     ///
-    /// Overrides files are `requirements.txt`-like files that force a specific version of a
-    /// requirement to be installed, regardless of the requirements declared by any constituent
-    /// package, and regardless of whether this would be considered an invalid resolution.
+    /// Provide requirements with hashes in a file passed to `--build-constraint`. This does not
+    /// require hashes for runtime dependencies.
     ///
-    /// While constraints are _additive_, in that they're combined with the requirements of the
-    /// constituent packages, overrides are _absolute_, in that they completely replace the
-    /// requirements of the constituent packages.
-    #[arg(
-        long,
-        alias = "override",
-        env = EnvVars::UV_OVERRIDE,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    pub overrides: Vec<Maybe<RequirementsInput>>,
+    /// No hash is required when uv uses its bundled `uv_build` backend, since it is part of the uv
+    /// executable. When build isolation is disabled, build dependencies must already be installed
+    /// and their hashes are not checked.
+    #[arg(long, overrides_with("no_require_build_hashes"))]
+    pub require_build_hashes: bool,
 
-    /// Exclude packages from resolution using the given requirements files.
-    ///
-    /// Excludes files are `requirements.txt`-like files that specify packages to exclude
-    /// from the resolution. When a package is excluded, it will be omitted from the
-    /// dependency list entirely and its own dependencies will be ignored during the resolution
-    /// phase. Excludes are unconditional in that requirement specifiers and markers are ignored;
-    /// any package listed in the provided file will be omitted from all resolved environments.
-    #[arg(
-        long,
-        alias = "exclude",
-        env = EnvVars::UV_EXCLUDE,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    pub excludes: Vec<Maybe<RequirementsInput>>,
-
-    /// Constrain build dependencies using the given requirements files when building source
-    /// distributions.
-    ///
-    /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
-    /// requirement that's installed. However, including a package in a constraints file will _not_
-    /// trigger the installation of that package.
-    #[arg(
-        long,
-        short,
-        alias = "build-constraint",
-        env = EnvVars::UV_BUILD_CONSTRAINT,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    pub build_constraints: Vec<Maybe<RequirementsInput>>,
+    #[arg(long, overrides_with("require_build_hashes"), hide = true)]
+    pub no_require_build_hashes: bool,
 
     /// Include optional dependencies from the specified extra name; may be provided more than once.
     ///
@@ -1710,7 +1722,7 @@ pub struct PipSyncArgs {
     #[arg(required(true), value_hint = ValueHint::FilePath)]
     pub src_file: Vec<RequirementsInput>,
 
-    /// Constrain versions using the given requirements files.
+    /// Constrain versions using the given requirements files [env: `UV_CONSTRAINT`=]
     ///
     /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
     /// requirement that's installed. However, including a package in a constraints file will _not_
@@ -1721,14 +1733,12 @@ pub struct PipSyncArgs {
         long,
         short,
         alias = "constraint",
-        env = EnvVars::UV_CONSTRAINT,
-        value_delimiter = ' ',
         value_hint = ValueHint::FilePath,
     )]
     pub constraints: Vec<Maybe<RequirementsInput>>,
 
     /// Constrain build dependencies using the given requirements files when building source
-    /// distributions.
+    /// distributions [env: `UV_BUILD_CONSTRAINT`=]
     ///
     /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
     /// requirement that's installed. However, including a package in a constraints file will _not_
@@ -1737,8 +1747,6 @@ pub struct PipSyncArgs {
         long,
         short,
         alias = "build-constraint",
-        env = EnvVars::UV_BUILD_CONSTRAINT,
-        value_delimiter = ' ',
         value_hint = ValueHint::FilePath,
     )]
     pub build_constraints: Vec<Maybe<RequirementsInput>>,
@@ -1775,6 +1783,20 @@ pub struct PipSyncArgs {
 
     #[command(flatten)]
     pub hash_checking: HashCheckingArgs,
+
+    /// Require hashes for all build dependencies.
+    ///
+    /// Provide requirements with hashes in a file passed to `--build-constraint`. This does not
+    /// require hashes for runtime dependencies; use `--require-hashes` for those.
+    ///
+    /// No hash is required when uv uses its bundled `uv_build` backend, since it is part of the uv
+    /// executable. When build isolation is disabled, build dependencies must already be installed
+    /// and their hashes are not checked.
+    #[arg(long, overrides_with("no_require_build_hashes"))]
+    pub require_build_hashes: bool,
+
+    #[arg(long, overrides_with("require_build_hashes"), hide = true)]
+    pub no_require_build_hashes: bool,
 
     /// The Python interpreter into which packages should be installed.
     ///
@@ -2022,72 +2044,8 @@ pub struct PipInstallArgs {
     #[arg(long, value_delimiter = ' ', value_hint = ValueHint::Other)]
     pub no_editable_package: Vec<PackageName>,
 
-    /// Constrain versions using the given requirements files.
-    ///
-    /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
-    /// requirement that's installed. However, including a package in a constraints file will _not_
-    /// trigger the installation of that package.
-    ///
-    /// This is equivalent to pip's `--constraint` option.
-    #[arg(
-        long,
-        short,
-        alias = "constraint",
-        env = EnvVars::UV_CONSTRAINT,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    pub constraints: Vec<Maybe<RequirementsInput>>,
-
-    /// Override versions using the given requirements files.
-    ///
-    /// Overrides files are `requirements.txt`-like files that force a specific version of a
-    /// requirement to be installed, regardless of the requirements declared by any constituent
-    /// package, and regardless of whether this would be considered an invalid resolution.
-    ///
-    /// While constraints are _additive_, in that they're combined with the requirements of the
-    /// constituent packages, overrides are _absolute_, in that they completely replace the
-    /// requirements of the constituent packages.
-    #[arg(
-        long,
-        alias = "override",
-        env = EnvVars::UV_OVERRIDE,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    pub overrides: Vec<Maybe<RequirementsInput>>,
-
-    /// Exclude packages from resolution using the given requirements files.
-    ///
-    /// Excludes files are `requirements.txt`-like files that specify packages to exclude
-    /// from the resolution. When a package is excluded, it will be omitted from the
-    /// dependency list entirely and its own dependencies will be ignored during the resolution
-    /// phase. Excludes are unconditional in that requirement specifiers and markers are ignored;
-    /// any package listed in the provided file will be omitted from all resolved environments.
-    #[arg(
-        long,
-        alias = "exclude",
-        env = EnvVars::UV_EXCLUDE,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    pub excludes: Vec<Maybe<RequirementsInput>>,
-
-    /// Constrain build dependencies using the given requirements files when building source
-    /// distributions.
-    ///
-    /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
-    /// requirement that's installed. However, including a package in a constraints file will _not_
-    /// trigger the installation of that package.
-    #[arg(
-        long,
-        short,
-        alias = "build-constraint",
-        env = EnvVars::UV_BUILD_CONSTRAINT,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    pub build_constraints: Vec<Maybe<RequirementsInput>>,
+    #[command(flatten)]
+    pub constraints: DependencyConstraintsArgs,
 
     /// Include optional dependencies from the specified extra name; may be provided more than once.
     ///
@@ -2129,6 +2087,20 @@ pub struct PipInstallArgs {
 
     #[command(flatten)]
     pub hash_checking: HashCheckingArgs,
+
+    /// Require hashes for all build dependencies.
+    ///
+    /// Provide requirements with hashes in a file passed to `--build-constraint`. This does not
+    /// require hashes for runtime dependencies; use `--require-hashes` for those.
+    ///
+    /// No hash is required when uv uses its bundled `uv_build` backend, since it is part of the uv
+    /// executable. When build isolation is disabled, build dependencies must already be installed
+    /// and their hashes are not checked.
+    #[arg(long, overrides_with("no_require_build_hashes"))]
+    pub require_build_hashes: bool,
+
+    #[arg(long, overrides_with("require_build_hashes"), hide = true)]
+    pub no_require_build_hashes: bool,
 
     /// The Python interpreter into which packages should be installed.
     ///
@@ -2869,7 +2841,8 @@ pub struct BuildArgs {
     #[arg(long, overrides_with("create_gitignore"))]
     no_create_gitignore: bool,
 
-    /// Constrain build dependencies using the given requirements files when building distributions.
+    /// Constrain build dependencies using the given requirements files when building
+    /// distributions [env: `UV_BUILD_CONSTRAINT`=]
     ///
     /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
     /// build dependency that's installed. However, including a package in a constraints file will
@@ -2878,8 +2851,6 @@ pub struct BuildArgs {
         long,
         short,
         alias = "build-constraint",
-        env = EnvVars::UV_BUILD_CONSTRAINT,
-        value_delimiter = ' ',
         value_hint = ValueHint::FilePath,
     )]
     build_constraints: Vec<Maybe<RequirementsInput>>,
@@ -3939,6 +3910,22 @@ pub struct UpgradeArgs {
 
     #[command(flatten)]
     registry_client: RegistryClientArgs,
+
+    /// Require hashes for all build dependencies.
+    #[arg(
+        long,
+        overrides_with("no_require_build_hashes"),
+        help_heading = "Build options"
+    )]
+    require_build_hashes: bool,
+
+    /// Do not require hashes for every build dependency.
+    #[arg(
+        long,
+        overrides_with("require_build_hashes"),
+        help_heading = "Build options"
+    )]
+    no_require_build_hashes: bool,
 }
 
 #[derive(Args)]
@@ -3961,7 +3948,7 @@ pub struct AddArgs {
     )]
     pub requirements: Vec<RequirementsInput>,
 
-    /// Constrain versions using the given requirements files.
+    /// Constrain versions using the given requirements files [env: `UV_CONSTRAINT`=]
     ///
     /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
     /// requirement that's installed. The constraints will _not_ be added to the project's
@@ -3972,8 +3959,6 @@ pub struct AddArgs {
         long,
         short,
         alias = "constraint",
-        env = EnvVars::UV_CONSTRAINT,
-        value_delimiter = ' ',
         value_hint = ValueHint::FilePath,
     )]
     pub constraints: Vec<Maybe<RequirementsInput>>,
@@ -5340,7 +5325,7 @@ pub struct ToolRunArgs {
     )]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
 
-    /// Constrain versions using the given requirements files.
+    /// Constrain versions using the given requirements files [env: `UV_CONSTRAINT`=]
     ///
     /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
     /// requirement that's installed. However, including a package in a constraints file will _not_
@@ -5351,14 +5336,12 @@ pub struct ToolRunArgs {
         long,
         short,
         alias = "constraint",
-        env = EnvVars::UV_CONSTRAINT,
-        value_delimiter = ' ',
         value_hint = ValueHint::FilePath,
     )]
     pub constraints: Vec<Maybe<RequirementsInput>>,
 
     /// Constrain build dependencies using the given requirements files when building source
-    /// distributions.
+    /// distributions [env: `UV_BUILD_CONSTRAINT`=]
     ///
     /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
     /// requirement that's installed. However, including a package in a constraints file will _not_
@@ -5367,13 +5350,11 @@ pub struct ToolRunArgs {
         long,
         short,
         alias = "build-constraint",
-        env = EnvVars::UV_BUILD_CONSTRAINT,
-        value_delimiter = ' ',
         value_hint = ValueHint::FilePath,
     )]
     pub build_constraints: Vec<Maybe<RequirementsInput>>,
 
-    /// Override versions using the given requirements files.
+    /// Override versions using the given requirements files [env: `UV_OVERRIDE`=]
     ///
     /// Overrides files are `requirements.txt`-like files that force a specific version of a
     /// requirement to be installed, regardless of the requirements declared by any constituent
@@ -5385,8 +5366,6 @@ pub struct ToolRunArgs {
     #[arg(
         long,
         alias = "override",
-        env = EnvVars::UV_OVERRIDE,
-        value_delimiter = ' ',
         value_hint = ValueHint::FilePath,
     )]
     pub overrides: Vec<Maybe<RequirementsInput>>,
@@ -5528,72 +5507,8 @@ pub struct ToolInstallArgs {
     #[arg(long, value_hint = ValueHint::Other)]
     with_executables_from: Vec<comma::CommaSeparatedRequirements>,
 
-    /// Constrain versions using the given requirements files.
-    ///
-    /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
-    /// requirement that's installed. However, including a package in a constraints file will _not_
-    /// trigger the installation of that package.
-    ///
-    /// This is equivalent to pip's `--constraint` option.
-    #[arg(
-        long,
-        short,
-        alias = "constraint",
-        env = EnvVars::UV_CONSTRAINT,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    constraints: Vec<Maybe<RequirementsInput>>,
-
-    /// Override versions using the given requirements files.
-    ///
-    /// Overrides files are `requirements.txt`-like files that force a specific version of a
-    /// requirement to be installed, regardless of the requirements declared by any constituent
-    /// package, and regardless of whether this would be considered an invalid resolution.
-    ///
-    /// While constraints are _additive_, in that they're combined with the requirements of the
-    /// constituent packages, overrides are _absolute_, in that they completely replace the
-    /// requirements of the constituent packages.
-    #[arg(
-        long,
-        alias = "override",
-        env = EnvVars::UV_OVERRIDE,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    overrides: Vec<Maybe<RequirementsInput>>,
-
-    /// Exclude packages from resolution using the given requirements files.
-    ///
-    /// Excludes files are `requirements.txt`-like files that specify packages to exclude
-    /// from the resolution. When a package is excluded, it will be omitted from the
-    /// dependency list entirely and its own dependencies will be ignored during the resolution
-    /// phase. Excludes are unconditional in that requirement specifiers and markers are ignored;
-    /// any package listed in the provided file will be omitted from all resolved environments.
-    #[arg(
-        long,
-        alias = "exclude",
-        env = EnvVars::UV_EXCLUDE,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    excludes: Vec<Maybe<RequirementsInput>>,
-
-    /// Constrain build dependencies using the given requirements files when building source
-    /// distributions.
-    ///
-    /// Constraints files are `requirements.txt`-like files that only control the _version_ of a
-    /// requirement that's installed. However, including a package in a constraints file will _not_
-    /// trigger the installation of that package.
-    #[arg(
-        long,
-        short,
-        alias = "build-constraint",
-        env = EnvVars::UV_BUILD_CONSTRAINT,
-        value_delimiter = ' ',
-        value_hint = ValueHint::FilePath,
-    )]
-    build_constraints: Vec<Maybe<RequirementsInput>>,
+    #[command(flatten)]
+    constraints: DependencyConstraintsArgs,
 
     #[command(flatten)]
     installer: ResolverInstallerArgs,
@@ -6921,6 +6836,8 @@ pub struct HashCheckingArgs {
     /// and _all_ requirements must either be pinned to exact versions (e.g., `==1.0.0`), or be
     /// specified via direct URL.
     ///
+    /// To require hashes for all build dependencies, use `--require-build-hashes`.
+    ///
     /// Hash-checking mode introduces a number of additional constraints:
     ///
     /// - Git dependencies are not supported.
@@ -7093,6 +7010,33 @@ pub struct BuildOptionsArgs {
         value_hint = ValueHint::Other,
     )]
     no_binary_package: Vec<PackageName>,
+
+    /// Require hashes for all build dependencies.
+    ///
+    /// Hashes can be provided in `tool.uv.build-constraint-dependencies` or URL fragments
+    /// (e.g., `#sha256=...`) in `build-system.requires`. This does not require hashes for runtime
+    /// dependencies.
+    ///
+    /// This is separate from `--require-hashes`: for `uv pip` installs, that option applies to
+    /// runtime requirements; for `uv build`, it applies to command-line build constraints.
+    ///
+    /// No hash is required when uv uses its bundled `uv_build` backend, since it is part of the uv
+    /// executable. When build isolation is disabled, build dependencies must already be installed
+    /// and their hashes are not checked.
+    #[arg(
+        long,
+        overrides_with("no_require_build_hashes"),
+        help_heading = "Build options"
+    )]
+    require_build_hashes: bool,
+
+    /// Do not require hashes for every build dependency.
+    #[arg(
+        long,
+        overrides_with("require_build_hashes"),
+        help_heading = "Build options"
+    )]
+    no_require_build_hashes: bool,
 }
 
 /// Arguments that configure build isolation for source distributions.

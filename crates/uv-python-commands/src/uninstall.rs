@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fmt::Write;
+use std::io;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -11,17 +12,27 @@ use owo_colors::OwoColorize;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{debug, warn};
 
+use uv_command_support::Printer;
+use uv_command_support::{ExitStatus, elapsed};
 use uv_fs::Simplified;
-use uv_python::downloads::PythonDownloadRequest;
-use uv_python::managed::{
-    ManagedPythonInstallations, PythonMinorVersionLink, python_executable_dir,
+use uv_python_managed::{
+    ManagedPythonInstallation, ManagedPythonInstallations, PythonMinorVersionLink,
+    python_executable_dir,
 };
-use uv_python::{PythonInstallationKey, PythonInstallationMinorVersionKey, PythonRequest};
+use uv_python_types::{
+    PythonDownloadRequest, PythonInstallationKey, PythonInstallationMinorVersionKey, PythonRequest,
+};
 
 use crate::install::format_executables;
 use crate::{ChangeEvent, ChangeEventKind};
-use uv_command_support::Printer;
-use uv_command_support::{ExitStatus, elapsed};
+
+#[derive(Debug, thiserror::Error)]
+#[error("Failed to remove symlink directory `{}`", path.display())]
+struct MinorVersionLinkRemovalError {
+    path: PathBuf,
+    #[source]
+    source: io::Error,
+}
 
 /// Uninstall managed Python versions.
 pub async fn uninstall(
@@ -49,8 +60,12 @@ pub async fn uninstall(
                 Err(err) => return Err(err.into()),
             }
 
-            if uv_fs::directories(top_level)?.all(|path| uv_fs::is_temporary(&path)) {
-                fs_err::tokio::remove_dir_all(top_level).await?;
+            // Best-effort cleanup: the parent may contain user files or be in use.
+            if let Err(err) = fs_err::tokio::remove_dir(top_level).await {
+                debug!(
+                    "Skipping removal of parent directory `{}`: {err}",
+                    top_level.user_display()
+                );
             }
         }
     }
@@ -111,7 +126,7 @@ async fn do_uninstall(
             // Clear any remnants in the registry
             #[cfg(windows)]
             {
-                uv_python::windows_registry::remove_orphan_registry_entries(
+                uv_python_managed::windows_registry::remove_orphan_registry_entries(
                     &installed_installations,
                 );
             }
@@ -142,12 +157,14 @@ async fn do_uninstall(
     let mut errors = vec![];
     #[cfg(windows)]
     {
-        uv_python::windows_registry::remove_registry_entry(
+        uv_python_managed::windows_registry::remove_registry_entry(
             &matching_installations,
             all,
             &mut errors,
         );
-        uv_python::windows_registry::remove_orphan_registry_entries(&installed_installations);
+        uv_python_managed::windows_registry::remove_orphan_registry_entries(
+            &installed_installations,
+        );
     }
 
     // Find and remove all relevant Python executables
@@ -230,15 +247,13 @@ async fn do_uninstall(
         .collect();
 
     let remaining_minor_versions =
-        PythonInstallationMinorVersionKey::highest_installations_by_minor_version_key(
-            remaining_installations.iter(),
-        );
+        ManagedPythonInstallation::highest_by_minor_version_key(remaining_installations.iter());
 
     for (_, installation) in remaining_minor_versions
         .iter()
         .filter(|(minor_version, _)| uninstalled_minor_versions.contains(minor_version))
     {
-        installation.ensure_minor_version_link()?;
+        installation.ensure_minor_version_link().await?;
     }
     // For each uninstalled installation, check if there are no remaining installations
     // for its minor version. If there are none remaining, remove the symlink directory
@@ -249,12 +264,12 @@ async fn do_uninstall(
                 PythonMinorVersionLink::from_installation(installation)
             {
                 if minor_version_link.exists() {
-                    if uv_fs::remove_symlink(&minor_version_link.symlink_directory).is_err() {
-                        return Err(anyhow::anyhow!(
-                            "Failed to remove symlink directory `{}`",
-                            minor_version_link.symlink_directory.display()
-                        ));
-                    }
+                    uv_fs::remove_symlink(&minor_version_link.symlink_directory).map_err(
+                        |source| MinorVersionLinkRemovalError {
+                            path: minor_version_link.symlink_directory.clone(),
+                            source,
+                        },
+                    )?;
                     let symlink_term = if cfg!(windows) {
                         "junction"
                     } else {

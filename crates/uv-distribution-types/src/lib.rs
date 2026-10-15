@@ -82,11 +82,9 @@ pub use crate::index::*;
 pub use crate::index_name::*;
 pub use crate::index_url::*;
 pub use crate::installed::*;
-pub use crate::known_platform::*;
 pub use crate::minimum_libc_version::MinimumLibcVersion;
 pub use crate::origin::*;
 pub use crate::pip_index::*;
-pub use crate::prioritized_distribution::*;
 pub use crate::requested::*;
 pub use crate::requirement::*;
 pub use crate::requires_python::*;
@@ -117,11 +115,9 @@ mod index_name;
 mod index_url;
 mod installed;
 mod installed_modules;
-mod known_platform;
 mod minimum_libc_version;
 mod origin;
 mod pip_index;
-mod prioritized_distribution;
 mod requested;
 mod requirement;
 mod requires_python;
@@ -710,6 +706,16 @@ impl<'a> From<&'a BuiltDist> for DistRef<'a> {
 }
 
 impl BuiltDist {
+    /// Return the filename of the selected wheel.
+    pub fn wheel_filename(&self) -> &WheelFilename {
+        match self {
+            Self::Registry(wheels) => &wheels.best_wheel().filename,
+            Self::DirectUrl(wheel) => &wheel.filename,
+            Self::Path(wheel) => &wheel.filename,
+            Self::GitPath(wheel) => &wheel.filename,
+        }
+    }
+
     /// Return true if the distribution refers to a local file or directory.
     fn is_local(&self) -> bool {
         matches!(self, Self::Path(_))
@@ -1028,28 +1034,6 @@ impl Name for Dist {
         match self {
             Self::Built(dist) => dist.name(),
             Self::Source(dist) => dist.name(),
-        }
-    }
-}
-
-impl Name for CompatibleDist<'_> {
-    fn name(&self) -> &PackageName {
-        match self {
-            Self::InstalledDist(dist) => dist.name(),
-            Self::SourceDist {
-                sdist,
-                prioritized: _,
-            } => sdist.name(),
-            Self::CompatibleWheel {
-                wheel,
-                priority: _,
-                prioritized: _,
-            } => wheel.name(),
-            Self::IncompatibleWheel {
-                sdist,
-                wheel: _,
-                prioritized: _,
-            } => sdist.name(),
         }
     }
 }

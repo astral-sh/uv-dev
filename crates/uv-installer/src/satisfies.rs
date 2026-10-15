@@ -13,7 +13,7 @@ use uv_distribution_types::{
     ExtraBuildVariables, InstalledDirectUrlDist, InstalledDist, InstalledDistKind,
     PackageConfigSettings, RequirementSource,
 };
-use uv_git_types::{GitLfs, GitOid};
+use uv_git_types::GitLfs;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_platform_tags::{AbiTag, IncompatibleTag, TagCompatibility, Tags};
@@ -226,10 +226,12 @@ impl RequirementSatisfaction {
                     return Self::Mismatch;
                 }
 
-                // TODO(charlie): It would be more consistent for us to compare the requested
-                // revisions here.
-                if installed_precise.as_deref()
-                    != requested_git.precise().as_ref().map(GitOid::as_str)
+                if !installed_precise
+                    .as_deref()
+                    .zip(requested_git.precise())
+                    .is_some_and(|(installed, requested)| {
+                        installed.eq_ignore_ascii_case(requested.as_str())
+                    })
                 {
                     debug!(
                         "Precise mismatch: {:?} vs. {:?}",
@@ -295,8 +297,12 @@ impl RequirementSatisfaction {
                     return Self::Mismatch;
                 }
 
-                if installed_precise.as_deref()
-                    != requested_git.precise().as_ref().map(GitOid::as_str)
+                if !installed_precise
+                    .as_deref()
+                    .zip(requested_git.precise())
+                    .is_some_and(|(installed, requested)| {
+                        installed.eq_ignore_ascii_case(requested.as_str())
+                    })
                 {
                     debug!(
                         "Precise mismatch: {:?} vs. {:?}",

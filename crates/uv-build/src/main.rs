@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
 use uv_preview::Preview;
-use uv_static::{EnvVars, parse_boolish_environment_variable};
+use uv_static::{EnvVars, TarBackend, parse_boolish_environment_variable};
 
 use anyhow::{Context, Result, bail};
 use tracing::debug;
@@ -26,7 +26,7 @@ fn main() -> Result<()> {
         .from_env()
         .context("Invalid RUST_LOG directives")?;
     let stderr_layer = tracing_subscriber::fmt::layer()
-        .event_format(UvFormat::default())
+        .event_format(UvFormat)
         .with_writer(std::sync::Mutex::new(anstream::stderr()))
         .with_filter(filter);
     tracing_subscriber::registry().with(stderr_layer).init();
@@ -76,6 +76,7 @@ fn main() -> Result<()> {
                 &sdist_directory,
                 uv_version::version(),
                 false,
+                TarBackend::from_env(),
             )?;
             // Tell the build frontend about the name of the artifact we built
             writeln!(&mut std::io::stdout(), "{filename}").context("stdout is closed")?;

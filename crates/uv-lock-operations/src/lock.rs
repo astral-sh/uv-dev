@@ -21,7 +21,7 @@ use uv_lock::{GroupMetadata, Lock, ResolverManifest};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictKind, SupportedEnvironments};
-use uv_python::{Interpreter, PythonEnvironment};
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::{ExtrasResolver, script_extra_build_requires};
 use uv_resolve_operations::Error as ResolveError;
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
@@ -314,6 +314,7 @@ async fn do_lock(
         config_setting,
         config_settings_package,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         exclude_newer,
@@ -662,7 +663,7 @@ async fn do_lock(
         let build_hasher = HashStrategy::from_constraints(
             &existing_lock.build_constraints(target.install_path()),
             Some(&interpreter.to_resolver_marker_environment()),
-            uv_configuration::HashCheckingMode::Verify,
+            *build_hash_checking,
         )?;
         let locked_build_hasher = locked_hasher
             .clone()
@@ -693,7 +694,7 @@ async fn do_lock(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        uv_configuration::HashCheckingMode::Verify,
+        *build_hash_checking,
     )?;
     // Explicit build constraints apply even when fresh resolution can replace lockfile hashes.
     let resolution_build_hasher = match mode {

@@ -45,12 +45,17 @@ use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
-use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, Interpreter, PyVenvConfiguration, PythonArchitecture,
-    PythonDownloads, PythonEnvironment, PythonInstallation, PythonPreference, PythonRequest,
-    PythonVersionFile, VersionFileDiscoveryOptions,
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::PythonInstallation;
+use uv_python_discovery::PythonVersionFile;
+use uv_python_discovery::ScriptInterpreter;
+use uv_python_discovery::VersionFileDiscoveryOptions;
+use uv_python_interpreter::{Interpreter, PyVenvConfiguration, PythonEnvironment};
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_python_context::{ProjectPythonRequest, PythonDownloadReporter, ScriptInterpreter};
 use uv_redacted::DisplaySafeUrl;
 use uv_requirements::{
     RequirementsSource, RequirementsSpecification, script_extra_build_requires,
@@ -66,6 +71,7 @@ use uv_settings::{
 use uv_shell::WindowsRunnable;
 use uv_static::EnvVars;
 use uv_types::SourceTreeEditablePolicy;
+use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
@@ -490,7 +496,7 @@ pub async fn run(
                     ),
                     false,
                     uv_virtualenv::Seed::Disabled,
-                    false,
+                    UpgradePolicy::Fixed,
                 )?;
 
                 Some(environment.into_interpreter())
@@ -683,7 +689,7 @@ pub async fn run(
                     ),
                     false,
                     uv_virtualenv::Seed::Disabled,
-                    false,
+                    UpgradePolicy::Fixed,
                 )?
             } else {
                 // If we're not isolating the environment, reuse the base environment for the
@@ -887,7 +893,7 @@ pub async fn run(
                     ),
                     false,
                     uv_virtualenv::Seed::Disabled,
-                    false,
+                    UpgradePolicy::Fixed,
                 )?;
                 venv.into_interpreter()
             } else {
@@ -1019,7 +1025,7 @@ pub async fn run(
                 ),
                 false,
                 uv_virtualenv::Seed::Disabled,
-                false,
+                UpgradePolicy::Fixed,
             )
         })
         .transpose()?;

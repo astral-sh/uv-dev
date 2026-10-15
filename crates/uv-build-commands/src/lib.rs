@@ -39,10 +39,13 @@ use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_preview::{Preview, PreviewFeature};
-use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonEnvironment,
-    PythonInstallation, PythonPreference, PythonRequest, PythonVersionFile,
-    VersionFileDiscoveryOptions,
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::PythonInstallation;
+use uv_python_discovery::PythonVersionFile;
+use uv_python_discovery::VersionFileDiscoveryOptions;
+use uv_python_interpreter::PythonEnvironment;
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
 use uv_requirements::RequirementsSource;
 use uv_resolve_operations as operations;
@@ -53,7 +56,9 @@ use uv_warnings::warn_user;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 
-use uv_python_context::{PythonContextError, PythonDownloadReporter, find_requires_python};
+use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::PythonSelectionError;
+use uv_python_discovery::find_requires_python;
 use uv_settings::ResolverSettings;
 
 #[derive(Debug, Error)]
@@ -61,15 +66,17 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
-    FindOrDownloadPython(#[from] uv_python::Error),
+    FindOrDownloadPython(#[from] uv_python_discovery::Error),
     #[error(transparent)]
     HashStrategy(#[from] uv_types::HashStrategyError),
     #[error(transparent)]
     FlatIndex(#[from] uv_client::FlatIndexError),
     #[error(transparent)]
     ClientBuild(#[from] uv_client::ClientBuildError),
-    #[error(transparent)]
-    BuildPlan(anyhow::Error),
+    #[error("Pass `--wheel` explicitly to build a wheel from a source distribution")]
+    WheelFromSdistRequiresFlag,
+    #[error("Building an `--sdist` from a source distribution is not supported")]
+    SdistFromSdist,
     #[error(transparent)]
     Extract(#[from] uv_extract::Error),
     #[error(transparent)]
@@ -87,7 +94,7 @@ pub enum Error {
     #[error("Build requirement is not satisfied: `{0}`")]
     UnsatisfiedBuildRequirement(Box<Requirement>),
     #[error(transparent)]
-    PythonContext(#[from] Box<PythonContextError>),
+    PythonSelection(#[from] Box<PythonSelectionError>),
     #[error("Failed to write message")]
     Fmt(#[from] fmt::Error),
     #[error("Can't use `--force-pep517` with `--list`")]
@@ -109,11 +116,20 @@ pub enum Error {
     NameMismatch(PackageName, PackageName),
     #[error("The source distribution declares version {0}, but the wheel declares version {1}")]
     VersionMismatch(Version, Version),
+    #[error(
+        "Refusing to clear output directory `{}` because it contains the build source `{}`",
+        output_dir.simplified_display(),
+        source_path.simplified_display()
+    )]
+    ClearSource {
+        output_dir: PathBuf,
+        source_path: PathBuf,
+    },
 }
 
-impl From<PythonContextError> for Error {
-    fn from(error: PythonContextError) -> Self {
-        Self::PythonContext(Box::new(error))
+impl From<PythonSelectionError> for Error {
+    fn from(error: PythonSelectionError) -> Self {
+        Self::PythonSelection(Box::new(error))
     }
 }
 
@@ -123,7 +139,7 @@ impl Hinted for Error {
             Self::BuildBackend(err) => err.hints(),
             Self::BuildFrontend(err) => err.hints(),
             Self::BuildDispatch(err) => err.hints(),
-            Self::PythonContext(err) => err.hints(),
+            Self::PythonSelection(err) => err.hints(),
             Self::Operations(err) => err.hints(),
             Self::Extract(uv_extract::Error::Tar(err)) => {
                 // TODO(konsti): astral-tokio-tar should use a proper error instead of
@@ -243,6 +259,7 @@ pub async fn build_frontend(
         config_setting,
         config_settings_package,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         exclude_newer,
@@ -382,6 +399,37 @@ pub async fn build_frontend(
         vec![AnnotatedSource::from(src)]
     };
 
+    let output_dir = if let Some(output_dir) = output_dir {
+        std::path::absolute(output_dir)?
+    } else if let Ok(workspace) = workspace.as_ref() {
+        workspace.install_path().join("dist")
+    } else {
+        let source = packages
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("No packages found to build"))?;
+        match &source.source {
+            Source::Directory(source_dir) => source_dir.join("dist"),
+            Source::File(_) => source.directory().to_path_buf(),
+        }
+    };
+
+    // Validate every source before clearing the shared output directory. Workspace packages are
+    // built concurrently, so clearing from an individual build can remove another package's
+    // source (or its freshly built artifacts).
+    if clear && output_dir.exists() {
+        if let Some(source) = packages
+            .iter()
+            .find(|source| is_path_within(source.directory(), &output_dir))
+        {
+            return Err(anyhow::Error::from(Error::ClearSource {
+                output_dir,
+                source_path: source.path().to_path_buf(),
+            })
+            .context(format!("Failed to build `{source}`")));
+        }
+        fs_err::remove_dir_all(&output_dir)?;
+    }
+
     // Build backends can include arbitrary files from the source directory in the distribution.
     // Warn if the active cache is within the source since cache contents may be included in the
     // build.
@@ -401,7 +449,7 @@ pub async fn build_frontend(
         let future = build_package(
             source.clone(),
             skip_dependency_check,
-            output_dir.as_deref(),
+            &output_dir,
             python.as_deref(),
             install_mirrors.clone(),
             config_discovery,
@@ -415,10 +463,10 @@ pub async fn build_frontend(
             index_locations,
             client_builder.clone(),
             hash_checking,
+            *build_hash_checking,
             build_logs,
             gitignore,
             force_pep517,
-            clear,
             &build_constraints,
             &build_constraints_from_workspace,
             build_isolation,
@@ -474,7 +522,7 @@ pub async fn build_frontend(
 async fn build_package(
     source: AnnotatedSource<'_>,
     skip_dependency_check: bool,
-    output_dir: Option<&Path>,
+    output_dir: &Path,
     python_request: Option<&str>,
     install_mirrors: PythonInstallMirrors,
     config_discovery: ConfigDiscovery,
@@ -488,10 +536,10 @@ async fn build_package(
     index_locations: &IndexLocations,
     client_builder: BaseClientBuilder<'_>,
     hash_checking: Option<HashCheckingMode>,
+    build_hash_checking: HashCheckingMode,
     build_logs: bool,
     gitignore: bool,
     force_pep517: bool,
-    clear: bool,
     build_constraints: &[RequirementsSource],
     build_constraints_from_workspace: &[NameRequirementSpecification],
     build_isolation: &BuildIsolation,
@@ -512,24 +560,6 @@ async fn build_package(
     config_settings_package: &PackageConfigSettings,
     preview: Preview,
 ) -> Result<Vec<BuildMessage>, Error> {
-    let output_dir = if let Some(output_dir) = output_dir {
-        Cow::Owned(std::path::absolute(output_dir)?)
-    } else {
-        if let Ok(workspace) = workspace {
-            Cow::Owned(workspace.install_path().join("dist"))
-        } else {
-            match &source.source {
-                Source::Directory(src) => Cow::Owned(src.join("dist")),
-                Source::File(src) => Cow::Borrowed(src.parent().unwrap()),
-            }
-        }
-    };
-
-    // Clear the output directory if requested
-    if clear && output_dir.exists() {
-        fs_err::remove_dir_all(&*output_dir)?;
-    }
-
     // (1) Explicit request from user
     let mut interpreter_request = python_request.map(PythonRequest::parse);
 
@@ -547,9 +577,12 @@ async fn build_package(
     if interpreter_request.is_none() {
         if let Ok(workspace) = workspace {
             let groups = DependencyGroupsWithDefaults::none();
-            interpreter_request = find_requires_python(workspace, &groups)?
-                .as_ref()
-                .and_then(PythonRequest::from_requires_python);
+            interpreter_request =
+                find_requires_python(workspace, &groups)?
+                    .as_ref()
+                    .and_then(|requires_python| {
+                        PythonRequest::from_specifiers(requires_python.specifiers())
+                    });
         }
     }
 
@@ -579,14 +612,22 @@ async fn build_package(
             .chain(build_constraints_from_workspace.iter().cloned()),
     );
 
+    let hash_checking = match build_hash_checking {
+        HashCheckingMode::Require => Some(HashCheckingMode::Require),
+        HashCheckingMode::Verify => hash_checking,
+    };
     let hasher = if let Some(hash_checking) = hash_checking {
-        // Under `--require-hashes`, include all command-line constraints, but only workspace
-        // constraints with supplied hashes. Other workspace constraints still restrict builds.
+        // `uv build --require-hashes` requires hashes only for command-line build constraints;
+        // `--require-build-hashes` also includes workspace build constraints.
         let hash_constraints = Constraints::from_specifications(
             command_line_constraints.iter().cloned().chain(
                 build_constraints_from_workspace
                     .iter()
-                    .filter(|entry| !hash_checking.is_require() || !entry.hashes.is_empty())
+                    .filter(|entry| {
+                        !hash_checking.is_require()
+                            || build_hash_checking.is_require()
+                            || !entry.hashes.is_empty()
+                    })
                     .cloned(),
             ),
         );
@@ -657,7 +698,8 @@ async fn build_package(
         workspace_cache.clone(),
         concurrency.clone(),
         preview,
-    );
+    )
+    .with_build_hash_checking(build_hash_checking);
     let dependency_check = match types_build_isolation {
         uv_types::BuildIsolation::Isolated => None,
         uv_types::BuildIsolation::Shared(_) | uv_types::BuildIsolation::SharedPackage(..) => {
@@ -670,10 +712,10 @@ async fn build_package(
         }
     };
 
-    prepare_output_directory(&output_dir, gitignore).await?;
+    prepare_output_directory(output_dir, gitignore).await?;
 
     // Determine the build plan.
-    let plan = BuildPlan::determine(&source, sdist, wheel).map_err(Error::BuildPlan)?;
+    let plan = BuildPlan::determine(&source, sdist, wheel)?;
 
     // Check if the build backend is matching uv version that allows calling in the uv build backend
     // directly.
@@ -747,7 +789,7 @@ async fn build_package(
             if list {
                 let sdist_list = build_sdist(
                     source.path(),
-                    &output_dir,
+                    output_dir,
                     build_action,
                     &source,
                     printer,
@@ -765,7 +807,7 @@ async fn build_package(
             }
             let sdist_build = build_sdist(
                 source.path(),
-                &output_dir,
+                output_dir,
                 build_action.force_build(),
                 &source,
                 printer,
@@ -783,11 +825,18 @@ async fn build_package(
 
             // Extract the source distribution into a temporary directory.
             let path = output_dir.join(sdist_build.raw_filename());
-            let reader = fs_err::tokio::File::open(&path).await?;
+            let mut reader = fs_err::tokio::File::open(&path).await?;
             let ext = SourceDistExtension::from_path(path.as_path())
                 .map_err(|err| Error::InvalidSourceDistExt(path.user_display().to_string(), err))?;
             let temp_dir = tempfile::tempdir_in(cache.bucket(CacheBucket::SourceDistributions))?;
-            let (temp_dir, _) = uv_extract::stream::archive(reader, ext, temp_dir).await?;
+            let (temp_dir, _) = uv_extract::stream::archive(
+                &mut reader,
+                ext,
+                temp_dir,
+                build_dispatch.tar_backend(),
+            )
+            .await?;
+            drop(reader);
 
             // Extract the top-level directory from the archive.
             let extracted = match uv_extract::strip_component(temp_dir.path()) {
@@ -798,7 +847,7 @@ async fn build_package(
 
             let wheel_build = build_wheel(
                 &extracted,
-                &output_dir,
+                output_dir,
                 build_action,
                 &source,
                 printer,
@@ -818,7 +867,7 @@ async fn build_package(
         BuildPlan::Sdist => {
             let sdist_build = build_sdist(
                 source.path(),
-                &output_dir,
+                output_dir,
                 build_action,
                 &source,
                 printer,
@@ -837,7 +886,7 @@ async fn build_package(
         BuildPlan::Wheel => {
             let wheel_build = build_wheel(
                 source.path(),
-                &output_dir,
+                output_dir,
                 build_action,
                 &source,
                 printer,
@@ -857,7 +906,7 @@ async fn build_package(
         BuildPlan::SdistAndWheel => {
             let sdist_build = build_sdist(
                 source.path(),
-                &output_dir,
+                output_dir,
                 build_action,
                 &source,
                 printer,
@@ -874,7 +923,7 @@ async fn build_package(
 
             let wheel_build = build_wheel(
                 source.path(),
-                &output_dir,
+                output_dir,
                 build_action,
                 &source,
                 printer,
@@ -894,12 +943,19 @@ async fn build_package(
         }
         BuildPlan::WheelFromSdist => {
             // Extract the source distribution into a temporary directory.
-            let reader = fs_err::tokio::File::open(source.path()).await?;
+            let mut reader = fs_err::tokio::File::open(source.path()).await?;
             let ext = SourceDistExtension::from_path(source.path()).map_err(|err| {
                 Error::InvalidSourceDistExt(source.path().user_display().to_string(), err)
             })?;
-            let temp_dir = tempfile::tempdir_in(&output_dir)?;
-            let (temp_dir, _) = uv_extract::stream::archive(reader, ext, temp_dir).await?;
+            let temp_dir = tempfile::tempdir_in(output_dir)?;
+            let (temp_dir, _) = uv_extract::stream::archive(
+                &mut reader,
+                ext,
+                temp_dir,
+                build_dispatch.tar_backend(),
+            )
+            .await?;
+            drop(reader);
 
             // If the source distribution has a normalized filename, check its identity.
             let source_dist = source
@@ -918,7 +974,7 @@ async fn build_package(
 
             let wheel_build = build_wheel(
                 &extracted,
-                &output_dir,
+                output_dir,
                 build_action,
                 &source,
                 printer,
@@ -1082,12 +1138,14 @@ async fn build_sdist(
             let source_tree = source_tree.to_path_buf();
             let output_dir_ = output_dir.to_path_buf();
             let sources_enabled = sources.is_none();
+            let tar_backend = build_dispatch.tar_backend();
             let filename = tokio::task::spawn_blocking(move || {
                 uv_build_backend::build_source_dist(
                     &source_tree,
                     &output_dir_,
                     uv_version::version(),
                     sources_enabled,
+                    tar_backend,
                 )
             })
             .await??
@@ -1491,21 +1549,17 @@ enum BuildPlan {
 }
 
 impl BuildPlan {
-    fn determine(source: &AnnotatedSource, sdist: bool, wheel: bool) -> Result<Self> {
+    fn determine(source: &AnnotatedSource, sdist: bool, wheel: bool) -> Result<Self, Error> {
         Ok(match &source.source {
             Source::File(_) => {
                 // We're building from a file, which must be a source distribution.
                 match (sdist, wheel) {
                     (false, true) => Self::WheelFromSdist,
                     (false, false) => {
-                        return Err(anyhow::anyhow!(
-                            "Pass `--wheel` explicitly to build a wheel from a source distribution"
-                        ));
+                        return Err(Error::WheelFromSdistRequiresFlag);
                     }
                     (true, _) => {
-                        return Err(anyhow::anyhow!(
-                            "Building an `--sdist` from a source distribution is not supported"
-                        ));
+                        return Err(Error::SdistFromSdist);
                     }
                 }
             }

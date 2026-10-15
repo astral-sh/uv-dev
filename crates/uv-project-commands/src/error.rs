@@ -2,6 +2,7 @@
 
 use std::{fmt, io};
 
+use owo_colors::OwoColorize;
 use uv_command_support::UvError;
 use uv_environment_operations::EnvironmentError;
 use uv_errors::{Hinted, Hints};
@@ -20,7 +21,7 @@ pub enum ProjectError {
     Pep723ScriptTomlParse(#[source] toml::de::Error),
 
     #[error(transparent)]
-    PyprojectMut(#[from] uv_workspace::pyproject_mut::Error),
+    PyprojectMut(#[from] uv_project_edit::Error),
 
     #[error(transparent)]
     Lock(#[from] uv_lock_operations::LockError),
@@ -30,6 +31,9 @@ pub enum ProjectError {
 
     #[error(transparent)]
     Workspace(#[from] WorkspaceError),
+
+    #[error(transparent)]
+    MissingProjectVersion(WorkspaceError),
 
     #[error(transparent)]
     Fmt(#[from] fmt::Error),
@@ -51,6 +55,7 @@ impl From<ProjectError> for UvError {
             | ProjectError::Pep723ScriptTomlParse(_)
             | ProjectError::PyprojectMut(_)
             | ProjectError::Workspace(_)
+            | ProjectError::MissingProjectVersion(_)
             | ProjectError::Fmt(_)
             | ProjectError::Io(_)
             | ProjectError::Anyhow(_)) => Self::unexpected(error.into()),
@@ -63,6 +68,10 @@ impl Hinted for ProjectError {
         match self {
             Self::Lock(error) => error.hints(),
             Self::Environment(error) => error.hints(),
+            Self::MissingProjectVersion(_) => Hints::from(format!(
+                "If you meant to view uv's version, use `{}` instead",
+                "uv self version".green()
+            )),
             Self::PyprojectTomlParse(_)
             | Self::PyprojectTomlUpdate
             | Self::Pep723ScriptTomlParse(_)

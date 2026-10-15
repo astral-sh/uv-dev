@@ -8,13 +8,12 @@ use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
-use uv_fs::copy_dir_all;
-use uv_python::PYTHON_VERSION_FILENAME;
+use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use uv_test::{TestContext, packse::PackseServer, uv_snapshot};
+use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -771,6 +770,43 @@ fn run_pep723_script_metadata() -> Result<()> {
     Installed 1 package in [TIME]
      + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979)
     ");
+
+    // A full commit pin is already satisfied, so running again should skip resolution.
+    uv_snapshot!(context.filters(), context.run().arg("main.py"), @"exit_code: 0 (success)");
+
+    Ok(())
+}
+
+/// A script with a Git archive pinned to a full commit skips resolution once installed.
+#[test]
+#[cfg(feature = "test-git")]
+fn run_pep723_script_git_archive() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let test_script = context.temp_dir.child("main.py");
+    test_script.write_str(indoc! { r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["iniconfig"]
+        #
+        # [tool.uv.sources]
+        # iniconfig = { git = "https://github.com/astral-sh/archive-in-git-test.git", rev = "bb7ce6abf9f90544767701de5b7b0c7802dc642b", path = "archives/iniconfig-2.0.0-py3-none-any.whl" }
+        # ///
+
+        import iniconfig
+       "#
+    })?;
+
+    uv_snapshot!(context.filters(), context.run().arg("main.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0 (from git+https://github.com/astral-sh/archive-in-git-test.git@bb7ce6abf9f90544767701de5b7b0c7802dc642b#path=archives/iniconfig-2.0.0-py3-none-any.whl)
+    ");
+
+    uv_snapshot!(context.filters(), context.run().arg("main.py"), @"exit_code: 0 (success)");
 
     Ok(())
 }
@@ -1853,13 +1889,11 @@ fn run_with_overlay_interpreter() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    // Switch to a relocatable virtual environment using the same interpreter.
+    // Switch to a relocatable virtual environment.
     context
         .venv()
         .arg("--allow-existing")
         .arg("--relocatable")
-        .arg("--python")
-        .arg(context.venv.path())
         .assert()
         .success();
 
@@ -2170,13 +2204,13 @@ fn run_with_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let anyio_local = context.temp_dir.child("src").child("anyio_local");
-    copy_dir_all(
+    copy_dir_ignore(
         context.workspace_root.join("test/packages/anyio_local"),
         &anyio_local,
     )?;
 
     let black_editable = context.temp_dir.child("src").child("black_editable");
-    copy_dir_all(
+    copy_dir_ignore(
         context.workspace_root.join("test/packages/black_editable"),
         &black_editable,
     )?;

@@ -14,7 +14,7 @@ use uv_normalize::{GroupName, PackageName};
 use uv_pep440::VersionSpecifiers;
 use uv_pep508::MarkerTreeContents;
 use uv_platform_tags::TagsError;
-use uv_python_context::PythonContextError;
+use uv_python_discovery::PythonSelectionError;
 use uv_requirements::ScriptRequirementsError;
 use uv_resolve_operations::Error as ResolveError;
 use uv_settings::{FrozenSource, LockedSource};
@@ -137,7 +137,7 @@ pub enum LockError {
     Tags(#[from] TagsError),
 
     #[error(transparent)]
-    PythonContext(#[from] Box<PythonContextError>),
+    PythonSelection(#[from] Box<PythonSelectionError>),
 
     #[error(transparent)]
     Resolve(#[from] Box<ResolveError>),
@@ -207,7 +207,7 @@ impl From<LockError> for UvError {
             | LockError::IndexUrl(_)
             | LockError::Lock(_)
             | LockError::Tags(_)
-            | LockError::PythonContext(_)
+            | LockError::PythonSelection(_)
             | LockError::HashStrategy(_)
             | LockError::DependencyGroup(_)
             | LockError::DefaultGroups(_)
@@ -233,7 +233,7 @@ impl Hinted for LockError {
             }
             Self::Resolve(error) => error.hints(),
             Self::Lock(error) => error.hints(),
-            Self::PythonContext(error) => error.hints(),
+            Self::PythonSelection(error) => error.hints(),
             Self::MissingLockfile(..)
             | Self::UnsupportedLockVersion(..)
             | Self::UnparsableLockVersion(..)
@@ -275,9 +275,9 @@ impl From<LoweringError> for LockError {
     }
 }
 
-impl From<PythonContextError> for LockError {
-    fn from(error: PythonContextError) -> Self {
-        Self::PythonContext(Box::new(error))
+impl From<PythonSelectionError> for LockError {
+    fn from(error: PythonSelectionError) -> Self {
+        Self::PythonSelection(Box::new(error))
     }
 }
 

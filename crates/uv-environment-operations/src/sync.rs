@@ -1,4 +1,3 @@
-use anyhow::Result;
 use itertools::Itertools;
 use rustc_hash::FxHashSet;
 use uv_cache::Cache;
@@ -19,7 +18,7 @@ use uv_lock::Installable;
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
-use uv_python::PythonEnvironment;
+use uv_python_interpreter::PythonEnvironment;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_resolver::FlatIndex;
 use uv_settings::InstallerSettingsRef;
@@ -66,6 +65,7 @@ pub async fn sync_from_lock(
         config_setting,
         config_settings_package,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         exclude_newer,
@@ -290,7 +290,7 @@ pub async fn sync_from_lock(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&venv.interpreter().to_resolver_marker_environment()),
-        uv_configuration::HashCheckingMode::Verify,
+        build_hash_checking,
     )?;
     // Also verify artifacts in the full lockfile, including unselected extras and groups.
     let build_hasher = target
@@ -395,7 +395,7 @@ fn apply_no_virtual_project(resolution: Resolution) -> Resolution {
 pub fn store_credentials_from_target(
     target: InstallTarget<'_>,
     client_builder: &BaseClientBuilder,
-) -> Result<()> {
+) -> Result<(), EnvironmentError> {
     // Iterate over any indexes in the target.
     for index in target.indexes() {
         if let Some(credentials) = index.credentials()? {

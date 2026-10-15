@@ -47,6 +47,7 @@ use uv_distribution_types::{
 use uv_fs::{PortablePath, PortablePathBuf, Simplified, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl, GitUrlParseError};
+use uv_macros::DebugNoInline;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{
@@ -8351,8 +8352,8 @@ impl GitSource {
         // A full commit requested as `rev` is already precise and must not resolve to another
         // commit through the lockfile fragment.
         if let GitSourceKind::Rev(revision) = &kind
-            && GitOid::from_str(revision).is_ok()
-            && !revision.eq_ignore_ascii_case(precise.as_str())
+            && let Some(commit) = GitReference::from_rev(revision.clone()).as_commit()
+            && commit != precise
         {
             return Err(GitSourceError::RevisionMismatch {
                 revision: revision.clone(),
@@ -8714,6 +8715,7 @@ impl SourceDist {
 impl From<GitReference> for GitSourceKind {
     fn from(value: GitReference) -> Self {
         match value {
+            GitReference::Commit(commit) => Self::Rev(commit.to_string()),
             GitReference::Branch(branch) => Self::Branch(branch),
             GitReference::Tag(tag) => Self::Tag(tag),
             GitReference::BranchOrTag(rev) => Self::Rev(rev),
@@ -8776,6 +8778,9 @@ fn locked_git_url(
 
     // Put the requested reference in the query.
     match git.reference() {
+        GitReference::Commit(commit) => {
+            url.query_pairs_mut().append_pair("rev", commit.as_str());
+        }
         GitReference::Branch(branch) => {
             url.query_pairs_mut().append_pair("branch", branch.as_str());
         }
@@ -9807,7 +9812,7 @@ impl std::fmt::Display for WheelTagHint {
 /// For example, if there are two or more duplicative distributions given
 /// to `Lock::new`, then an error is returned. It's likely that the fault
 /// is with the caller somewhere in such cases.
-#[derive(Debug, thiserror::Error)]
+#[derive(DebugNoInline, thiserror::Error)]
 enum LockErrorKind {
     /// An error that occurs when collecting dependency-group settings.
     #[error(transparent)]
@@ -10373,6 +10378,10 @@ fn is_wheel_unreachable_for_marker(
     marker: &UniversalMarker,
     tags: Option<&Tags>,
 ) -> bool {
+    // TODO(konsti): Include wheel variants in lockfiles when supported.
+    if filename.variant().is_some() {
+        return true;
+    }
     if let Some(tags) = tags
         && !filename.compatibility(tags).is_compatible()
     {

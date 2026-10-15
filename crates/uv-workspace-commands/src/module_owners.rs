@@ -21,7 +21,7 @@ use uv_lock::{Installable, Metadata};
 use uv_normalize::{DefaultExtras, DefaultGroups, PackageName};
 use uv_preview::Preview;
 use uv_pypi_types::ModuleName;
-use uv_python::PythonEnvironment;
+use uv_python_interpreter::PythonEnvironment;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::{InstallerSettingsRef, MalwareCheckSettings, ResolverSettings};
 use uv_workspace::WorkspaceCache;
@@ -61,6 +61,7 @@ pub(super) async fn collect_module_owners(
             config_setting: &settings.config_setting,
             config_settings_package: &settings.config_settings_package,
             build_isolation: &settings.build_isolation,
+            build_hash_checking: settings.build_hash_checking,
             extra_build_dependencies: &settings.extra_build_dependencies,
             extra_build_variables: &settings.extra_build_variables,
             exclude_newer: &settings.exclude_newer,

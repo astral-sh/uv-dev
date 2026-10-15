@@ -5,14 +5,14 @@ use itertools::Itertools;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
-use uv_configuration::{Concurrency, Constraints, GitLfsSetting, HashCheckingMode};
+use uv_configuration::{Concurrency, Constraints, GitLfsSetting};
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
     Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_preview::Preview;
-use uv_python::{Interpreter, PythonEnvironment};
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::NamedRequirementsResolver;
 use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::FlatIndex;
@@ -20,6 +20,8 @@ use uv_settings::ResolverSettings;
 use uv_torch::TorchStrategy;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
+
+use crate::error::ToolError;
 
 /// Resolve any [`UnresolvedRequirementSpecification`] into a fully-qualified [`Requirement`].
 pub(super) async fn resolve_names(
@@ -35,7 +37,7 @@ pub(super) async fn resolve_names(
     printer: Printer,
     preview: Preview,
     lfs: GitLfsSetting,
-) -> Result<Vec<Requirement>, uv_requirements::Error> {
+) -> Result<Vec<Requirement>, ToolError> {
     // Partition the requirements into named and unnamed requirements.
     let (mut requirements, unnamed): (Vec<_>, Vec<_>) = requirements
         .into_iter()
@@ -66,6 +68,7 @@ pub(super) async fn resolve_names(
         keyring_provider,
         link_mode,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         prerelease: _,
@@ -100,8 +103,7 @@ pub(super) async fn resolve_names(
         .torch_backend(torch_backend.clone())
         .markers(interpreter.markers())
         .platform(interpreter.platform())
-        .build()
-        .map_err(std::io::Error::other)?;
+        .build()?;
 
     // Determine whether to enable build isolation.
     let environment;
@@ -123,11 +125,12 @@ pub(super) async fn resolve_names(
     let build_hasher = HashStrategy::from_constraints(
         build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
-    )?;
+        *build_hash_checking,
+    )
+    .map_err(uv_requirements::Error::from)?;
     let flat_index = FlatIndex::load(&client, cache, index_locations)
         .await
-        .map_err(Box::new)?;
+        .map_err(|error| uv_requirements::Error::FlatIndex(Box::new(error)))?;
 
     // Lower the extra build dependencies, if any.
     let extra_build_requires =

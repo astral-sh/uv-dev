@@ -29,7 +29,7 @@ use uv_pep508::VerbatimUrl;
 use uv_platform_tags::Tags;
 use uv_preview::Preview;
 use uv_pypi_types::ResolverMarkerEnvironment;
-use uv_python::PythonEnvironment;
+use uv_python_interpreter::PythonEnvironment;
 use uv_types::{BuildContext, HashStrategy, InFlight};
 use uv_warnings::warn_user;
 
@@ -254,7 +254,7 @@ impl InstallationPlan {
                 venv,
                 tags,
             )
-            .context("Failed to determine installation plan")?;
+            .map_err(Error::Plan)?;
 
         Ok(Self {
             plan,

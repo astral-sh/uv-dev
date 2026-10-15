@@ -24,9 +24,10 @@ use uv_fs::Simplified;
 use uv_install_wheel::LinkMode;
 use uv_normalize::DefaultGroups;
 use uv_preview::Preview;
-use uv_python::{
-    ConfigDiscovery, EnvironmentPreference, PythonArchitecture, PythonDownloads,
-    PythonInstallation, PythonPreference, PythonRequest,
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::PythonInstallation;
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
 use uv_resolver::{ExcludeNewer, FlatIndex};
 use uv_settings::PythonInstallMirrors;
@@ -34,7 +35,7 @@ use uv_shell::{Shell, shlex_posix, shlex_windows};
 use uv_types::{
     AnyErrorBuild, BuildContext, BuildIsolation, BuildStack, HashStrategy, SourceTreeEditablePolicy,
 };
-use uv_virtualenv::{OnExisting, RemovalReason, Seed};
+use uv_virtualenv::{OnExisting, RemovalReason, Seed, UpgradePolicy};
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
@@ -45,9 +46,9 @@ use uv_environment_operations::{
 };
 use uv_install_operations::Changelog;
 use uv_install_operations::loggers::{DefaultInstallLogger, InstallLogger};
-use uv_python_context::ProjectPythonRequest;
-use uv_python_context::PythonDownloadReporter;
-use uv_python_context::report_interpreter;
+use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::report_interpreter;
 
 #[derive(Error, Debug)]
 enum VenvError {
@@ -177,17 +178,19 @@ pub(crate) async fn venv(
         python.into_interpreter()
     };
 
-    let upgradeable = project_python
-        .python_request
-        .as_ref()
-        .is_none_or(|request| !request.includes_patch());
+    let upgrade_policy = UpgradePolicy::from_request(
+        project_python
+            .python_request
+            .as_ref()
+            .unwrap_or(&PythonRequest::Default),
+    );
 
     // Determine the default path.
     let path = if let Some(workspace) = centralized_workspace {
         centralized_environment_root(
             ProjectEnvironmentTarget::from(workspace),
             &interpreter,
-            upgradeable,
+            upgrade_policy,
             cache,
         )
     } else {
@@ -272,10 +275,9 @@ pub(crate) async fn venv(
         on_existing,
         relocatable,
         seed,
-        upgradeable,
+        upgrade_policy,
     )
     .map_err(VenvError::Creation)?;
-    venv.cache_virtualenv(system_site_packages, cache)?;
 
     // Install seed packages.
     if let Seed::Enabled = seed {
@@ -358,7 +360,7 @@ pub(crate) async fn venv(
         // Since the virtual environment is empty, and the set of requirements is trivial (no
         // constraints, no editables, etc.), we can use the build dispatch APIs directly.
         let requirements = build_dispatch
-            .resolve(&requirements, &build_stack)
+            .resolve(&requirements, None, &build_stack)
             .await
             .map_err(|err| VenvError::Seed(err.into()))?;
         let installed = build_dispatch

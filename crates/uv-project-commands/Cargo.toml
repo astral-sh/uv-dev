@@ -1,6 +1,6 @@
 [package]
 name = "uv-project-commands"
-version = "0.0.90"
+version = "0.0.93"
 description = "This is an internal component crate of uv"
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -16,6 +16,8 @@ doctest = false
 workspace = true
 
 [dependencies]
+uv-python-types = { workspace = true }
+uv-python-interpreter = { workspace = true }
 uv-audit = { workspace = true }
 uv-audit-operations = { workspace = true }
 uv-auth = { workspace = true }
@@ -43,9 +45,9 @@ uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
 uv-preview = { workspace = true }
+uv-project-edit = { workspace = true }
 uv-pypi-types = { workspace = true }
-uv-python = { workspace = true }
-uv-python-context = { workspace = true }
+uv-python-discovery = { workspace = true }
 uv-redacted = { workspace = true }
 uv-requirements = { workspace = true }
 uv-resolve-operations = { workspace = true }
@@ -64,7 +66,7 @@ uv-workspace = { workspace = true }
 
 anstream = { workspace = true }
 anyhow = { workspace = true }
-async_zip = { workspace = true, features = ["zstd"] }
+async_zip = { workspace = true, features = ["zstd-read"] }
 clap = { workspace = true }
 ctrlc = { workspace = true }
 fs-err = { workspace = true }

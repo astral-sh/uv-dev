@@ -13,7 +13,7 @@ use uv_cache_key::{cache_digest, cache_name};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroupsWithDefaults, DryRun,
-    ExtrasSpecification, HashCheckingMode, Modifications, Reinstall, TargetTriple, Upgrade,
+    ExtrasSpecification, Modifications, Reinstall, TargetTriple, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
@@ -27,11 +27,13 @@ use uv_lock::{Installable, Lock};
 use uv_normalize::PackageName;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts};
-use uv_python::managed::{ManagedPythonInstallation, PythonMinorVersionLink};
-use uv_python::{
-    BrokenLink, ConfigDiscovery, EnvironmentPreference, Interpreter, InvalidEnvironmentKind,
-    LenientImplementationName, PythonArchitecture, PythonDownloads, PythonEnvironment,
-    PythonInstallation, PythonPreference, PythonRequest,
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::PythonInstallation;
+use uv_python_interpreter::{BrokenLink, Interpreter, InvalidEnvironmentKind, PythonEnvironment};
+use uv_python_managed::{PythonMinorVersionLink, UpgradePolicy};
+use uv_python_types::{
+    EnvironmentPreference, LenientImplementationName, PythonArchitecture, PythonDownloads,
+    PythonPreference, PythonRequest,
 };
 use uv_requirements::RequirementsSpecification;
 use uv_resolver::{
@@ -49,11 +51,13 @@ use crate::install_target::{InstallTarget, PackageSelection};
 use uv_command_support::{Printer, conjunction};
 use uv_install_operations::Changelog;
 use uv_install_operations::loggers::InstallLogger;
-use uv_python_context::{
-    CompatibleProjectPython, EnvironmentIncompatibilityError, EnvironmentKind,
-    ProjectPythonRequest, PythonDownloadReporter, ScriptInterpreter,
-    check_environment_compatibility,
-};
+use uv_python_discovery::CompatibleProjectPython;
+use uv_python_discovery::EnvironmentIncompatibilityError;
+use uv_python_discovery::EnvironmentKind;
+use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::ScriptInterpreter;
+use uv_python_discovery::check_environment_compatibility;
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
 use uv_resolve_operations::loggers::ResolveLogger;
 use uv_settings::{InstallerSettingsRef, ResolverInstallerSettings, ResolverSettings};
@@ -200,8 +204,10 @@ fn existing_project_environment(
 ) -> Result<Option<PythonEnvironment>, EnvironmentError> {
     let environment = match PythonEnvironment::from_root(root, cache) {
         Ok(environment) => environment,
-        Err(uv_python::Error::MissingEnvironment(_)) => return Ok(None),
-        Err(uv_python::Error::InvalidEnvironment(inner)) => {
+        Err(uv_python_interpreter::PythonEnvironmentError::MissingEnvironment(_)) => {
+            return Ok(None);
+        }
+        Err(uv_python_interpreter::PythonEnvironmentError::InvalidEnvironment(inner)) => {
             match inner.kind {
                 InvalidEnvironmentKind::NotDirectory => {
                     return Err(EnvironmentError::InvalidProjectEnvironmentDir(
@@ -227,14 +233,18 @@ fn existing_project_environment(
             }
             return Ok(None);
         }
-        Err(uv_python::Error::Query(uv_python::InterpreterError::NotFound(_))) => {
+        Err(uv_python_interpreter::PythonEnvironmentError::Query(
+            uv_python_interpreter::InterpreterError::NotFound(_),
+        )) => {
             return Ok(None);
         }
-        Err(uv_python::Error::Query(uv_python::InterpreterError::BrokenLink(BrokenLink {
-            path,
-            unix,
-            venv: _,
-        }))) => {
+        Err(uv_python_interpreter::PythonEnvironmentError::Query(
+            uv_python_interpreter::InterpreterError::BrokenLink(BrokenLink {
+                path,
+                unix,
+                venv: _,
+            }),
+        )) => {
             if unix {
                 let target_path = fs_err::read_link(&path)?;
                 warn_user!(
@@ -399,7 +409,7 @@ pub fn is_centralized_environment_reference(path: &Path, cache: &Cache) -> bool 
 pub fn centralized_environment_root(
     target: ProjectEnvironmentTarget<'_>,
     interpreter: &Interpreter,
-    upgradeable: bool,
+    upgrade_policy: UpgradePolicy,
     cache: &Cache,
 ) -> PathBuf {
     let install_path = target.install_path();
@@ -409,21 +419,18 @@ pub fn centralized_environment_root(
     // Use the workspace path to isolate projects and the interpreter key to maximize intra-project
     // environment re-use while avoiding clashes with incompatible environments. Ignoring the patch
     // version allows upgradeable managed environments to be re-used after an upgrade.
-    let (digest, python_version) = if upgradeable
-        && let Some(installation) = ManagedPythonInstallation::try_from_interpreter(interpreter)
-        && PythonMinorVersionLink::from_installation(&installation)
-            .is_some_and(|link| link.exists())
-    {
-        (
-            cache_digest(&(&workspace_path, installation.minor_version_key())),
-            interpreter.python_minor_version(),
-        )
-    } else {
-        (
-            cache_digest(&(&workspace_path, &interpreter_key)),
-            interpreter.python_version().clone(),
-        )
-    };
+    let (digest, python_version) =
+        if let Some(link) = PythonMinorVersionLink::from_interpreter(interpreter, upgrade_policy) {
+            (
+                cache_digest(&(&workspace_path, link.key())),
+                interpreter.python_minor_version(),
+            )
+        } else {
+            (
+                cache_digest(&(&workspace_path, &interpreter_key)),
+                interpreter.python_version().clone(),
+            )
+        };
     let name = target
         .project_name()
         .and_then(|name| cache_name(name.as_ref(), Some(100)))
@@ -620,11 +627,12 @@ impl ProjectInterpreter {
     ) -> Result<Self, EnvironmentError> {
         let python_request = project_python.python_request.as_ref();
         let requires_python = project_python.requires_python();
+        let upgrade_policy =
+            UpgradePolicy::from_request(python_request.unwrap_or(&PythonRequest::Default));
 
         let environment_selection =
             ProjectEnvironmentSelection::from_install_path(target.install_path(), active);
         let centralized = centralized_environments_enabled(&environment_selection, cache);
-        let upgradeable = python_request.is_none_or(|request| !request.includes_patch());
 
         // Prefer `.venv`'s interpreter to keep its compatible cached environment selected; derive
         // the cache root instead of trusting the link target.
@@ -640,7 +648,7 @@ impl ProjectInterpreter {
                 let root = centralized_environment_root(
                     target,
                     candidate.interpreter(),
-                    upgradeable,
+                    upgrade_policy,
                     cache,
                 );
                 if let Some(environment) = discover_project_environment(
@@ -699,7 +707,7 @@ impl ProjectInterpreter {
 
         if centralized {
             let root =
-                centralized_environment_root(target, python.interpreter(), upgradeable, cache);
+                centralized_environment_root(target, python.interpreter(), upgrade_policy, cache);
             if let Some(environment) = discover_project_environment(
                 &root,
                 python_request,
@@ -754,8 +762,11 @@ pub async fn lock_project_environment(
     target: ProjectEnvironmentTarget<'_>,
 ) -> Result<LockedFile, LockedFileError> {
     let install_path = target.install_path();
+    // The workspace exists even when its environment does not. Resolve aliases before choosing
+    // the lock so two paths to the same workspace cannot initialize it concurrently.
+    let workspace_path = install_path.simple_canonicalize()?;
     LockedFile::acquire(
-        std::env::temp_dir().join(format!("uv-{}.lock", cache_digest(&install_path))),
+        std::env::temp_dir().join(format!("uv-{}.lock", cache_digest(&workspace_path))),
         LockedFileMode::Exclusive,
         install_path.simplified_display(),
     )
@@ -881,10 +892,6 @@ impl ProjectEnvironment {
             )
             .await?
         };
-        let upgradeable = project_python
-            .python_request
-            .as_ref()
-            .is_none_or(|request| !request.includes_patch());
 
         match ProjectInterpreter::discover(
             target,
@@ -915,9 +922,11 @@ impl ProjectEnvironment {
 
             // Otherwise, create a virtual environment with the discovered interpreter.
             ProjectInterpreter::Interpreter(interpreter) => {
-                let interpreter = interpreter.into_interpreter();
+                let requested = interpreter.into_requested_interpreter();
+                let upgrade_policy = UpgradePolicy::from_request(requested.request());
+                let interpreter = requested.into_interpreter();
                 let root = if centralized {
-                    centralized_environment_root(target, &interpreter, upgradeable, cache)
+                    centralized_environment_root(target, &interpreter, upgrade_policy, cache)
                 } else {
                     environment_selection
                         .explicit_path()
@@ -993,7 +1002,7 @@ impl ProjectEnvironment {
                         ),
                         uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
                         uv_virtualenv::Seed::Disabled,
-                        upgradeable,
+                        upgrade_policy,
                     )?;
                     return Ok(if replace_environment {
                         Self::WouldReplace(root, environment, temp_dir)
@@ -1054,9 +1063,8 @@ impl ProjectEnvironment {
                     ),
                     uv_preview::is_enabled(PreviewFeature::RelocatableEnvsDefault),
                     uv_virtualenv::Seed::Disabled,
-                    upgradeable,
+                    upgrade_policy,
                 )?;
-                environment.cache_virtualenv(false, cache)?;
 
                 if centralized {
                     update_project_environment_link(&environment, target, link_error_reporting);
@@ -1160,10 +1168,6 @@ impl ScriptEnvironment {
             })
             .ok();
 
-        let upgradeable = python_request
-            .as_ref()
-            .is_none_or(|request| !request.includes_patch());
-
         match ScriptInterpreter::discover(
             script,
             python_request,
@@ -1184,7 +1188,9 @@ impl ScriptEnvironment {
             ScriptInterpreter::Environment(environment) => Ok(Self::Existing(environment)),
 
             // Otherwise, create a virtual environment with the discovered interpreter.
-            ScriptInterpreter::Interpreter(interpreter) => {
+            ScriptInterpreter::Interpreter(requested) => {
+                let upgrade_policy = UpgradePolicy::from_request(requested.request());
+                let interpreter = requested.into_interpreter();
                 let root = ScriptInterpreter::root(script, active, cache);
 
                 // Determine a prompt for the environment, in order of preference:
@@ -1211,7 +1217,7 @@ impl ScriptEnvironment {
                         ),
                         false,
                         uv_virtualenv::Seed::Disabled,
-                        upgradeable,
+                        upgrade_policy,
                     )?;
                     return Ok(if root.exists() {
                         Self::WouldReplace(root, environment, temp_dir)
@@ -1248,9 +1254,8 @@ impl ScriptEnvironment {
                     ),
                     false,
                     uv_virtualenv::Seed::Disabled,
-                    upgradeable,
+                    upgrade_policy,
                 )?;
-                environment.cache_virtualenv(false, cache)?;
 
                 Ok(if replaced {
                     Self::Replaced(environment)
@@ -1374,6 +1379,7 @@ pub async fn resolve_environment(
         config_setting,
         config_settings_package,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         exclude_newer,
@@ -1485,7 +1491,7 @@ pub async fn resolve_environment(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        *build_hash_checking,
     )?;
 
     // When resolving from an interpreter, we assume an empty environment, so reinstalls aren't
@@ -1511,7 +1517,19 @@ pub async fn resolve_environment(
 
             preferences
         }
-        Some(PreferenceLocation::Entries(entries)) => entries,
+        Some(PreferenceLocation::Entries(entries)) => {
+            // Drop preferences for any packages that are included in the upgrade strategy.
+            if upgrade.is_all() {
+                vec![]
+            } else if let Some(packages) = upgrade.packages() {
+                entries
+                    .into_iter()
+                    .filter(|preference| !packages.contains(preference.name()))
+                    .collect()
+            } else {
+                entries
+            }
+        }
         None => vec![],
     };
 
@@ -1611,6 +1629,7 @@ pub async fn sync_environment(
         config_setting,
         config_settings_package,
         build_isolation,
+        build_hash_checking,
         extra_build_dependencies,
         extra_build_variables,
         exclude_newer,
@@ -1649,7 +1668,7 @@ pub async fn sync_environment(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        build_hash_checking,
     )?;
     // TODO(charlie): These are all default values. We should consider whether we want to make them
     // optional on the downstream APIs.
@@ -1770,6 +1789,7 @@ pub async fn update_environment(
                 keyring_provider,
                 link_mode,
                 build_isolation,
+                build_hash_checking,
                 extra_build_dependencies: _,
                 extra_build_variables,
                 prerelease,
@@ -1899,7 +1919,7 @@ pub async fn update_environment(
     let build_hasher = HashStrategy::from_constraints(
         &build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        *build_hash_checking,
     )?;
     // TODO(charlie): These are all default values. We should consider whether we want to make them
     // optional on the downstream APIs.

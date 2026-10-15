@@ -48,7 +48,8 @@ use uv_pep440::release_specifiers_to_ranges;
 use uv_pep508::VersionOrUrl;
 use uv_preview::PreviewFeature;
 use uv_pypi_types::{ParsedDirectoryUrl, ParsedUrl};
-use uv_python::{ConfigDiscovery, PythonRequest};
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_types::PythonRequest;
 use uv_requirements::{GroupsSpecification, RequirementsSource};
 use uv_requirements_txt::RequirementsTxtRequirement;
 use uv_scripts::{Pep723Error, Pep723Item, Pep723Script};
@@ -539,7 +540,8 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     }
 
     // Resolve the cache settings.
-    let cache_settings = CacheSettings::resolve(*cli.top_level.cache_args, filesystem.as_ref());
+    let cache_settings =
+        CacheSettings::resolve(*cli.top_level.cache_args, filesystem.as_ref(), &environment);
 
     if global_initialization.needs_initialization() {
         // Set and finalize the global preview configuration.
@@ -780,6 +782,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.dependency_mode,
                 args.settings.upgrade,
                 args.settings.generate_hashes,
+                args.build_hash_checking,
                 args.settings.no_emit_package,
                 args.settings.no_strip_extras,
                 args.settings.no_strip_markers,
@@ -879,6 +882,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.link_mode,
                 args.settings.compile_bytecode,
                 args.settings.hash_checking,
+                args.build_hash_checking,
                 args.settings.index_locations,
                 args.settings.index_strategy,
                 args.settings.torch_backend,
@@ -1052,6 +1056,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.settings.link_mode,
                 args.settings.compile_bytecode,
                 args.settings.hash_checking,
+                args.build_hash_checking,
                 globals.installer_metadata,
                 &args.settings.config_setting,
                 &args.settings.config_settings_package,

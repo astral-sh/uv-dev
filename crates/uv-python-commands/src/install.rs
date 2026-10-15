@@ -21,19 +21,22 @@ use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
 use uv_fs::Simplified;
 use uv_platform::{Arch, Libc};
 use uv_preview::{Preview, PreviewFeature};
-use uv_python::downloads::{
-    self, ArchRequest, DownloadResult, ManagedPythonDownload, ManagedPythonDownloadList,
-    PythonDownloadRequest,
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::PythonVersionFile;
+use uv_python_discovery::VersionFileDiscoveryOptions;
+use uv_python_discovery::VersionFilePreference;
+use uv_python_interpreter::Interpreter;
+use uv_python_managed::downloads::{
+    self, DownloadResult, ManagedPythonDownload, ManagedPythonDownloadList,
 };
-use uv_python::managed::{
+use uv_python_managed::{
     ManagedPythonInstallation, ManagedPythonInstallations, PythonExecutable,
     PythonMinorVersionLink, compare_build_versions, create_link_to_executable,
     python_executable_dir,
 };
-use uv_python::{
-    ConfigDiscovery, ImplementationName, Interpreter, PythonArchitecture, PythonDownloads,
-    PythonInstallationKey, PythonInstallationMinorVersionKey, PythonRequest, PythonVersionFile,
-    VersionFileDiscoveryOptions, VersionFilePreference, VersionRequest,
+use uv_python_types::{
+    ArchRequest, ImplementationName, PythonArchitecture, PythonDownloadRequest, PythonDownloads,
+    PythonInstallationKey, PythonRequest, VersionRequest,
 };
 use uv_settings::PythonInstallMirrors;
 use uv_shell::Shell;
@@ -42,7 +45,7 @@ use uv_warnings::warn_user;
 
 use crate::{ChangeEvent, ChangeEventKind};
 use uv_command_support::{ExitStatus, Printer, UvError, conjunction, elapsed};
-use uv_python_context::PythonDownloadReporter;
+use uv_python_discovery::PythonDownloadReporter;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct InstallRequest<'a> {
@@ -665,10 +668,10 @@ async fn perform_install(
     // Ensure that the installations are _complete_ for both downloaded installations and existing
     // installations that match the request
     for installation in &installations {
-        installation.ensure_externally_managed()?;
-        installation.ensure_sysconfig_patched()?;
-        installation.ensure_canonical_executables()?;
-        installation.ensure_build_file()?;
+        installation.ensure_externally_managed().await?;
+        installation.ensure_sysconfig_patched().await?;
+        installation.ensure_canonical_executables().await?;
+        installation.ensure_build_file().await?;
         if let Err(e) = installation.ensure_dylib_patched() {
             e.warn_user(installation);
         }
@@ -700,7 +703,7 @@ async fn perform_install(
         if !matches!(registry, Some(false)) {
             #[cfg(windows)]
             {
-                match uv_python::windows_registry::create_registry_entry(installation) {
+                match uv_python_managed::windows_registry::create_registry_entry(installation) {
                     Ok(()) => {}
                     Err(err) => {
                         errors.push((
@@ -714,16 +717,15 @@ async fn perform_install(
         }
     }
 
-    let minor_versions =
-        PythonInstallationMinorVersionKey::highest_installations_by_minor_version_key(
-            installations
-                .iter()
-                .copied()
-                .chain(existing_installations.iter()),
-        );
+    let minor_versions = ManagedPythonInstallation::highest_by_minor_version_key(
+        installations
+            .iter()
+            .copied()
+            .chain(existing_installations.iter()),
+    );
 
     for installation in minor_versions.values() {
-        installation.ensure_minor_version_link()?;
+        installation.ensure_minor_version_link().await?;
     }
 
     if changelog.installed.is_empty() && errors.is_empty() {
@@ -819,7 +821,7 @@ async fn perform_install(
                         not_explicit.download_request.clone().with_arch(native_arch);
                     writeln!(
                         printer.stderr(),
-                        "{} uv selected a Python distribution with an emulated architecture ({}) for your platform because support for the native architecture ({}) is not yet mature; to override this behaviour, request the native architecture explicitly with: {}",
+                        "{} uv selected a Python distribution with an emulated architecture ({}) for your platform ({}); to require the native architecture, use: {}",
                         "note:".bold(),
                         install_key.arch(),
                         native_arch,
@@ -1025,7 +1027,7 @@ fn create_bin_links(
                     .or_default()
                     .insert(target.clone());
             }
-            Err(uv_python::managed::Error::LinkExecutable(err))
+            Err(uv_python_managed::Error::LinkExecutable(err))
                 if err.kind() == ErrorKind::AlreadyExists =>
             {
                 debug!(

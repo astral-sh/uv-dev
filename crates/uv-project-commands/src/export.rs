@@ -28,10 +28,10 @@ use uv_lock::{Lock, PylockToml, RequirementsTxtExport, cyclonedx_json};
 use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_preview::{Preview, PreviewFeature};
-use uv_python::{
-    ConfigDiscovery, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
-};
-use uv_python_context::{ProjectPythonRequest, ScriptInterpreter};
+use uv_python_discovery::ConfigDiscovery;
+use uv_python_discovery::ProjectPythonRequest;
+use uv_python_discovery::ScriptInterpreter;
+use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::is_pylock_toml;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_scripts::Pep723Script;
@@ -722,7 +722,8 @@ async fn render_export<'output>(
                 all_packages,
             )?;
 
-            export.output_as_json_v1_5(&mut writer)?;
+            serde_json::to_writer_pretty(&mut writer, &export)
+                .context("Failed to serialize JSON")?;
         }
     }
 

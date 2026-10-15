@@ -458,6 +458,12 @@ impl RequirementsTxt {
                         end,
                     })?;
 
+                    if !sub_constraints.editables.is_empty() {
+                        return Err(RequirementsTxtParserError::EditableConstraint {
+                            file: sub_file,
+                        });
+                    }
+
                     // Treat any nested requirements or constraints as constraints. This differs
                     // from `pip`, which seems to treat `-r` requirements in constraints files as
                     // _requirements_, but we don't want to support that.
@@ -477,6 +483,7 @@ impl RequirementsTxt {
                     for constraint in sub_constraints.constraints {
                         data.constraints.push(constraint);
                     }
+                    data.require_hashes |= sub_constraints.require_hashes;
                 }
                 RequirementsTxtStatement::RequirementEntry(requirement_entry) => {
                     data.requirements.push(requirement_entry);
@@ -633,6 +640,22 @@ const fn is_terminal(c: char) -> bool {
     matches!(c, '\n' | '\r' | '#')
 }
 
+/// Eat an option name if it is followed by a token boundary.
+fn eat_option(s: &mut Scanner, option: &str) -> bool {
+    let Some(remainder) = s.after().strip_prefix(option) else {
+        return false;
+    };
+    if remainder
+        .chars()
+        .next()
+        .is_none_or(|char| char.is_whitespace() || matches!(char, '=' | '#'))
+    {
+        s.eat_if(option)
+    } else {
+        false
+    }
+}
+
 /// Parse a single entry, that is a requirement, an inclusion or a comment line.
 ///
 /// Consumes all preceding trivia (whitespace and comments). If it returns `None`, we've reached
@@ -773,7 +796,7 @@ fn parse_entry(
             })?
         };
         RequirementsTxtStatement::ExtraIndexUrl(url.with_given(given))
-    } else if s.eat_if("--no-index") {
+    } else if eat_option(s, "--no-index") {
         RequirementsTxtStatement::NoIndex
     } else if s.eat_if("--require-hashes") {
         RequirementsTxtStatement::RequireHashes
@@ -882,7 +905,8 @@ fn parse_entry(
         })
     } else if let Some(char) = s.peek() {
         // Identify an unsupported option, like `--trusted-host`.
-        if let Some(option) = UnsupportedOption::iter().find(|option| s.eat_if(option.name())) {
+        if let Some(option) = UnsupportedOption::iter().find(|option| eat_option(s, option.name()))
+        {
             s.eat_while(|c: char| !is_terminal(c));
             RequirementsTxtStatement::UnsupportedOption(option)
         } else {
@@ -1166,6 +1190,9 @@ pub enum RequirementsTxtParserError {
         start: usize,
         end: usize,
     },
+    EditableConstraint {
+        file: RequirementsInput,
+    },
     Parser {
         message: String,
         line: usize,
@@ -1245,6 +1272,13 @@ impl Display for RequirementsTxtParserError {
             Self::UnnamedConstraint { .. } => {
                 write!(f, "Unnamed requirements are not allowed as constraints")
             }
+            Self::EditableConstraint { file } => {
+                write!(
+                    f,
+                    "Editable requirements are not allowed as constraints in `{}`",
+                    file.user_display(),
+                )
+            }
             Self::Parser {
                 message,
                 line,
@@ -1291,6 +1325,7 @@ impl std::error::Error for RequirementsTxtParserError {
             Self::NoBinary { source, .. } => Some(source),
             Self::OnlyBinary { source, .. } => Some(source),
             Self::UnnamedConstraint { .. } => None,
+            Self::EditableConstraint { .. } => None,
             Self::UnsupportedRequirement { source, .. } => Some(source),
             Self::Pep508 { source, .. } => Some(source),
             Self::ParsedUrl { source, .. } => Some(source),
@@ -1363,6 +1398,13 @@ impl Display for RequirementsTxtFileError {
                 write!(
                     f,
                     "Unnamed requirements are not allowed as constraints in `{file}`",
+                )
+            }
+            RequirementsTxtParserError::EditableConstraint { file } => {
+                write!(
+                    f,
+                    "Editable requirements are not allowed as constraints in `{}`",
+                    file.user_display(),
                 )
             }
             RequirementsTxtParserError::Parser {
@@ -1510,7 +1552,7 @@ mod test {
 
     use uv_fs::Simplified;
 
-    use crate::{RequirementsTxt, calculate_row_column};
+    use crate::{RequirementsTxt, calculate_row_column, eat_option};
 
     fn workspace_test_data_dir() -> PathBuf {
         Path::new("./test-data").simple_canonicalize().unwrap()
@@ -2864,6 +2906,41 @@ mod test {
         });
 
         Ok(())
+    }
+
+    #[test_case("--no-indexx"; "no index")]
+    #[test_case("--prefoo"; "pre")]
+    #[test_case("--trusted-hostile"; "trusted host")]
+    #[tokio::test]
+    async fn malformed_option(content: &str) -> Result<()> {
+        let temp_dir = assert_fs::TempDir::new()?;
+        let requirements_txt = temp_dir.child("requirements.txt");
+        requirements_txt.write_str(content)?;
+
+        let error = RequirementsTxt::parse(requirements_txt.path(), temp_dir.path())
+            .await
+            .unwrap_err();
+        let errors = anyhow::Error::new(error).chain().join("\n");
+
+        let requirement_txt = regex::escape(&requirements_txt.path().user_display().to_string());
+        let filters = vec![(requirement_txt.as_str(), "<REQUIREMENTS_TXT>")];
+        insta::with_settings!({
+            filters => filters
+        }, {
+            insta::assert_snapshot!(errors, @"Unexpected '-', expected '-c', '-e', '-r' or the start of a requirement: <REQUIREMENTS_TXT>:1:1");
+        });
+
+        Ok(())
+    }
+
+    #[test_case("--no-index", "--no-index", ""; "end of file")]
+    #[test_case("--no-index ", "--no-index", " "; "whitespace")]
+    #[test_case("--trusted-host=example.com", "--trusted-host", "=example.com"; "equals")]
+    #[test_case("--no-index# comment", "--no-index", "# comment"; "comment")]
+    fn option_boundary(input: &str, option: &str, remainder: &str) {
+        let mut scanner = Scanner::new(input);
+        assert!(eat_option(&mut scanner, option));
+        assert_eq!(scanner.after(), remainder);
     }
 
     #[test_case("numpy>=1,<2\n  @-broken\ntqdm", "2:4"; "ASCII Character with LF")]

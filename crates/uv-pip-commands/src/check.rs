@@ -8,9 +8,9 @@ use uv_cache::Cache;
 use uv_configuration::TargetTriple;
 use uv_distribution_types::{DependencyMetadata, Diagnostic, InstalledDist};
 use uv_installer::{SitePackages, SitePackagesDiagnostic};
-use uv_python::{
-    EnvironmentPreference, PythonArchitecture, PythonEnvironment, PythonPreference, PythonRequest,
-    PythonVersion,
+use uv_python_discovery::find_environment;
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonPreference, PythonRequest, PythonVersion,
 };
 
 use crate::reporters::report_target_environment;
@@ -32,7 +32,7 @@ pub fn pip_check(
     let start = Instant::now();
 
     // Detect the current Python interpreter.
-    let environment = PythonEnvironment::find(
+    let environment = find_environment(
         &python.map(PythonRequest::parse).unwrap_or_default(),
         EnvironmentPreference::from_system_flag(system, false),
         PythonPreference::default().with_system_flag(system),
@@ -83,7 +83,7 @@ pub fn pip_check(
             "incompatibilities"
         };
         writeln!(
-            printer.stderr(),
+            printer.stderr_important(),
             "{}",
             format!(
                 "Found {}",
@@ -93,7 +93,11 @@ pub fn pip_check(
         )?;
 
         for diagnostic in &diagnostics {
-            writeln!(printer.stderr(), "{}", diagnostic.message().bold())?;
+            writeln!(
+                printer.stderr_important(),
+                "{}",
+                diagnostic.message().bold()
+            )?;
         }
 
         Ok(ExitStatus::Failure)

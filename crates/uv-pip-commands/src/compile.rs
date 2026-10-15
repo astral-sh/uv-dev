@@ -34,9 +34,11 @@ use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{Conflicts, SupportedEnvironments};
-use uv_python::{
-    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonEnvironment,
-    PythonInstallation, PythonPreference, PythonRequest, PythonVersion, VersionRequest,
+use uv_python_discovery::PythonInstallation;
+use uv_python_interpreter::PythonEnvironment;
+use uv_python_types::{
+    EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
+    PythonVersion, VersionRequest,
 };
 use uv_requirements::{
     GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
@@ -56,7 +58,7 @@ use uv_workspace::pyproject::ExtraBuildDependencies;
 
 use uv_command_support::Printer;
 use uv_command_support::{ExitStatus, OutputWriter, UvError};
-use uv_python_context::PythonDownloadReporter;
+use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations::locked_requirements::{
     LockedRequirements, read_pylock_toml_requirements, read_requirements_txt,
 };
@@ -88,6 +90,7 @@ pub async fn pip_compile(
     dependency_mode: DependencyMode,
     upgrade: Upgrade,
     generate_hashes: bool,
+    build_hash_checking: HashCheckingMode,
     no_emit_packages: Vec<PackageName>,
     include_extras: bool,
     include_markers: bool,
@@ -464,7 +467,7 @@ pub async fn pip_compile(
 
     // Read the lockfile, if present.
     let LockedRequirements { preferences, git } =
-        if let Some(output_file) = output_file.filter(|output_file| output_file.exists()) {
+        if let Some(output_file) = output_file.filter(|output_file| output_file.is_file()) {
             match format {
                 PipCompileFormat::RequirementsTxt => LockedRequirements::from_preferences(
                     read_requirements_txt(output_file, &upgrade).await?,
@@ -507,7 +510,7 @@ pub async fn pip_compile(
     let build_hashes = HashStrategy::from_constraints(
         &build_constraints,
         Some(&interpreter.to_resolver_marker_environment()),
-        HashCheckingMode::Verify,
+        build_hash_checking,
     )?;
     // Lower the extra build dependencies, if any.
     let extra_build_requires =

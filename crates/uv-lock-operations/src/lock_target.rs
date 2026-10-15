@@ -21,7 +21,7 @@ use uv_lock::Lock;
 use uv_normalize::{GroupName, PackageName};
 use uv_pep508::RequirementOrigin;
 use uv_pypi_types::{Conflicts, SupportedEnvironments, VerbatimParsedUrl};
-use uv_python_context::find_requires_python;
+use uv_python_discovery::find_requires_python;
 use uv_scripts::Pep723Script;
 use uv_workspace::dependency_groups::{
     DependencyGroupError, FlatDependencyGroup, FlatDependencyGroups,
@@ -399,10 +399,10 @@ impl<'lock> LockTarget<'lock> {
         }
     }
 
-    /// Write the lockfile to disk.
+    /// Atomically write the lockfile so readers cannot observe a partial lock.
     pub(crate) async fn commit(self, lock: &Lock) -> Result<(), LockError> {
         let encoded = lock.to_toml()?;
-        fs_err::tokio::write(self.lock_path(), encoded).await?;
+        uv_fs::write_atomic_preserve(self.lock_path(), encoded).await?;
         Ok(())
     }
 
