@@ -343,8 +343,9 @@ impl Middleware for AuthMiddleware {
         // In the middleware, existing credentials are already moved from the URL
         // to the headers so for display purposes we restore some information
         let url = tracing_url(&request, request_credentials.as_ref());
-        let index = self.indexes.index_for(request.url());
-        let auth_policy = self.indexes.auth_policy_for(request.url());
+        let request_url = SafeUrl::ref_cast(request.url());
+        let index = self.indexes.index_for(request_url);
+        let auth_policy = self.indexes.auth_policy_for(request_url);
         trace!("Handling request for `{url}` with authentication policy {auth_policy}");
 
         let credentials: Option<Arc<Authentication>> = if matches!(auth_policy, AuthPolicy::Never) {
@@ -451,13 +452,13 @@ impl Middleware for AuthMiddleware {
         let credentials = if let Some(index) = index {
             self.cache().get_url(&index.url, &username).or_else(|| {
                 self.cache()
-                    .get_realm(Realm::from(&**retry_request_url), username)
+                    .get_realm(Realm::from(retry_request_url), username)
             })
         } else {
             // Since there is no known index for this URL, check if there are credentials in
             // the realm-level cache.
             self.cache()
-                .get_realm(Realm::from(&**retry_request_url), username)
+                .get_realm(Realm::from(retry_request_url), username)
         }
         .or(credentials);
 
@@ -586,8 +587,10 @@ impl AuthMiddleware {
                         .get_url(&index.root_url, credentials.as_username().as_ref())
                 })
         } else {
-            self.cache()
-                .get_realm(Realm::from(request.url()), credentials.to_username())
+            self.cache().get_realm(
+                Realm::from(SafeUrl::ref_cast(request.url())),
+                credentials.to_username(),
+            )
         };
         if let Some(credentials) = maybe_cached_credentials {
             request = credentials.authenticate(request).await?;
@@ -618,10 +621,10 @@ impl AuthMiddleware {
             Some(credentials)
         } else if index.is_some() {
             // If this is a known index, we fall back to checking for the realm.
-            if let Some(credentials) = self
-                .cache()
-                .get_realm(Realm::from(request.url()), credentials.to_username())
-            {
+            if let Some(credentials) = self.cache().get_realm(
+                Realm::from(SafeUrl::ref_cast(request.url())),
+                credentials.to_username(),
+            ) {
                 request = credentials.authenticate(request).await?;
                 Some(credentials)
             } else {
@@ -661,7 +664,7 @@ impl AuthMiddleware {
         let key = if let Some(index) = index {
             (FetchUrl::Index(index.url.clone()), username)
         } else {
-            (FetchUrl::Realm(Realm::from(&**url)), username)
+            (FetchUrl::Realm(Realm::from(url)), username)
         };
         if let Some(credentials) = self.cache().fetches.register_or_wait(&key).await {
             if credentials.is_some() {
@@ -830,9 +833,7 @@ impl AuthMiddleware {
                             "Checking keyring for credentials for index URL `{}@{}`",
                             username, index.url
                         );
-                        keyring
-                            .fetch(SafeUrl::ref_cast(&index.url), Some(username))
-                            .await
+                        keyring.fetch(&index.url, Some(username)).await
                     } else {
                         debug!(
                             "Checking keyring for credentials for full URL `{}@{}`",
@@ -846,7 +847,7 @@ impl AuthMiddleware {
                             "Checking keyring for credentials for index URL `{}` without username due to `authenticate = always`",
                             index.url
                         );
-                        keyring.fetch(SafeUrl::ref_cast(&index.url), None).await
+                        keyring.fetch(&index.url, None).await
                     } else {
                         None
                     }
@@ -896,8 +897,6 @@ mod tests {
     use reqwest::Client;
     use tempfile::NamedTempFile;
     use test_log::test;
-
-    use url::Url;
     use wiremock::matchers::{basic_auth, method, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -972,12 +971,15 @@ mod tests {
             .with(AuthMiddleware::new().with_cache(CredentialsCache::new()))
             .build();
 
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         let mut url = base_url.clone();
         url.set_username(username).unwrap();
         url.set_password(Some(password)).unwrap();
-        assert_eq!(client.get(url).send().await?.status(), 200);
+        assert_eq!(
+            client.get(url.into_unsafe_url()).send().await?.status(),
+            200
+        );
 
         // Works for a URL without credentials now
         assert_eq!(
@@ -1000,7 +1002,7 @@ mod tests {
         url.set_username(username).unwrap();
         url.set_password(Some("invalid")).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             401,
             "Credentials in the URL should take precedence and fail"
         );
@@ -1014,10 +1016,10 @@ mod tests {
         let password = "password";
 
         let server = start_test_server(username, password).await;
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
         let cache = CredentialsCache::new();
         cache.insert(
-            SafeUrl::ref_cast(&base_url),
+            &base_url,
             Arc::new(Authentication::from(Credentials::basic(
                 Some(username.to_string()),
                 Some(password.to_string()),
@@ -1031,7 +1033,10 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username(username).unwrap();
         url.set_password(Some(password)).unwrap();
-        assert_eq!(client.get(url).send().await?.status(), 200);
+        assert_eq!(
+            client.get(url.into_unsafe_url()).send().await?.status(),
+            200
+        );
 
         // Works for a URL without credentials too
         assert_eq!(
@@ -1054,7 +1059,7 @@ mod tests {
         url.set_username(username).unwrap();
         url.set_password(Some("invalid")).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             401,
             "Credentials in the URL should take precedence and fail"
         );
@@ -1068,10 +1073,10 @@ mod tests {
         let password = "";
 
         let server = start_test_server(username, password).await;
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
         let cache = CredentialsCache::new();
         cache.insert(
-            SafeUrl::ref_cast(&base_url),
+            &base_url,
             Arc::new(Authentication::from(Credentials::basic(
                 Some(username.to_string()),
                 None,
@@ -1085,7 +1090,10 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username(username).unwrap();
         url.set_password(None).unwrap();
-        assert_eq!(client.get(url).send().await?.status(), 200);
+        assert_eq!(
+            client.get(url.into_unsafe_url()).send().await?.status(),
+            200
+        );
 
         // Works for a URL without credentials too
         assert_eq!(
@@ -1108,7 +1116,7 @@ mod tests {
         url.set_username(username).unwrap();
         url.set_password(Some("invalid")).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             401,
             "Credentials in the URL should take precedence and fail"
         );
@@ -1145,11 +1153,11 @@ mod tests {
             "Credentials should be pulled from the netrc file"
         );
 
-        let mut url = Url::parse(&server.uri())?;
+        let mut url = SafeUrl::parse(&server.uri())?;
         url.set_username(username).unwrap();
         url.set_password(Some("invalid")).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             401,
             "Credentials in the URL should take precedence and fail"
         );
@@ -1168,7 +1176,7 @@ mod tests {
         let username = "user";
         let password = "password";
         let server = start_test_server(username, password).await;
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         let mut netrc_file = NamedTempFile::new()?;
         writeln!(
@@ -1197,7 +1205,7 @@ mod tests {
         url.set_username(username).unwrap();
         url.set_password(Some("invalid")).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             401,
             "Credentials in the URL should take precedence and fail"
         );
@@ -1239,11 +1247,11 @@ mod tests {
             "Credentials should not be pulled from the netrc file due to host mismatch"
         );
 
-        let mut url = Url::parse(&server.uri())?;
+        let mut url = SafeUrl::parse(&server.uri())?;
         url.set_username(username).unwrap();
         url.set_password(Some(password)).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             200,
             "Credentials in the URL should still work"
         );
@@ -1256,7 +1264,7 @@ mod tests {
         let username = "user";
         let password = "password";
         let server = start_test_server(username, password).await;
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         let mut netrc_file = NamedTempFile::new()?;
         writeln!(
@@ -1278,7 +1286,7 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username("other-user").unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             401,
             "The netrc password should not be used due to a username mismatch"
         );
@@ -1286,7 +1294,7 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username("user").unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             200,
             "The netrc password should be used for a matching user"
         );
@@ -1299,7 +1307,7 @@ mod tests {
         let username = "user";
         let password = "password";
         let server = start_test_server(username, password).await;
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         let client = test_client_builder()
             .with(
@@ -1326,7 +1334,7 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username(username).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             200,
             "Credentials for the username should be pulled from the keyring"
         );
@@ -1335,7 +1343,7 @@ mod tests {
         url.set_username(username).unwrap();
         url.set_password(Some("invalid")).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             401,
             "Password in the URL should take precedence and fail"
         );
@@ -1343,7 +1351,11 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username(username).unwrap();
         assert_eq!(
-            client.get(url.clone()).send().await?.status(),
+            client
+                .get(url.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "Subsequent requests should not use the invalid password"
         );
@@ -1351,7 +1363,7 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username("other_user").unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             401,
             "Credentials are not pulled from the keyring when given another username"
         );
@@ -1364,7 +1376,7 @@ mod tests {
         let username = "user";
         let password = "password";
         let server = start_test_server(username, password).await;
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         let indexes = indexes_for(&base_url, AuthPolicy::Always);
         let client = test_client_builder()
@@ -1393,7 +1405,7 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username(username).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             200,
             "The password for the username should be pulled from the keyring"
         );
@@ -1402,7 +1414,7 @@ mod tests {
         url.set_username(username).unwrap();
         url.set_password(Some("invalid")).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             401,
             "Password in the URL should take precedence and fail"
         );
@@ -1410,7 +1422,7 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username("other_user").unwrap();
         assert_matches!(
-            client.get(url).send().await,
+            client.get(url.into_unsafe_url()).send().await,
             Err(reqwest_middleware::Error::Middleware(_)),
             "If the username does not match, a password should not be fetched, and the middleware should fail eagerly since `authenticate = always` is not satisfied"
         );
@@ -1427,7 +1439,7 @@ mod tests {
         let username = "user";
         let password = "password";
         let server = start_test_server(username, password).await;
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         let client = test_client_builder()
             .with(
@@ -1445,7 +1457,7 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username(username).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             401,
             "We should fail because the port is not present in the keyring entry"
         );
@@ -1459,13 +1471,13 @@ mod tests {
         let password = "password";
 
         let server = start_test_server(username, password).await;
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
         let cache = CredentialsCache::new();
 
         // Seed _just_ the username. We should pull the username from the cache if not present on the
         // URL.
         cache.insert(
-            SafeUrl::ref_cast(&base_url),
+            &base_url,
             Arc::new(Authentication::from(Credentials::basic(
                 Some(username.to_string()),
                 None,
@@ -1494,7 +1506,7 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username(username).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             200,
             "Credentials for the username should be pulled from the keyring"
         );
@@ -1507,24 +1519,24 @@ mod tests {
         let username_1 = "user1";
         let password_1 = "password1";
         let server_1 = start_test_server(username_1, password_1).await;
-        let base_url_1 = Url::parse(&server_1.uri())?;
+        let base_url_1 = SafeUrl::parse(&server_1.uri())?;
 
         let username_2 = "user2";
         let password_2 = "password2";
         let server_2 = start_test_server(username_2, password_2).await;
-        let base_url_2 = Url::parse(&server_2.uri())?;
+        let base_url_2 = SafeUrl::parse(&server_2.uri())?;
 
         let cache = CredentialsCache::new();
         // Seed the cache with our credentials
         cache.insert(
-            SafeUrl::ref_cast(&base_url_1),
+            &base_url_1,
             Arc::new(Authentication::from(Credentials::basic(
                 Some(username_1.to_string()),
                 Some(password_1.to_string()),
             ))),
         );
         cache.insert(
-            SafeUrl::ref_cast(&base_url_2),
+            &base_url_2,
             Arc::new(Authentication::from(Credentials::basic(
                 Some(username_2.to_string()),
                 Some(password_2.to_string()),
@@ -1574,12 +1586,12 @@ mod tests {
         let username_1 = "user1";
         let password_1 = "password1";
         let server_1 = start_test_server(username_1, password_1).await;
-        let base_url_1 = Url::parse(&server_1.uri())?;
+        let base_url_1 = SafeUrl::parse(&server_1.uri())?;
 
         let username_2 = "user2";
         let password_2 = "password2";
         let server_2 = start_test_server(username_2, password_2).await;
-        let base_url_2 = Url::parse(&server_2.uri())?;
+        let base_url_2 = SafeUrl::parse(&server_2.uri())?;
 
         let client = test_client_builder()
             .with(
@@ -1623,7 +1635,11 @@ mod tests {
         let mut url_1 = base_url_1.clone();
         url_1.set_username(username_1).unwrap();
         assert_eq!(
-            client.get(url_1.clone()).send().await?.status(),
+            client
+                .get(url_1.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "Requests with a username should succeed"
         );
@@ -1636,18 +1652,30 @@ mod tests {
         let mut url_2 = base_url_2.clone();
         url_2.set_username(username_2).unwrap();
         assert_eq!(
-            client.get(url_2.clone()).send().await?.status(),
+            client
+                .get(url_2.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "Requests with a username should succeed"
         );
 
         assert_eq!(
-            client.get(format!("{url_1}/foo")).send().await?.status(),
+            client
+                .get(format!("{}/foo", url_1.as_str()))
+                .send()
+                .await?
+                .status(),
             200,
             "Requests can be to different paths in the same realm"
         );
         assert_eq!(
-            client.get(format!("{url_2}/foo")).send().await?.status(),
+            client
+                .get(format!("{}/foo", url_2.as_str()))
+                .send()
+                .await?
+                .status(),
             200,
             "Requests can be to different paths in the same realm"
         );
@@ -1703,7 +1731,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
         let base_url_1 = base_url.join("prefix_1")?;
         let base_url_2 = base_url.join("prefix_2")?;
         let base_url_3 = base_url.join("prefix_3")?;
@@ -1712,14 +1740,14 @@ mod tests {
 
         // Seed the cache with our credentials
         cache.insert(
-            SafeUrl::ref_cast(&base_url_1),
+            &base_url_1,
             Arc::new(Authentication::from(Credentials::basic(
                 Some(username_1.to_string()),
                 Some(password_1.to_string()),
             ))),
         );
         cache.insert(
-            SafeUrl::ref_cast(&base_url_2),
+            &base_url_2,
             Arc::new(Authentication::from(Credentials::basic(
                 Some(username_2.to_string()),
                 Some(password_2.to_string()),
@@ -1732,18 +1760,26 @@ mod tests {
 
         // Both servers should work
         assert_eq!(
-            client.get(base_url_1.clone()).send().await?.status(),
-            200,
-            "Requests should not require credentials"
-        );
-        assert_eq!(
-            client.get(base_url_2.clone()).send().await?.status(),
+            client
+                .get(base_url_1.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "Requests should not require credentials"
         );
         assert_eq!(
             client
-                .get(base_url.join("prefix_1/foo")?)
+                .get(base_url_2.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
+            200,
+            "Requests should not require credentials"
+        );
+        assert_eq!(
+            client
+                .get(base_url.join("prefix_1/foo")?.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -1752,7 +1788,7 @@ mod tests {
         );
         assert_eq!(
             client
-                .get(base_url.join("prefix_2/foo")?)
+                .get(base_url.join("prefix_2/foo")?.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -1761,7 +1797,7 @@ mod tests {
         );
         assert_eq!(
             client
-                .get(base_url.join("prefix_1_foo")?)
+                .get(base_url.join("prefix_1_foo")?.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -1770,7 +1806,11 @@ mod tests {
         );
 
         assert_eq!(
-            client.get(base_url_3.clone()).send().await?.status(),
+            client
+                .get(base_url_3.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "Requests to the 'public' prefix should not use credentials"
         );
@@ -1826,7 +1866,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
         let base_url_1 = base_url.join("prefix_1")?;
         let base_url_2 = base_url.join("prefix_2")?;
         let base_url_3 = base_url.join("prefix_3")?;
@@ -1860,12 +1900,20 @@ mod tests {
 
         // Both servers do not work without a username
         assert_eq!(
-            client.get(base_url_1.clone()).send().await?.status(),
+            client
+                .get(base_url_1.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             401,
             "Requests should require a username"
         );
         assert_eq!(
-            client.get(base_url_2.clone()).send().await?.status(),
+            client
+                .get(base_url_2.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             401,
             "Requests should require a username"
         );
@@ -1873,12 +1921,20 @@ mod tests {
         let mut url_1 = base_url_1.clone();
         url_1.set_username(username_1).unwrap();
         assert_eq!(
-            client.get(url_1.clone()).send().await?.status(),
+            client
+                .get(url_1.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "Requests with a username should succeed"
         );
         assert_eq!(
-            client.get(base_url_2.clone()).send().await?.status(),
+            client
+                .get(base_url_2.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             401,
             "Credentials should not be re-used for the second prefix"
         );
@@ -1886,14 +1942,18 @@ mod tests {
         let mut url_2 = base_url_2.clone();
         url_2.set_username(username_2).unwrap();
         assert_eq!(
-            client.get(url_2.clone()).send().await?.status(),
+            client
+                .get(url_2.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "Requests with a username should succeed"
         );
 
         assert_eq!(
             client
-                .get(base_url.join("prefix_1/foo")?)
+                .get(base_url.join("prefix_1/foo")?.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -1902,7 +1962,7 @@ mod tests {
         );
         assert_eq!(
             client
-                .get(base_url.join("prefix_2/foo")?)
+                .get(base_url.join("prefix_2/foo")?.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -1911,7 +1971,7 @@ mod tests {
         );
         assert_eq!(
             client
-                .get(base_url.join("prefix_1_foo")?)
+                .get(base_url.join("prefix_1_foo")?.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -1919,7 +1979,11 @@ mod tests {
             "Requests to paths with a matching prefix but different resource segments should fail"
         );
         assert_eq!(
-            client.get(base_url_3.clone()).send().await?.status(),
+            client
+                .get(base_url_3.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "Requests to the 'public' prefix should not use credentials"
         );
@@ -1958,7 +2022,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
         let base_url_1 = base_url.join("prefix_1")?;
         let base_url_2 = base_url.join("prefix_2")?;
 
@@ -1967,20 +2031,28 @@ mod tests {
                 AuthMiddleware::new()
                     .with_cache(CredentialsCache::new())
                     .with_keyring(Some(KeyringProvider::dummy([
-                        (base_url_1.clone(), username, password_1),
-                        (base_url_2.clone(), username, password_2),
+                        (base_url_1.as_str(), username, password_1),
+                        (base_url_2.as_str(), username, password_2),
                     ]))),
             )
             .build();
 
         // Both servers do not work without a username
         assert_eq!(
-            client.get(base_url_1.clone()).send().await?.status(),
+            client
+                .get(base_url_1.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             401,
             "Requests should require a username"
         );
         assert_eq!(
-            client.get(base_url_2.clone()).send().await?.status(),
+            client
+                .get(base_url_2.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             401,
             "Requests should require a username"
         );
@@ -1988,18 +2060,26 @@ mod tests {
         let mut url_1 = base_url_1.clone();
         url_1.set_username(username).unwrap();
         assert_eq!(
-            client.get(url_1.clone()).send().await?.status(),
+            client
+                .get(url_1.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "The first request with a username will succeed"
         );
         assert_eq!(
-            client.get(base_url_2.clone()).send().await?.status(),
+            client
+                .get(base_url_2.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             401,
             "Credentials should not be re-used for the second prefix"
         );
         assert_eq!(
             client
-                .get(base_url.join("prefix_1/foo")?)
+                .get(base_url.join("prefix_1/foo")?.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -2010,13 +2090,17 @@ mod tests {
         let mut url_2 = base_url_2.clone();
         url_2.set_username(username).unwrap();
         assert_eq!(
-            client.get(url_2.clone()).send().await?.status(),
+            client
+                .get(url_2.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             401, // INCORRECT BEHAVIOR
             "A request with the same username and realm for a URL that needs a different password will fail"
         );
         assert_eq!(
             client
-                .get(base_url.join("prefix_2/foo")?)
+                .get(base_url.join("prefix_2/foo")?.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -2058,18 +2142,18 @@ mod tests {
             .mount(&server)
             .await;
 
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
         let base_url_1 = base_url.join("prefix_1")?;
         let base_url_2 = base_url.join("prefix_2")?;
         let indexes = Indexes::from_indexes(vec![
             Index {
-                url: SafeUrl::from_url(base_url_1.clone()),
-                root_url: SafeUrl::from_url(base_url_1.clone()),
+                url: base_url_1.clone(),
+                root_url: base_url_1.clone(),
                 auth_policy: AuthPolicy::Auto,
             },
             Index {
-                url: SafeUrl::from_url(base_url_2.clone()),
-                root_url: SafeUrl::from_url(base_url_2.clone()),
+                url: base_url_2.clone(),
+                root_url: base_url_2.clone(),
                 auth_policy: AuthPolicy::Auto,
             },
         ]);
@@ -2079,8 +2163,8 @@ mod tests {
                 AuthMiddleware::new()
                     .with_cache(CredentialsCache::new())
                     .with_keyring(Some(KeyringProvider::dummy([
-                        (base_url_1.clone(), username, password_1),
-                        (base_url_2.clone(), username, password_2),
+                        (base_url_1.as_str(), username, password_1),
+                        (base_url_2.as_str(), username, password_2),
                     ])))
                     .with_indexes(indexes),
             )
@@ -2088,12 +2172,20 @@ mod tests {
 
         // Both servers do not work without a username
         assert_eq!(
-            client.get(base_url_1.clone()).send().await?.status(),
+            client
+                .get(base_url_1.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             401,
             "Requests should require a username"
         );
         assert_eq!(
-            client.get(base_url_2.clone()).send().await?.status(),
+            client
+                .get(base_url_2.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             401,
             "Requests should require a username"
         );
@@ -2101,18 +2193,26 @@ mod tests {
         let mut url_1 = base_url_1.clone();
         url_1.set_username(username).unwrap();
         assert_eq!(
-            client.get(url_1.clone()).send().await?.status(),
+            client
+                .get(url_1.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "The first request with a username will succeed"
         );
         assert_eq!(
-            client.get(base_url_2.clone()).send().await?.status(),
+            client
+                .get(base_url_2.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             401,
             "Credentials should not be re-used for the second prefix"
         );
         assert_eq!(
             client
-                .get(base_url.join("prefix_1/foo")?)
+                .get(base_url.join("prefix_1/foo")?.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -2123,13 +2223,17 @@ mod tests {
         let mut url_2 = base_url_2.clone();
         url_2.set_username(username).unwrap();
         assert_eq!(
-            client.get(url_2.clone()).send().await?.status(),
+            client
+                .get(url_2.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "A request with the same username and realm for a URL will use index-specific password"
         );
         assert_eq!(
             client
-                .get(base_url.join("prefix_2/foo")?)
+                .get(base_url.join("prefix_2/foo")?.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -2168,11 +2272,11 @@ mod tests {
             .mount(&server)
             .await;
 
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
         let index_url = base_url.join("prefix_1")?;
         let indexes = Indexes::from_indexes(vec![Index {
-            url: SafeUrl::from_url(index_url.clone()),
-            root_url: SafeUrl::from_url(index_url.clone()),
+            url: index_url.clone(),
+            root_url: index_url.clone(),
             auth_policy: AuthPolicy::Auto,
         }]);
 
@@ -2181,7 +2285,7 @@ mod tests {
                 AuthMiddleware::new()
                     .with_cache(CredentialsCache::new())
                     .with_keyring(Some(KeyringProvider::dummy([(
-                        base_url.clone(),
+                        base_url.as_str(),
                         username,
                         password,
                     )])))
@@ -2191,7 +2295,11 @@ mod tests {
 
         // Index server does not work without a username
         assert_eq!(
-            client.get(index_url.clone()).send().await?.status(),
+            client
+                .get(index_url.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             401,
             "Requests should require a username"
         );
@@ -2200,7 +2308,11 @@ mod tests {
         let mut realm_url = base_url.clone();
         realm_url.set_username(username).unwrap();
         assert_eq!(
-            client.get(realm_url.clone()).send().await?.status(),
+            client
+                .get(realm_url.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "The first realm request with a username will succeed"
         );
@@ -2208,13 +2320,17 @@ mod tests {
         let mut url = index_url.clone();
         url.set_username(username).unwrap();
         assert_eq!(
-            client.get(url.clone()).send().await?.status(),
+            client
+                .get(url.clone().into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "A request with the same username and realm for a URL will use the realm if there is no index-specific password"
         );
         assert_eq!(
             client
-                .get(base_url.join("prefix_1/foo")?)
+                .get(base_url.join("prefix_1/foo")?.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -2225,8 +2341,8 @@ mod tests {
         Ok(())
     }
 
-    fn indexes_for(url: &Url, policy: AuthPolicy) -> Indexes {
-        let mut url = SafeUrl::from_url(url.clone());
+    fn indexes_for(url: &SafeUrl, policy: AuthPolicy) -> Indexes {
+        let mut url = url.clone();
         url.set_password(None).ok();
         url.set_username("").ok();
         Indexes::from_indexes(vec![Index {
@@ -2245,7 +2361,7 @@ mod tests {
 
         let server = start_test_server(username, password).await;
 
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         let indexes = indexes_for(&base_url, AuthPolicy::Always);
         let client = test_client_builder()
@@ -2271,7 +2387,10 @@ mod tests {
         let mut url = base_url.clone();
         url.set_username(username).unwrap();
         url.set_password(Some(password)).unwrap();
-        assert_eq!(client.get(url).send().await?.status(), 200);
+        assert_eq!(
+            client.get(url.into_unsafe_url()).send().await?.status(),
+            200
+        );
 
         assert_eq!(
             client
@@ -2287,7 +2406,7 @@ mod tests {
         url.set_username(username).unwrap();
         url.set_password(Some("invalid")).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             401,
             "Incorrect credentials should fail"
         );
@@ -2312,7 +2431,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         let indexes = indexes_for(&base_url, AuthPolicy::Always);
         let client = test_client_builder()
@@ -2340,7 +2459,7 @@ mod tests {
         let password = "password";
 
         let server = start_test_server(username, password).await;
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         Mock::given(method("GET"))
             .and(path_regex("/*"))
@@ -2397,7 +2516,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         let indexes = indexes_for(&base_url, AuthPolicy::Never);
         let client = test_client_builder()
@@ -2453,7 +2572,7 @@ mod tests {
         let password = "password";
 
         let server = start_test_server(username, password).await;
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         // Create a text credential store with matching credentials
         let mut store = TextCredentialStore::default();
@@ -2509,7 +2628,7 @@ mod tests {
         let wrong_username = "wronguser";
 
         let server = start_test_server(username, password).await;
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         let mut store = TextCredentialStore::default();
         let service = crate::Service::try_from(base_url.to_string()).unwrap();
@@ -2574,7 +2693,7 @@ mod tests {
     }
 
     fn create_request(url: &str) -> Request {
-        Request::new(Method::GET, Url::parse(url).unwrap())
+        Request::new(Method::GET, SafeUrl::parse(url).unwrap().into_unsafe_url())
     }
 
     /// Test for <https://github.com/astral-sh/uv/issues/17343>
@@ -2603,13 +2722,13 @@ mod tests {
             .with(AuthMiddleware::new().with_cache(CredentialsCache::new()))
             .build();
 
-        let base_url = Url::parse(&server.uri())?;
+        let base_url = SafeUrl::parse(&server.uri())?;
 
         // Test with the URL format `:password@host` (empty username, password present)
         let mut url = base_url.clone();
         url.set_password(Some(password)).unwrap();
         assert_eq!(
-            client.get(url).send().await?.status(),
+            client.get(url.into_unsafe_url()).send().await?.status(),
             200,
             "URL with empty username but password should authenticate successfully"
         );
