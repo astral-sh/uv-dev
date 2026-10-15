@@ -173,6 +173,7 @@ pub async fn pip_install(
         extras,
         Some(groups),
         &client_builder,
+        &cache,
     )
     .await?;
 
@@ -207,7 +208,7 @@ pub async fn pip_install(
 
     // Read build constraints.
     let build_constraints = Constraints::from_specifications(
-        uv_resolve_operations::read_constraints(build_constraints, &client_builder)
+        uv_resolve_operations::read_constraints(build_constraints, &client_builder, &cache)
             .await?
             .into_iter()
             .chain(build_constraints_from_workspace.iter().cloned()),

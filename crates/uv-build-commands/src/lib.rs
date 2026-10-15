@@ -604,7 +604,7 @@ async fn build_package(
 
     // Read build constraints.
     let command_line_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+        operations::read_constraints(build_constraints, &client_builder, cache).await?;
     let build_constraints = Constraints::from_specifications(
         command_line_constraints
             .iter()

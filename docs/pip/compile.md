@@ -46,6 +46,17 @@ To lock dependencies from stdin, use `-`:
 $ echo "ruff" | uv pip compile -
 ```
 
+`uv pip compile -` also accepts project metadata from stdin:
+
+```console
+$ cat pyproject.toml | uv pip compile -
+$ cat setup.py | uv pip compile - --input-format setup.py
+```
+
+The `--input-format` option is available for `uv pip compile`, `uv pip install`, and `uv pip sync`.
+Project metadata read from stdin must be
+[self-contained](./packages.md#installing-packages-from-files).
+
 To lock with optional dependencies enabled, e.g., the "foo" extra:
 
 ```console

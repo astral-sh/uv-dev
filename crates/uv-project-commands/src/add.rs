@@ -393,10 +393,17 @@ pub async fn add(
         &[],
         None,
         &client_builder,
+        cache,
     )
     .await?;
     if spec.pylock.is_some() {
         bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
+    }
+    if let Some(source_tree) = spec.source_trees.first() {
+        bail!(
+            "Adding requirements from a `{}` is not supported in `uv add`",
+            source_tree.filename()
+        );
     }
     let RequirementsSpecification {
         requirements,

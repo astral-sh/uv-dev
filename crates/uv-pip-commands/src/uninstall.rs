@@ -43,9 +43,16 @@ pub async fn pip_uninstall(
     let client_builder = client_builder.clone().keyring(keyring_provider);
 
     // Read all requirements from the provided sources.
-    let spec = RequirementsSpecification::from_simple_sources(sources, &client_builder).await?;
+    let spec =
+        RequirementsSpecification::from_simple_sources(sources, &client_builder, &cache).await?;
     if spec.pylock.is_some() {
         anyhow::bail!("`pylock.toml` is not a supported input format for `uv pip uninstall`");
+    }
+    if let Some(source_tree) = spec.source_trees.first() {
+        anyhow::bail!(
+            "`{}` is not a supported input format for `uv pip uninstall`",
+            source_tree.filename()
+        );
     }
 
     // Detect the current Python interpreter.

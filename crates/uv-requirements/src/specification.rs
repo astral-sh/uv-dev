@@ -33,10 +33,12 @@ use std::fmt::Display;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use astral_ini::Options;
 use rustc_hash::FxHashSet;
 use tracing::instrument;
 use url::Url;
 
+use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
@@ -123,10 +125,11 @@ impl RequirementsSpecification {
     pub async fn from_source(
         source: &RequirementsSource,
         client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
     ) -> Result<Self> {
-        let mut cache = SourceCache::default();
-        let source = resolve_source(source, client_builder, &mut cache).await?;
-        Self::from_source_with_cache(&source, client_builder, &mut cache).await
+        let mut source_cache = SourceCache::default();
+        let source = resolve_source(source, client_builder, &mut source_cache).await?;
+        Self::from_source_with_cache(&source, client_builder, &mut source_cache, cache).await
     }
 
     /// Create a [`RequirementsSpecification`] from PEP 723 script metadata.
@@ -278,7 +281,8 @@ impl RequirementsSpecification {
     async fn from_source_with_cache(
         source: &RequirementsSource,
         client_builder: &BaseClientBuilder<'_>,
-        cache: &mut SourceCache,
+        source_cache: &mut SourceCache,
+        cache: &Cache,
     ) -> Result<Self> {
         Ok(match source {
             RequirementsSource::Package(requirement) => Self {
@@ -304,9 +308,13 @@ impl RequirementsSpecification {
                     return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
                 }
 
-                let requirements_txt =
-                    RequirementsTxt::parse_with_cache(input.clone(), &*CWD, client_builder, cache)
-                        .await?;
+                let requirements_txt = RequirementsTxt::parse_with_cache(
+                    input.clone(),
+                    &*CWD,
+                    client_builder,
+                    source_cache,
+                )
+                .await?;
 
                 if requirements_txt == RequirementsTxt::default() {
                     warn_user!(
@@ -317,30 +325,39 @@ impl RequirementsSpecification {
 
                 Self::from_requirements_txt(requirements_txt)
             }
-            RequirementsSource::PyprojectToml(path) => {
-                let content = match fs_err::tokio::read_to_string(&path).await {
-                    Ok(content) => content,
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                        return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
+            RequirementsSource::PyprojectToml(input) => {
+                if let RequirementsInput::Local(path) = input
+                    && !path.is_file()
+                {
+                    return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
+                }
+                let content = read_cached_file(input, client_builder, source_cache).await?;
+                let pyproject_toml = PyProjectToml::from_toml(&content, input.user_display())
+                    .with_context(|| format!("Failed to parse: {}", input.user_display()))?;
+                let source_tree = match input {
+                    RequirementsInput::Local(path) => {
+                        SourceTree::PyProjectToml(path.clone(), pyproject_toml)
                     }
-                    Err(err) => {
+                    RequirementsInput::Stdin => SourceTree::from_stdin(
+                        &content,
+                        "pyproject.toml",
+                        |path| SourceTree::PyProjectToml(path, pyproject_toml),
+                        cache,
+                    )?,
+                    RequirementsInput::Remote(url) => {
                         return Err(anyhow::anyhow!(
-                            "Failed to read `{}`: {}",
-                            path.user_display(),
-                            err
+                            "Remote `pyproject.toml` inputs are not supported: {url}"
                         ));
                     }
                 };
-                let pyproject_toml = PyProjectToml::from_toml(&content, path.user_display())
-                    .with_context(|| format!("Failed to parse: {}", path.user_display()))?;
 
                 Self {
-                    source_trees: vec![SourceTree::PyProjectToml(path.clone(), pyproject_toml)],
+                    source_trees: vec![source_tree],
                     ..Self::default()
                 }
             }
             RequirementsSource::Pep723Script(input) => {
-                let content = read_cached_file(input, client_builder, cache).await?;
+                let content = read_cached_file(input, client_builder, source_cache).await?;
 
                 let metadata = match Pep723Metadata::parse(content.as_bytes()) {
                     Ok(Some(script)) => script,
@@ -355,23 +372,32 @@ impl RequirementsSpecification {
 
                 Self::from_pep723_metadata(&metadata)
             }
-            RequirementsSource::SetupPy(path) => {
-                if !path.is_file() {
-                    return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
-                }
-
+            RequirementsSource::SetupPy(input) | RequirementsSource::SetupCfg(input) => {
+                let (filename, constructor): (&str, fn(PathBuf) -> SourceTree) =
+                    if let RequirementsSource::SetupPy(_) = source {
+                        ("setup.py", SourceTree::SetupPy)
+                    } else {
+                        ("setup.cfg", SourceTree::SetupCfg)
+                    };
+                let source_tree = match input {
+                    RequirementsInput::Local(path) => {
+                        if !path.is_file() {
+                            return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
+                        }
+                        constructor(path.clone())
+                    }
+                    RequirementsInput::Stdin => {
+                        let content = read_cached_file(input, client_builder, source_cache).await?;
+                        SourceTree::from_stdin(&content, filename, constructor, cache)?
+                    }
+                    RequirementsInput::Remote(url) => {
+                        return Err(anyhow::anyhow!(
+                            "Remote `{filename}` inputs are not supported: {url}"
+                        ));
+                    }
+                };
                 Self {
-                    source_trees: vec![SourceTree::SetupPy(path.clone())],
-                    ..Self::default()
-                }
-            }
-            RequirementsSource::SetupCfg(path) => {
-                if !path.is_file() {
-                    return Err(anyhow::anyhow!("File not found: {}", path.user_display()));
-                }
-
-                Self {
-                    source_trees: vec![SourceTree::SetupCfg(path.clone())],
+                    source_trees: vec![source_tree],
                     ..Self::default()
                 }
             }
@@ -386,7 +412,7 @@ impl RequirementsSpecification {
                     // Remote lockfiles are fetched after index credentials are initialized.
                     pylock: Some(match input {
                         RequirementsInput::Stdin => PylockSource::Stdin(
-                            read_cached_file(input, client_builder, cache).await?,
+                            read_cached_file(input, client_builder, source_cache).await?,
                         ),
                         RequirementsInput::Local(path) => PylockSource::Local(path.clone()),
                         RequirementsInput::Remote(url) => PylockSource::Remote(url.clone()),
@@ -401,7 +427,7 @@ impl RequirementsSpecification {
                 ));
             }
             RequirementsSource::Extensionless(input) => {
-                let content = read_cached_file(input, client_builder, cache).await?;
+                let content = read_cached_file(input, client_builder, source_cache).await?;
 
                 // Detect if it's a PEP 723 script.
                 if let Some(metadata) = Pep723Metadata::parse(content.as_bytes())? {
@@ -413,7 +439,7 @@ impl RequirementsSpecification {
                         input.clone(),
                         &*CWD,
                         client_builder,
-                        cache,
+                        source_cache,
                     )
                     .await?;
 
@@ -445,14 +471,39 @@ impl RequirementsSpecification {
         excludes: &[RequirementsSource],
         groups: Option<&GroupsSpecification>,
         client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
     ) -> Result<Self> {
         let mut spec = Self::default();
-        let mut cache = SourceCache::default();
+        let mut source_cache = SourceCache::default();
 
-        let requirements = resolve_sources(requirements, client_builder, &mut cache).await?;
-        let constraints = resolve_sources(constraints, client_builder, &mut cache).await?;
-        let overrides = resolve_sources(overrides, client_builder, &mut cache).await?;
-        let excludes = resolve_sources(excludes, client_builder, &mut cache).await?;
+        let requirements = resolve_sources(requirements, client_builder, &mut source_cache).await?;
+        let constraints = resolve_sources(constraints, client_builder, &mut source_cache).await?;
+        let overrides = resolve_sources(overrides, client_builder, &mut source_cache).await?;
+        let excludes = resolve_sources(excludes, client_builder, &mut source_cache).await?;
+
+        for (sources, kind) in [
+            (&constraints, "constraints"),
+            (&overrides, "overrides"),
+            (&excludes, "excludes"),
+        ] {
+            for source in sources {
+                let filename = match source.as_ref() {
+                    RequirementsSource::PyprojectToml(_) => "pyproject.toml",
+                    RequirementsSource::SetupPy(_) => "setup.py",
+                    RequirementsSource::SetupCfg(_) => "setup.cfg",
+                    RequirementsSource::Package(_)
+                    | RequirementsSource::Editable(_)
+                    | RequirementsSource::Pep723Script(_)
+                    | RequirementsSource::PylockToml(_)
+                    | RequirementsSource::RequirementsTxt(_)
+                    | RequirementsSource::EnvironmentYml(_)
+                    | RequirementsSource::Extensionless(_) => continue,
+                };
+                return Err(anyhow::anyhow!(
+                    "The input `{source}` appears to be a `{filename}` file, but {kind} must be specified in `requirements.txt` format"
+                ));
+            }
+        }
 
         // Disallow `pylock.toml` files as constraints.
         if let Some(pylock_toml) = constraints.iter().find_map(|source| {
@@ -574,7 +625,9 @@ impl RequirementsSpecification {
         // Resolve sources into specifications so we know their `source_tree`.
         let mut requirement_sources = Vec::new();
         for source in &requirements {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source =
+                Self::from_source_with_cache(source, client_builder, &mut source_cache, cache)
+                    .await?;
             requirement_sources.push(source);
         }
 
@@ -630,7 +683,9 @@ impl RequirementsSpecification {
         // Read all constraints, treating both requirements _and_ constraints as constraints.
         // Overrides are ignored.
         for source in &constraints {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source =
+                Self::from_source_with_cache(source, client_builder, &mut source_cache, cache)
+                    .await?;
             for entry in source.requirements {
                 match entry.requirement {
                     UnresolvedRequirement::Named(requirement) => {
@@ -670,7 +725,9 @@ impl RequirementsSpecification {
         // Read all overrides, treating both requirements _and_ overrides as overrides.
         // Constraints are ignored.
         for source in &overrides {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source =
+                Self::from_source_with_cache(source, client_builder, &mut source_cache, cache)
+                    .await?;
             spec.overrides.extend(source.requirements);
             spec.overrides.extend(source.overrides);
             spec.override_dependencies
@@ -697,7 +754,9 @@ impl RequirementsSpecification {
 
         // Collect excludes.
         for source in &excludes {
-            let source = Self::from_source_with_cache(source, client_builder, &mut cache).await?;
+            let source =
+                Self::from_source_with_cache(source, client_builder, &mut source_cache, cache)
+                    .await?;
             for req_spec in source.requirements {
                 match req_spec.requirement {
                     UnresolvedRequirement::Named(requirement) => {
@@ -728,8 +787,9 @@ impl RequirementsSpecification {
     pub async fn from_simple_sources(
         requirements: &[RequirementsSource],
         client_builder: &BaseClientBuilder<'_>,
+        cache: &Cache,
     ) -> Result<Self> {
-        Self::from_sources(requirements, &[], &[], &[], None, client_builder).await
+        Self::from_sources(requirements, &[], &[], &[], None, client_builder, cache).await
     }
 
     /// Initialize a [`RequirementsSpecification`] from a list of [`Requirement`], including
@@ -788,10 +848,31 @@ async fn resolve_source<'a>(
 ) -> Result<Cow<'a, RequirementsSource>> {
     if let RequirementsSource::Extensionless(input @ RequirementsInput::Stdin) = source {
         let content = read_cached_file(input, client_builder, cache).await?;
-        if toml::from_str::<toml::Table>(&content)
-            .is_ok_and(|table| table.contains_key("lock-version"))
+        if Pep723Metadata::parse(content.as_bytes())?.is_some() {
+            return Ok(Cow::Borrowed(source));
+        }
+        if let Ok(table) = toml::from_str::<toml::Table>(&content) {
+            if table.contains_key("lock-version") {
+                return Ok(Cow::Owned(RequirementsSource::PylockToml(input.clone())));
+            }
+            if table.contains_key("project")
+                || table.contains_key("build-system")
+                || table.contains_key("dependency-groups")
+                || table.contains_key("tool")
+            {
+                return Ok(Cow::Owned(RequirementsSource::PyprojectToml(input.clone())));
+            }
+        }
+        if Options::default()
+            .case_sensitive(true)
+            .parse(&content)
+            .is_ok_and(|ini| {
+                ini.sections().any(|(section, _)| {
+                    section == "metadata" || section == "options" || section.starts_with("options.")
+                })
+            })
         {
-            return Ok(Cow::Owned(RequirementsSource::PylockToml(input.clone())));
+            return Ok(Cow::Owned(RequirementsSource::SetupCfg(input.clone())));
         }
     }
     Ok(Cow::Borrowed(source))

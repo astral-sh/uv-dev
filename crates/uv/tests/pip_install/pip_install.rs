@@ -1677,6 +1677,7 @@ werkzeug==3.0.1
     Ok(())
 }
 
+/// PEP 723 metadata takes precedence when the script is valid TOML with a `project` key.
 #[test]
 fn install_script_from_stdin() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -1685,7 +1686,7 @@ fn install_script_from_stdin() -> Result<()> {
         # /// script
         # dependencies = ["iniconfig==2.0.0"]
         # ///
-        import iniconfig
+        project = "example"
     "#})?;
 
     uv_snapshot!(context.pip_install()
@@ -19315,4 +19316,73 @@ async fn pep_751_remote_index_credentials() -> Result<()> {
     ");
 
     Ok(())
+}
+
+#[test]
+fn install_pyproject_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        [project]
+        name = "stdin-project"
+        version = "1.0"
+        dependencies = ["iniconfig==2.0.0"]
+        [project.optional-dependencies]
+        dev = ["idna==3.6"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("-")
+        .arg("--extra").arg("dev")
+        .stdin(File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + idna==3.6
+     + iniconfig==2.0.0
+    ");
+    context
+        .assert_command("import iniconfig; import idna")
+        .success();
+
+    Ok(())
+}
+
+/// An explicit format takes precedence over inline metadata detection.
+#[test]
+fn install_stdin_explicit_requirements_format() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["does-not-exist"]
+        # ///
+        iniconfig==2.0.0
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install().arg("-r").arg("-")
+        .arg("--input-format").arg("requirements.txt")
+        .stdin(File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    context.assert_command("import iniconfig").success();
+
+    Ok(())
+}
+
+#[test]
+fn install_input_format_requires_stdin() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), context.pip_install().arg("iniconfig")
+        .arg("--input-format").arg("setup.py").arg("--offline"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: `--input-format` requires a requirements input of `-`
+    ");
 }

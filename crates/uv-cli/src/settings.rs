@@ -23,8 +23,9 @@ use uv_configuration::{
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
     KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
     PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
-    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
-    TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
+    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsFormat, RequirementsInput,
+    ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade,
+    VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
@@ -3341,6 +3342,7 @@ fn requirement_files(
 pub struct PipCompileSettings {
     pub format: Option<PipCompileFormat>,
     pub src_file: Vec<RequirementsInput>,
+    pub input_format: Option<RequirementsFormat>,
     pub constraints: Vec<RequirementsInput>,
     pub overrides: Vec<RequirementsInput>,
     pub excludes: Vec<RequirementsInput>,
@@ -3366,6 +3368,7 @@ impl PipCompileSettings {
     ) -> anyhow::Result<Self> {
         let PipCompileArgs {
             src_file,
+            input_format,
             constraints:
                 DependencyConstraintsArgs {
                     constraints,
@@ -3487,9 +3490,14 @@ impl PipCompileSettings {
             .as_ref()
             .and_then(|configuration| configuration.minimum_libc_version);
 
+        if input_format.is_some() && !src_file.contains(&RequirementsInput::Stdin) {
+            bail!("`--input-format` requires a requirements input of `-`");
+        }
+
         Ok(Self {
             format,
             src_file,
+            input_format,
             constraints: requirement_files(constraints, environment.constraints.clone()),
             build_constraints: requirement_files(
                 build_constraints,
@@ -3568,6 +3576,7 @@ impl PipCompileSettings {
 #[derive(Debug, Clone)]
 pub struct PipSyncSettings {
     pub src_file: Vec<RequirementsInput>,
+    pub input_format: Option<RequirementsFormat>,
     pub constraints: Vec<RequirementsInput>,
     pub build_constraints: Vec<RequirementsInput>,
     pub build_hash_checking: HashCheckingMode,
@@ -3586,6 +3595,7 @@ impl PipSyncSettings {
     ) -> anyhow::Result<Self> {
         let PipSyncArgs {
             src_file,
+            input_format,
             constraints,
             build_constraints,
             require_build_hashes,
@@ -3627,8 +3637,13 @@ impl PipSyncSettings {
             check,
         } = *args;
 
+        if input_format.is_some() && !src_file.contains(&RequirementsInput::Stdin) {
+            bail!("`--input-format` requires a requirements input of `-`");
+        }
+
         Ok(Self {
             src_file,
+            input_format,
             constraints: requirement_files(constraints, environment.constraints.clone()),
             build_constraints: requirement_files(
                 build_constraints,
@@ -3692,6 +3707,7 @@ impl PipSyncSettings {
 pub struct PipInstallSettings {
     pub package: Vec<String>,
     pub requirements: Vec<RequirementsInput>,
+    pub input_format: Option<RequirementsFormat>,
     pub editables: Vec<String>,
     pub editable: Option<EditableMode>,
     pub constraints: Vec<RequirementsInput>,
@@ -3720,6 +3736,7 @@ impl PipInstallSettings {
         let PipInstallArgs {
             package,
             requirements,
+            input_format,
             editable,
             no_editable,
             no_editable_package,
@@ -3816,9 +3833,14 @@ impl PipInstallSettings {
             Vec::new()
         };
 
+        if input_format.is_some() && !requirements.contains(&RequirementsInput::Stdin) {
+            bail!("`--input-format` requires a requirements input of `-`");
+        }
+
         Ok(Self {
             package,
             requirements,
+            input_format,
             editables: editable,
             constraints: requirement_files(constraints, environment.constraints.clone()),
             overrides: requirement_files(overrides, environment.overrides.clone()),

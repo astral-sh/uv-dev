@@ -3659,3 +3659,72 @@ fn tool_run_pylock_stdin() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn tool_run_pyproject_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        [project]
+        name = "stdin-project"
+        version = "1.0"
+        dependencies = ["iniconfig==2.0.0"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--with-requirements").arg("-")
+        .arg("python").arg("-c").arg("import iniconfig; print('ok')")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    Ok(())
+}
+
+/// A project source from stdin must bypass the installed tool's environment.
+#[test]
+fn tool_run_pyproject_stdin_installed() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .arg("cowsay==6.1")
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .assert()
+        .success();
+
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        [project]
+        name = "stdin-project"
+        version = "1.0"
+        dependencies = ["iniconfig==2.0.0"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--from").arg("cowsay")
+        .arg("--with-requirements").arg("-")
+        .arg("python").arg("-c").arg("import iniconfig; print('ok')")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 2 packages in [TIME]
+     + cowsay==6.1
+     + iniconfig==2.0.0
+    ");
+
+    Ok(())
+}

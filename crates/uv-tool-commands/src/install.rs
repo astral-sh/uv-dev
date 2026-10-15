@@ -45,7 +45,7 @@ use crate::common::{
     tool_environment_spec,
 };
 use crate::error::ToolLockError;
-use crate::requirements::resolve_names;
+use crate::requirements::resolve_requirements;
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
@@ -116,7 +116,7 @@ pub async fn install(
                 RequirementsSource::from_package(requirement)?
             };
             Some(
-                RequirementsSpecification::from_source(&source, &client_builder)
+                RequirementsSpecification::from_source(&source, &client_builder, &cache)
                     .await?
                     .requirements,
             )
@@ -158,7 +158,7 @@ pub async fn install(
     .into_interpreter();
 
     let receipt_build_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+        operations::read_constraints(build_constraints, &client_builder, &cache).await?;
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
 
@@ -195,8 +195,9 @@ pub async fn install(
                 None
             };
 
-            let requirement = resolve_names(
+            let requirement = resolve_requirements(
                 requirements,
+                &[],
                 &interpreter,
                 &settings.resolver,
                 &build_constraints,
@@ -373,13 +374,14 @@ pub async fn install(
     };
 
     // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
+    let mut spec = RequirementsSpecification::from_sources(
         with,
         constraints,
         overrides,
         excludes,
         None,
         &client_builder,
+        &cache,
     )
     .await?;
 
@@ -387,13 +389,17 @@ pub async fn install(
         anyhow::bail!("`pylock.toml` is not a supported input format for `uv tool install`");
     }
 
+    // Extract project dependencies before constructing the receipt and tool-lock manifest.
+    let source_trees = std::mem::take(&mut spec.source_trees);
+
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
         let mut requirements = Vec::with_capacity(1 + with.len());
         requirements.push(requirement.clone());
         requirements.extend(
-            resolve_names(
+            resolve_requirements(
                 spec.requirements.clone(),
+                &source_trees,
                 &interpreter,
                 &settings.resolver,
                 &build_constraints,
@@ -449,8 +455,9 @@ pub async fn install(
         .collect::<Vec<_>>();
 
     // Resolve the overrides.
-    let receipt_overrides = resolve_names(
+    let receipt_overrides = resolve_requirements(
         spec.overrides,
+        &[],
         &interpreter,
         &settings.resolver,
         &build_constraints,
