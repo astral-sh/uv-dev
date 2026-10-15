@@ -41,7 +41,8 @@ use uv_python_types::{
     PythonVersion, VersionRequest,
 };
 use uv_requirements::{
-    GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
+    GroupsSpecification, PylockInputMode, RequirementsSource, RequirementsSpecification,
+    is_pylock_toml,
 };
 use uv_resolver::{
     AnnotationStyle, DependencyMode, DisplayResolutionGraph, ExcludeNewer, FlatIndex, ForkStrategy,
@@ -63,6 +64,7 @@ use uv_resolve_operations::locked_requirements::{
     LockedRequirements, read_pylock_toml_requirements, read_requirements_txt,
 };
 use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::pylock::import_pylock_toml;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
 /// Resolve a set of requirements into a set of pinned versions.
@@ -202,13 +204,13 @@ pub async fn pip_compile(
     // Read all requirements from the provided sources.
     let RequirementsSpecification {
         project,
-        requirements,
+        mut requirements,
         constraints,
         overrides,
         mut override_dependencies,
         excludes,
         pylock,
-        pylock_groups: _,
+        pylock_groups,
         source_trees,
         groups,
         extras: used_extras,
@@ -225,6 +227,7 @@ pub async fn pip_compile(
         overrides,
         excludes,
         Some(&groups),
+        PylockInputMode::Import,
         &client_builder,
         &cache,
     )
@@ -232,14 +235,7 @@ pub async fn pip_compile(
 
     override_dependencies.extend(overrides_from_workspace);
 
-    // Reject `pylock.toml` files, which are valid outputs but not inputs.
-    if pylock.is_some() {
-        return Err(anyhow!(
-            "`pylock.toml` is not a supported input format for `uv pip compile`"
-        ));
-    }
-
-    if !extras.is_empty() && source_trees.is_empty() {
+    if !extras.is_empty() && source_trees.is_empty() && pylock.is_none() {
         return Err(anyhow!(
             "Requesting extras requires a `pyproject.toml`, `setup.cfg`, or `setup.py` file."
         ));
@@ -270,7 +266,7 @@ pub async fn pip_compile(
 
     // If all the metadata could be statically resolved, validate that every extra was used. If we
     // need to resolve metadata via PEP 517, we don't know which extras are used until much later.
-    if source_trees.is_empty() {
+    if source_trees.is_empty() && pylock.is_none() {
         let mut unused_extras = extras
             .explicit_names()
             .filter(|extra| !used_extras.contains(extra))
@@ -464,20 +460,30 @@ pub async fn pip_compile(
         .platform(interpreter.platform())
         .build()?;
 
-    // Read the lockfile, if present.
-    let LockedRequirements { preferences, git } =
-        if let Some(output_file) = output_file.filter(|output_file| output_file.is_file()) {
-            match format {
-                PipCompileFormat::RequirementsTxt => LockedRequirements::from_preferences(
-                    read_requirements_txt(output_file, &upgrade).await?,
-                ),
-                PipCompileFormat::PylockToml => {
-                    read_pylock_toml_requirements(output_file, &upgrade).await?
-                }
+    let imported = if let Some(pylock) = &pylock {
+        let (imported, locked) =
+            import_pylock_toml(pylock, &extras, &pylock_groups, &upgrade, &client_builder).await?;
+        requirements.extend(imported);
+        locked
+    } else {
+        LockedRequirements::default()
+    };
+
+    // Prefer imported versions over versions recorded in the existing output file.
+    let locked = if let Some(output_file) = output_file.filter(|output_file| output_file.is_file())
+    {
+        match format {
+            PipCompileFormat::RequirementsTxt => LockedRequirements::from_preferences(
+                read_requirements_txt(output_file, &upgrade).await?,
+            ),
+            PipCompileFormat::PylockToml => {
+                read_pylock_toml_requirements(output_file, &upgrade).await?
             }
-        } else {
-            LockedRequirements::default()
-        };
+        }
+    } else {
+        LockedRequirements::default()
+    };
+    let LockedRequirements { preferences, git } = imported.with_fallback(locked);
 
     // Populate the Git resolver.
     for ResolvedRepositoryReference { reference, sha } in git {

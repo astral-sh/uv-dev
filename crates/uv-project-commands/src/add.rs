@@ -49,7 +49,8 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_redacted::DisplaySafeUrl;
 use uv_requirements::{
-    NamedRequirementsResolver, RequirementsSource, RequirementsSpecification, SourceTreeResolver,
+    NamedRequirementsResolver, PylockInputMode, RequirementsSource, RequirementsSpecification,
+    SourceTreeResolver,
 };
 use uv_resolve_operations::Error as ResolveError;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
@@ -375,6 +376,7 @@ pub async fn add(
         &[],
         &[],
         None,
+        PylockInputMode::Install,
         &client_builder,
         cache,
     )

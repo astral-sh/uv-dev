@@ -48,7 +48,7 @@ use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
 use crate::install_report::write_install_report;
-use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
+use crate::pylock::resolve_pylock_toml;
 use crate::reporters::report_target_environment;
 use crate::resolve_build_hash_checking;
 use uv_command_support::{ExitStatus, Printer, UvError};
@@ -58,6 +58,7 @@ use uv_install_operations::loggers::{DefaultInstallLogger, InstallLogger};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::report_interpreter;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::pylock::read_pylock_toml;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
 /// The interpreter is externally managed and cannot be modified.

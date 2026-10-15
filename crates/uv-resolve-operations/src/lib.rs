@@ -27,8 +27,9 @@ use uv_pep508::{MarkerEnvironment, RequirementOrigin};
 use uv_platform_tags::Tags;
 use uv_pypi_types::Conflicts;
 use uv_requirements::{
-    GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
-    RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
+    GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, PylockInputMode,
+    RequirementsSource, RequirementsSpecification, SourceTree, SourceTreeResolution,
+    SourceTreeResolver,
 };
 use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
@@ -44,6 +45,7 @@ pub mod latest;
 pub mod locked_requirements;
 pub mod loggers;
 mod markers;
+pub mod pylock;
 pub mod reporters;
 
 pub use error::Error;
@@ -67,6 +69,7 @@ pub async fn read_requirements(
         overrides,
         excludes,
         groups,
+        PylockInputMode::Install,
         client_builder,
         cache,
     )
@@ -96,6 +99,7 @@ pub async fn read_constraints(
         &[],
         &[],
         None,
+        PylockInputMode::Install,
         client_builder,
         cache,
     )

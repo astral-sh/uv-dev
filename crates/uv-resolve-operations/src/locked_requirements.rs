@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::Result;
@@ -8,9 +9,10 @@ use uv_distribution_types::IndexUrl;
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
+use uv_normalize::{ExtraName, GroupName};
 use uv_pep508::VerbatimUrl;
 use uv_requirements_txt::RequirementsTxt;
-use uv_resolver::{Preference, PreferenceError, UpgradePackages};
+use uv_resolver::{Preference, PreferenceError, UniversalMarker, UpgradePackages};
 
 #[derive(Debug, Default)]
 pub struct LockedRequirements {
@@ -21,12 +23,70 @@ pub struct LockedRequirements {
 }
 
 impl LockedRequirements {
+    /// Add fallback version preferences for new package names and prepend fallback Git references.
+    #[must_use]
+    pub fn with_fallback(mut self, fallback: Self) -> Self {
+        let names = self
+            .preferences
+            .iter()
+            .map(|preference| preference.name().clone())
+            .collect::<BTreeSet<_>>();
+        self.preferences.extend(
+            fallback
+                .preferences
+                .into_iter()
+                .filter(|preference| !names.contains(preference.name())),
+        );
+        self.git.splice(0..0, fallback.git);
+        self
+    }
+
     /// Create a [`LockedRequirements`] from a list of preferences.
     pub fn from_preferences(preferences: Vec<Preference>) -> Self {
         Self {
             preferences,
             ..Self::default()
         }
+    }
+
+    /// Extract version and Git preferences from selected packages in a [`PylockToml`].
+    pub fn from_pylock(
+        lock: &PylockToml,
+        install_path: &Path,
+        extras: &[ExtraName],
+        groups: &[GroupName],
+        upgrade: &Upgrade,
+    ) -> Result<Self, PylockTomlErrorKind> {
+        if upgrade.is_all() {
+            return Ok(Self::default());
+        }
+        let upgrade_packages = UpgradePackages::for_non_project(upgrade);
+        let mut preferences = Vec::new();
+        let mut git = Vec::new();
+        for package in &lock.packages {
+            if upgrade_packages.contains(&package.name) {
+                continue;
+            }
+            let marker = package.marker().simplify_pep751(extras, groups);
+            if marker.is_false() {
+                continue;
+            }
+            if let Some(version) = &package.version {
+                preferences.push(Preference::from_locked(
+                    package.name.clone(),
+                    version.clone(),
+                    package
+                        .index
+                        .as_ref()
+                        .map(|index| IndexUrl::from(VerbatimUrl::from(index.clone()))),
+                    vec![UniversalMarker::from_combined(marker)],
+                ));
+            }
+            if let Some(git_ref) = package.as_git_ref(install_path)? {
+                git.push(git_ref);
+            }
+        }
+        Ok(Self { preferences, git })
     }
 }
 
@@ -122,6 +182,8 @@ pub async fn read_pylock_toml_requirements(
     let content = fs_err::tokio::read_to_string(&output_file).await?;
     let lock = info_span!("toml::from_str upgrade", path = %output_file.display())
         .in_scope(|| toml::from_str::<PylockToml>(&content))?;
+    let absolute = std::path::absolute(output_file)?;
+    let install_path = absolute.parent().unwrap_or(&CWD);
 
     let upgrade_packages = UpgradePackages::for_non_project(upgrade);
 
@@ -148,7 +210,7 @@ pub async fn read_pylock_toml_requirements(
         }
 
         // Map each entry in the lockfile to a Git SHA.
-        if let Some(git_ref) = package.as_git_ref()? {
+        if let Some(git_ref) = package.as_git_ref(install_path)? {
             git.push(git_ref);
         }
     }

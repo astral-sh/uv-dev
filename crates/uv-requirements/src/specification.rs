@@ -100,6 +100,15 @@ pub struct RequirementsSpecification {
     pub no_build: NoBuild,
 }
 
+/// Whether a `pylock.toml` is installed directly or imported into a new resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PylockInputMode {
+    /// Install the locked packages without adding or resolving requirements.
+    Install,
+    /// Combine imported requirements with other inputs and resolve them again.
+    Import,
+}
+
 /// A `pylock.toml` input, with contents retained when format detection consumes stdin.
 #[derive(Debug, Clone)]
 pub enum PylockSource {
@@ -470,6 +479,7 @@ impl RequirementsSpecification {
         overrides: &[RequirementsSource],
         excludes: &[RequirementsSource],
         groups: Option<&GroupsSpecification>,
+        pylock_mode: PylockInputMode,
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
     ) -> Result<Self> {
@@ -547,26 +557,27 @@ impl RequirementsSpecification {
             ));
         }
 
-        // If we have a `pylock.toml`, don't allow additional requirements, constraints, or
-        // overrides.
+        // Direct lockfile installation cannot combine additional requirements, constraints, or
+        // overrides. Importing a lockfile permits these inputs because it resolves again.
         if requirements
             .iter()
             .any(|source| matches!(source.as_ref(), RequirementsSource::PylockToml(_)))
         {
-            if requirements
-                .iter()
-                .any(|source| !matches!(source.as_ref(), RequirementsSource::PylockToml(..)))
+            if pylock_mode == PylockInputMode::Install
+                && requirements
+                    .iter()
+                    .any(|source| !matches!(source.as_ref(), RequirementsSource::PylockToml(..)))
             {
                 return Err(anyhow::anyhow!(
                     "Cannot specify additional requirements alongside a `pylock.toml` file",
                 ));
             }
-            if !constraints.is_empty() {
+            if pylock_mode == PylockInputMode::Install && !constraints.is_empty() {
                 return Err(anyhow::anyhow!(
                     "Cannot specify constraints with a `pylock.toml` file"
                 ));
             }
-            if !overrides.is_empty() {
+            if pylock_mode == PylockInputMode::Install && !overrides.is_empty() {
                 return Err(anyhow::anyhow!(
                     "Cannot specify overrides with a `pylock.toml` file"
                 ));
@@ -789,7 +800,17 @@ impl RequirementsSpecification {
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
     ) -> Result<Self> {
-        Self::from_sources(requirements, &[], &[], &[], None, client_builder, cache).await
+        Self::from_sources(
+            requirements,
+            &[],
+            &[],
+            &[],
+            None,
+            PylockInputMode::Install,
+            client_builder,
+            cache,
+        )
+        .await
     }
 
     /// Initialize a [`RequirementsSpecification`] from a list of [`Requirement`], including

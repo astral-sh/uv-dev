@@ -39,7 +39,7 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{PylockInputMode, RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_shell::WindowsRunnable;
 use uv_static::EnvVars;
@@ -1028,6 +1028,7 @@ async fn get_or_create_environment(
         overrides,
         &[],
         None,
+        PylockInputMode::Install,
         client_builder,
         cache,
     )

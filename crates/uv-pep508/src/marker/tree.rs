@@ -1316,6 +1316,30 @@ impl MarkerTree {
         Self(INTERNER.lock().restrict(self.0, assumption.0))
     }
 
+    /// Substitute the selected PEP 751 extras and dependency groups, retaining environment markers.
+    #[must_use]
+    pub fn simplify_pep751(self, extras: &[ExtraName], groups: &[GroupName]) -> Self {
+        Self(
+            INTERNER
+                .lock()
+                .restrict_by(self.0, &|variable| match variable {
+                    Variable::List(CanonicalMarkerListPair::Extras(extra)) => {
+                        Some(extras.contains(extra))
+                    }
+                    Variable::List(CanonicalMarkerListPair::DependencyGroup(group)) => {
+                        Some(groups.contains(group))
+                    }
+                    Variable::Extra(_) => Some(false),
+                    Variable::Version(_)
+                    | Variable::VersionString(_)
+                    | Variable::String(_)
+                    | Variable::In { .. }
+                    | Variable::Contains { .. }
+                    | Variable::List(CanonicalMarkerListPair::Arbitrary { .. }) => None,
+                }),
+        )
+    }
+
     /// Remove the extras from a marker, returning `None` if the marker tree evaluates to `true`.
     ///
     /// Any `extra` markers that are always `true` given the provided extras will be removed.
