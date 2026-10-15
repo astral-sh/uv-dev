@@ -10,13 +10,15 @@ The reporter lists nine private-Git integration-test failures on Gentoo Linux am
 
 **Reproduction outcome: not_reproducible.** All nine reported test scenarios passed against the published uv 0.13.1 binary on Ubuntu x86_64 with Git 2.55.0 and Python 3.12.3. The detailed multiple-PAT scenario also passed against the installed uv 0.13.0 binary. This does not rule out a Gentoo build, Git configuration, transport, or environment difference; no common root cause or uv-version regression has been established.
 
-These tests intentionally access private fixtures using credentials supplied by the test helpers. They are gated by the default-enabled `test-git` feature; private fixtures are not inherently unavailable to downstream test runs. The two rate-limit tests simulate GitHub API responses locally and do not demonstrate actual GitHub rate limiting.
+These tests intentionally access private fixtures using credentials supplied by the test helpers. In the inspected source, they are gated by the default-enabled `test-git` feature; private fixtures are not inherently unavailable to downstream test runs. The two rate-limit tests simulate GitHub API responses locally and do not demonstrate actual GitHub rate limiting.
+
+**Maintainer direction:** charliermarsh plans to gate these private-Git tests behind an additional feature beyond `test-git` (astral-sh/uv#22584, comment ID 6190687672, October 15, 2026 at 11:11:51 UTC). This is a stated implementation plan. The supplied discussion does not specify a feature name, default-enablement policy, implementation PR, or release target. The additional gate would give separate control over these tests; it does not establish why the authenticated fetches failed downstream.
 
 ## Classification
 
 Retain the bug classification as a reported integration-test regression. The expected behavior is successful installation, dependency editing, and frozen synchronization, not failure merely because the fixtures are private. Current execution supports those success expectations and does not confirm the reported failures locally.
 
-No confirmed duplicate was found. In particular, failure of a regression test associated with astral-sh/uv#19419 would not by itself establish recurrence of its historical workspace-discovery bug. Credential expiry, redirect handling, Git-version changes, and downstream configuration remain unconfirmed hypotheses. The issue was open with no comments when rechecked during reproduction.
+No confirmed duplicate was found. In particular, failure of a regression test associated with astral-sh/uv#19419 would not by itself establish recurrence of its historical workspace-discovery bug. Credential expiry, redirect handling, Git-version changes, and downstream configuration remain unconfirmed hypotheses. The planned additional feature gate does not change the bug classification or the unsuccessful local reproduction outcome.
 
 ## Reproduction
 
@@ -88,7 +90,7 @@ Obtain the exact Cargo/nextest command and enabled features, Gentoo package reci
 - astral-sh/uv#22464, merged October 11, changes checks for already-installed Git dependencies pinned to full commits. Its diff does not change the reported private-install test bodies or Git authentication.
 - astral-sh/uv#22519, merged October 13, copies local repository fixtures into isolated test directories. Its diff does not alter the nine private-Git scenarios.
 - astral-sh/uv#22452 caches compiled snapshot filters; astral-sh/uv#22453 avoids loading the Python catalog for contexts that request no Python. Their descriptions were reviewed as test-helper changes in the release. The reported tests request Python 3.12.
-- `crates/uv/Cargo.toml` enables `test-git` through `test-defaults`. All nine reported tests require it; there is no separate private-Git feature. Three of the install tests additionally exclude Windows.
+- In the source inspected during reproduction, `crates/uv/Cargo.toml` enables `test-git` through `test-defaults`. All nine reported tests require it; that source has no separate private-Git feature. Three of the install tests additionally exclude Windows. The maintainer subsequently announced the additional gate described above; its implementation has not been verified here.
 - `crates/uv-git/src/git.rs::fetch_with_cli` invokes system Git and disables terminal prompting. That explains the form of an unauthenticated-fetch error but does not identify why the reporter's authenticated fetch failed.
 - `crates/uv-project-commands/src/sync.rs` uses `MemberDiscovery::Existing` for frozen sync, consistent with the final implementation of astral-sh/uv#19423. The original PR body describes an earlier implementation and should not be used as the current algorithm.
 
@@ -106,6 +108,6 @@ The earlier candidate exclusions remain appropriate: astral-sh/uv#15188 concerns
 
 ## Next maintainer action
 
-Request the downstream details and redacted logs listed above. Report that all nine authenticated scenarios currently pass on the tested Linux environment, rather than diagnosing fixture access, expired credentials, or a frozen-workspace regression from the reported error alone.
+Track the planned additional feature gate and confirm its name, default behavior, and release availability before recommending downstream feature flags. For root-cause investigation, obtain the downstream details and redacted logs listed above. All nine authenticated scenarios passed on the tested Linux environment, so neither the reported error nor the gating plan establishes expired fixture credentials or a frozen-workspace regression.
 
 No GitHub changes were made, and no checkout files were modified during reproduction. The pre-existing checkout status was left unchanged.
