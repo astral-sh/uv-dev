@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9845,
+        "title": "Read `UV_INDEX_<NAME>_` credentials during `uv publish`",
+        "url": "https://github.com/astral-sh/uv/issues/9845",
+        "state": "open",
+        "reason": "Canonical discussion of the same missing credential fallback with `uv publish --index`. It explicitly requests reading named-index username/password environment variables. Maintainers discussed fallback precedence, then raised concerns about download and upload credentials differing; it remains labeled enhancement and needs-decision. This report adds a username-only Azure keyring case."
+      },
+      {
+        "kind": "issue",
+        "number": 10193,
+        "title": "How to provide publish credentials for an alternative (named) package index?",
+        "url": "https://github.com/astral-sh/uv/issues/10193",
+        "state": "closed",
+        "reason": "Named-index publishing failed when only `UV_INDEX_<NAME>_USERNAME` and its password counterpart were supplied. A maintainer and the reporter identified it as a duplicate of astral-sh/uv#9845. It involves Artifactory and complete credentials rather than Azure keyring, but confirms the same canonical discussion."
+      },
+      {
+        "kind": "issue",
+        "number": 9227,
+        "title": "Allow `--token` to be empty if `--keyring-provider` is set with `uv publish`",
+        "url": "https://github.com/astral-sh/uv/issues/9227",
+        "state": "open",
+        "reason": "Adjacent keyring/prompt behavior: publishing works with an explicit username, while prompting does not provide the expected keyring flow. A maintainer explains that keyring lookup requires a username and that missing credentials trigger prompting. It concerns PyPI token handling, not reuse of named-index environment variables."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9694,
+        "title": "Publish: Support --index <name>",
+        "url": "https://github.com/astral-sh/uv/pull/9694",
+        "state": "merged",
+        "reason": "Introduced named-index publishing and resolution of publish/check URLs, merging on 2024-12-10. astral-sh/uv#9845 reported missing credential reuse immediately afterward in uv 0.5.8. This is the originating feature, not a fix for username inheritance."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged pull requests using authenticated gh. Literal searches covered UV_INDEX_<NAME>_USERNAME, UV_INDEX with publish, VssSessionToken, Enter username, and publish with 401 Unauthorized. Conceptual searches covered named-index publishing, credential reuse, private-index prompts, Azure authentication, and keyring username selection, including searches without platform/provider details. Fix-oriented searches covered publish credentials, username, and keyring; PR searches returned no additional candidates, so referenced PRs were inspected directly. Read candidate comments and followed astral-sh/uv#10193 and astral-sh/uv#10386 to astral-sh/uv#9845, plus its originating PR. Ruled out astral-sh/uv#18003 and astral-sh/uv#17608 as closer matches because they concern stored-credential selection/default token usernames; astral-sh/uv#9997 involved unexported variables. Inspected astral-sh/uv#11836, astral-sh/uv#15587, astral-sh/uv#16236, and merged astral-sh/uv#15546: these concern check-URL authentication rather than the upload username. Also inspected astral-sh/uv#8806 and astral-sh/uv#8827 from the keyring discussion; neither implements named-index username reuse. Compared these findings with the current publish implementation and Azure integration documentation."
+  },
+  "type": "duplicate",
+  "type_reason": "astral-sh/uv#9845 already tracks the same missing named-index credential fallback during publishing and remains open. The username-only Azure keyring trigger is a more specific instance of that request. Current source confirms that index selection supplies URLs without populating the upload username. No evidence establishes a previously fixed upload-username regression; astral-sh/uv#15546 fixed the separate check-URL credential path.",
+  "summary": "astral-sh/uv#9845 is the canonical open discussion, with astral-sh/uv#10193 already closed as its duplicate. astral-sh/uv#9227 explains the adjacent keyring/prompt interaction, and astral-sh/uv#9694 introduced named-index publishing.",
+  "draft_response": "This is already tracked in astral-sh/uv#9845. `--index` selects the publish and check URLs, but the upload username is not populated from `UV_INDEX_<NAME>_USERNAME`. That discussion remains open, including concerns about download and upload credentials differing.\n\nFor your Azure keyring setup, continue using `--username VssSessionToken` or `UV_PUBLISH_USERNAME=VssSessionToken` with the subprocess provider enabled. Please add your username-only keyring case to astral-sh/uv#9845 so the discussion stays together."
+}
