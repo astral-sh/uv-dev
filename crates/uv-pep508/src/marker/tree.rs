@@ -1316,6 +1316,30 @@ impl MarkerTree {
         Self(INTERNER.lock().restrict(self.0, assumption.0))
     }
 
+    /// Resolve PEP 751 extras and dependency groups while retaining environment conditions.
+    #[must_use]
+    pub fn simplify_pep751(self, extras: &[ExtraName], groups: &[GroupName]) -> Self {
+        Self(
+            INTERNER
+                .lock()
+                .restrict_by(self.0, &|variable| match variable {
+                    Variable::List(CanonicalMarkerListPair::Extras(extra)) => {
+                        Some(extras.contains(extra))
+                    }
+                    Variable::List(CanonicalMarkerListPair::DependencyGroup(group)) => {
+                        Some(groups.contains(group))
+                    }
+                    Variable::String(_)
+                    | Variable::Version(_)
+                    | Variable::VersionString(_)
+                    | Variable::In { .. }
+                    | Variable::Contains { .. }
+                    | Variable::Extra(_)
+                    | Variable::List(CanonicalMarkerListPair::Arbitrary { .. }) => None,
+                }),
+        )
+    }
+
     /// Remove the extras from a marker, returning `None` if the marker tree evaluates to `true`.
     ///
     /// Any `extra` markers that are always `true` given the provided extras will be removed.
@@ -1870,7 +1894,7 @@ mod test {
 
     use insta::assert_snapshot;
 
-    use uv_normalize::ExtraName;
+    use uv_normalize::{ExtraName, GroupName};
     use uv_pep440::Version;
 
     use crate::marker::{MarkerEnvironment, MarkerEnvironmentBuilder};
@@ -2462,6 +2486,18 @@ mod test {
             }"##,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_simplify_pep751() {
+        let marker =
+            m("('default' in dependency_groups or 'test' in extras) and sys_platform == 'linux'");
+        let environment = m("sys_platform == 'linux'");
+        let group = GroupName::from_str("default").expect("valid group name");
+        let extra = ExtraName::from_str("test").expect("valid extra name");
+        assert_eq!(marker.simplify_pep751(&[], &[group]), environment);
+        assert_eq!(marker.simplify_pep751(&[extra], &[]), environment);
+        assert_eq!(marker.simplify_pep751(&[], &[]), MarkerTree::FALSE);
     }
 
     #[test]
