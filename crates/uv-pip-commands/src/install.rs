@@ -48,7 +48,7 @@ use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
 use crate::install_report::write_install_report;
-use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
+use crate::pylock::{parse_pylock_toml, resolve_pylock_toml};
 use crate::reporters::report_target_environment;
 use crate::resolve_build_hash_checking;
 use uv_command_support::{ExitStatus, Printer, UvError};
@@ -511,7 +511,7 @@ pub async fn pip_install(
     );
 
     let (resolution, hasher) = if let Some(pylock) = pylock {
-        let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
+        let (install_path, lock) = parse_pylock_toml(&pylock)?;
 
         // Convert the extras and groups specifications into a concrete form.
         let extras = extras.with_defaults(DefaultExtras::default());

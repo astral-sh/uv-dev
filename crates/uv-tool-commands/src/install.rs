@@ -383,6 +383,10 @@ pub async fn install(
     )
     .await?;
 
+    if spec.pylock.is_some() {
+        anyhow::bail!("`pylock.toml` is not a supported input format for `uv tool install`");
+    }
+
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
         let mut requirements = Vec::with_capacity(1 + with.len());

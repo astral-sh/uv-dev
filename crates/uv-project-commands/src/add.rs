@@ -386,11 +386,7 @@ pub async fn add(
         .keyring(settings.resolver.keyring_provider);
 
     // Read the requirements.
-    let RequirementsSpecification {
-        requirements,
-        constraints,
-        ..
-    } = RequirementsSpecification::from_sources(
+    let spec = RequirementsSpecification::from_sources(
         &requirements,
         &constraints,
         &[],
@@ -399,6 +395,14 @@ pub async fn add(
         &client_builder,
     )
     .await?;
+    if spec.pylock.is_some() {
+        bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
+    }
+    let RequirementsSpecification {
+        requirements,
+        constraints,
+        ..
+    } = spec;
 
     // Initialize any shared state.
     let state = PlatformState::default();
