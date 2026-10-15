@@ -2363,7 +2363,12 @@ async fn run_project(
             requirements.extend(
                 args.with_requirements
                     .into_iter()
-                    .map(RequirementsSource::from_requirements_file)
+                    .map(|input| {
+                        RequirementsSource::from_requirements_file_with_format(
+                            input,
+                            args.input_format,
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?,
             );
 
@@ -2572,11 +2577,9 @@ async fn run_project(
                 .iter()
                 .map(String::as_str)
                 .map(RequirementsSource::from_package_argument)
-                .chain(
-                    args.requirements
-                        .into_iter()
-                        .map(RequirementsSource::from_requirements_file),
-                )
+                .chain(args.requirements.into_iter().map(|input| {
+                    RequirementsSource::from_requirements_file_with_format(input, args.input_format)
+                }))
                 .collect::<Result<Vec<_>>>()?;
 
             // Special-case: any local source trees specified on the command-line are automatically

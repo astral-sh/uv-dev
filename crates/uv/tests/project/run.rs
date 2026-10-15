@@ -7955,16 +7955,106 @@ fn run_setup_cfg_stdin() -> Result<()> {
         name = stdin-project
         version = 1.0
         [options]
-        install_requires = iniconfig
+        install_requires = iniconfig==2.0.0
     "})?;
 
-    uv_snapshot!(context.filters(), context.run().arg("--offline").arg("--no-project")
-        .arg("--with-requirements").arg("-").arg("python").arg("-c").arg("")
+    uv_snapshot!(context.filters(), context.run().arg("--no-project")
+        .arg("--with-requirements").arg("-").arg("python").arg("-c").arg("import iniconfig; print('ok')")
         .stdin(fs_err::File::open(input.path())?.into_file()), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+
     ----- stderr -----
-    error: Adding requirements from a `setup.cfg` is not supported in `uv run`
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
     ");
 
     Ok(())
+}
+
+/// Metadata requirements are layered on the current project without installing the source project.
+#[test]
+fn run_pyproject_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "metadata-project"
+        version = "1.0"
+        dependencies = ["iniconfig==2.0.0"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--with-requirements").arg("requirements/pyproject.toml")
+        .arg("python").arg("-c").arg("import iniconfig; print('ok')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn run_setup_py_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        from setuptools import setup
+        setup(name="stdin-project", version="1.0", install_requires=["iniconfig==2.0.0"])
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run().arg("--no-project")
+        .arg("--with-requirements").arg("-")
+        .arg("--input-format").arg("setup.py")
+        .arg("python").arg("-c").arg("import iniconfig; print('ok')")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn run_stdin_requirements_and_script() {
+    let context = uv_test::test_context!("3.12");
+
+    uv_snapshot!(context.filters(), context.run().arg("--no-project")
+        .arg("--with-requirements").arg("-")
+        .arg("--input-format").arg("requirements.txt").arg("-"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot read both requirements file and script from stdin
+    ");
 }

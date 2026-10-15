@@ -17,13 +17,13 @@ use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, AddBoundsKind, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
     DevMode, DryRun, EditableMode, ExtrasSpecification, ExtrasSpecificationWithDefaults,
-    GitLfsSetting, InstallOptions, Modifications, NoSources,
+    GitLfsSetting, InstallOptions, Modifications,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, UniversalState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
     Identifier, Index, IndexLocations, IndexName, IndexUrl, NameRequirementSpecification,
-    Requirement, RequirementSource, UnresolvedRequirement,
+    Requirement, RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
@@ -48,7 +48,9 @@ use uv_python_discovery::init_script_python_requirement;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_redacted::DisplaySafeUrl;
-use uv_requirements::{NamedRequirementsResolver, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{
+    NamedRequirementsResolver, RequirementsSource, RequirementsSpecification, SourceTreeResolver,
+};
 use uv_resolve_operations::Error as ResolveError;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolver::FlatIndex;
@@ -140,27 +142,8 @@ pub async fn add(
     malware_settings: &MalwareCheckSettings,
 ) -> Result<ExitStatus> {
     for source in &requirements {
-        match source {
-            RequirementsSource::PyprojectToml(_) => {
-                bail!("Adding requirements from a `pyproject.toml` is not supported in `uv add`");
-            }
-            RequirementsSource::SetupPy(_) => {
-                bail!("Adding requirements from a `setup.py` is not supported in `uv add`");
-            }
-            RequirementsSource::Pep723Script(_) => {
-                bail!("Adding requirements from a PEP 723 script is not supported in `uv add`");
-            }
-            RequirementsSource::SetupCfg(_) => {
-                bail!("Adding requirements from a `setup.cfg` is not supported in `uv add`");
-            }
-            RequirementsSource::PylockToml(_) => {
-                bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
-            }
-            RequirementsSource::Package(_)
-            | RequirementsSource::Editable(_)
-            | RequirementsSource::RequirementsTxt(_)
-            | RequirementsSource::Extensionless(_)
-            | RequirementsSource::EnvironmentYml(_) => {}
+        if let RequirementsSource::PylockToml(_) = source {
+            bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
         }
     }
 
@@ -399,48 +382,51 @@ pub async fn add(
     if spec.pylock.is_some() {
         bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
     }
-    if let Some(source_tree) = spec.source_trees.first() {
-        bail!(
-            "Adding requirements from a `{}` is not supported in `uv add`",
-            source_tree.filename()
-        );
-    }
     let RequirementsSpecification {
         requirements,
         constraints,
+        source_trees,
         ..
     } = spec;
 
     // Initialize any shared state.
     let state = PlatformState::default();
 
-    // Resolve any unnamed requirements.
+    // Resolve project metadata and any unnamed requirements.
     let requirements = {
-        // Partition the requirements into named and unnamed requirements.
-        let (mut requirements, unnamed): (Vec<_>, Vec<_>) = requirements
-            .into_iter()
-            .map(|spec| {
-                spec.requirement.augment_requirement(
-                    rev.as_deref(),
-                    tag.as_deref(),
-                    branch.as_deref(),
-                    lfs.into(),
-                    marker,
-                )
-            })
-            .partition_map(|requirement| match requirement {
-                UnresolvedRequirement::Named(requirement) => itertools::Either::Left(requirement),
-                UnresolvedRequirement::Unnamed(requirement) => {
-                    itertools::Either::Right(requirement)
-                }
-            });
+        let partition_requirements = |requirements: Vec<UnresolvedRequirementSpecification>| {
+            requirements
+                .into_iter()
+                .map(|spec| {
+                    spec.requirement.augment_requirement(
+                        rev.as_deref(),
+                        tag.as_deref(),
+                        branch.as_deref(),
+                        lfs.into(),
+                        marker,
+                    )
+                })
+                .partition_map(|requirement| match requirement {
+                    UnresolvedRequirement::Named(requirement) => {
+                        itertools::Either::Left(requirement)
+                    }
+                    UnresolvedRequirement::Unnamed(requirement) => {
+                        itertools::Either::Right(requirement)
+                    }
+                })
+        };
 
-        // Resolve any unnamed requirements.
-        if !unnamed.is_empty() {
+        let has_unnamed = requirements
+            .iter()
+            .any(|requirement| match requirement.requirement {
+                UnresolvedRequirement::Named(_) => false,
+                UnresolvedRequirement::Unnamed(_) => true,
+            });
+        if has_unnamed || !source_trees.is_empty() {
             // TODO(charlie): These are all default values. We should consider whether we want to
             // make them optional on the downstream APIs.
             let hasher = HashStrategy::default();
-            let sources = NoSources::None;
+            let sources = settings.resolver.sources.clone();
 
             // Initialize the registry client.
             let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
@@ -532,6 +518,29 @@ pub async fn add(
                 preview,
             );
 
+            let source_requirements = SourceTreeResolver::new(
+                &ExtrasSpecification::default(),
+                &hasher,
+                state.index(),
+                DistributionDatabase::new(
+                    &client,
+                    &build_dispatch,
+                    concurrency.downloads_semaphore.clone(),
+                ),
+            )
+            .with_reporter(Arc::new(ResolverReporter::from(printer)))
+            .resolve(source_trees.iter())
+            .await?;
+            let (mut requirements, unnamed): (Vec<_>, Vec<_>) = partition_requirements(
+                requirements
+                    .into_iter()
+                    .chain(source_requirements.into_iter().flat_map(|source| {
+                        Box::into_iter(source.into_requirements())
+                            .map(UnresolvedRequirementSpecification::from)
+                    }))
+                    .collect(),
+            );
+
             requirements.extend(
                 NamedRequirementsResolver::new(
                     &hasher,
@@ -546,9 +555,11 @@ pub async fn add(
                 .resolve(unnamed.into_iter())
                 .await?,
             );
+            requirements
+        } else {
+            let (requirements, _): (Vec<_>, Vec<_>) = partition_requirements(requirements);
+            requirements
         }
-
-        requirements
     };
 
     // If any of the requirements are self-dependencies, bail.

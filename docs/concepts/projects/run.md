@@ -39,6 +39,23 @@ $ uv run --with httpx==0.25.0 python -c "import httpx; print(httpx.__version__)"
 The requested version will be respected regardless of the project's requirements. For example, even
 if the project requires `httpx==0.24.0`, the output above would be the same.
 
+Use `--with-requirements` to read additional dependencies from a requirements file or project
+metadata such as `pyproject.toml`, `setup.cfg`, or `setup.py`. Project metadata contributes its base
+dependencies; optional dependencies, dependency groups, and the source project itself are not
+installed:
+
+```console
+$ uv run --with-requirements ../other-project/pyproject.toml python example.py
+```
+
+Pass `-` to read the requirements from stdin. Project metadata from stdin must be
+[self-contained](../../pip/packages.md#installing-packages-from-files); use `--input-format setup.py`
+to execute a `setup.py` input and extract its dependencies:
+
+```console
+$ cat setup.py | uv run --with-requirements - --input-format setup.py python example.py
+```
+
 ## Running scripts
 
 Scripts that declare inline metadata are automatically executed in environments isolated from the

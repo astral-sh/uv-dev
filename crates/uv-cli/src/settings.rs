@@ -694,6 +694,7 @@ pub struct RunSettings {
     pub with: Vec<String>,
     pub with_editable: Vec<String>,
     pub with_requirements: Vec<RequirementsInput>,
+    pub input_format: Option<RequirementsFormat>,
     pub isolated: bool,
     pub show_resolution: bool,
     pub all_packages: bool,
@@ -754,6 +755,7 @@ impl RunSettings {
             with,
             with_editable,
             with_requirements,
+            input_format,
             isolated,
             active,
             no_active,
@@ -811,6 +813,14 @@ impl RunSettings {
 
         let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
 
+        let with_requirements = with_requirements
+            .into_iter()
+            .filter_map(Maybe::into_option)
+            .collect::<Vec<_>>();
+        if input_format.is_some() && !with_requirements.contains(&RequirementsInput::Stdin) {
+            bail!("`--input-format` requires a requirements input of `-`");
+        }
+
         Ok(Self {
             lock_check: locked,
             frozen,
@@ -852,10 +862,8 @@ impl RunSettings {
                 .into_iter()
                 .flat_map(CommaSeparatedRequirements::into_iter)
                 .collect(),
-            with_requirements: with_requirements
-                .into_iter()
-                .filter_map(Maybe::into_option)
-                .collect(),
+            with_requirements,
+            input_format,
             isolated,
             show_resolution,
             all_packages,
@@ -2210,6 +2218,7 @@ pub struct AddSettings {
     pub no_sync: bool,
     pub packages: Vec<String>,
     pub requirements: Vec<RequirementsInput>,
+    pub input_format: Option<RequirementsFormat>,
     pub constraints: Vec<RequirementsInput>,
     pub marker: Option<MarkerTree>,
     pub dependency_type: DependencyType,
@@ -2250,6 +2259,7 @@ impl AddSettings {
         let AddArgs {
             packages,
             requirements,
+            input_format,
             constraints,
             marker,
             dev,
@@ -2436,6 +2446,10 @@ impl AddSettings {
             resolver_installer_options(installer, build, configured_indexes(filesystem.as_ref()))?;
         let indexes = options.indexes.index.clone().unwrap_or_default();
 
+        if input_format.is_some() && !requirements.contains(&RequirementsInput::Stdin) {
+            bail!("`--input-format` requires a requirements input of `-`");
+        }
+
         Ok(Self {
             lock_check: locked,
             frozen,
@@ -2443,6 +2457,7 @@ impl AddSettings {
             no_sync: no_sync.is_enabled(),
             packages,
             requirements,
+            input_format,
             constraints: requirement_files(constraints, environment.constraints.clone()),
             marker,
             dependency_type,

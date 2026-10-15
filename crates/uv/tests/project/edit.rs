@@ -5689,11 +5689,11 @@ fn add_requirements_file() -> Result<()> {
     Checked [N] packages in [TIME]
     ");
 
-    // Passing a `setup.py` should fail.
+    // Passing a missing `setup.py` should fail.
     uv_snapshot!(context.filters(), context.add().arg("-r").arg("setup.py"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Adding requirements from a `setup.py` is not supported in `uv add`
+    error: File not found: setup.py
     ");
 
     // Passing nothing should fail.
@@ -7428,6 +7428,49 @@ fn add_extensionless_script() -> Result<()> {
         "#
         );
     });
+    Ok(())
+}
+
+/// Add from a named PEP 723 script via `-r`.
+#[test]
+fn add_requirements_from_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+        import iniconfig
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("-r").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig==2.0.0",
+    ]
+    "#);
+
     Ok(())
 }
 
@@ -15613,15 +15656,74 @@ fn add_pyproject_stdin() -> Result<()> {
         [project]
         name = "stdin-project"
         version = "1.0"
-        dependencies = ["iniconfig"]
+        dependencies = ["iniconfig==2.0.0"]
+        [tool.uv.sources]
+        iniconfig = { path = "missing" }
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("--offline").arg("--no-sync").arg("-r").arg("-")
+    uv_snapshot!(context.filters(), context.add().arg("-r").arg("-").arg("--no-sources")
         .stdin(fs_err::File::open(input.path())?.into_file()), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: Adding requirements from a `pyproject.toml` is not supported in `uv add`
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
     ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig==2.0.0",
+    ]
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn add_setup_py_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        from setuptools import setup
+        setup(name="stdin-project", version="1.0", install_requires=["iniconfig==2.0.0"])
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("-r").arg("-")
+        .arg("--input-format").arg("setup.py")
+        .arg("--marker").arg("python_version >= '3.12'")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig==2.0.0 ; python_full_version >= '3.12'",
+    ]
+    "#);
 
     Ok(())
 }

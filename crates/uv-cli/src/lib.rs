@@ -3373,13 +3373,20 @@ pub struct RunArgs {
     /// Run with the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// and `pylock.toml`.
+    /// `pyproject.toml`, `setup.py`, and `setup.cfg`.
     ///
     /// The same environment semantics as `--with` apply.
     ///
-    /// Using `pyproject.toml`, `setup.py`, or `setup.cfg` files is not allowed.
+    /// Project metadata contributes its dependencies without installing the project itself.
     #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
+
+    /// The format of requirements read from stdin via `--with-requirements -`.
+    ///
+    /// The format is detected by default. Select `setup.py` explicitly to execute Python and
+    /// extract dependencies. Project metadata from stdin must be self-contained.
+    #[arg(long, value_enum)]
+    pub input_format: Option<RequirementsFormat>,
 
     /// Run the command in an isolated virtual environment [env: UV_ISOLATED=]
     ///
@@ -3968,7 +3975,7 @@ pub struct AddArgs {
     /// Add the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`.
+    /// `pyproject.toml`, `setup.py`, and `setup.cfg`.
     #[arg(
         long,
         short,
@@ -3977,6 +3984,13 @@ pub struct AddArgs {
         value_hint = ValueHint::FilePath,
     )]
     pub requirements: Vec<RequirementsInput>,
+
+    /// The format of requirements read from stdin via `--requirements -`.
+    ///
+    /// The format is detected by default. Select `setup.py` explicitly to execute Python and
+    /// extract dependencies. Project metadata from stdin must be self-contained.
+    #[arg(long, value_enum)]
+    pub input_format: Option<RequirementsFormat>,
 
     /// Constrain versions using the given requirements files [env: `UV_CONSTRAINT`=]
     ///

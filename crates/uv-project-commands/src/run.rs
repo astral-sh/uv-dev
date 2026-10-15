@@ -26,7 +26,7 @@ use uv_command_support::{
 };
 use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DryRun, EditableMode, EnvFile,
-    ExtrasSpecification, InstallOptions, Modifications, RequirementsInput, TargetTriple,
+    ExtrasSpecification, InstallOptions, Modifications, TargetTriple,
 };
 use uv_dispatch::UniversalState;
 use uv_distribution::LoweredExtraBuildDependencies;
@@ -140,26 +140,7 @@ pub async fn run(
         .into());
     }
 
-    // These cases seem quite complex because (in theory) they should change the "current package".
-    // Let's ban them entirely for now.
-    let mut requirements_from_stdin: bool = false;
-    for source in &requirements {
-        match source {
-            RequirementsSource::PyprojectToml(_) => {
-                bail!("Adding requirements from a `pyproject.toml` is not supported in `uv run`");
-            }
-            RequirementsSource::SetupPy(_) => {
-                bail!("Adding requirements from a `setup.py` is not supported in `uv run`");
-            }
-            RequirementsSource::SetupCfg(_) => {
-                bail!("Adding requirements from a `setup.cfg` is not supported in `uv run`");
-            }
-            RequirementsSource::Extensionless(RequirementsInput::Stdin) => {
-                requirements_from_stdin = true;
-            }
-            _ => {}
-        }
-    }
+    let requirements_from_stdin = requirements.iter().any(RequirementsSource::is_stdin);
 
     // Fail early if stdin is used for multiple purposes.
     if matches!(
@@ -920,13 +901,6 @@ pub async fn run(
         if spec.pylock.is_some() {
             bail!("Adding requirements from a `pylock.toml` is not supported in `uv run`");
         }
-        if let Some(source_tree) = spec.source_trees.first() {
-            bail!(
-                "Adding requirements from a `{}` is not supported in `uv run`",
-                source_tree.filename()
-            );
-        }
-
         Some(spec)
     };
 
@@ -1340,6 +1314,11 @@ fn can_skip_ephemeral(
     site_packages: &SitePackages,
     settings: &ResolverInstallerSettings,
 ) -> bool {
+    // Source-tree dependencies must be extracted before checking the base environment.
+    if !spec.source_trees.is_empty() {
+        return false;
+    }
+
     // Extract the build settings.
     let ResolverInstallerSettings {
         resolver:
