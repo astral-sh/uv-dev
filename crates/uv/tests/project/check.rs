@@ -1321,6 +1321,7 @@ fn check_no_sync_creates_lock_without_sync() -> Result<()> {
 
         [options]
         exclude-newer = "2026-02-15T00:00:00Z"
+        indexes = [{ url = "http://[LOCALHOST]/simple" }]
 
         [[package]]
         name = "a"
@@ -1493,13 +1494,14 @@ fn check_no_sync_updates_stale_lock_without_sync() -> Result<()> {
         assert_snapshot!(diff, @r#"
         --- old
         +++ new
-        @@ -1,26 +1,26 @@
+        @@ -1,27 +1,27 @@
          version = 1
          revision = 5
          requires-python = ">=3.12"
 
          [options]
          exclude-newer = "2026-02-15T00:00:00Z"
+         indexes = [{ url = "http://[LOCALHOST]/simple" }]
 
          [[package]]
          name = "a"

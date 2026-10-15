@@ -5059,6 +5059,9 @@ fn add_lower_bound_local() -> Result<()> {
         revision = 5
         requires-python = ">=3.12"
 
+        [options]
+        indexes = [{ url = "http://[LOCALHOST]/simple" }]
+
         [[package]]
         name = "a"
         version = "1.2.3+foo"
@@ -9910,6 +9913,7 @@ fn add_warn_index_url() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     warning: Indexes specified via `--extra-index-url` will not be persisted to the `pyproject.toml` file; use `--index` instead.
+    Ignoring existing lockfile due to change in index configuration
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because only idna==2.7 is available and your project depends on idna>=3.6, we can conclude that your project's requirements are unsatisfiable.
@@ -9980,6 +9984,7 @@ fn add_no_warn_index_url() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "https://test.pypi.org/simple", default = true }]
 
         [[package]]
         name = "iniconfig"
@@ -10070,6 +10075,7 @@ fn add_index() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
+        indexes = [{ url = "https://pypi.org/simple" }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -10101,6 +10107,7 @@ fn add_index() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().arg("jinja2").arg("--index").arg("pytorch=https://astral-sh.github.io/pytorch-mirror/whl/cu121"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
     Resolved 4 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
@@ -10153,6 +10160,7 @@ fn add_index() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
+        indexes = [{ url = "https://pypi.org/simple" }, { url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121" }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -10213,6 +10221,7 @@ fn add_index() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().arg("jinja2").arg("--index").arg("pytorch=https://test.pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
     Resolved 4 packages in [TIME]
     Checked 3 packages in [TIME]
     ");
@@ -10262,6 +10271,7 @@ fn add_index() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
+        indexes = [{ url = "https://pypi.org/simple" }, { url = "https://test.pypi.org/simple" }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -10327,6 +10337,7 @@ fn add_index() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--index").arg("https://pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
     Resolved 5 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
@@ -10379,6 +10390,7 @@ fn add_index() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
+        indexes = [{ url = "https://test.pypi.org/simple" }, { url = "https://pypi.org/simple" }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -10451,12 +10463,21 @@ fn add_index() -> Result<()> {
         );
     });
 
-    // Adding a subsequent index with the same URL should bump it to the top, but retain the name.
+    // Promoting Test PyPI requires resolving again; it cannot satisfy typing-extensions.
     uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--index").arg("https://test.pypi.org/simple"), @"
-    exit_code: 0 (success)
+    exit_code: 1 (failure)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
-    Checked 4 packages in [TIME]
+    Ignoring existing lockfile due to change in index configuration
+    error: Failed to add dependencies
+      cause: No solution found when resolving dependencies
+      cause: Because there are no versions of typing-extensions and your project depends on typing-extensions>=4.12.2, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: If you want to add the package regardless of the failed resolution, provide the `--frozen` flag to skip locking and syncing
+    ");
+
+    // Frozen edits can promote the existing URL while retaining its name and the prior lockfile.
+    uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--index").arg("https://test.pypi.org/simple").arg("--frozen"), @"
+    exit_code: 0 (success)
     ");
 
     let pyproject_toml = context.read("pyproject.toml");
@@ -10505,6 +10526,7 @@ fn add_index() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
+        indexes = [{ url = "https://test.pypi.org/simple" }, { url = "https://pypi.org/simple" }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -10638,6 +10660,7 @@ fn add_default_index_url() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "https://test.pypi.org/simple", default = true }]
 
         [[package]]
         name = "iniconfig"
@@ -10666,6 +10689,7 @@ fn add_default_index_url() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().arg("typing-extensions").arg("--default-index").arg("https://pypi.org/simple"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Ignoring existing lockfile due to change in index configuration
     Resolved 3 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
@@ -10807,6 +10831,7 @@ async fn add_index_credentials() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "http://[LOCALHOST]/basic-auth/simple", default = true }]
 
         [[package]]
         name = "iniconfig"
@@ -10904,6 +10929,7 @@ async fn existing_index_credentials() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "http://[LOCALHOST]/basic-auth/simple", default = true }]
 
         [[package]]
         name = "iniconfig"
@@ -10994,6 +11020,7 @@ fn add_index_with_trailing_slash() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
+        indexes = [{ url = "https://pypi.org/simple" }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -11087,6 +11114,7 @@ fn add_index_without_trailing_slash() -> Result<()> {
 
         [options]
         exclude-newer = "2025-01-30T00:00:00Z"
+        indexes = [{ url = "https://pypi.org/simple" }]
 
         [manifest]
         constraints = [{ name = "markupsafe", specifier = "<3" }]
@@ -12932,6 +12960,7 @@ fn multiple_index_cli() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "https://pypi.org/simple" }, { url = "https://test.pypi.org/simple" }]
 
         [[package]]
         name = "project"
@@ -13037,6 +13066,7 @@ fn repeated_index_cli_environment_variable() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "https://test.pypi.org/simple", default = true }, { url = "https://test.pypi.org/simple" }]
 
         [[package]]
         name = "iniconfig"
@@ -13137,6 +13167,7 @@ fn repeated_index_cli_environment_variable_newline() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "https://test.pypi.org/simple" }]
 
         [[package]]
         name = "iniconfig"
@@ -13241,6 +13272,7 @@ fn repeated_index_cli() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "https://test.pypi.org/simple" }]
 
         [[package]]
         name = "iniconfig"
@@ -13345,6 +13377,7 @@ fn repeated_index_cli_reversed() -> Result<()> {
 
         [options]
         exclude-newer = "2024-03-25T00:00:00Z"
+        indexes = [{ url = "https://test.pypi.org/simple" }]
 
         [[package]]
         name = "iniconfig"

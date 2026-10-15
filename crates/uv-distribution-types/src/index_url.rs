@@ -17,7 +17,9 @@ use uv_pypi_types::HashAlgorithm;
 use uv_redacted::DisplaySafeUrl;
 use uv_warnings::warn_user;
 
-use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Verbatim};
+use crate::{
+    ExcludeNewerOverride, Index, IndexStatusCodeStrategy, SerializableStatusCode, Verbatim,
+};
 
 pub static PYPI_URL: LazyLock<DisplaySafeUrl> =
     LazyLock::new(|| DisplaySafeUrl::parse("https://pypi.org/simple").unwrap());
@@ -487,6 +489,12 @@ impl<'a> IndexLocations {
             IndexStatusCodeStrategy::Default,
             Index::status_code_strategy,
         )
+    }
+
+    /// Return the explicitly configured ignored error codes selected for an index URL.
+    pub fn ignored_error_codes_for(&self, url: &IndexUrl) -> Option<&[SerializableStatusCode]> {
+        self.index_for_url(url)
+            .and_then(|index| index.ignore_error_codes.as_deref())
     }
 
     /// Return whether the given status code is explicitly ignored for an [`IndexUrl`].
