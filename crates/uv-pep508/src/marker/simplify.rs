@@ -28,6 +28,13 @@ pub(crate) fn to_dnf(tree: MarkerTree) -> Vec<Vec<MarkerExpression>> {
     dnf
 }
 
+/// Returns a DNF expression for a given marker tree, without simplification.
+pub(crate) fn to_unsimplified_dnf(tree: MarkerTree) -> Vec<Vec<MarkerExpression>> {
+    let mut dnf = Vec::new();
+    collect_dnf(tree, &mut dnf, &mut Vec::new());
+    dnf
+}
+
 /// Walk a [`MarkerTree`] recursively and construct a DNF expression.
 ///
 /// A decision diagram can be converted to DNF form by performing a depth-first traversal of
