@@ -21,10 +21,11 @@ use reqwest_retry::policies::ExponentialBackoff;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter, ReadBuf};
+use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWriteExt, BufWriter, ReadBuf};
+use tokio::task::spawn_blocking;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 use url::Url;
 use zstd::stream::read::Decoder;
 
@@ -37,7 +38,9 @@ use uv_client::{
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
-use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, rename_with_retry};
+use uv_fs::{
+    LockedFile, LockedFileError, LockedFileMode, Simplified, rename_with_retry, with_retry_sync,
+};
 use uv_macros::DebugNoInline;
 use uv_platform::{Arch, Libc, Os, Platform};
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
@@ -547,7 +550,7 @@ impl ManagedPythonDownload {
             // Download the archive to the cache, or return a reader if we have it in cache.
             // TODO(konsti): We should "tee" the write so we can do the download-to-cache and unpacking
             // in one step.
-            let file = match fs_err::tokio::File::open(&target_cache_file).await {
+            let mut file = match fs_err::tokio::File::open(&target_cache_file).await {
                 Ok(file) => {
                     debug!(
                         "Extracting existing `{}`",
@@ -583,17 +586,48 @@ impl ManagedPythonDownload {
 
             // Extract the downloaded archive into a temporary directory.
             let size = Some(file.metadata().await?.len());
-            self.extract_reader(
-                tokio::io::BufReader::new(file),
-                temp_dir,
-                &filename,
-                ext,
-                size,
-                reporter,
-                Direction::Extract,
-                tar_backend,
-            )
-            .await?
+            let result = self
+                .extract_reader(
+                    tokio::io::BufReader::new(&mut file),
+                    temp_dir,
+                    &filename,
+                    ext,
+                    size,
+                    reporter,
+                    Direction::Extract,
+                    tar_backend,
+                )
+                .await;
+
+            let mut rejected = false;
+            if let Err(Error::HashMismatch { .. }) = &result {
+                rejected = true;
+            } else if let Err(Error::ExtractError(..)) = &result
+                && self.sha256.is_some()
+                && file.rewind().await.is_ok()
+            {
+                // A malformed archive can fail before extraction reaches the checksum check.
+                // Verify the same open file before removing it: extraction can also fail because
+                // the destination is unwritable, which does not make the cached archive invalid.
+                let mut hasher = Some(Hasher::from(HashAlgorithm::Sha256));
+                let mut reader =
+                    uv_extract::hash::HashReader::new(&mut file, hasher.as_mut_slice());
+                if reader.finish().await.is_ok()
+                    && let Err(Error::HashMismatch { .. }) = self.check_hash(hasher)
+                {
+                    rejected = true;
+                }
+            }
+            if rejected
+                && let Err(err) =
+                    Self::remove_rejected_archive(&target_cache_file, &cache_lock_file, file).await
+            {
+                warn!(
+                    "Failed to remove invalid cached Python archive `{}`: {err}",
+                    target_cache_file.user_display()
+                );
+            }
+            result?
         } else {
             // Avoid overlong log lines
             debug!("Downloading `{url}`");
@@ -754,6 +788,59 @@ impl ManagedPythonDownload {
         let file = fs_err::tokio::File::open(&temp_file).await?;
         rename_with_retry(&temp_file, target_cache_file).await?;
         Ok(file)
+    }
+
+    /// Remove a rejected archive only if the cache entry still refers to the file that was read.
+    async fn remove_rejected_archive(
+        target_cache_file: &Path,
+        cache_lock_file: &Path,
+        rejected_file: fs_err::tokio::File,
+    ) -> Result<(), Error> {
+        let rejected = same_file::Handle::from_file(rejected_file.into_std().await.into_file())?;
+        let lock = LockedFile::acquire(
+            cache_lock_file,
+            LockedFileMode::Exclusive,
+            target_cache_file.user_display(),
+        )
+        .await?;
+        let is_rejected_file = match fs_err::tokio::File::open(target_cache_file).await {
+            Ok(file) => {
+                same_file::Handle::from_file(file.into_std().await.into_file())? == rejected
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => false,
+            Err(err) => return Err(err.into()),
+        };
+        // Publishers and rejected-entry removal share this lock, so the identity check and rename
+        // cannot cross another publication.
+        drop(rejected);
+        if is_rejected_file {
+            let parent = target_cache_file.parent().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "archive cache path has no parent",
+                )
+            })?;
+            let rejected_path = tempfile::NamedTempFile::new_in(parent)?.into_temp_path();
+            // Other installers can still have the rejected archive open. On Windows, deleting it
+            // in place would leave the cache key inaccessible until every reader closes. Move it
+            // to a unique pathname first so the cache can immediately accept a replacement.
+            let target_cache_file = target_cache_file.to_path_buf();
+            // The blocking task owns the lock and temporary path so cancellation cannot release
+            // them while the rename is still queued or running.
+            spawn_blocking(move || {
+                let _lock = lock;
+                match with_retry_sync(&target_cache_file, &rejected_path, "renaming", || {
+                    fs_err::rename(&target_cache_file, &rejected_path)
+                }) {
+                    Ok(()) => Ok(()),
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+                    Err(err) => Err(err),
+                }
+            })
+            .await
+            .map_err(io::Error::other)??;
+        }
+        Ok(())
     }
 
     /// Extract a Python interpreter archive into a (temporary) directory, either from a file or
@@ -1229,6 +1316,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use tokio::io::AsyncReadExt;
+    use tokio::sync::oneshot;
+    use tokio::task::JoinHandle;
 
     use uv_platform::{Arch, Libc, Os, Platform};
     use uv_python_types::{LenientImplementationName, PythonInstallationKey};
@@ -1550,6 +1639,237 @@ mod tests {
         file.read_to_end(&mut contents).await?;
         assert_eq!(contents, [0; 1024]);
         Ok(())
+    }
+
+    #[test]
+    fn python_archive_cached_hash_mismatch_is_removed() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cache_dir = temp_dir.path().join("cache");
+        let installation_dir = temp_dir.path().join("installations");
+        let scratch_dir = temp_dir.path().join("scratch");
+        fs_err::create_dir_all(&cache_dir)?;
+        fs_err::create_dir_all(&installation_dir)?;
+        fs_err::create_dir_all(&scratch_dir)?;
+        let cache_file = cache_dir.join("ababababa-python.tar");
+        fs_err::write(&cache_file, [0; 1024])?;
+        let download = cpython_download_for_url("https://example.com/python.tar");
+        let client = BaseClientBuilder::default()
+            .connectivity(Connectivity::Offline)
+            .build()?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        let result = temp_env::with_var(EnvVars::UV_PYTHON_CACHE_DIR, Some(&cache_dir), || {
+            runtime.block_on(download.fetch_from_url(
+                DisplaySafeUrl::parse("https://example.com/python.tar")?,
+                &client,
+                &installation_dir,
+                &scratch_dir,
+                false,
+                None,
+                TarBackend::default(),
+            ))
+        });
+
+        assert_matches!(result, Err(Error::HashMismatch { .. }));
+        assert!(!cache_file.exists());
+        Ok(())
+    }
+
+    /// Invalid compression can stop extraction before its normal checksum comparison.
+    #[test]
+    fn python_archive_cached_invalid_gzip_is_removed() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cache_dir = temp_dir.path().join("cache");
+        let installation_dir = temp_dir.path().join("installations");
+        let scratch_dir = temp_dir.path().join("scratch");
+        fs_err::create_dir_all(&cache_dir)?;
+        fs_err::create_dir_all(&installation_dir)?;
+        fs_err::create_dir_all(&scratch_dir)?;
+        let cache_file = cache_dir.join("ababababa-python.tar.gz");
+        fs_err::write(&cache_file, b"invalid gzip")?;
+        let download = cpython_download_for_url("https://example.com/python.tar.gz");
+        let client = BaseClientBuilder::default()
+            .connectivity(Connectivity::Offline)
+            .build()?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        let result = temp_env::with_var(EnvVars::UV_PYTHON_CACHE_DIR, Some(&cache_dir), || {
+            runtime.block_on(download.fetch_from_url(
+                DisplaySafeUrl::parse("https://example.com/python.tar.gz")?,
+                &client,
+                &installation_dir,
+                &scratch_dir,
+                false,
+                None,
+                TarBackend::default(),
+            ))
+        });
+
+        assert_matches!(result, Err(Error::ExtractError(..)));
+        assert!(!cache_file.exists());
+        Ok(())
+    }
+
+    /// Extraction errors do not justify removing bytes that match the expected digest.
+    #[test]
+    fn python_archive_matching_hash_survives_extraction_error() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cache_dir = temp_dir.path().join("cache");
+        let installation_dir = temp_dir.path().join("installations");
+        let scratch_dir = temp_dir.path().join("scratch");
+        fs_err::create_dir_all(&cache_dir)?;
+        fs_err::create_dir_all(&installation_dir)?;
+        fs_err::create_dir_all(&scratch_dir)?;
+        let mut hasher = Hasher::from(HashAlgorithm::Sha256);
+        hasher.update(b"invalid gzip");
+        let digest = HashDigest::from(hasher);
+        let cache_file = cache_dir.join(format!("{}-python.tar.gz", &digest.digest()[..9]));
+        fs_err::write(&cache_file, b"invalid gzip")?;
+        let mut download = cpython_download_for_url("https://example.com/python.tar.gz");
+        download.sha256 = Some(Digest::from_hex(digest.digest())?);
+        let client = BaseClientBuilder::default()
+            .connectivity(Connectivity::Offline)
+            .build()?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        let result = temp_env::with_var(EnvVars::UV_PYTHON_CACHE_DIR, Some(&cache_dir), || {
+            runtime.block_on(download.fetch_from_url(
+                DisplaySafeUrl::parse("https://example.com/python.tar.gz")?,
+                &client,
+                &installation_dir,
+                &scratch_dir,
+                false,
+                None,
+                TarBackend::default(),
+            ))
+        });
+
+        assert_matches!(result, Err(Error::ExtractError(..)));
+        assert_eq!(fs_err::read(&cache_file)?, b"invalid gzip");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn python_archive_rejection_keeps_concurrent_replacement() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cache_file = temp_dir.path().join("python.tar");
+        fs_err::write(&cache_file, b"rejected archive")?;
+        let rejected = fs_err::tokio::File::open(&cache_file).await?;
+        let replacement = temp_dir.path().join("replacement.tar");
+        fs_err::write(&replacement, b"replacement archive")?;
+        rename_with_retry(&replacement, &cache_file).await?;
+
+        ManagedPythonDownload::remove_rejected_archive(
+            &cache_file,
+            &temp_dir.path().join(".lock"),
+            rejected,
+        )
+        .await?;
+
+        assert_eq!(fs_err::read(&cache_file)?, b"replacement archive");
+        Ok(())
+    }
+
+    /// An old reader must not keep the cache pathname delete-pending on Windows.
+    #[tokio::test]
+    async fn python_archive_rejection_allows_replacement_with_open_reader() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cache_file = temp_dir.path().join("python.tar");
+        fs_err::write(&cache_file, b"rejected archive")?;
+        let rejected = fs_err::tokio::File::open(&cache_file).await?;
+        let mut other_reader = fs_err::tokio::File::open(&cache_file).await?;
+
+        ManagedPythonDownload::remove_rejected_archive(
+            &cache_file,
+            &temp_dir.path().join(".lock"),
+            rejected,
+        )
+        .await?;
+
+        fs_err::write(&cache_file, b"replacement archive")?;
+        assert_eq!(fs_err::read(&cache_file)?, b"replacement archive");
+        let mut contents = Vec::new();
+        other_reader.read_to_end(&mut contents).await?;
+        assert_eq!(contents, b"rejected archive");
+        Ok(())
+    }
+
+    /// Cancellation must not release the archive lock before a queued rename finishes.
+    #[test]
+    fn python_archive_rejection_retains_lock_when_cancelled() -> anyhow::Result<()> {
+        async fn occupy_blocking_pool() -> anyhow::Result<(oneshot::Sender<()>, JoinHandle<()>)> {
+            let (started_sender, started_receiver) = oneshot::channel();
+            let (release_sender, release_receiver) = oneshot::channel::<()>();
+            let task = spawn_blocking(move || {
+                let _ = started_sender.send(());
+                let _ = release_receiver.blocking_recv();
+            });
+            started_receiver.await?;
+            Ok((release_sender, task))
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let cache_file = temp_dir.path().join("python.tar");
+        let lock_file = temp_dir.path().join(".lock");
+        fs_err::write(&cache_file, b"rejected archive")?;
+        let rejected = fs_err::tokio::File::from_std(fs_err::File::open(&cache_file)?);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()?;
+
+        runtime.block_on(async {
+            let mut removal = Box::pin(ManagedPythonDownload::remove_rejected_archive(
+                &cache_file,
+                &lock_file,
+                rejected,
+            ));
+
+            // Complete lock acquisition and the identity read without polling the next operation.
+            for _ in 0..2 {
+                let (release, blocker) = occupy_blocking_pool().await?;
+                assert!(futures::poll!(removal.as_mut()).is_pending());
+                drop(release);
+                blocker.await?;
+                spawn_blocking(|| ()).await?;
+            }
+
+            let (release, blocker) = occupy_blocking_pool().await?;
+            assert!(futures::poll!(removal.as_mut()).is_pending());
+            let rejected_path = fs_err::read_dir(temp_dir.path())?
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<io::Result<Vec<_>>>()?
+                .into_iter()
+                .find(|path| path != &cache_file && path != &lock_file)
+                .ok_or_else(|| anyhow::anyhow!("expected a quarantine path before the rename"))?;
+
+            drop(removal);
+            assert!(
+                LockedFile::acquire_no_wait(&lock_file, LockedFileMode::Exclusive, "archive")
+                    .is_none()
+            );
+            assert!(rejected_path.exists());
+
+            drop(release);
+            blocker.await?;
+            spawn_blocking(|| ()).await?;
+            assert!(!cache_file.exists());
+            assert!(!rejected_path.exists());
+            let _lock =
+                LockedFile::acquire_no_wait(&lock_file, LockedFileMode::Exclusive, "archive")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("archive lock was not released after removal")
+                    })?;
+            fs_err::write(&cache_file, b"replacement archive")?;
+            assert_eq!(fs_err::read(&cache_file)?, b"replacement archive");
+            anyhow::Ok(())
+        })
     }
 
     #[cfg(unix)]
