@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 16693,
+        "title": "uv build does not warn or fail when license files do not exist",
+        "url": "https://github.com/astral-sh/uv/issues/16693",
+        "state": "closed",
+        "reason": "Related license-glob validation history: unmatched patterns silently produced empty license directories. This report instead selects an existing file that does not match the pattern, so it is a different correctness problem."
+      },
+      {
+        "kind": "pull_request",
+        "number": 16697,
+        "title": "Error when a `project.license-files` glob matches nothing",
+        "url": "https://github.com/astral-sh/uv/pull/16697",
+        "state": "merged",
+        "reason": "Fixed astral-sh/uv#16693 on 2025-11-14 by checking that each license glob matches a file. Its diff retains the existing match_path-based file collection; the exact matchers only track unmatched patterns. It does not fix the false-positive selection reported here."
+      },
+      {
+        "kind": "issue",
+        "number": 16751,
+        "title": "Build backend: `source-include` silently ignores directory without a glob pattern",
+        "url": "https://github.com/astral-sh/uv/issues/16751",
+        "state": "open",
+        "reason": "Discusses the same GlobDirFilter and the distinction between directory traversal and inclusion. Its requested behavior concerns including children of explicitly selected directories, whereas this report concerns incorrectly treating nonmatching regular files as licenses."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18772,
+        "title": "Don't silently ignore directories in source-include",
+        "url": "https://github.com/astral-sh/uv/pull/18772",
+        "state": "open",
+        "reason": "Open work for astral-sh/uv#16751 changes the shared directory matcher to include descendants of matched directories. The inspected diff retains match_path's directory-prefix acceptance and does not address this license-file false positive; relevant for coordinating changes to the matcher."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separated recursive license selection/UTF-8 rejection from package-data placement and license copying. Literal queries included 'must be UTF-8 encoded', 'license-files', 'license glob', 'non-license', and '0.13.1'; conceptual queries covered recursive matching, unrelated/extra files, vendored licenses, package data, and area:build-backend. Separate mechanism searches used GlobDirFilter and match_directory. Inspected candidate comments, timelines, PR reviews, and diffs. PR keyword searches returned no results despite timeline-linked PRs being retrievable, limiting search completeness. Followed astral-sh/uv#16693 to merged astral-sh/uv#16697 and astral-sh/uv#16751 to open astral-sh/uv#18772. Ruled out astral-sh/uv#15040 (default license discovery), astral-sh/uv#13280 (escaping unsupported glob characters), and astral-sh/uv#15655 (wrong backend); astral-sh/uv#16596 clarifies package-data placement but does not track this failure."
+  },
+  "type": "bug",
+  "type_reason": "Source inspection confirms that license_metadata collects regular files using GlobDirFilter::match_path, which accepts directory-prefix matches as well as full glob matches. With **/LICENSE.txt, a nonmatching binary can therefore be collected and subjected to license UTF-8 validation. The related issues and PRs address different behavior; no duplicate or previously fixed version of this failure was established. Inclusion of data files within the Python package is expected.",
+  "summary": "No duplicate identified. astral-sh/uv#16693 and astral-sh/uv#16697 cover unmatched license globs; astral-sh/uv#16751 and astral-sh/uv#18772 concern related directory-matching semantics.",
+  "draft_response": "Your example exposes a bug in license-file selection. The backend uses a directory-prefix check when collecting license files, so `**/LICENSE.txt` can admit `thing.bin` even though its filename does not match. That file then reaches the license UTF-8 check. File selection needs to require a full glob match while retaining prefix checks for directory traversal.\n\nFor now, you can list each license path explicitly, including any nested vendored licenses. You do not need to re-encode or relocate the binary: files under the Python package are included in the wheel by default. A vendored license remaining beside the code and also being copied into `.dist-info/licenses` is expected."
+}
