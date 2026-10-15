@@ -788,7 +788,7 @@ async fn lock_script_environment(script: Pep723ItemRef<'_>) -> Result<LockedFile
             LockedFile::acquire(
                 std::env::temp_dir().join(format!("uv-{}.lock", cache_digest(url))),
                 LockedFileMode::Exclusive,
-                url.to_string(),
+                url,
             )
             .await
         }
