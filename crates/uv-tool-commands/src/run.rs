@@ -28,6 +28,7 @@ use uv_distribution_types::{
     RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_errors::HintOrdering;
+use uv_git::ResolvedRepositoryReference;
 use uv_installer::{BuildSettings, InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
@@ -60,6 +61,7 @@ use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger}
 use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations as operations;
 use uv_resolve_operations::latest::LatestClient;
+use uv_resolve_operations::locked_requirements::LockedRequirements;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::pylock::import_pylock_requirements;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
@@ -841,6 +843,38 @@ async fn get_or_create_environment(
         operations::read_constraints(build_constraints, client_builder, cache).await?,
     );
 
+    // Read the `--with` requirements.
+    let mut spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        &[],
+        None,
+        PylockInputMode::Import,
+        client_builder,
+        cache,
+    )
+    .await?;
+    import_pylock_requirements(
+        &mut spec,
+        &settings.resolver.index_locations,
+        &settings.resolver.upgrade,
+        &client_builder
+            .clone()
+            .keyring(settings.resolver.keyring_provider),
+    )
+    .await?;
+    // Select imported Git preferences before resolving unnamed requirements and caching their metadata.
+    let markers = resolution_markers(None, python_platform.as_ref(), &interpreter);
+    let locked = LockedRequirements::from_imported(
+        Vec::new(),
+        spec.git_preferences.clone(),
+        Some(&markers),
+    )?;
+    for (_, ResolvedRepositoryReference { reference, sha }) in locked.git {
+        state.git().insert(reference, sha);
+    }
+
     let from = match request {
         ToolRequest::Python {
             executable: request_executable,
@@ -1022,27 +1056,6 @@ async fn get_or_create_environment(
         None
     };
 
-    // Read the `--with` requirements.
-    let mut spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        &[],
-        None,
-        PylockInputMode::Import,
-        client_builder,
-        cache,
-    )
-    .await?;
-    import_pylock_requirements(
-        &mut spec,
-        &settings.resolver.index_locations,
-        &settings.resolver.upgrade,
-        &client_builder
-            .clone()
-            .keyring(settings.resolver.keyring_provider),
-    )
-    .await?;
     let exclusions = Excludes::from_entries(spec.excludes.iter().cloned());
 
     // Resolve the `--from` and `--with` requirements.

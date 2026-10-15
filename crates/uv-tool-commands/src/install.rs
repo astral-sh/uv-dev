@@ -20,6 +20,7 @@ use uv_distribution_types::{
     ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
     RequirementSource, UnresolvedRequirementSpecification,
 };
+use uv_git::ResolvedRepositoryReference;
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
@@ -55,6 +56,7 @@ use uv_environment_operations::{
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_resolve_operations as operations;
 use uv_resolve_operations::latest::LatestClient;
+use uv_resolve_operations::locked_requirements::LockedRequirements;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::pylock::import_pylock_requirements;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
@@ -105,6 +107,23 @@ pub async fn install(
 
     // Parse the input requirement.
     let request = ToolRequest::parse(&package, from.as_deref())?;
+
+    // If the user passed, e.g., `ruff@latest`, we need to mark it as upgradable.
+    let settings = if let ToolRequest::Package {
+        target: Target::Latest(_, name, _),
+        ..
+    } = &request
+    {
+        ResolverInstallerSettings {
+            resolver: ResolverSettings {
+                upgrade: Upgrade::package(name.clone()).combine(settings.resolver.upgrade),
+                ..settings.resolver
+            },
+            ..settings
+        }
+    } else {
+        settings
+    };
 
     let unresolved_target_requirements = match &request {
         ToolRequest::Package {
@@ -170,6 +189,40 @@ pub async fn install(
         refresh
     };
     let cache = cache.with_refresh(refresh.clone());
+
+    // Read the `--with` requirements.
+    let mut spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        excludes,
+        None,
+        PylockInputMode::Import,
+        &client_builder,
+        &cache,
+    )
+    .await?;
+
+    import_pylock_requirements(
+        &mut spec,
+        &settings.resolver.index_locations,
+        &settings.resolver.upgrade,
+        &client_builder
+            .clone()
+            .keyring(settings.resolver.keyring_provider),
+    )
+    .await?;
+
+    // Select imported Git preferences before resolving unnamed requirements and caching their metadata.
+    let markers = resolution_markers(None, python_platform.as_ref(), &interpreter);
+    let locked = LockedRequirements::from_imported(
+        Vec::new(),
+        spec.git_preferences.clone(),
+        Some(&markers),
+    )?;
+    for (_, ResolvedRepositoryReference { reference, sha }) in locked.git {
+        state.git().insert(reference, sha);
+    }
 
     // Resolve the `--from` requirement.
     let requirement = match &request {
@@ -351,19 +404,6 @@ pub async fn install(
 
     let package_name = &requirement.name;
 
-    // If the user passed, e.g., `ruff@latest`, we need to mark it as upgradable.
-    let settings = if request.is_latest() {
-        ResolverInstallerSettings {
-            resolver: ResolverSettings {
-                upgrade: Upgrade::package(package_name.clone()).combine(settings.resolver.upgrade),
-                ..settings.resolver
-            },
-            ..settings
-        }
-    } else {
-        settings
-    };
-
     // If the user passed `--force`, it implies `--reinstall-package <from>`.
     let settings = if force {
         ResolverInstallerSettings {
@@ -373,29 +413,6 @@ pub async fn install(
     } else {
         settings
     };
-
-    // Read the `--with` requirements.
-    let mut spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        excludes,
-        None,
-        PylockInputMode::Import,
-        &client_builder,
-        &cache,
-    )
-    .await?;
-
-    import_pylock_requirements(
-        &mut spec,
-        &settings.resolver.index_locations,
-        &settings.resolver.upgrade,
-        &client_builder
-            .clone()
-            .keyring(settings.resolver.keyring_provider),
-    )
-    .await?;
 
     let has_preferences = spec.has_preferences();
 

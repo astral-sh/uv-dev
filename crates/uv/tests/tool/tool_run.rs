@@ -3990,20 +3990,131 @@ fn tool_run_pylock_reresolve_git() -> Result<()> {
      + new-dependency==1.0.0
      + pylock-tool==1.0.0
     ");
+    Ok(())
+}
 
-    uv_snapshot!(context.filters(), context.tool_install()
-        .args(["--no-preview", "--with-requirements", "pylock.toml"])
+/// An unnamed Git source must read metadata from the imported commit before caching it.
+#[test]
+#[cfg(feature = "test-git")]
+fn tool_run_pylock_unnamed_git() -> Result<()> {
+    let index = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "pylock-unnamed-git"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.old-dependency.versions."1.0.0"]
+        sdist = false
+        [packages.new-dependency.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"));
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "git-dependency"
+        version = "1.0.0"
+        requires-python = ">=3.8"
+        dependencies = ["old-dependency"]
+        [project.scripts]
+        git-dependency = "git_dependency:main"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("src/git_dependency/__init__.py")
+        .write_str("def main(): pass\n")?;
+    context
+        .external_command("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial metadata",
+        ])
+        .assert()
+        .success();
+    let old_commit = context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .assert()
+        .success();
+    let old_commit = String::from_utf8(old_commit.get_output().stdout.clone())?;
+    let old_commit = old_commit.trim();
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "git-dependency"
+        version = "2.0.0"
+        requires-python = ">=3.8"
+        dependencies = ["new-dependency"]
+        [project.scripts]
+        git-dependency = "git_dependency:main"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-am",
+            "Updated metadata",
+        ])
+        .assert()
+        .success();
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+
+    context.temp_dir.child("pylock.toml").write_str(&format!(
+        r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "git-dependency"
+        vcs = {{ type = "git", url = "{repository_url}", commit-id = "{old_commit}" }}
+    "#
+    ))?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--from").arg(format!("git+{repository_url}"))
+        .args(["--with-requirements", "pylock.toml"])
         .arg("--default-index").arg(index.index_url())
-        .env(EnvVars::XDG_BIN_HOME, context.bin_dir.as_os_str())
-        .arg("pylock-tool"), @"
+        .args(["python", "-c", &format!("import json, importlib.util; from importlib.metadata import distribution, version; print(version('git-dependency'), version('old-dependency'), importlib.util.find_spec('new_dependency') is None, json.loads(distribution('git-dependency').read_text('direct_url.json'))['vcs_info']['commit_id'] == '{old_commit}')")]), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0 1.0.0 True True
+
     ----- stderr -----
-    Resolved 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + git-dependency==2.0.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
-     + new-dependency==1.0.0
-     + pylock-tool==1.0.0
-    Installed 1 executable: pylock-tool
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + git-dependency==1.0.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+     + old-dependency==1.0.0
     ");
     Ok(())
 }
