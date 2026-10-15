@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -19,7 +20,7 @@ def command_output(command: list[str], source: Path) -> str:
     return subprocess.check_output(command, cwd=source, text=True).strip()
 
 
-def build(source: Path) -> dict[str, float]:
+def train(source: Path, output: Path) -> dict:
     source = source.resolve()
     environment = os.environ | {"CARGO_INCREMENTAL": "0"}
     pgo_directory = source / "target-pgo"
@@ -38,7 +39,41 @@ def build(source: Path) -> dict[str, float]:
         env=environment,
         check=True,
     )
-    durations = {"pgo_training": round(time.perf_counter() - start, 3)}
+    duration = round(time.perf_counter() - start, 3)
+    output.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(pgo_directory / "uv.profdata", output / "uv.profdata")
+    return {
+        "target": TARGET,
+        "revision": command_output(["git", "rev-parse", "HEAD"], source),
+        "rustc": command_output(["rustc", "--version"], source),
+        "sha256": hashlib.sha256((output / "uv.profdata").read_bytes()).hexdigest(),
+        "build_seconds": duration,
+    }
+
+
+def load_profile(directory: Path) -> dict:
+    profile = json.loads((directory / "profile.json").read_text())
+    if profile["target"] != TARGET:
+        raise ValueError(f"Expected a PGO profile for {TARGET}")
+    if (
+        hashlib.sha256((directory / "uv.profdata").read_bytes()).hexdigest()
+        != profile["sha256"]
+    ):
+        raise ValueError("PGO profile does not match its recorded checksum")
+    return profile
+
+
+def build(source: Path, pgo_directory: Path) -> dict[str, float]:
+    source = source.resolve()
+    pgo_directory = pgo_directory.resolve()
+    profile = load_profile(pgo_directory)
+    if profile["rustc"] != command_output(["rustc", "--version"], source):
+        raise ValueError(
+            "PGO profile and measured revision must use the same Rust toolchain; "
+            "update the pinned training revision"
+        )
+    environment = os.environ | {"CARGO_INCREMENTAL": "0"}
+    durations = {}
     commands = {
         "uv": (
             source,
@@ -88,8 +123,10 @@ def build(source: Path) -> dict[str, float]:
 
 def measure(
     source: Path,
+    pgo_directory: Path,
     build_seconds: dict | None = None,
 ) -> dict:
+    pgo_profile = load_profile(pgo_directory)
     sizes = {
         binary: (source / "target" / TARGET / profile / binary).stat().st_size
         for binary, profile in BINARIES.items()
@@ -107,9 +144,8 @@ def measure(
         },
         "sizes": sizes,
         "pgo": True,
-        "pgo_profile_sha256": hashlib.sha256(
-            (source / "target-pgo" / "uv.profdata").read_bytes()
-        ).hexdigest(),
+        "pgo_revision": pgo_profile["revision"],
+        "pgo_profile_sha256": pgo_profile["sha256"],
         "build_seconds": build_seconds,
     }
 
@@ -123,6 +159,11 @@ def report(
 ) -> str:
     if current["target"] != TARGET or (base and base["target"] != TARGET):
         raise ValueError(f"Expected measurements for {TARGET}")
+    if base and (
+        current["pgo_profile_sha256"] != base["pgo_profile_sha256"]
+        or current["pgo_revision"] != base["pgo_revision"]
+    ):
+        raise ValueError("Both revisions must use the same PGO profile")
 
     lines = ["## Binary size", ""]
     if base:
@@ -164,10 +205,12 @@ def report(
             f"Baseline revision: [{base['revision'][:8]}]({repository_url}/commit/{base['revision']})."
         )
     lines += [
+        f"PGO training revision: [{current['pgo_revision'][:8]}]({repository_url}/commit/{current['pgo_revision']}).",
         "",
         (
             "Native Cargo builds with `release` for `uv` and `uvx`, and `minimal-size` "
-            "for `uv-build`. `uv` and `uvx` use the release PGO training corpus and flags. "
+            "for `uv-build`. `uv` and `uvx` share a PGO profile trained on a pinned "
+            "`main` revision using the release training corpus and flags. "
             "Incremental compilation is disabled. Sizes are uncompressed bytes; "
             "SBOM embedding and manylinux packaging are excluded."
         ),
@@ -181,13 +224,13 @@ def report(
             "### Build time",
             "",
             (
-                "Elapsed build and PGO preparation time for the current revision, excluding "
-                "job setup, cache transfers, and artifact uploads. The `uv` build includes `uvx`."
+                "Elapsed `cargo build` time for the current revision, excluding "
+                "job setup, cache transfers, and artifact uploads. The `uv` build includes `uvx`. "
+                "PGO profile preparation runs in a separate job."
             ),
             "",
             "| Build | Seconds |",
             "| --- | ---: |",
-            f"| PGO instrumentation and training | {durations['pgo_training']:.3f} |",
             f"| `uv` and `uvx` | {durations['uv']:.3f} |",
             f"| `uv-build` | {durations['uv-build']:.3f} |",
         ]
@@ -197,11 +240,16 @@ def report(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    training = commands.add_parser("train")
+    training.add_argument("--source", type=Path, required=True)
+    training.add_argument("--output", type=Path, required=True)
     build_command = commands.add_parser("build")
     build_command.add_argument("--source", type=Path, required=True)
+    build_command.add_argument("--pgo-profile", type=Path, required=True)
     build_command.add_argument("--output", type=Path, required=True)
     measurement = commands.add_parser("measure")
     measurement.add_argument("--source", type=Path, required=True)
+    measurement.add_argument("--pgo-profile", type=Path, required=True)
     measurement.add_argument("--output", type=Path, required=True)
     measurement.add_argument("--build-times", type=Path)
     summary = commands.add_parser("report")
@@ -211,13 +259,18 @@ def main() -> None:
     summary.add_argument("--sizes-only", action="store_true")
     args = parser.parse_args()
 
-    if args.command == "build":
-        args.output.write_text(json.dumps(build(args.source), indent=2) + "\n")
+    if args.command == "train":
+        profile = train(args.source, args.output)
+        (args.output / "profile.json").write_text(json.dumps(profile, indent=2) + "\n")
+    elif args.command == "build":
+        args.output.write_text(
+            json.dumps(build(args.source, args.pgo_profile), indent=2) + "\n"
+        )
     elif args.command == "measure":
         durations = (
             json.loads(args.build_times.read_text()) if args.build_times else None
         )
-        result = measure(args.source, durations)
+        result = measure(args.source, args.pgo_profile, durations)
         args.output.write_text(json.dumps(result, indent=2) + "\n")
     elif args.command == "report":
         current = json.loads(args.current.read_text())
