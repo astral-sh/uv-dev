@@ -1270,7 +1270,19 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
         .assert()
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
-    assert_eq!(metadata["modules"], modules);
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["modules"], @r#"
+        {
+          "required_module": {
+            "owners": [
+              {
+                "package_id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
+              }
+            ]
+          }
+        }
+        "#);
+    });
     uv_snapshot!(context.filters(), context.pip_show().arg("metadata-extra"), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -1906,19 +1918,13 @@ fn workspace_metadata_module_owners_include_stale_virtual_package() -> Result<()
     let stale_owner = context
         .temp_dir
         .child("module_owner_root-0.1.0-py3-none-any.whl");
-    write_wheel(
-        stale_owner.path(),
-        "module-owner-root",
-        "module_owner_root-0.1.0",
-        &[("stale.py", "")],
-    )?;
+    write_wheel(stale_owner.path(), "module-owner-root", &[("stale.py", "")])?;
     let selected_owner = context
         .temp_dir
         .child("selected_owner-0.1.0-py3-none-any.whl");
     write_wheel(
         selected_owner.path(),
         "selected-owner",
-        "selected_owner-0.1.0",
         &[("selected.py", "")],
     )?;
     let selected_owner_url = Url::from_file_path(selected_owner.path())
@@ -1953,7 +1959,9 @@ fn workspace_metadata_module_owners_include_stale_virtual_package() -> Result<()
     context
         .assert_command("import stale; import selected")
         .success();
-    insta::with_settings!({ filters => context.filters() }, {
+    let mut filters = context.filters();
+    filters.push((r#""sha256": "[0-9a-f]{64}""#, r#""sha256": "[SHA256]""#));
+    insta::with_settings!({ filters => filters }, {
         insta::assert_json_snapshot!(serde_json::json!({
             "modules": metadata["modules"],
             "resolution": metadata["resolution"],
@@ -2028,7 +2036,6 @@ fn workspace_metadata_module_owners_after_dependency_changes() -> Result<()> {
     write_wheel(
         installed_owner.path(),
         "module-owner",
-        "module_owner-0.1.0",
         &[("installed_module.py", "")],
     )?;
     let locked_owner = context
@@ -2038,7 +2045,6 @@ fn workspace_metadata_module_owners_after_dependency_changes() -> Result<()> {
         locked_owner.path(),
         "module-owner",
         "0.2.0",
-        "module_owner-0.2.0",
         "",
         &[("replacement_module.py", "")],
     )?;
@@ -2302,12 +2308,7 @@ fn workspace_metadata_installed_packages_without_modules() -> Result<()> {
     let declared = context
         .temp_dir
         .child("missing_record-0.1.0-py3-none-any.whl");
-    write_wheel(
-        declared.path(),
-        "missing-record",
-        "missing_record-0.1.0",
-        &[],
-    )?;
+    write_wheel(declared.path(), "missing-record", &[])?;
     let declared_url = SafeUrl::from_file_path(declared.path())
         .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
     pyproject.write_str(&formatdoc! {r#"
