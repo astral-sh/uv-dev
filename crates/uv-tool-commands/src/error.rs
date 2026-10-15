@@ -44,6 +44,15 @@ impl From<uv_resolve_operations::Error> for ToolError {
     }
 }
 
+impl ToolError {
+    pub(crate) fn from_requirements(error: uv_resolve_operations::Error) -> Self {
+        match error {
+            uv_resolve_operations::Error::Requirements(error) => Self::Requirements(error),
+            error => Self::Resolve(Box::new(error)),
+        }
+    }
+}
+
 impl From<ToolError> for UvError {
     fn from(error: ToolError) -> Self {
         match error {

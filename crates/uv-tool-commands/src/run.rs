@@ -925,7 +925,8 @@ async fn get_or_create_environment(
                         preview,
                         lfs,
                     )
-                    .await?
+                    .await
+                    .map_err(ToolError::from_requirements)?
                     .pop()
                     .unwrap();
 
@@ -1081,7 +1082,8 @@ async fn get_or_create_environment(
                 preview,
                 lfs,
             )
-            .await?,
+            .await
+            .map_err(ToolError::from_requirements)?,
         );
         requirements
     };
@@ -1110,7 +1112,8 @@ async fn get_or_create_environment(
         preview,
         lfs,
     )
-    .await?;
+    .await
+    .map_err(ToolError::from_requirements)?;
 
     // Check if the tool is already installed in a compatible environment.
     if !isolated && !request.is_latest() && spec.source_trees.is_empty() && !spec.has_preferences()

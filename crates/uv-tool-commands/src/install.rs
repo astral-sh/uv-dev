@@ -45,7 +45,7 @@ use crate::common::{
     ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
     tool_environment_spec,
 };
-use crate::error::ToolLockError;
+use crate::error::{ToolError, ToolLockError};
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
@@ -264,7 +264,8 @@ pub async fn install(
                 preview,
                 lfs,
             )
-            .await?
+            .await
+            .map_err(ToolError::from_requirements)?
             .pop()
             .unwrap();
 
@@ -439,7 +440,8 @@ pub async fn install(
                 preview,
                 lfs,
             )
-            .await?,
+            .await
+            .map_err(ToolError::from_requirements)?,
         );
         requirements
     };
@@ -497,7 +499,8 @@ pub async fn install(
         preview,
         lfs,
     )
-    .await?;
+    .await
+    .map_err(ToolError::from_requirements)?;
 
     // Resolve the excludes.
     let receipt_excludes = spec.excludes.clone();

@@ -1779,40 +1779,19 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         pyproject_toml: &PyProjectToml,
         credentials_cache: &CredentialsCache,
     ) -> Result<Option<RequiresDist>, Error> {
-        // Attempt to read static metadata from the `pyproject.toml`.
-        match uv_pypi_types::RequiresDist::from_pyproject_toml(pyproject_toml.clone()) {
-            Ok(requires_dist) => {
-                debug!("Found static `requires-dist` for: {}", path.display());
-                let requires_dist = RequiresDist::from_project_maybe_workspace(
-                    requires_dist,
-                    path,
-                    None,
-                    self.build_context.locations(),
-                    self.build_context.sources().clone(),
-                    self.build_context
-                        .source_tree_editable_policy()
-                        .workspace_member_editable(None),
-                    self.build_context.cache(),
-                    self.build_context.workspace_cache(),
-                    credentials_cache,
-                )
-                .await?;
-                Ok(Some(requires_dist))
-            }
-            Err(
-                err @ (uv_pypi_types::MetadataError::Pep508Error(_)
-                | uv_pypi_types::MetadataError::DynamicField(_)
-                | uv_pypi_types::MetadataError::FieldNotFound(_)
-                | uv_pypi_types::MetadataError::PoetrySyntax),
-            ) => {
-                debug!(
-                    "No static `requires-dist` available for: {} ({err:?})",
-                    path.display()
-                );
-                Ok(None)
-            }
-            Err(err) => Err(Error::PyprojectToml(err)),
-        }
+        RequiresDist::from_pyproject_toml(
+            path,
+            pyproject_toml,
+            self.build_context.locations(),
+            self.build_context.sources().clone(),
+            self.build_context
+                .source_tree_editable_policy()
+                .workspace_member_editable(None),
+            self.build_context.cache(),
+            self.build_context.workspace_cache(),
+            credentials_cache,
+        )
+        .await
     }
 
     /// Return the [`RevisionHashes`] for an archive stored in a Git repository.

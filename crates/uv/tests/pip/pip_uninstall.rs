@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 #[cfg(windows)]
 use std::path::{Component, Prefix};
 
@@ -7,8 +8,9 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
-#[cfg(feature = "test-pypi")]
 use uv_static::EnvVars;
+use uv_test::package_server::PackageServer;
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -21,7 +23,7 @@ fn no_arguments() {
     error: the following required arguments were not provided:
       <PACKAGE|--requirements <REQUIREMENTS>>
 
-    Usage: uv pip uninstall --cache-dir [CACHE_DIR] <PACKAGE|--requirements <REQUIREMENTS>>
+    Usage: uv pip uninstall --cache-dir [CACHE_DIR] --exclude-newer <EXCLUDE_NEWER> <PACKAGE|--requirements <REQUIREMENTS>>
 
     For more information, try '--help'.
     "
@@ -749,6 +751,7 @@ fn uninstall_pylock_stdin() -> Result<()> {
 }
 
 /// Base metadata dependencies follow requirements-file behavior: versions and markers are ignored.
+/// Static metadata does not need configured build constraints or find-links directories to exist.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn uninstall_pyproject_stdin() -> Result<()> {
@@ -769,6 +772,8 @@ fn uninstall_pyproject_stdin() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context.pip_uninstall().args(["--offline", "-r", "-"])
+        .env(EnvVars::UV_FIND_LINKS, "missing-wheels")
+        .env(EnvVars::UV_BUILD_CONSTRAINT, "missing-build-constraints.txt")
         .stdin(fs_err::File::open(input.path())?.into_file()), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -817,7 +822,7 @@ fn uninstall_setup_py_stdin() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     context
         .pip_install()
-        .arg("iniconfig==2.0.0")
+        .args(["iniconfig==2.0.0", "setuptools==69.2.0", "wheel==0.43.0"])
         .assert()
         .success();
     let input = context.temp_dir.child("input");
@@ -827,12 +832,95 @@ fn uninstall_setup_py_stdin() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context.pip_uninstall()
-        .args(["-r", "-", "--input-format", "setup.py"])
+        .args(["--no-index", "-r", "-", "--input-format", "setup.py"])
+        .env(EnvVars::UV_NO_BUILD_ISOLATION, "1")
         .stdin(fs_err::File::open(input.path())?.into_file()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Uninstalled 1 package in [TIME]
      - iniconfig==2.0.0
+    ");
+    Ok(())
+}
+
+/// Dynamic metadata uses the configured index to install its backend and passes build settings.
+#[tokio::test]
+async fn uninstall_pyproject_build_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .pip_install()
+        .arg(
+            context
+                .workspace_root
+                .join("test/links/simple_launcher-0.1.0-py3-none-any.whl"),
+        )
+        .assert()
+        .success();
+
+    let name = "uninstall-build-backend".parse()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[(
+            "uninstall_build_backend/backend.py",
+            indoc! {r#"
+            from pathlib import Path
+
+            def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+                dist_info = Path(metadata_directory) / "metadata_project-1.0.dist-info"
+                dist_info.mkdir()
+                dependency = config_settings["dependency"]
+                (dist_info / "METADATA").write_text(
+                    "Metadata-Version: 2.3\nName: metadata-project\nVersion: 1.0\n"
+                    f"Requires-Dist: {dependency}\n"
+                )
+                return dist_info.name
+        "#},
+        )],
+    );
+    let server = PackageServer::new(&name).await;
+    server.serve(&filename, &wheel, None).await;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "metadata-project"
+        version = "1.0"
+        dynamic = ["dependencies"]
+
+        [build-system]
+        requires = ["uninstall-build-backend==1.0.0"]
+        build-backend = "uninstall_build_backend.backend"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_uninstall()
+        .args(["--dry-run", "-r", "pyproject.toml", "-C", "dependency=simple-launcher"])
+        .env(EnvVars::UV_INDEX_URL, server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Would uninstall 1 package
+     - simple-launcher==0.1.0 (from file://[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl)
+    ");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(&format!(
+            "--index-url {}\nsimple-launcher\n",
+            server.index_url()
+        ))?;
+    uv_snapshot!(context.filters(), context.pip_uninstall()
+        .args(["--no-cache", "-r", "pyproject.toml", "-r", "requirements.txt", "-C", "dependency=simple-launcher"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Uninstalled 1 package in [TIME]
+     - simple-launcher==0.1.0 (from file://[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl)
     ");
     Ok(())
 }

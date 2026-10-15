@@ -9,7 +9,7 @@ use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{Concurrency, Constraints, DryRun, ExtrasSpecification, GitLfsSetting};
 use uv_dispatch::SharedState;
-use uv_distribution_types::{InstalledMetadata, Name, UnresolvedRequirement};
+use uv_distribution_types::{Index, InstalledMetadata, Name, Origin, UnresolvedRequirement};
 use uv_distribution_types::{NameRequirementSpecification, Requirement};
 use uv_fs::Simplified;
 use uv_pep508::UnnamedRequirement;
@@ -64,6 +64,27 @@ pub async fn pip_uninstall(
         &cache,
     )
     .await?;
+
+    let settings = ResolverSettings {
+        index_locations: settings.index_locations.combine(
+            spec.extra_index_urls
+                .into_iter()
+                .map(Index::from_extra_index_url)
+                .chain(spec.index_url.map(Index::from_index_url))
+                .map(|index| index.with_origin(Origin::RequirementsTxt))
+                .collect(),
+            spec.find_links
+                .into_iter()
+                .map(Index::from_find_links)
+                .map(|index| index.with_origin(Origin::RequirementsTxt))
+                .collect(),
+            spec.no_index,
+        ),
+        build_options: settings
+            .build_options
+            .combine(spec.no_binary, spec.no_build),
+        ..settings
+    };
 
     // Detect the current Python interpreter.
     let environment = find_environment(
@@ -125,7 +146,7 @@ pub async fn pip_uninstall(
         .ok();
 
     // Cache index credentials before fetching lockfiles or metadata build constraints.
-    let _client = if spec.pylock.is_some() || !spec.source_trees.is_empty() {
+    let client = if spec.pylock.is_some() || !spec.source_trees.is_empty() {
         Some(
             RegistryClientBuilder::new(client_builder.clone(), cache.clone())
                 .index_locations(settings.index_locations.clone())
@@ -149,32 +170,44 @@ pub async fn pip_uninstall(
         }));
     }
 
-    let metadata_requirements = if spec.source_trees.is_empty() {
-        Vec::new()
+    let (mut metadata_requirements, dynamic_sources) = if let Some(client) = &client {
+        uv_resolve_operations::resolve_static_requirements(
+            &spec.source_trees,
+            &settings,
+            client,
+            &cache,
+            &workspace_cache,
+        )
+        .await?
     } else {
+        (Vec::new(), Vec::new())
+    };
+    if !dynamic_sources.is_empty() {
         let build_constraints = Constraints::from_specifications(
             uv_resolve_operations::read_constraints(build_constraints, &client_builder, &cache)
                 .await?
                 .into_iter()
                 .chain(build_constraints_from_workspace),
         );
-        uv_resolve_operations::resolve_requirements(
-            Vec::new(),
-            &spec.source_trees,
-            environment.interpreter(),
-            &settings,
-            &build_constraints,
-            &client_builder,
-            &SharedState::default(),
-            &concurrency,
-            &cache,
-            &workspace_cache,
-            printer,
-            preview,
-            GitLfsSetting::default(),
-        )
-        .await?
-    };
+        metadata_requirements.extend(
+            uv_resolve_operations::resolve_requirements(
+                Vec::new(),
+                &dynamic_sources,
+                environment.interpreter(),
+                &settings,
+                &build_constraints,
+                &client_builder,
+                &SharedState::default(),
+                &concurrency,
+                &cache,
+                &workspace_cache,
+                printer,
+                preview,
+                GitLfsSetting::default(),
+            )
+            .await?,
+        );
+    }
 
     // Index the current `site-packages` directory.
     let site_packages = uv_installer::SitePackages::from_environment(&environment)?;

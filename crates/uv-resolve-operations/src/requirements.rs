@@ -3,7 +3,7 @@ use std::sync::Arc;
 use itertools::Itertools;
 
 use uv_cache::Cache;
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::{BaseClientBuilder, RegistryClient, RegistryClientBuilder};
 use uv_command_support::Printer;
 use uv_configuration::{Concurrency, Constraints, ExtrasSpecification, GitLfsSetting};
 use uv_dispatch::{BuildDispatch, SharedState};
@@ -25,7 +25,7 @@ use crate::reporters::ResolverReporter;
 
 /// Resolve project metadata and unnamed requirements into fully-qualified [`Requirement`] entries.
 pub async fn resolve_requirements(
-    requirements: Vec<UnresolvedRequirementSpecification>,
+    mut requirements: Vec<UnresolvedRequirementSpecification>,
     source_trees: &[SourceTree],
     interpreter: &Interpreter,
     settings: &ResolverSettings,
@@ -116,6 +116,24 @@ pub async fn resolve_requirements(
         .build()
         .map_err(anyhow::Error::from)?;
 
+    let (static_requirements, dynamic_sources) =
+        resolve_static_requirements(source_trees, settings, &client, cache, workspace_cache)
+            .await?;
+    requirements.extend(
+        static_requirements
+            .into_iter()
+            .map(UnresolvedRequirementSpecification::from),
+    );
+    if dynamic_sources.is_empty()
+        && requirements.iter().all(|spec| match spec.requirement {
+            UnresolvedRequirement::Named(_) => true,
+            UnresolvedRequirement::Unnamed(_) => false,
+        })
+    {
+        let (requirements, _): (Vec<_>, Vec<_>) = partition_requirements(requirements);
+        return Ok(requirements);
+    }
+
     // Determine whether to enable build isolation.
     let environment;
     let build_isolation = match build_isolation {
@@ -186,17 +204,14 @@ pub async fn resolve_requirements(
         ),
     )
     .with_reporter(Arc::new(ResolverReporter::from(printer)))
-    .resolve(source_trees.iter())
+    .resolve(dynamic_sources.iter())
     .await?;
     let (mut requirements, unnamed): (Vec<_>, Vec<_>) = partition_requirements(
         requirements
             .into_iter()
             .chain(source_requirements.into_iter().flat_map(|source| {
                 Box::into_iter(source.into_requirements())
-                    .filter_map(|mut requirement| {
-                        requirement.marker = requirement.marker.simplify_not_extras_with(|_| true);
-                        (!requirement.marker.is_false()).then_some(requirement)
-                    })
+                    .filter_map(base_requirement)
                     .map(UnresolvedRequirementSpecification::from)
             }))
             .collect(),
@@ -219,4 +234,43 @@ pub async fn resolve_requirements(
     );
 
     Ok(requirements)
+}
+
+/// Extract base dependencies from static metadata and return source trees that need a backend.
+pub async fn resolve_static_requirements(
+    source_trees: &[SourceTree],
+    settings: &ResolverSettings,
+    client: &RegistryClient,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+) -> Result<(Vec<Requirement>, Vec<SourceTree>), Error> {
+    let extras = ExtrasSpecification::default();
+    let mut requirements = Vec::new();
+    let mut dynamic_sources = Vec::new();
+    for source in source_trees {
+        if let Some(resolution) = source
+            .resolve_static(
+                &extras,
+                &settings.index_locations,
+                settings.sources.clone(),
+                SourceTreeEditablePolicy::Project.workspace_member_editable(None),
+                cache,
+                workspace_cache,
+                client.credentials_cache(),
+            )
+            .await?
+        {
+            requirements.extend(
+                Box::into_iter(resolution.into_requirements()).filter_map(base_requirement),
+            );
+        } else {
+            dynamic_sources.push(source.clone());
+        }
+    }
+    Ok((requirements, dynamic_sources))
+}
+
+fn base_requirement(mut requirement: Requirement) -> Option<Requirement> {
+    requirement.marker = requirement.marker.simplify_not_extras_with(|_| true);
+    (!requirement.marker.is_false()).then_some(requirement)
 }

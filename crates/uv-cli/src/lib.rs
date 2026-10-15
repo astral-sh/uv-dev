@@ -2377,6 +2377,43 @@ pub struct PipUninstallArgs {
     #[arg(long, value_enum)]
     pub input_format: Option<RequirementsFormat>,
 
+    /// Constrain build dependencies when extracting dynamic project metadata.
+    #[arg(long = "build-constraints", alias = "build-constraint", value_hint = ValueHint::FilePath)]
+    pub build_constraints: Vec<Maybe<RequirementsInput>>,
+
+    #[command(flatten)]
+    pub fetch: FetchArgs,
+
+    #[command(flatten)]
+    pub build: BuildOptionsArgs,
+
+    #[command(flatten)]
+    pub build_isolation: PackageBuildIsolationArgs,
+
+    #[command(flatten)]
+    pub sources: SourcesArgs,
+
+    /// Settings to pass to the PEP 517 build backend, specified as `KEY=VALUE` pairs.
+    #[arg(
+        long,
+        short = 'C',
+        alias = "config-settings",
+        help_heading = "Build options"
+    )]
+    pub config_setting: Option<Vec<ConfigSettingEntry>>,
+
+    /// Settings to pass to the PEP 517 build backend for a specific package, specified as `PACKAGE:KEY=VALUE` pairs.
+    #[arg(
+        long,
+        alias = "config-settings-package",
+        help_heading = "Build options"
+    )]
+    pub config_settings_package: Option<Vec<ConfigSettingPackageEntry>>,
+
+    /// The method to use when installing build dependencies from the global cache.
+    #[arg(long, value_enum, env = EnvVars::UV_LINK_MODE, help_heading = "Build options")]
+    pub link_mode: Option<uv_install_wheel::LinkMode>,
+
     /// The Python interpreter from which packages should be uninstalled.
     ///
     /// By default, uninstallation requires a virtual environment. A path to an alternative Python
@@ -2393,15 +2430,6 @@ pub struct PipUninstallArgs {
         value_hint = ValueHint::Other,
     )]
     pub python: Option<Maybe<String>>,
-
-    /// Attempt to use `keyring` for authentication for remote requirements files.
-    ///
-    /// At present, only `--keyring-provider subprocess` is supported, which configures uv to use
-    /// the `keyring` CLI to handle authentication.
-    ///
-    /// Defaults to `disabled`.
-    #[arg(long, value_enum, env = EnvVars::UV_KEYRING_PROVIDER)]
-    pub keyring_provider: Option<KeyringProviderType>,
 
     /// Use the system Python to uninstall packages.
     ///
