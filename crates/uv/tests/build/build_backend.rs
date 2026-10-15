@@ -1087,6 +1087,160 @@ fn license_file_must_be_utf8() -> Result<()> {
     Ok(())
 }
 
+/// A recursive license glob must not validate unrelated binary package data as a license.
+#[test]
+fn license_glob_recursive_binary() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "zzz"
+        version = "0.1.0"
+        license = "MIT"
+        license-files = ["src/zzz/_vendor/**/LICENSE.txt"]
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/zzz/__init__.py").touch()?;
+    context
+        .temp_dir
+        .child("src/zzz/_vendor/LICENSE.txt")
+        .write_str("Vendored license")?;
+    context
+        .temp_dir
+        .child("src/zzz/_vendor/thing.bin")
+        .write_binary(&[0xff])?;
+
+    // Unrelated binary data should not cause a license encoding error (astral-sh/uv#22579).
+    uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Invalid project metadata
+      cause: License file `src/zzz/_vendor/thing.bin` must be UTF-8 encoded
+    ");
+
+    Ok(())
+}
+
+/// License validation also visits bytecode that the build backend excludes by default.
+#[test]
+fn license_glob_recursive_bytecode() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "zzz"
+        version = "0.1.0"
+        license = "MIT"
+        license-files = ["src/zzz/_vendor/**/LICENSE.txt"]
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/zzz/__init__.py").touch()?;
+    context
+        .temp_dir
+        .child("src/zzz/_vendor/LICENSE.txt")
+        .write_str("Vendored license")?;
+    context
+        .temp_dir
+        .child("src/zzz/_vendor/__init__.py")
+        .touch()?;
+    context
+        .python_command()
+        .arg("-c")
+        .arg("import py_compile; py_compile.compile('src/zzz/_vendor/__init__.py', doraise=True)")
+        .assert()
+        .success();
+
+    // Excluded bytecode should not cause a license encoding error (astral-sh/uv#22579).
+    uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Invalid project metadata
+      cause: License file `src/zzz/_vendor/__pycache__/__init__.cpython-312.pyc` must be UTF-8 encoded
+    ");
+
+    Ok(())
+}
+
+/// UTF-8 package data passes validation but is incorrectly recorded and packaged as a license.
+#[test]
+fn license_glob_recursive_text() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "zzz"
+        version = "0.1.0"
+        license = "MIT"
+        license-files = ["src/zzz/_vendor/**/LICENSE.txt"]
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context.temp_dir.child("src/zzz/__init__.py").touch()?;
+    context
+        .temp_dir
+        .child("src/zzz/_vendor/LICENSE.txt")
+        .write_str("Vendored license")?;
+    context
+        .temp_dir
+        .child("src/zzz/_vendor/data.txt")
+        .write_str("Runtime data")?;
+
+    uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/zzz-0.1.0-py3-none-any.whl
+    ");
+
+    context
+        .pip_install()
+        .arg("--offline")
+        .arg("dist/zzz-0.1.0-py3-none-any.whl")
+        .assert()
+        .success();
+
+    // Unmatched text files should not appear in license metadata or the license directory
+    // (astral-sh/uv#22579).
+    let metadata = context.read(context.site_packages().join("zzz-0.1.0.dist-info/METADATA"));
+    assert_snapshot!(metadata, @"
+    Metadata-Version: 2.4
+    Name: zzz
+    Version: 0.1.0
+    License-Expression: MIT
+    License-File: src/zzz/_vendor/LICENSE.txt
+    License-File: src/zzz/_vendor/data.txt
+    ");
+    let license = context.read(
+        context
+            .site_packages()
+            .join("zzz-0.1.0.dist-info/licenses/src/zzz/_vendor/data.txt"),
+    );
+    assert_snapshot!(license, @"Runtime data");
+
+    Ok(())
+}
+
 /// Test that a symlinked file (here: license) gets included.
 #[test]
 #[cfg(unix)]
