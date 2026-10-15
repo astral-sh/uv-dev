@@ -14518,15 +14518,7 @@ fn change_layout_custom_directory() -> Result<()> {
 #[test]
 fn pep_751_install_stdin() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (filename, wheel) = generate_wheel(
-        &"stdin-probe".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::default(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"stdin-probe".parse()?, &"1.0.0".parse()?).build();
     let hash = hex::encode(Sha256::digest(&wheel));
     context.temp_dir.child(&filename).write_binary(&wheel)?;
 

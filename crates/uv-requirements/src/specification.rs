@@ -50,7 +50,7 @@ use uv_distribution_types::{
 use uv_fs::{CWD, Simplified};
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pypi_types::PyProjectToml;
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 use uv_requirements_txt::{RequirementsTxt, RequirementsTxtRequirement, SourceCache};
 use uv_scripts::{OverrideDependency, Pep723Metadata};
 use uv_warnings::warn_user;
@@ -102,7 +102,7 @@ pub struct RequirementsSpecification {
 pub enum PylockSource {
     Stdin(String),
     Local(PathBuf),
-    Remote(DisplaySafeUrl),
+    Remote(SafeUrl),
 }
 
 impl PylockSource {

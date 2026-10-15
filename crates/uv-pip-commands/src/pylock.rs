@@ -63,11 +63,7 @@ pub(crate) async fn read_pylock_toml(
         PylockSource::Stdin(content) => (std::env::current_dir()?, Cow::Borrowed(content.as_str())),
         PylockSource::Remote(url) => {
             let client = client_builder.build()?;
-            let response = client
-                .for_host(url)
-                .get(url::Url::from(url.clone()))
-                .send()
-                .await?;
+            let response = client.for_host(url).get(url.clone()).send().await?;
             response.error_for_status_ref()?;
             let content = response.text().await?;
             (std::env::current_dir()?, Cow::Owned(content))

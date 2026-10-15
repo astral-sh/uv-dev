@@ -735,7 +735,7 @@ fn yes_short_flag() {
 
 #[test]
 fn uninstall_pylock_stdin() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let input = context.temp_dir.child("input");
     input.write_str(indoc! {r#"
         lock-version = "1.0"
