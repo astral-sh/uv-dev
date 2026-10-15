@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWriteExt, BufWriter, ReadBuf};
+use tokio::task::spawn_blocking;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
 use tracing::{debug, instrument, warn};
@@ -37,7 +38,9 @@ use uv_client::{
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
-use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, rename_with_retry};
+use uv_fs::{
+    LockedFile, LockedFileError, LockedFileMode, Simplified, rename_with_retry, with_retry_sync,
+};
 use uv_macros::DebugNoInline;
 use uv_platform::{Arch, Libc, Os, Platform};
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
@@ -794,7 +797,7 @@ impl ManagedPythonDownload {
         rejected_file: fs_err::tokio::File,
     ) -> Result<(), Error> {
         let rejected = same_file::Handle::from_file(rejected_file.into_std().await.into_file())?;
-        let _lock = LockedFile::acquire(
+        let lock = LockedFile::acquire(
             cache_lock_file,
             LockedFileMode::Exclusive,
             target_cache_file.user_display(),
@@ -821,11 +824,21 @@ impl ManagedPythonDownload {
             // Other installers can still have the rejected archive open. On Windows, deleting it
             // in place would leave the cache key inaccessible until every reader closes. Move it
             // to a unique pathname first so the cache can immediately accept a replacement.
-            match rename_with_retry(target_cache_file, &rejected_path).await {
-                Ok(()) => {}
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => return Err(err.into()),
-            }
+            let target_cache_file = target_cache_file.to_path_buf();
+            // The blocking task owns the lock and temporary path so cancellation cannot release
+            // them while the rename is still queued or running.
+            spawn_blocking(move || {
+                let _lock = lock;
+                match with_retry_sync(&target_cache_file, &rejected_path, "renaming", || {
+                    fs_err::rename(&target_cache_file, &rejected_path)
+                }) {
+                    Ok(()) => Ok(()),
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+                    Err(err) => Err(err),
+                }
+            })
+            .await
+            .map_err(io::Error::other)??;
         }
         Ok(())
     }
@@ -1303,6 +1316,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use tokio::io::AsyncReadExt;
+    use tokio::sync::oneshot;
+    use tokio::task::JoinHandle;
 
     use uv_platform::{Arch, Libc, Os, Platform};
     use uv_python_types::{LenientImplementationName, PythonInstallationKey};
@@ -1783,6 +1798,78 @@ mod tests {
         other_reader.read_to_end(&mut contents).await?;
         assert_eq!(contents, b"rejected archive");
         Ok(())
+    }
+
+    /// Cancellation must not release the archive lock before a queued rename finishes.
+    #[test]
+    fn python_archive_rejection_retains_lock_when_cancelled() -> anyhow::Result<()> {
+        async fn occupy_blocking_pool() -> anyhow::Result<(oneshot::Sender<()>, JoinHandle<()>)> {
+            let (started_sender, started_receiver) = oneshot::channel();
+            let (release_sender, release_receiver) = oneshot::channel::<()>();
+            let task = spawn_blocking(move || {
+                let _ = started_sender.send(());
+                let _ = release_receiver.blocking_recv();
+            });
+            started_receiver.await?;
+            Ok((release_sender, task))
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let cache_file = temp_dir.path().join("python.tar");
+        let lock_file = temp_dir.path().join(".lock");
+        fs_err::write(&cache_file, b"rejected archive")?;
+        let rejected = fs_err::tokio::File::from_std(fs_err::File::open(&cache_file)?);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()?;
+
+        runtime.block_on(async {
+            let mut removal = Box::pin(ManagedPythonDownload::remove_rejected_archive(
+                &cache_file,
+                &lock_file,
+                rejected,
+            ));
+
+            // Complete lock acquisition and the identity read without polling the next operation.
+            for _ in 0..2 {
+                let (release, blocker) = occupy_blocking_pool().await?;
+                assert!(futures::poll!(removal.as_mut()).is_pending());
+                drop(release);
+                blocker.await?;
+                spawn_blocking(|| ()).await?;
+            }
+
+            let (release, blocker) = occupy_blocking_pool().await?;
+            assert!(futures::poll!(removal.as_mut()).is_pending());
+            let rejected_path = fs_err::read_dir(temp_dir.path())?
+                .map(|entry| entry.map(|entry| entry.path()))
+                .collect::<io::Result<Vec<_>>>()?
+                .into_iter()
+                .find(|path| path != &cache_file && path != &lock_file)
+                .ok_or_else(|| anyhow::anyhow!("expected a quarantine path before the rename"))?;
+
+            drop(removal);
+            assert!(
+                LockedFile::acquire_no_wait(&lock_file, LockedFileMode::Exclusive, "archive")
+                    .is_none()
+            );
+            assert!(rejected_path.exists());
+
+            drop(release);
+            blocker.await?;
+            spawn_blocking(|| ()).await?;
+            assert!(!cache_file.exists());
+            assert!(!rejected_path.exists());
+            let _lock =
+                LockedFile::acquire_no_wait(&lock_file, LockedFileMode::Exclusive, "archive")
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("archive lock was not released after removal")
+                    })?;
+            fs_err::write(&cache_file, b"replacement archive")?;
+            assert_eq!(fs_err::read(&cache_file)?, b"replacement archive");
+            anyhow::Ok(())
+        })
     }
 
     #[cfg(unix)]
