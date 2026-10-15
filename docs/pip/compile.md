@@ -133,6 +133,12 @@ To sync an environment with a [PEP 751](https://peps.python.org/pep-0751/) `pylo
 $ uv pip sync pylock.toml
 ```
 
+Use `-` to read either format from stdin:
+
+```console
+$ uv export --format pylock.toml | uv pip sync -
+```
+
 ## Adding constraints
 
 Constraints files are `requirements.txt`-like files that only control the _version_ of a requirement

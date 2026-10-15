@@ -28,8 +28,8 @@ pub enum RequirementsSource {
     SetupCfg(PathBuf),
     /// Dependencies were provided via an unsupported Conda `environment.yml` file (e.g., `pip install -r environment.yml`).
     EnvironmentYml(RequirementsInput),
-    /// An extensionless file that could be either a PEP 723 script or a requirements.txt file.
-    /// We detect the format when reading the file.
+    /// An extensionless file or stdin input whose format is detected when reading it.
+    /// Stdin also supports `pylock.toml`, alongside PEP 723 scripts and requirements files.
     Extensionless(RequirementsInput),
 }
 
@@ -282,14 +282,6 @@ impl RequirementsSource {
             .with_context(|| format!("Failed to parse: `{name}`"))?;
 
         Ok(Self::Package(requirement))
-    }
-
-    /// Returns `true` if the source allows extras to be specified.
-    pub fn allows_extras(&self) -> bool {
-        matches!(
-            self,
-            Self::PylockToml(_) | Self::PyprojectToml(_) | Self::SetupPy(_) | Self::SetupCfg(_)
-        )
     }
 }
 
