@@ -123,9 +123,9 @@ impl<'a, Context: BuildContext> Preparer<'a, Context> {
             }
             Dist::Source(ref dist) => {
                 if self.build_options.no_build_package(dist.name()) {
-                    if dist.is_editable() || dist.is_first_party() {
+                    if dist.is_editable() || dist.is_workspace_member() {
                         debug!(
-                            "Allowing build for first-party or editable source distribution: {dist}"
+                            "Allowing build for workspace member or editable source distribution: {dist}"
                         );
                     } else {
                         return Err(Error::NoBuild(dist.name().clone()));

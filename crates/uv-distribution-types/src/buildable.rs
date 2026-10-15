@@ -85,10 +85,10 @@ impl BuildableSource<'_> {
         }
     }
 
-    /// Returns `true` if the source is a first-party workspace member.
-    pub fn is_first_party(&self) -> bool {
+    /// Returns `true` if the source is a verified member of the supplied workspace.
+    pub fn is_workspace_member(&self) -> bool {
         match self {
-            Self::Dist(dist) => dist.is_first_party(),
+            Self::Dist(dist) => dist.is_workspace_member(),
             Self::Url(_) => false,
         }
     }
