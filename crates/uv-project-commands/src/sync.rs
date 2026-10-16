@@ -83,7 +83,8 @@ pub async fn sync(
     output_format: SyncFormat,
     malware_settings: MalwareCheckSettings,
 ) -> Result<ExitStatus> {
-    if preview.is_enabled(PreviewFeature::JsonOutput) && matches!(output_format, SyncFormat::Json) {
+    if !preview.is_enabled(PreviewFeature::JsonOutput) && matches!(output_format, SyncFormat::Json)
+    {
         warn_user!(
             "The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features {}` to disable this warning.",
             PreviewFeature::JsonOutput
