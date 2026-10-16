@@ -190,11 +190,30 @@ def main() -> int:
             uv, root, "refresh-seed-exec", executable, "refresh-cache"
         ),
     }
+    plain_refresh_seed = {
+        "executable": install(
+            uv, root, "plain-refresh-seed-exec", executable, "plain-refresh-cache"
+        ),
+        "plain": install(
+            uv, root, "plain-refresh-seed-plain", plain, "plain-refresh-cache"
+        ),
+    }
     existing_pointer = install(
         candidate, root, "existing-pointer", executable, "forward-cache"
     )
     refreshed_pointer = install(
         candidate, root, "refreshed-pointer", executable, "refresh-cache", refresh=True
+    )
+    existing_plain_pointer = install(
+        candidate, root, "existing-plain-pointer", plain, "reverse-cache"
+    )
+    refreshed_plain_pointer = install(
+        candidate,
+        root,
+        "refreshed-plain-pointer",
+        plain,
+        "plain-refresh-cache",
+        refresh=True,
     )
     run(
         [
@@ -227,7 +246,10 @@ def main() -> int:
     )
     correct = forward["executable"]["executable"] and not reverse["plain"]["executable"]
     migration_correct = (
-        existing_pointer["executable"] and refreshed_pointer["executable"]
+        existing_pointer["executable"]
+        and refreshed_pointer["executable"]
+        and not existing_plain_pointer["executable"]
+        and not refreshed_plain_pointer["executable"]
     )
     report = {
         "uv": binary_identity(uv),
@@ -239,6 +261,9 @@ def main() -> int:
         "existing_pointer": existing_pointer,
         "refresh_cache_seed": refresh_seed,
         "refreshed_pointer": refreshed_pointer,
+        "existing_plain_pointer": existing_plain_pointer,
+        "plain_refresh_cache_seed": plain_refresh_seed,
+        "refreshed_plain_pointer": refreshed_plain_pointer,
         "after_package_cache_clean": after_clean,
         "candidate_reuses_seeded_cache_correctly": migration_correct,
         "order_dependent_permissions": conflation,
