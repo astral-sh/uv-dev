@@ -30,6 +30,14 @@ The issue was opened on 2026-10-16 at 17:14:06 UTC; astral-sh/uv#22650 followed 
 
 Outcome: **reproducible**.
 
+### Reported origin and diagnostic behavior
+
+In the discussion of astral-sh/uv#22649, the reporter clarified that the original incident occurred on a colleague's Windows laptop. Nobody observed the interpreter disappear. Only `python.exe` was reported missing; the rest of the installation remained intact. The manual deletion in the reproduction recreates that filesystem state, rather than demonstrating how the original loss occurred.
+
+The reporter suspects antivirus involvement because an antivirus product had been uninstalled about a week earlier, but provides no evidence linking it to the missing file. The cause of the original deletion remains unknown; neither this report nor the controlled reproduction establishes that uv removed the interpreter. A maintainer asked how the installation became damaged; the supplied discussion contains no decision about accepting automatic repair. The confirmed bug remains the successful installation report and failure to restore an already-missing interpreter.
+
+The reporter also says `uv python list` warns that it failed to inspect the damaged installation. This qualifies the issue body's broad statement that nothing reports the broken installation: a listing warning is reported, even though an ordinary install reports success. That warning was not independently exercised in the recorded reproduction. The reporter emphasizes ordinary-install repair and accurate reporting, and reiterates that `--reinstall` repairs the installation.
+
 ### Environment and isolation
 
 - Ubuntu 24.04.5 LTS, Linux `6.17.0-1022-azure`, x86_64; this runner is not the reported WSL2 or Windows environment.
@@ -171,4 +179,4 @@ Validation is on Linux. `cargo xwin clippy` could not run because cargo-xwin is 
 
 Review the local fix alongside astral-sh/uv#22650, retaining the distinction from the junction and publication-race work. No released fix was verified. Windows/WSL2 runtime behavior, `uv sync`, system-interpreter fallback, and uninstall followed by install were not separately exercised. Related GitHub status and proposed-diff details are retained from the prior investigation, rather than refreshed during the fix attempt.
 
-Pull request: https://github.com/astral-sh/uv-dev/pull/2815
+Pull request: astral-sh/uv-dev#2815
