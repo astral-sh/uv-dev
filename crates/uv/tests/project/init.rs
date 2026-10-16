@@ -3860,6 +3860,34 @@ fn init_with_description() -> Result<()> {
 }
 
 #[test]
+fn init_description_escapes_toml() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let description = r#"A "quoted" project at C:\tools"#;
+    context
+        .init()
+        .args(["foo", "--bare", "--description", description])
+        .assert()
+        .success();
+
+    let pyproject = context.read("foo/pyproject.toml");
+    assert_snapshot!(pyproject, @r#"
+    [project]
+    name = "foo"
+    version = "0.1.0"
+    description = 'A "quoted" project at C:\tools'
+    requires-python = ">=3.12"
+    dependencies = []
+    "#);
+
+    let pyproject = pyproject.parse::<toml_edit::DocumentMut>()?;
+    assert_eq!(
+        pyproject["project"]["description"].as_str(),
+        Some(description)
+    );
+    Ok(())
+}
+
+#[test]
 fn init_without_description() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
