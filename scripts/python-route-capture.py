@@ -23,6 +23,7 @@ EXPECTED_ARCHIVE_SHA256 = (
     "743d2269e74a98f7c4281dbc2e8710c171be1965693720aac818ff0157e4d965"
 )
 DEADLINE_SECONDS = 120
+OFFLINE_CHECK_DEADLINE_SECONDS = 30
 ROUTES = {
     "A": "https://releases.astral.sh/github/python-build-standalone/releases/download",
     "B": "https://github.com/astral-sh/python-build-standalone/releases/download",
@@ -211,6 +212,8 @@ def trial_environment(workspace, traces, route):
         "UV_REQUEST_TIMEOUT",
         "HTTP_TIMEOUT",
         "UV_NO_PROGRESS",
+        "UV_COMPILE_BYTECODE",
+        "UV_CONFIG_FILE",
     ]:
         environment.pop(name, None)
     overrides = {
@@ -228,7 +231,6 @@ def trial_environment(workspace, traces, route):
         "UV_PYTHON_BIN_DIR": str(workspace / "bin"),
         "UV_PYTHON_INSTALL_BIN": "0",
         "UV_PYTHON_INSTALL_REGISTRY": "0",
-        "UV_COMPILE_BYTECODE": "0",
         "UV_LINK_MODE": "copy",
         "UV_INTERNAL__TEST_LOG_DIR": str(traces),
         "TMP": str(workspace / "tmp"),
@@ -238,6 +240,110 @@ def trial_environment(workspace, traces, route):
     }
     environment.update(overrides)
     return environment, overrides
+
+
+def install_arguments(binary):
+    return [
+        str(binary),
+        "--no-config",
+        "--color",
+        "never",
+        "python",
+        "install",
+        "--no-bin",
+        "--no-registry",
+        "--no-compile-bytecode",
+        DOWNLOAD_KEY,
+    ]
+
+
+def offline_check(binary, output, workspace, route):
+    name = f"offline-check-{route}"
+    evidence = output / name
+    evidence.mkdir()
+    work = workspace / name
+    work.mkdir()
+    for directory in ["archives", "install", "cache", "bin", "tmp"]:
+        (work / directory).mkdir()
+    raw_logs = work / "raw-logs"
+    raw_logs.mkdir()
+    traces = raw_logs / "child-traces"
+    traces.mkdir()
+    environment, overrides = trial_environment(work, traces, route)
+    environment["UV_OFFLINE"] = overrides["UV_OFFLINE"] = "1"
+    arguments = install_arguments(binary)
+    result = {
+        "schema_version": 1,
+        "kind": "offline_cli_preflight",
+        "included_in_route_observations": False,
+        "route": route,
+        "started_at": timestamp(),
+        "outcome": "running",
+        "command": arguments,
+        "environment_overrides": overrides,
+        "compile_bytecode_environment_present": "UV_COMPILE_BYTECODE" in environment,
+        "workspace": str(work),
+        "deadline_seconds": OFFLINE_CHECK_DEADLINE_SECONDS,
+        "command_attempts": 1,
+        "archive_cache_empty_before_start": not any((work / "archives").iterdir()),
+        "install_directory_empty_before_start": not any((work / "install").iterdir()),
+    }
+    write_json(evidence / "result.json", result)
+    try:
+        result.update(
+            run_process_tree(
+                arguments,
+                environment,
+                work,
+                raw_logs / "stdout.log",
+                raw_logs / "stderr.log",
+                OFFLINE_CHECK_DEADLINE_SECONDS,
+            )
+        )
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+        result.update(
+            {
+                "error": str(error),
+                "tree_exit_confirmed": False,
+                "timed_out": None,
+                "exit_code": None,
+            }
+        )
+    result["sanitized_logs"] = []
+    if result["tree_exit_confirmed"]:
+        result["sanitized_logs"] = copy_sanitized_logs(raw_logs, evidence)
+    result["traces"] = trace_observations(evidence / "child-traces")
+    stderr = evidence / "stderr.log"
+    result["expected_offline_error"] = stderr.is_file() and (
+        f"An offline Python installation was requested, but `{DOWNLOAD_KEY}`"
+        in stderr.read_text(encoding="utf-8")
+    )
+    result["trace_files"] = len(list((evidence / "child-traces").glob("*.log")))
+    result["archive_cache_empty_after_exit"] = (
+        not any((work / "archives").iterdir())
+        if result["tree_exit_confirmed"]
+        else None
+    )
+    result["outcome"] = (
+        "passed"
+        if result["tree_exit_confirmed"]
+        and not result["compile_bytecode_environment_present"]
+        and result["archive_cache_empty_before_start"]
+        and result["install_directory_empty_before_start"]
+        and not result["timed_out"]
+        and result["exit_code"] == 1
+        and result["expected_offline_error"]
+        and result["trace_files"] > 0
+        and result["archive_cache_empty_after_exit"]
+        and result["traces"]["managed_download_send_events"] == 0
+        and not result["traces"]["response_identities"]
+        and not result["traces"]["copy_observations"]
+        and not result["traces"]["parse_errors"]
+        else "failed"
+    )
+    result["finished_at"] = timestamp()
+    write_json(evidence / "result.json", result)
+    return result
 
 
 def run_trial(binary, output, workspace, index, route, archive_name):
@@ -253,18 +359,7 @@ def run_trial(binary, output, workspace, index, route, archive_name):
     traces = raw_logs / "child-traces"
     traces.mkdir()
     environment, overrides = trial_environment(work, traces, route)
-    arguments = [
-        str(binary),
-        "--no-config",
-        "--color",
-        "never",
-        "python",
-        "install",
-        "--no-bin",
-        "--no-registry",
-        "--no-compile-bytecode",
-        DOWNLOAD_KEY,
-    ]
+    arguments = install_arguments(binary)
     result = {
         "schema_version": 1,
         "trial": index,
@@ -387,8 +482,10 @@ def main():
         "python_version": sys.version,
         "sequence": list(args.sequence),
         "trial_count": 8,
+        "offline_check_count": 2,
         "binary": str(binary),
         "trials": [],
+        "offline_checks": [],
         "proxy_variables_present": {
             name: bool(os.environ.get(name))
             for name in [
@@ -459,6 +556,14 @@ def main():
             }
         )
         write_json(output / "manifest.json", manifest)
+        for route in ROUTES:
+            result = offline_check(binary, output, workspace, route)
+            manifest["offline_checks"].append(result)
+            write_json(output / "manifest.json", manifest)
+            if result["outcome"] != "passed":
+                raise RuntimeError(
+                    "Offline CLI check failed; route trials were not started"
+                )
         for index, route in enumerate(args.sequence, 1):
             result = run_trial(binary, output, workspace, index, route, archive_name)
             manifest["trials"].append(result)
