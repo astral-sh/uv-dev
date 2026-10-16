@@ -28,7 +28,7 @@ use uv_configuration::{
     ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DryRun, EditableMode, EnvFile,
     ExtrasSpecification, InstallOptions, Modifications, TargetTriple,
 };
-use uv_dispatch::UniversalState;
+use uv_dispatch::{PlatformState, UniversalState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::NameRequirementSpecification;
 use uv_environment_operations::environment::CachedEnvironment;
@@ -930,6 +930,13 @@ pub async fn run(
         }
         Some(spec) => {
             debug!("Syncing `--with` requirements to cached environment");
+
+            // Imported Git preferences can select commits with different metadata than the base environment.
+            let sync_state = if spec.git_preferences.is_empty() {
+                sync_state
+            } else {
+                PlatformState::default()
+            };
 
             // Project `--no-sync` skips updating the base environment, but `--with` may still build
             // packages in a separate environment. In these cases, unless frozen, use current project

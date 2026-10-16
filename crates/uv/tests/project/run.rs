@@ -8,11 +8,15 @@ use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
 use std::path::Path;
+#[cfg(feature = "test-git")]
+use url::Url;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[cfg(feature = "test-git")]
+use uv_test::packse::scenario::Scenario;
 use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot};
 
 #[test]
@@ -8104,6 +8108,142 @@ fn run_pylock_existing_environment() -> Result<()> {
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + iniconfig==1.1.1
+    ");
+    Ok(())
+}
+
+/// An unlocked script's Git dependency metadata must not leak into an overlay that prefers another commit.
+#[test]
+#[cfg(feature = "test-git")]
+fn run_pylock_script_git_preference() -> Result<()> {
+    let index = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "pylock-script-overlay"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.old-dependency.versions."1.0.0"]
+        sdist = false
+        [packages.new-dependency.versions."1.0.0"]
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context!("3.12").with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"));
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "git-dependency"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["old-dependency"]
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    repository.child("src/git_dependency/__init__.py").touch()?;
+    context
+        .external_command("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial metadata",
+        ])
+        .assert()
+        .success();
+    let commit = context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .assert()
+        .success();
+    let commit = String::from_utf8(commit.get_output().stdout.clone())?;
+    let commit = commit.trim();
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "git-dependency"
+        version = "2.0.0"
+        requires-python = ">=3.12"
+        dependencies = ["new-dependency"]
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-am",
+            "Updated metadata",
+        ])
+        .assert()
+        .success();
+    let repository_url =
+        Url::from_directory_path(repository.path()).expect("absolute temporary repository path");
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+    context
+        .temp_dir
+        .child("pylock.toml")
+        .write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "git-dependency"
+        vcs = {{ type = "git", url = "{repository_url}", commit-id = "{commit}" }}
+    "#})?;
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["git-dependency @ git+{repository_url}"]
+        # ///
+        from importlib.metadata import version
+        print(version("git-dependency"))
+        print(version("old-dependency"))
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .args(["--with-requirements", "pylock.toml"])
+        .arg("--default-index").arg(index.index_url())
+        .arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    1.0.0
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + git-dependency==2.0.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+     + new-dependency==1.0.0
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + git-dependency==1.0.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+     + old-dependency==1.0.0
     ");
     Ok(())
 }
