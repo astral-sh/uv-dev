@@ -1,3 +1,5 @@
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+use std::env;
 #[cfg(windows)]
 use std::path::PathBuf;
 #[cfg(unix)]
@@ -6,7 +8,7 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt},
 };
 
-use std::{env, path::Path, process::Command};
+use std::{path::Path, process::Command};
 
 use anyhow::Context;
 use assert_cmd::assert::OutputAssertExt;
@@ -16,15 +18,24 @@ use assert_fs::{
 };
 use indoc::indoc;
 use predicates::prelude::predicate;
+use serde_json::json;
+use sha2::{Digest, Sha256};
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use tracing::debug;
+use uv_test::archive::write_tar_gz;
 #[cfg(unix)]
 use uv_test::assert_link_target;
 use uv_test::{LATEST_PYTHON_3_12, assert_path_missing, uv_snapshot};
 
 use uv_fs::Simplified;
+use uv_platform::Platform;
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 use walkdir::WalkDir;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 #[test]
 fn python_install() {
@@ -2626,22 +2637,71 @@ fn python_install_prerelease_specific() {
     ");
 }
 
-/// A downloaded archive remains available for a fresh offline installation after uninstalling.
-#[test]
-fn python_install_cached() {
-    // Skip this test if the developer has set `UV_PYTHON_CACHE_DIR` locally since it's slow
-    if env::var_os(EnvVars::UV_PYTHON_CACHE_DIR).is_some() && env::var_os(EnvVars::CI).is_none() {
-        debug!("Skipping test because `UV_PYTHON_CACHE_DIR` is set");
-        return;
-    }
+/// Build a layout fixture for archive caching; the placeholder interpreter is never executed.
+fn python_archive_fixture() -> anyhow::Result<Vec<u8>> {
+    let entries: &[(&str, &str)] = if cfg!(windows) {
+        &[
+            ("fixture/pypy3.10.exe", "placeholder interpreter\n"),
+            ("fixture/Lib/fixture.txt", "archive fixture\n"),
+        ]
+    } else {
+        &[
+            ("fixture/bin/pypy3.10", "placeholder interpreter\n"),
+            // Supply `bin/python` because the fallback link targets the CPython-style `python3.10`.
+            ("fixture/bin/python", "placeholder interpreter\n"),
+            ("fixture/lib/pypy3.10/fixture.txt", "archive fixture\n"),
+        ]
+    };
+    let mut archive = Vec::new();
+    write_tar_gz(&mut archive, entries)?;
+    Ok(archive)
+}
 
+/// A downloaded archive remains available for a fresh offline installation after uninstalling.
+#[tokio::test]
+async fn python_install_cached() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .without_python_download_cache()
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
         .with_managed_python_dirs();
-
     let python_cache = context.temp_dir.child("python-cache");
+    let server = MockServer::start().await;
+    let archive = python_archive_fixture()?;
+    let sha256 = hex::encode(Sha256::digest(&archive));
+    let platform = Platform::from_env()?;
+    let key = format!("pypy-3.10.16-{platform}");
+    let download = json!({
+        "name": "pypy",
+        "arch": { "family": platform.arch.to_string(), "variant": null },
+        "os": platform.os.to_string(),
+        "libc": platform.libc.to_string(),
+        "major": 3,
+        "minor": 10,
+        "patch": 16,
+        "prerelease": "",
+        "url": format!("{}/pypy-3.10.16.tar.gz", server.uri()),
+        "sha256": sha256,
+        "variant": null,
+    });
+    let mut uncached_download = download.clone();
+    uncached_download["minor"] = json!(11);
+    uncached_download["url"] = json!(format!("{}/pypy-3.11.16.tar.gz", server.uri()));
+    let mut downloads = serde_json::Map::new();
+    downloads.insert(key.clone(), download);
+    downloads.insert(format!("pypy-3.11.16-{platform}"), uncached_download);
+    let downloads_json = context.temp_dir.child("python-downloads.json");
+    downloads_json.write_str(&serde_json::to_string(&downloads)?)?;
+    let context = context.with_env(
+        EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL,
+        downloads_json.path().as_os_str(),
+    );
+    Mock::given(method("GET"))
+        .and(path("/pypy-3.10.16.tar.gz"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(archive))
+        .expect(1)
+        .mount(&server)
+        .await;
 
     // Install PyPy 3.10
     uv_snapshot!(context.filters(), context
@@ -2657,7 +2717,13 @@ fn python_install_cached() {
     let bin_python = context
         .bin_dir
         .child(format!("pypy3.10{}", std::env::consts::EXE_SUFFIX));
-
+    let installation = context.temp_dir.child("managed").child(&key);
+    let marker = installation.child(if cfg!(windows) {
+        "Lib/fixture.txt"
+    } else {
+        "lib/pypy3.10/fixture.txt"
+    });
+    assert_eq!(context.read(&marker), "archive fixture\n");
     // The executable should be installed in the bin directory
     bin_python.assert(predicate::path::exists());
 
@@ -2678,6 +2744,8 @@ fn python_install_cached() {
     Uninstalled Python 3.10.16 in [TIME]
      - pypy-3.10.16-[PLATFORM] (pypy3.10)
     ");
+    installation.assert(predicate::path::missing());
+    bin_python.assert(predicate::path::missing());
 
     // The cached archive can be installed offline.
     uv_snapshot!(context.filters(), context
@@ -2690,14 +2758,10 @@ fn python_install_cached() {
     Installed Python 3.10.16 in [TIME]
      + pypy-3.10.16-[PLATFORM] (pypy3.10)
     ");
+    assert_eq!(context.read(&marker), "archive fixture\n");
+    bin_python.assert(predicate::path::exists());
 
     // A different archive is still unavailable offline.
-    let context = context
-        .with_filter((
-            r"https://downloads\.python\.org/pypy/[^`\s]+",
-            "[PYTHON_DOWNLOAD_URL]",
-        ))
-        .with_filter((r"pypy-3\.11\.\d+", "pypy-3.11.[PATCH]"));
     uv_snapshot!(context.filters(), context
         .python_install()
         .arg("pypy3.11")
@@ -2705,26 +2769,60 @@ fn python_install_cached() {
         .env(EnvVars::UV_PYTHON_CACHE_DIR, python_cache.as_ref()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to install pypy-3.11.[PATCH]-[PLATFORM]
-      cause: An offline Python installation was requested, but `pypy-3.11.[PATCH]-[PLATFORM]` (from `[PYTHON_DOWNLOAD_URL]`) is missing in `python-cache`
+    error: Failed to install pypy-3.11.16-[PLATFORM]
+      cause: An offline Python installation was requested, but `pypy-3.11.16-[PLATFORM]` (from `http://[LOCALHOST]/pypy-3.11.16.tar.gz`) is missing in `python-cache`
     ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .map(|requests| requests.len()),
+        Some(1)
+    );
+    Ok(())
 }
 
 /// Without archive caching, a forced reinstall downloads again, and a fresh offline installation
 /// cannot reuse the archive after uninstalling.
-#[test]
-fn python_install_no_cache() {
-    // Skip this test if the developer has set `UV_PYTHON_CACHE_DIR` locally since it's slow
-    if env::var_os(EnvVars::UV_PYTHON_CACHE_DIR).is_some() && env::var_os(EnvVars::CI).is_none() {
-        debug!("Skipping test because `UV_PYTHON_CACHE_DIR` is set");
-        return;
-    }
-
+#[tokio::test]
+async fn python_install_no_cache() -> anyhow::Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .without_python_download_cache()
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
         .with_managed_python_dirs();
+    let server = MockServer::start().await;
+    let archive = python_archive_fixture()?;
+    let sha256 = hex::encode(Sha256::digest(&archive));
+    let platform = Platform::from_env()?;
+    let key = format!("pypy-3.10.16-{platform}");
+    let download = json!({
+        "name": "pypy",
+        "arch": { "family": platform.arch.to_string(), "variant": null },
+        "os": platform.os.to_string(),
+        "libc": platform.libc.to_string(),
+        "major": 3,
+        "minor": 10,
+        "patch": 16,
+        "prerelease": "",
+        "url": format!("{}/pypy-3.10.16.tar.gz", server.uri()),
+        "sha256": sha256,
+        "variant": null,
+    });
+    let mut downloads = serde_json::Map::new();
+    downloads.insert(key.clone(), download);
+    let downloads_json = context.temp_dir.child("python-downloads.json");
+    downloads_json.write_str(&serde_json::to_string(&downloads)?)?;
+    let context = context.with_env(
+        EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL,
+        downloads_json.path().as_os_str(),
+    );
+    Mock::given(method("GET"))
+        .and(path("/pypy-3.10.16.tar.gz"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(archive))
+        .expect(2)
+        .mount(&server)
+        .await;
 
     // Install PyPy 3.10
     uv_snapshot!(context.filters(), context.python_install().arg("pypy3.10"), @"
@@ -2733,11 +2831,16 @@ fn python_install_no_cache() {
     Installed Python 3.10.16 in [TIME]
      + pypy-3.10.16-[PLATFORM] (pypy3.10)
     ");
-
     let bin_python = context
         .bin_dir
         .child(format!("pypy3.10{}", std::env::consts::EXE_SUFFIX));
-
+    let installation = context.temp_dir.child("managed").child(&key);
+    let marker = installation.child(if cfg!(windows) {
+        "Lib/fixture.txt"
+    } else {
+        "lib/pypy3.10/fixture.txt"
+    });
+    assert_eq!(context.read(&marker), "archive fixture\n");
     // The executable should be installed in the bin directory
     bin_python.assert(predicate::path::exists());
 
@@ -2747,6 +2850,13 @@ fn python_install_no_cache() {
     ----- stderr -----
     PyPy 3.10 is already installed
     ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .map(|requests| requests.len()),
+        Some(1)
+    );
 
     // A forced reinstall must download the archive again.
     uv_snapshot!(context.filters(), context.python_install().arg("pypy3.10").arg("--reinstall"), @"
@@ -2755,6 +2865,8 @@ fn python_install_no_cache() {
     Installed Python 3.10.16 in [TIME]
      ~ pypy-3.10.16-[PLATFORM] (pypy3.10)
     ");
+    assert_eq!(context.read(&marker), "archive fixture\n");
+    bin_python.assert(predicate::path::exists());
 
     uv_snapshot!(context.filters(), context.python_uninstall().arg("pypy3.10"), @"
     exit_code: 0 (success)
@@ -2763,12 +2875,10 @@ fn python_install_no_cache() {
     Uninstalled Python 3.10.16 in [TIME]
      - pypy-3.10.16-[PLATFORM] (pypy3.10)
     ");
+    installation.assert(predicate::path::missing());
+    bin_python.assert(predicate::path::missing());
 
     // Even the previously downloaded archive is unavailable offline.
-    let context = context.with_filter((
-        r"https://downloads\.python\.org/pypy/[^`\s]+",
-        "[PYTHON_DOWNLOAD_URL]",
-    ));
     uv_snapshot!(context.filters(), context
         .python_install()
         .arg("pypy3.10")
@@ -2776,9 +2886,17 @@ fn python_install_no_cache() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to install pypy-3.10.16-[PLATFORM]
-      cause: Failed to download `[PYTHON_DOWNLOAD_URL]`
-      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: [PYTHON_DOWNLOAD_URL]
+      cause: Failed to download `http://[LOCALHOST]/pypy-3.10.16.tar.gz`
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: http://[LOCALHOST]/pypy-3.10.16.tar.gz
     ");
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .map(|requests| requests.len()),
+        Some(2)
+    );
+    Ok(())
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
