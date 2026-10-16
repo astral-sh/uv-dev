@@ -915,7 +915,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 let is_last = i == forks_len - 1;
                 let forked_state = cur_state.take().unwrap();
                 if !is_last {
-                    cur_state = Some(forked_state.clone());
+                    cur_state = Some(forked_state.clone_for_fork());
                 }
 
                 let env = fork.env.clone();
@@ -975,7 +975,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             let is_last = i == forks_len - 1;
             let forked_state = cur_state.take().unwrap();
             if !is_last {
-                cur_state = Some(forked_state.clone());
+                cur_state = Some(forked_state.clone_for_fork());
             }
             let continuation = match fork.version {
                 Some(version) => ForkContinuation::UseVersion {
@@ -2700,6 +2700,26 @@ pub(crate) struct ForkState<'index> {
 }
 
 impl<'index> ForkState<'index> {
+    /// Clone a branch, recording its cost when resolver debug logging is enabled.
+    fn clone_for_fork(&self) -> Self {
+        let start = tracing::enabled!(Level::DEBUG).then(Instant::now);
+        let cloned = self.clone();
+        if let Some(start) = start {
+            debug!(
+                clone_us = %start.elapsed().as_micros(),
+                tracked_packages = self.pubgrub.incompatibilities.len(),
+                incompatibility_references = self
+                    .pubgrub
+                    .incompatibilities
+                    .values()
+                    .map(Vec::len)
+                    .sum::<usize>(),
+                "Cloned resolver fork state"
+            );
+        }
+        cloned
+    }
+
     fn new(
         pubgrub: State<UvDependencyProvider>,
         env: ResolverEnvironment,
