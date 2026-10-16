@@ -1744,6 +1744,8 @@ pub enum SourceError {
         "`{0}` did not resolve to a local directory, but the `--editable` flag was provided. Editable installs are only supported for local directories."
     )]
     UnusedEditable(String),
+    #[error("Cannot install virtual dependency `{0}` as editable")]
+    EditableVirtual(String),
     #[error("Failed to resolve absolute path")]
     Absolute(#[from] std::io::Error),
     #[error("Path contains invalid characters: {}", _0.display())]
@@ -1921,18 +1923,24 @@ impl Source {
                 editable: is_editable,
                 r#virtual: is_virtual,
                 url,
-            } => Self::Path {
-                editable: editable.or(is_editable),
-                package: is_virtual.map(|is_virtual| !is_virtual),
-                path: PortablePathBuf::from(
-                    try_relative_to_if(&install_path, root, url.prefers_relative())
-                        .map_err(SourceError::Absolute)?
-                        .into_boxed_path(),
-                ),
-                marker: MarkerTree::TRUE,
-                extra: None,
-                group: None,
-            },
+            } => {
+                let editable = editable.or(is_editable);
+                if editable == Some(true) && is_virtual == Some(true) {
+                    return Err(SourceError::EditableVirtual(name.to_string()));
+                }
+                Self::Path {
+                    editable,
+                    package: is_virtual.map(|is_virtual| !is_virtual),
+                    path: PortablePathBuf::from(
+                        try_relative_to_if(&install_path, root, url.prefers_relative())
+                            .map_err(SourceError::Absolute)?
+                            .into_boxed_path(),
+                    ),
+                    marker: MarkerTree::TRUE,
+                    extra: None,
+                    group: None,
+                }
+            }
             RequirementSource::Url {
                 location,
                 subdirectory,

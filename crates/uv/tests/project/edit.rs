@@ -15928,6 +15928,57 @@ fn add_pyproject_virtual_source() -> Result<()> {
     Ok(())
 }
 
+/// An editable override must not save an invalid virtual source, including with `--frozen`.
+#[test]
+fn add_pyproject_virtual_source_editable() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("dependency/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "1.0"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { path = "../dependency", package = false }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--editable", "--offline", "--frozen", "-r", "source/pyproject.toml"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot install virtual dependency `dependency` as editable
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+    "#);
+    Ok(())
+}
+
 /// Retain LFS settings for both Git directories and archives when importing their declarations.
 #[test]
 fn add_pyproject_git_lfs_sources() -> Result<()> {
