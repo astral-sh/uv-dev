@@ -135,7 +135,7 @@ class ReplayHandler(BaseHTTPRequestHandler):
         is_wheel = path.endswith(".whl")
         written = 0
         try:
-            if is_wheel:
+            if is_wheel and self.server.latency:
                 time.sleep(self.server.latency)
             self.send_response(status)
             self.send_header("Content-Type", content_type)
@@ -143,7 +143,7 @@ class ReplayHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")
             self.end_headers()
             for offset in range(0, len(data), 64 * 1024):
-                if is_wheel:
+                if is_wheel and self.server.chunk_delay:
                     time.sleep(self.server.chunk_delay)
                 chunk = data[offset : offset + 64 * 1024]
                 self.wfile.write(chunk)
@@ -166,19 +166,42 @@ class ReplayHandler(BaseHTTPRequestHandler):
         pass
 
 
-def command(arguments: list[str], environment: dict, log: Path) -> None:
-    with log.open("w") as output:
-        result = subprocess.run(
+def command(
+    arguments: list[str], environment: dict, log: Path, *, timeout: float = 300
+) -> None:
+    timed_out = threading.Event()
+    with (
+        log.open("w") as output,
+        subprocess.Popen(
             arguments,
             env=environment,
             stdout=output,
             stderr=subprocess.STDOUT,
             text=True,
-            check=False,
-            timeout=300,
-        )
-    if result.returncode:
-        raise RuntimeError(f"Command failed ({result.returncode}); see {log}")
+        ) as process,
+    ):
+
+        def expire() -> None:
+            if process.poll() is None:
+                timed_out.set()
+                process.kill()
+
+        timer = threading.Timer(timeout, expire)
+        timer.daemon = True
+        timer.start()
+        try:
+            returncode = process.wait()
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        finally:
+            timer.cancel()
+            timer.join()
+    if timed_out.is_set():
+        raise subprocess.TimeoutExpired(arguments, timeout)
+    if returncode:
+        raise RuntimeError(f"Command failed ({returncode}); see {log}")
 
 
 def run_sample(
