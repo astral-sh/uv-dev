@@ -2094,6 +2094,11 @@ mod tests {
         let entries = guard.state.cache.len();
         assert_eq!(guard.and(right, left).0, result.0);
         assert_eq!(guard.state.cache.len(), entries);
+
+        let result = guard.or(left, right.not());
+        let entries = guard.state.cache.len();
+        assert_eq!(guard.or(right.not(), left).0, result.0);
+        assert_eq!(guard.state.cache.len(), entries);
     }
 
     #[test]
