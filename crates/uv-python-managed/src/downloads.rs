@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::Read;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
@@ -1243,6 +1244,19 @@ async fn read_url(
             content_length = ?response.content_length(),
             "Received Python download response headers from `{url}`"
         );
+        if env::var_os(EnvVars::UV_INTERNAL__TEST_LOG_DIR)
+            .is_some_and(|directory| !directory.is_empty())
+        {
+            trace!(
+                identity = %response_identity(
+                    response.url(),
+                    response.remote_addr(),
+                    response.version(),
+                    response.headers(),
+                ),
+                "Python download response identity"
+            );
+        }
         let retry_count = response
             .extensions()
             .get::<reqwest_retry::RetryCount>()
@@ -1263,6 +1277,37 @@ async fn read_url(
     }
 }
 
+fn response_identity(
+    url: &Url,
+    peer_address: Option<SocketAddr>,
+    version: reqwest::Version,
+    headers: &reqwest::header::HeaderMap,
+) -> serde_json::Value {
+    let cache_headers: HashMap<_, _> = ["age", "cf-cache-status", "x-cache", "x-cache-hits"]
+        .into_iter()
+        .filter_map(|name| {
+            let value = headers.get(name)?.to_str().ok()?;
+            // Retain only short cache-header values with a restricted ASCII character set.
+            if value.is_empty()
+                || value.len() > 128
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b" ,-_".contains(&byte))
+            {
+                return None;
+            }
+            Some((name, value))
+        })
+        .collect();
+    serde_json::json!({
+        "final_host": url.host_str(),
+        "final_path": url.path(),
+        "peer_address": peer_address.map(|address| address.to_string()),
+        "protocol": format!("{version:?}"),
+        "cdn_cache_headers": cache_headers,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
@@ -1277,6 +1322,59 @@ mod tests {
     use uv_python_types::{LenientImplementationName, PythonInstallationKey};
 
     use super::*;
+
+    #[test]
+    fn response_identity_omits_credentials_and_query() {
+        let url =
+            Url::parse("https://user:password@example.com/archive.tar.gz?signature=secret#token")
+                .expect("valid URL");
+        let identity = response_identity(
+            &url,
+            None,
+            reqwest::Version::HTTP_2,
+            &reqwest::header::HeaderMap::new(),
+        );
+        assert_eq!(identity["final_host"], "example.com");
+        assert_eq!(identity["final_path"], "/archive.tar.gz");
+        assert_eq!(
+            identity,
+            serde_json::json!({
+                "final_host": "example.com",
+                "final_path": "/archive.tar.gz",
+                "peer_address": null,
+                "protocol": "HTTP/2.0",
+                "cdn_cache_headers": {},
+            })
+        );
+    }
+
+    #[test]
+    fn response_identity_limits_cache_headers() {
+        let url = Url::parse("https://example.com/archive.tar.gz").expect("valid URL");
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("age", "42".parse().expect("valid header"));
+        headers.insert("cf-cache-status", "HIT".parse().expect("valid header"));
+        headers.insert("x-cache", "HIT, MISS".parse().expect("valid header"));
+        headers.insert(
+            "x-cache-hits",
+            "https://example.com/?signature=secret"
+                .parse()
+                .expect("valid header"),
+        );
+        headers.insert(
+            "location",
+            "/?signature=secret".parse().expect("valid header"),
+        );
+        headers.insert("set-cookie", "token=secret".parse().expect("valid header"));
+        headers.insert(
+            "authorization",
+            "Bearer secret".parse().expect("valid header"),
+        );
+        assert_eq!(
+            response_identity(&url, None, reqwest::Version::HTTP_2, &headers)["cdn_cache_headers"],
+            serde_json::json!({"age": "42", "cf-cache-status": "HIT", "x-cache": "HIT, MISS"})
+        );
+    }
 
     #[test]
     fn test_download_error_debug() {
