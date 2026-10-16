@@ -20,6 +20,10 @@ requires at least five samples and an increase over the median of at least all o
 - 25%;
 - three scaled median absolute deviations (`3 × 1.4826 × MAD`).
 
+For a retried source run, each job uses its latest execution up to the requested attempt. Jobs that
+were not rerun remain eligible using their earlier results, and the comment identifies the attempt
+for each listed job. Baseline samples always use the first attempt.
+
 These are conservative operational thresholds, not a statistical claim that a PR caused a slowdown.
 Cache misses, runner load, and differences between PRs can still affect the result. For the first
 ten flagged jobs, the report includes up to three step increases of at least 15 seconds, provided

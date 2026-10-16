@@ -191,6 +191,26 @@ class TimingTests(unittest.TestCase):
 
 
 class ContextTests(unittest.TestCase):
+    def test_partial_retry_keeps_successful_jobs_from_earlier_attempt(self):
+        api = FakeAPI()
+        api.collections["actions/runs/100/attempts/1/jobs"] = [
+            job(600),
+            job(name="test", conclusion="failure"),
+        ]
+        api.collections["actions/runs/100/attempts/2/jobs"] = [job(name="test")]
+        measured = timings.measurements(timings.source_jobs(api, 100, 2))
+        benchmark = measured[timings.job_key(job())]
+        self.assertEqual((benchmark["seconds"], benchmark["attempt"]), (600, 1))
+        self.assertEqual(measured[timings.job_key(job(name="test"))]["attempt"], 2)
+
+    def test_retry_replaces_previous_success_even_when_it_fails(self):
+        api = FakeAPI()
+        api.collections["actions/runs/100/attempts/1/jobs"] = [job(600)]
+        api.collections["actions/runs/100/attempts/2/jobs"] = [
+            job(conclusion="failure")
+        ]
+        self.assertEqual(timings.measurements(timings.source_jobs(api, 100, 2)), {})
+
     def test_rejects_upstream_repository(self):
         api = FakeAPI()
         api.objects["actions/runs/100"]["repository"]["id"] = 699532645
@@ -376,6 +396,33 @@ class PublishingTests(unittest.TestCase):
 
 
 class GitHubTests(unittest.TestCase):
+    def test_transient_read_failure_is_retried(self):
+        responses = [
+            subprocess.CompletedProcess([], 1, "", "gh: HTTP 502"),
+            subprocess.CompletedProcess([], 0, "{}"),
+        ]
+        with (
+            patch.object(subprocess, "run", side_effect=responses) as execute,
+            patch.object(timings.time, "sleep"),
+        ):
+            self.assertEqual(timings.GitHub().request("actions/runs/100"), {})
+        self.assertEqual(execute.call_count, 2)
+
+    def test_comment_write_is_not_retried_after_server_error(self):
+        with (
+            patch.dict("os.environ", {"COMMENT_TOKEN": "write"}),
+            patch.object(
+                subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 1, "", "gh: HTTP 502"),
+            ) as execute,
+            self.assertRaisesRegex(RuntimeError, "HTTP 502"),
+        ):
+            timings.GitHub().request(
+                "issues/42/comments", method="POST", body={"body": "report"}
+            )
+        self.assertEqual(execute.call_count, 1)
+
     def test_jobs_are_paginated(self):
         first = [{"id": index} for index in range(100)]
         api = timings.GitHub()

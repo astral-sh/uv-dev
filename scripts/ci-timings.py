@@ -9,6 +9,7 @@ import re
 import statistics
 import subprocess
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,17 +36,34 @@ class GitHub:
         if method != "GET":
             environment["GH_TOKEN"] = environment["COMMENT_TOKEN"]
             command.extend(["--input", "-"])
-        result = subprocess.run(
-            command,
-            input=json.dumps(body) if body is not None else None,
-            text=True,
-            capture_output=True,
-            check=False,
-            env=environment,
-        )
-        if result.returncode:
-            raise RuntimeError(f"GitHub {method} request failed: {path}")
-        return json.loads(result.stdout)
+        for attempt in range(3):
+            try:
+                result = subprocess.run(
+                    command,
+                    input=json.dumps(body) if body is not None else None,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env=environment,
+                    timeout=120,
+                )
+            except subprocess.TimeoutExpired:
+                error = "timed out"
+                retryable = True
+            else:
+                if not result.returncode:
+                    return json.loads(result.stdout)
+                status = re.search(r"HTTP (\d{3})", result.stderr)
+                error = f"failed (HTTP {status[1]})" if status else "failed"
+                retryable = status is not None and status[1] in {
+                    "429",
+                    "502",
+                    "503",
+                    "504",
+                }
+            if method != "GET" or not retryable or attempt == 2:
+                raise RuntimeError(f"GitHub {method} request {error}: {path}")
+            time.sleep(2**attempt)
 
     def items(self, path, key=None, *, pages=10):
         separator = "&" if "?" in path else "?"
@@ -153,7 +171,12 @@ def measure_job(job, *, before=None):
     seconds = sum(steps.values())
     if seconds <= 0:
         return None
-    return {"id": job["id"], "seconds": seconds, "steps": steps}
+    return {
+        "id": job["id"],
+        "attempt": job.get("run_attempt", 1),
+        "seconds": seconds,
+        "steps": steps,
+    }
 
 
 def measurements(jobs, *, before=None):
@@ -169,6 +192,18 @@ def measurements(jobs, *, before=None):
 
 def jobs_for_attempt(api, run_id, attempt):
     return list(api.items(f"actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs"))
+
+
+def source_jobs(api, run_id, attempt):
+    # A retry may execute only failed jobs. Keep the latest execution of every job.
+    latest = {}
+    for number in range(1, attempt + 1):
+        execution = {}
+        for job in jobs_for_attempt(api, run_id, number):
+            job["run_attempt"] = number
+            execution.setdefault(job_key(job), []).append(job)
+        latest.update(execution)
+    return [job for group in latest.values() for job in group]
 
 
 def baseline_runs(api, source, pull_number):
@@ -241,6 +276,7 @@ def compare(source, pull, jobs, baselines, *, historical=False):
             "name": key[0],
             "labels": key[1],
             "job_id": current["id"],
+            "attempt": current["attempt"],
             "seconds": current["seconds"],
             "samples": samples,
             "comparison": comparison(
@@ -335,6 +371,7 @@ def render(report, retained=()):
                 "name": job["name"],
                 "run_id": report["run_id"],
                 "job_id": job["job_id"],
+                "attempt": job["attempt"],
                 "seconds": job["seconds"],
                 "median": job["comparison"]["median"],
             }
@@ -363,8 +400,8 @@ def render(report, retained=()):
             [
                 "These jobs took longer than the median for matching jobs in recent CI runs from other `uv-dev` PRs:",
                 "",
-                "| Job | This run | Baseline median | Increase | Samples |",
-                "| --- | ---: | ---: | ---: | ---: |",
+                "| Job | Attempt | Runtime | Baseline median | Increase | Samples |",
+                "| --- | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for job in findings[:10]:
@@ -372,7 +409,7 @@ def render(report, retained=()):
             percent = comparison["increase"] / comparison["median"] * 100
             url = f"https://github.com/{REPOSITORY}/actions/runs/{report['run_id']}/job/{job['job_id']}"
             lines.append(
-                f"| [{inline(job['name'])}]({url}) | {duration(job['seconds'])} "
+                f"| [{inline(job['name'])}]({url}) | {job['attempt']} | {duration(job['seconds'])} "
                 f"| {duration(comparison['median'])} | +{duration(comparison['increase'])} "
                 f"(+{percent:.0f}%) | {len(job['samples'])} |"
             )
@@ -422,7 +459,7 @@ def render(report, retained=()):
         for warning in retained[:10]:
             url = f"https://github.com/{REPOSITORY}/actions/runs/{warning['run_id']}/job/{warning['job_id']}"
             lines.append(
-                f"- [{inline(warning['name'])}]({url}): {duration(warning['seconds'])} against a {duration(warning['median'])} median."
+                f"- [{inline(warning['name'])}]({url}) (attempt {warning['attempt']}): {duration(warning['seconds'])} against a {duration(warning['median'])} median."
             )
         if len(retained) > 10:
             lines.append(
@@ -442,6 +479,7 @@ def render(report, retained=()):
                 "from different PR branches, using their first attempt and matching job names and runner labels. "
                 "Only successful jobs whose measured steps finished before this run was created contribute samples. "
                 "Runtime is the sum of step durations, excluding queue and dependency waits. "
+                "For this run, each job uses its latest execution up to this attempt, including jobs not rerun. "
                 f"A warning requires at least {MIN_SAMPLES} samples and an increase of at least "
                 f"{MIN_SECONDS} seconds, {MIN_FRACTION:.0%}, and three scaled median absolute deviations."
             ),
@@ -576,7 +614,7 @@ def main():
     if arguments.command == "context":
         print(f"pull-request={pull['number']}")
         return
-    jobs = jobs_for_attempt(api, source["id"], source["run_attempt"])
+    jobs = source_jobs(api, source["id"], source["run_attempt"])
     baselines = baseline_runs(api, source, pull["number"])
     report = compare(source, pull, jobs, baselines, historical=historical)
     arguments.output.mkdir(parents=True, exist_ok=True)
