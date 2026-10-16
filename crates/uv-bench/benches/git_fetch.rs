@@ -16,7 +16,7 @@ use criterion::{
     BatchSize, BenchmarkId, Criterion, SamplingMode, criterion_group, criterion_main,
     measurement::WallTime,
 };
-use uv_git::{Fetch, GitHttpSettings, GitResolver};
+use uv_git::{Fetch, GitFetchSettings, GitResolver};
 use uv_git_types::{GitLfs, GitOid, GitReference, GitUrl};
 use uv_redacted::DisplaySafeUrl;
 
@@ -34,7 +34,7 @@ fn fetch(
     runtime: &tokio::runtime::Runtime,
     git: &GitUrl,
     cache: &Path,
-    settings: GitHttpSettings,
+    settings: GitFetchSettings,
 ) -> Fetch {
     let fetched = runtime
         .block_on(GitResolver::default().fetch(git, settings, cache.to_path_buf(), None))
@@ -63,7 +63,9 @@ fn git_fetch(criterion: &mut Criterion<WallTime>) {
         .enable_all()
         .build()
         .expect("Failed to create Tokio runtime");
-    let settings = GitHttpSettings::default().with_offline(true);
+    let settings = GitFetchSettings::default()
+        .with_offline(true)
+        .with_partial_fetches(true);
     let mut group = criterion.benchmark_group("git_fetch");
     group.sampling_mode(SamplingMode::Flat);
     for fixture in GIT_FIXTURES {

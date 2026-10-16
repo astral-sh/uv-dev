@@ -13,6 +13,7 @@ use uv_cache_key::cache_digest;
 use uv_git_types::{GitOid, GitUrl};
 use uv_redacted::DisplaySafeUrl;
 
+use crate::GitFetchSettings;
 use crate::credentials::GIT_STORE;
 use crate::git::{GitDatabase, GitRemote};
 
@@ -20,10 +21,8 @@ use crate::git::{GitDatabase, GitRemote};
 pub(crate) struct GitSource {
     /// The Git reference from the manifest file.
     git: GitUrl,
-    /// Whether to disable SSL verification.
-    disable_ssl: bool,
-    /// Whether to operate without network connectivity.
-    offline: bool,
+    /// Settings for fetching and checking out the repository.
+    settings: GitFetchSettings,
     /// The path to the Git source database.
     cache: PathBuf,
     /// The reporter to use for this source.
@@ -31,23 +30,13 @@ pub(crate) struct GitSource {
 }
 
 impl GitSource {
-    /// Initialize a [`GitSource`] with the given Git URL, HTTP client, and cache path.
-    pub(crate) fn new(git: GitUrl, cache: impl Into<PathBuf>, offline: bool) -> Self {
+    /// Initialize a [`GitSource`] with the given Git URL, cache path, and fetch settings.
+    pub(crate) fn new(git: GitUrl, cache: impl Into<PathBuf>, settings: GitFetchSettings) -> Self {
         Self {
             git,
-            disable_ssl: false,
-            offline,
+            settings,
             cache: cache.into(),
             reporter: None,
-        }
-    }
-
-    /// Disable SSL verification for this [`GitSource`].
-    #[must_use]
-    pub(crate) fn dangerous(self) -> Self {
-        Self {
-            disable_ssl: true,
-            ..self
         }
     }
 
@@ -65,16 +54,31 @@ impl GitSource {
     pub(crate) fn fetch(self) -> Result<Fetch> {
         let lfs_requested = self.git.lfs().enabled();
 
-        // The path to the repo, within the Git database.
-        let ident = cache_digest(self.git.repository());
-        let db_path = self.cache.join("db").join(&ident);
-
-        // Authenticate the URL, if necessary.
         let remote = if let Some(credentials) = GIT_STORE.get(self.git.repository()) {
             Cow::Owned(credentials.apply(self.git.url().clone()))
         } else {
             Cow::Borrowed(self.git.url())
         };
+        let has_credentials = match remote.without_credentials() {
+            Cow::Borrowed(_) => false,
+            Cow::Owned(_) => true,
+        };
+        // Build backends cannot use uv's transient credentials or TLS exceptions for lazy fetches.
+        // Keep these repositories complete so build tools can inspect history locally.
+        let settings = self.settings.with_partial_fetches(
+            self.settings.partial_fetches && !has_credentials && !self.settings.disable_ssl,
+        );
+
+        // Older cache readers require complete repositories, including historical trees.
+        let cache = if settings.partial_fetches {
+            self.cache.join("partial")
+        } else {
+            self.cache
+        };
+
+        // The path to the repo, within the Git database.
+        let ident = cache_digest(self.git.repository());
+        let db_path = cache.join("db").join(&ident);
 
         // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes
         // it easier to short-circuit this in the cases where we do have the commit.
@@ -84,7 +88,7 @@ impl GitSource {
 
             // If we have a locked revision, and we have a pre-existing database which has that
             // revision, then no update needs to happen.
-            // When requested, we also check if LFS artifacts have been fetched and validated.
+            // Git LFS objects also live in the database so deleted checkouts can be rebuilt.
             if let (Some(rev), Some(db)) = (self.git.precise(), &maybe_db) {
                 if db.contains(rev) && (!lfs_requested || db.contains_lfs_artifacts(rev)) {
                     debug!("Using existing Git source `{}`", self.git.url());
@@ -113,8 +117,7 @@ impl GitSource {
                 maybe_db,
                 self.git.reference(),
                 self.git.precise(),
-                self.disable_ssl,
-                self.offline,
+                settings,
                 lfs_requested,
             )?;
 
@@ -137,16 +140,12 @@ impl GitSource {
         } else {
             ident
         };
-        let checkout_path = self
-            .cache
-            .join("checkouts")
-            .join(&ident)
-            .join(short_id.as_str());
+        let checkout_path = cache.join("checkouts").join(&ident).join(short_id.as_str());
 
         // Check out `actual_rev` from the database to a scoped location on the
         // filesystem. This will use hard links and such to ideally make the
         // checkout operation here pretty fast.
-        let checkout = db.copy_to(actual_rev, &checkout_path)?;
+        let checkout = db.copy_to(actual_rev, &checkout_path, settings)?;
 
         // Report the checkout operation to the reporter.
         if let Some(task) = maybe_task {

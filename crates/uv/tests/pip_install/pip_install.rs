@@ -4029,6 +4029,7 @@ fn install_git_private_https_pat_and_username() {
 #[cfg(all(not(windows), feature = "test-git"))]
 fn install_git_private_https_pat_not_authorized() {
     let context = uv_test::test_context!(DEFAULT_PYTHON_VERSION)
+        .with_env(EnvVars::UV_PREVIEW_FEATURES, "git-partial-fetches")
         .with_filter(("`.*/git fetch (.*)`", "`git fetch $1`"));
 
     // A revoked token
@@ -4049,6 +4050,19 @@ fn install_git_private_https_pat_not_authorized() {
              remote: Invalid username or token. Password authentication is not supported for Git operations.
              fatal: Authentication failed for 'https://github.com/astral-test/uv-private-pypackage/'
     ");
+
+    let config = fs::read_to_string(
+        context
+            .cache_dir
+            .child("git-v1")
+            .child("db")
+            .child("8401f5508e3e612d")
+            .child(".git")
+            .child("config"),
+    )
+    .expect("Git config should exist");
+    assert!(!config.contains(token));
+    assert!(!config.contains("promisor = true"));
 }
 
 /// Install a package from a private GitHub repository using a PAT
