@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import io
+import itertools
 import json
 import os
 import re
@@ -55,6 +56,15 @@ def validate_corpus(corpus: dict) -> None:
             )
 
 
+def release_files(release: dict) -> list[dict]:
+    files = release.get("files")
+    if files is None:
+        return [{"tag": "py3-none-any", "upload_time": release.get("upload_time")}]
+    if not isinstance(files, list) or not files:
+        raise ValueError("Each release must contain at least one file")
+    return files
+
+
 def assets_for(corpus: dict) -> dict[str, tuple[str, bytes]]:
     validate_corpus(corpus)
     assets = {}
@@ -65,46 +75,67 @@ def assets_for(corpus: dict) -> dict[str, tuple[str, bytes]]:
         raise ValueError("as_of must include a timezone")
     for release in corpus["releases"]:
         name, version = release["name"], release["version"]
-        if (name, version) in seen:
+        components = [int(value) for value in version.split(".")]
+        while len(components) > 1 and components[-1] == 0:
+            components.pop()
+        identity = (name, tuple(components))
+        if identity in seen:
             raise ValueError(f"Duplicate release: {name}=={version}")
-        seen.add((name, version))
-        if (
-            release.get("upload_time")
-            and datetime.fromisoformat(release["upload_time"]) > as_of
-        ):
-            raise ValueError(
-                f"Release is newer than the frozen observation time: {release}"
-            )
+        seen.add(identity)
         normalized = name.replace("-", "_")
-        filename = f"{normalized}-{version}-py3-none-any.whl"
         metadata = f"Metadata-Version: 2.2\nName: {name}\nVersion: {version}\n"
         metadata += "".join(
             f"Requires-Dist: {value}\n" for value in release.get("requires_dist", [])
         )
         metadata = metadata.encode()
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w") as wheel:
-            prefix = f"{normalized}-{version}.dist-info/"
-            for entry, content in {
-                "METADATA": metadata,
-                "WHEEL": b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-                "RECORD": b"",
-            }.items():
-                wheel.writestr(zipfile.ZipInfo(prefix + entry), content)
-        data = buffer.getvalue()
-        path = f"/files/{filename}"
-        assets[path] = ("application/octet-stream", data)
-        assets[path + ".metadata"] = ("text/plain", metadata)
-        file = {
-            "filename": filename,
-            "url": path,
-            "size": len(data),
-            "hashes": {"sha256": hashlib.sha256(data).hexdigest()},
-            "core-metadata": {"sha256": hashlib.sha256(metadata).hexdigest()},
-        }
-        if release.get("upload_time") is not None:
-            file["upload-time"] = release["upload_time"]
-        projects.setdefault(name, []).append(file)
+        tags = set()
+        for specification in release_files(release):
+            tag = specification["tag"]
+            if not re.fullmatch(
+                r"[a-z0-9_]+(?:\.[a-z0-9_]+)*-[a-z0-9_]+(?:\.[a-z0-9_]+)*-[a-z0-9_]+(?:\.[a-z0-9_]+)*",
+                tag,
+            ):
+                raise ValueError(f"Unsupported wheel tag: {tag!r}")
+            if tag in tags:
+                raise ValueError(f"Duplicate wheel tag: {name}=={version}: {tag}")
+            tags.add(tag)
+            upload_time = specification.get("upload_time")
+            if upload_time is not None:
+                timestamp = datetime.fromisoformat(upload_time)
+                if timestamp.utcoffset() is None or timestamp > as_of:
+                    raise ValueError(
+                        f"Invalid frozen file upload time: {upload_time!r}"
+                    )
+            filename = f"{normalized}-{version}-{tag}.whl"
+            wheel_tags = "".join(
+                f"Tag: {python}-{abi}-{platform}\n"
+                for python, abi, platform in itertools.product(
+                    *(component.split(".") for component in tag.split("-"))
+                )
+            )
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w") as wheel:
+                prefix = f"{normalized}-{version}.dist-info/"
+                for entry, content in {
+                    "METADATA": metadata,
+                    "WHEEL": f"Wheel-Version: 1.0\nRoot-Is-Purelib: true\n{wheel_tags}".encode(),
+                    "RECORD": b"",
+                }.items():
+                    wheel.writestr(zipfile.ZipInfo(prefix + entry), content)
+            data = buffer.getvalue()
+            path = f"/files/{filename}"
+            assets[path] = ("application/octet-stream", data)
+            assets[path + ".metadata"] = ("text/plain", metadata)
+            file = {
+                "filename": filename,
+                "url": path,
+                "size": len(data),
+                "hashes": {"sha256": hashlib.sha256(data).hexdigest()},
+                "core-metadata": {"sha256": hashlib.sha256(metadata).hexdigest()},
+            }
+            if upload_time is not None:
+                file["upload-time"] = upload_time
+            projects.setdefault(name, []).append(file)
     for name, files in projects.items():
         data = {"meta": {"api-version": "1.0"}, "name": name, "files": files}
         assets[f"/simple/{name}/"] = (
@@ -132,7 +163,7 @@ def replay(
             self.end_headers()
             self.wfile.write(content)
 
-        def log_message(self, *_args):
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -182,10 +213,18 @@ def replay(
                     timeout=60,
                 )
                 selected = None
+                selected_files = {}
                 if process.returncode == 0:
+                    packages = tomllib.loads(process.stdout)["packages"]
                     selected = {
-                        package["name"]: package["version"]
-                        for package in tomllib.loads(process.stdout)["packages"]
+                        package["name"]: package["version"] for package in packages
+                    }
+                    selected_files = {
+                        package["name"]: sorted(
+                            Path(urlsplit(wheel["url"]).path).name
+                            for wheel in package.get("wheels", [])
+                        )
+                        for package in packages
                     }
                 elif process.returncode != 1 or (
                     "No solution found when resolving dependencies"
@@ -212,6 +251,7 @@ def replay(
                     "cutoff": cutoff.isoformat() if age else None,
                     "returncode": process.returncode,
                     "selected": selected,
+                    "selected_files": selected_files,
                     "changed_from_baseline": selected != baseline,
                     "selected_labels": selected_labels,
                     "seconds": time.perf_counter() - started,
@@ -219,6 +259,12 @@ def replay(
                 }
                 observations.append(observation)
                 if check and selected != scenario["expected"][str(age)]:
+                    raise AssertionError(json.dumps(observation, indent=2))
+                if (
+                    check
+                    and "expected_files" in scenario
+                    and selected_files != scenario["expected_files"][str(age)]
+                ):
                     raise AssertionError(json.dumps(observation, indent=2))
     finally:
         server.shutdown()
@@ -234,8 +280,11 @@ def replay(
         "as_of": corpus["as_of"],
         "description": corpus["description"],
         "releases": len(corpus["releases"]),
+        "files": sum(len(release_files(release)) for release in corpus["releases"]),
         "missing_upload_times": sum(
-            release.get("upload_time") is None for release in corpus["releases"]
+            file.get("upload_time") is None
+            for release in corpus["releases"]
+            for file in release_files(release)
         ),
         "observations": observations,
     }
