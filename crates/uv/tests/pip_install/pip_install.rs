@@ -1854,7 +1854,7 @@ fn install_editable_incompatible_constraint_url() -> Result<()> {
 fn install_editable_pep_508_requirements_txt() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let source = context.workspace_root.join("test/packages/black_editable");
-    let url = Url::from_directory_path(&source)
+    let url = SafeUrl::from_directory_path(&source)
         .map_err(|()| anyhow!("failed to convert editable source path to a file URL"))?;
     let requirement = format!("black[d] @ {}", url.as_str().trim_end_matches('/'));
 
@@ -12048,7 +12048,7 @@ def main():
     let mut filters = context.filters();
     filters.push((r"@[0-9a-f]{40}", "@COMMIT_HASH"));
 
-    let url = Url::from_directory_path(mylib_dir.path()).unwrap();
+    let url = SafeUrl::from_directory_path(mylib_dir.path()).unwrap();
     uv_snapshot!(filters, context.pip_install()
         .arg(format!("git+{}", url.as_str().trim_end_matches('/')))
         .env("GIT_ALLOW_PROTOCOL", "file"), @r"

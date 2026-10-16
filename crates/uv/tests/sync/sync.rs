@@ -4366,7 +4366,7 @@ fn sync_extra_build_dependencies_sources() -> Result<()> {
             child = ["anyio"]
         "#,
         anyio_local = anyio_local.portable_display(),
-        child_url = Url::from_file_path(child.path()).unwrap(),
+        child_url = SafeUrl::from_file_path(child.path()).unwrap(),
     })?;
 
     // Running `uv sync` should succeed, as `anyio` is provided as a source
@@ -17246,7 +17246,7 @@ async fn sync_deprecated_zstd_wheel() -> Result<()> {
 }
 
 async fn assert_source_archive_not_requested(server: &MockServer, archive_url: &str) {
-    let archive_url = Url::parse(archive_url).expect("valid source archive URL");
+    let archive_url = SafeUrl::parse(archive_url).expect("valid source archive URL");
     let requests = server
         .received_requests()
         .await

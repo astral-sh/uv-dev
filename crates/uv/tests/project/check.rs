@@ -1862,6 +1862,9 @@ async fn check_uses_exact_ty_version_from_selected_included_group() -> Result<()
 #[test]
 #[cfg(feature = "test-pypi")]
 fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
+    const INVALID_HASH: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
     context
@@ -1897,8 +1900,6 @@ fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
         !original_hashes.is_empty(),
         "ty has no locked artifact hashes"
     );
-    const INVALID_HASH: &str =
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
     assert!(!original_hashes.contains(&INVALID_HASH));
     context
         .temp_dir
