@@ -1396,6 +1396,8 @@ pub async fn resolve_environment(
     let RequirementsSpecification {
         project,
         requirements,
+        preferences: imported_preferences,
+        git_preferences,
         constraints,
         overrides,
         override_dependencies,
@@ -1503,23 +1505,13 @@ pub async fn resolve_environment(
         EnvironmentResolution::Universal => upgrade.clone(),
     };
 
-    // If an existing lockfile exists, build up a set of preferences.
-    let preferences = match spec.preferences {
+    // Imported preferences take precedence over the existing environment or lockfile.
+    let fallback = match spec.preferences {
         Some(PreferenceLocation::Lock { lock, install_path }) => {
-            let LockedRequirements { preferences, git } =
-                read_lock_requirements(lock, install_path, &upgrade)?;
-
-            // Populate the Git resolver.
-            for ResolvedRepositoryReference { reference, sha } in git {
-                debug!("Inserting Git reference into resolver: `{reference:?}` at `{sha}`");
-                state.git().insert(reference, sha);
-            }
-
-            preferences
+            read_lock_requirements(lock, install_path, &upgrade)?
         }
         Some(PreferenceLocation::Entries(entries)) => {
-            // Drop preferences for any packages that are included in the upgrade strategy.
-            if upgrade.is_all() {
+            let preferences = if upgrade.is_all() {
                 vec![]
             } else if let Some(packages) = upgrade.packages() {
                 entries
@@ -1528,10 +1520,21 @@ pub async fn resolve_environment(
                     .collect()
             } else {
                 entries
-            }
+            };
+            LockedRequirements::from_preferences(preferences)
         }
-        None => vec![],
+        None => LockedRequirements::default(),
     };
+    let LockedRequirements { preferences, git } = LockedRequirements::from_imported(
+        imported_preferences,
+        git_preferences,
+        resolver_environment.marker_environment(),
+    )?
+    .with_fallback(fallback);
+    for (_, ResolvedRepositoryReference { reference, sha }) in git {
+        debug!("Inserting Git reference into resolver: `{reference:?}` at `{sha}`");
+        state.git().insert(reference, sha);
+    }
 
     // Resolve the flat indexes from `--find-links`.
     let flat_index = FlatIndex::load(&client, cache, index_locations).await?;
@@ -1811,6 +1814,8 @@ pub async fn update_environment(
     let RequirementsSpecification {
         project,
         requirements,
+        preferences: imported_preferences,
+        git_preferences,
         constraints,
         overrides,
         override_dependencies,
@@ -1829,6 +1834,8 @@ pub async fn update_environment(
     if reinstall.is_none()
         && upgrade.is_none()
         && source_trees.is_empty()
+        && imported_preferences.is_empty()
+        && git_preferences.is_empty()
         && matches!(modifications, Modifications::Sufficient)
     {
         match site_packages.satisfies_spec(
@@ -1927,7 +1934,15 @@ pub async fn update_environment(
     let extras = ExtrasSpecification::default();
     let groups = BTreeMap::new();
     let hasher = HashStrategy::default();
-    let preferences = Vec::default();
+    let LockedRequirements { preferences, git } = LockedRequirements::from_imported(
+        imported_preferences,
+        git_preferences,
+        Some(&marker_env),
+    )?;
+    for (_, ResolvedRepositoryReference { reference, sha }) in git {
+        debug!("Inserting Git reference into resolver: `{reference:?}` at `{sha}`");
+        state.git().insert(reference, sha);
+    }
 
     // Determine the tags to use for resolution.
     let python_requirement = PythonRequirement::from_interpreter(interpreter);

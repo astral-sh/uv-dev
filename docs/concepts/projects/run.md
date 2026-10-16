@@ -48,6 +48,11 @@ installed:
 $ uv run --with-requirements ../other-project/pyproject.toml python example.py
 ```
 
+A `pylock.toml` input contributes its default-selected packages. Recorded versions and Git commits
+are preferences for the ephemeral environment and take precedence over preferences from the base
+environment. Registry artifacts are resolved again; recorded artifact sizes and hashes are not
+enforced.
+
 Pass `-` to read the requirements from stdin. Project metadata from stdin must be
 [self-contained](../../pip/packages.md#installing-packages-from-files); use
 `--input-format setup.py` to execute a `setup.py` input and extract its dependencies:

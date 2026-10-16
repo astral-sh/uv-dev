@@ -127,6 +127,8 @@ pub async fn pip_sync(
         excludes,
         pylock,
         pylock_groups,
+        preferences: _,
+        git_preferences: _,
         source_trees,
         groups,
         index_url,

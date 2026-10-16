@@ -9,20 +9,28 @@ use uv_distribution_types::IndexUrl;
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
-use uv_normalize::{ExtraName, GroupName};
+use uv_normalize::PackageName;
 use uv_pep508::{MarkerEnvironment, MarkerTree, VerbatimUrl};
+use uv_requirements::GitPreference;
 use uv_requirements_txt::RequirementsTxt;
-use uv_resolver::{Preference, PreferenceError, UniversalMarker, UpgradePackages};
+use uv_resolver::{Preference, PreferenceError, UpgradePackages};
 
 #[derive(Debug, Default)]
 pub struct LockedRequirements {
     /// The pinned versions from the lockfile.
     pub preferences: Vec<Preference>,
     /// The pinned Git SHAs from the lockfile.
-    pub git: Vec<ResolvedRepositoryReference>,
+    pub git: Vec<(PackageName, ResolvedRepositoryReference)>,
 }
 
 impl LockedRequirements {
+    /// Retain version and Git preferences for packages matching the predicate.
+    pub fn retain(&mut self, mut predicate: impl FnMut(&PackageName) -> bool) {
+        self.preferences
+            .retain(|preference| predicate(preference.name()));
+        self.git.retain(|(name, _)| predicate(name));
+    }
+
     /// Retain fallback version preferences outside each package's imported marker domains,
     /// and prepend fallback Git references.
     #[must_use]
@@ -54,52 +62,33 @@ impl LockedRequirements {
         }
     }
 
-    /// Extract version and Git preferences from selected packages in a [`PylockToml`].
-    pub(crate) fn from_pylock(
-        lock: &PylockToml,
-        install_path: &Path,
-        extras: &[ExtraName],
-        groups: &[GroupName],
-        upgrade: &Upgrade,
+    /// Select imported preferences for the environment used by this resolution attempt.
+    pub fn from_imported(
+        preferences: Vec<Preference>,
+        git_preferences: Vec<GitPreference>,
         environment: Option<&MarkerEnvironment>,
     ) -> Result<Self> {
-        if upgrade.is_all() {
-            return Ok(Self::default());
-        }
-        let upgrade_packages = UpgradePackages::for_non_project(upgrade);
-        let mut preferences = Vec::new();
-        let mut git: Vec<ResolvedRepositoryReference> = Vec::new();
-        for package in &lock.packages {
-            if upgrade_packages.contains(&package.name) {
-                continue;
-            }
-            let marker = package.marker().simplify_pep751(extras, groups);
-            if marker.is_false()
-                || environment.is_some_and(|environment| !marker.evaluate(environment, &[]))
+        let preferences = preferences
+            .into_iter()
+            .filter(|preference| {
+                environment.is_none_or(|environment| preference.marker().evaluate(environment, &[]))
+            })
+            .collect();
+        let mut git: Vec<(PackageName, ResolvedRepositoryReference)> = Vec::new();
+        for preference in git_preferences {
+            if environment.is_some_and(|environment| !preference.marker.evaluate(environment, &[]))
             {
                 continue;
             }
-            if let Some(version) = &package.version {
-                preferences.push(Preference::from_locked(
-                    package.name.clone(),
-                    version.clone(),
-                    package.index.as_ref().map(|index| {
-                        IndexUrl::from(VerbatimUrl::from(index.without_credentials().into_owned()))
-                    }),
-                    vec![UniversalMarker::from_combined(marker)],
-                ));
+            if git.iter().any(|(_, existing)| {
+                existing.reference == preference.git.reference && existing.sha != preference.git.sha
+            }) {
+                anyhow::bail!(
+                    "Cannot import conflicting Git commits for the repository reference used by `{}`",
+                    preference.name
+                );
             }
-            if let Some(git_ref) = package.as_git_ref(install_path)? {
-                if git.iter().any(|existing| {
-                    existing.reference == git_ref.reference && existing.sha != git_ref.sha
-                }) {
-                    anyhow::bail!(
-                        "Cannot import conflicting Git commits for the repository reference used by `{}`",
-                        package.name
-                    );
-                }
-                git.push(git_ref);
-            }
+            git.push((preference.name, preference.git));
         }
         Ok(Self { preferences, git })
     }
@@ -176,7 +165,7 @@ pub fn read_lock_requirements(
 
         // Map each entry in the lockfile to a Git SHA.
         if let Some(git_ref) = package.as_git_ref()? {
-            git.push(git_ref);
+            git.push((package.name().clone(), git_ref));
         }
     }
 
@@ -226,7 +215,7 @@ pub async fn read_pylock_toml_requirements(
 
         // Map each entry in the lockfile to a Git SHA.
         if let Some(git_ref) = package.as_git_ref(install_path)? {
-            git.push(git_ref);
+            git.push((package.name.clone(), git_ref));
         }
     }
 

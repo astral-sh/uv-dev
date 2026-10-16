@@ -20,6 +20,7 @@ use uv_distribution_types::{
     ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
     RequirementSource, UnresolvedRequirementSpecification,
 };
+use uv_git::ResolvedRepositoryReference;
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
@@ -55,7 +56,9 @@ use uv_environment_operations::{
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_resolve_operations as operations;
 use uv_resolve_operations::latest::LatestClient;
+use uv_resolve_operations::locked_requirements::LockedRequirements;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
+use uv_resolve_operations::pylock::import_pylock_requirements;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::{ResolverInstallerSettings, ResolverSettings};
 
@@ -100,10 +103,58 @@ pub async fn install(
     let reporter = PythonDownloadReporter::single(printer);
 
     // Initialize any shared state.
-    let state = PlatformState::default();
+    let mut state = PlatformState::default();
 
     // Parse the input requirement.
     let request = ToolRequest::parse(&package, from.as_deref())?;
+
+    // If the user passed, e.g., `ruff@latest`, we need to mark it as upgradable.
+    let settings = if let ToolRequest::Package {
+        target: Target::Latest(_, name, _),
+        ..
+    } = &request
+    {
+        ResolverInstallerSettings {
+            resolver: ResolverSettings {
+                upgrade: Upgrade::package(name.clone()).combine(settings.resolver.upgrade),
+                ..settings.resolver
+            },
+            ..settings
+        }
+    } else {
+        settings
+    };
+
+    // If the user passed, e.g., `ruff@latest`, refresh the cache.
+    let refresh = if request.is_latest() {
+        refresh.combine(Refresh::All(Timestamp::now()))
+    } else {
+        refresh
+    };
+    let cache = cache.with_refresh(refresh.clone());
+
+    // Read the `--with` requirements.
+    let mut spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        excludes,
+        None,
+        PylockInputMode::Import,
+        &client_builder,
+        &cache,
+    )
+    .await?;
+
+    import_pylock_requirements(
+        &mut spec,
+        &settings.resolver.index_locations,
+        &settings.resolver.upgrade,
+        &client_builder
+            .clone()
+            .keyring(settings.resolver.keyring_provider),
+    )
+    .await?;
 
     let unresolved_target_requirements = match &request {
         ToolRequest::Package {
@@ -130,6 +181,7 @@ pub async fn install(
             .as_ref()
             .and_then(|requirements| requirements.first())
             .map(|requirement| &requirement.requirement),
+        &spec.git_preferences,
         config_discovery,
         lfs,
         state.git(),
@@ -162,13 +214,16 @@ pub async fn install(
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
 
-    // If the user passed, e.g., `ruff@latest`, refresh the cache.
-    let refresh = if request.is_latest() {
-        refresh.combine(Refresh::All(Timestamp::now()))
-    } else {
-        refresh
-    };
-    let cache = cache.with_refresh(refresh.clone());
+    // Select imported Git preferences before resolving unnamed requirements and caching their metadata.
+    let markers = resolution_markers(None, python_platform.as_ref(), &interpreter);
+    let locked = LockedRequirements::from_imported(
+        Vec::new(),
+        spec.git_preferences.clone(),
+        Some(&markers),
+    )?;
+    for (_, ResolvedRepositoryReference { reference, sha }) in locked.git {
+        state.git().insert(reference, sha);
+    }
 
     // Resolve the `--from` requirement.
     let requirement = match &request {
@@ -350,19 +405,6 @@ pub async fn install(
 
     let package_name = &requirement.name;
 
-    // If the user passed, e.g., `ruff@latest`, we need to mark it as upgradable.
-    let settings = if request.is_latest() {
-        ResolverInstallerSettings {
-            resolver: ResolverSettings {
-                upgrade: Upgrade::package(package_name.clone()).combine(settings.resolver.upgrade),
-                ..settings.resolver
-            },
-            ..settings
-        }
-    } else {
-        settings
-    };
-
     // If the user passed `--force`, it implies `--reinstall-package <from>`.
     let settings = if force {
         ResolverInstallerSettings {
@@ -373,22 +415,7 @@ pub async fn install(
         settings
     };
 
-    // Read the `--with` requirements.
-    let mut spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        excludes,
-        None,
-        PylockInputMode::Install,
-        &client_builder,
-        &cache,
-    )
-    .await?;
-
-    if spec.pylock.is_some() {
-        anyhow::bail!("`pylock.toml` is not a supported input format for `uv tool install`");
-    }
+    let has_preferences = spec.has_preferences();
 
     // Extract project dependencies before constructing the receipt and tool-lock manifest.
     let source_trees = std::mem::take(&mut spec.source_trees);
@@ -542,6 +569,26 @@ pub async fn install(
             })
     };
 
+    if let Some(environment) = &existing_environment
+        && !environment.environment().uses(&interpreter)
+    {
+        // Metadata and Git preferences must follow the interpreter used by the tool environment.
+        state = PlatformState::default();
+        let markers = resolution_markers(
+            None,
+            python_platform.as_ref(),
+            environment.environment().interpreter(),
+        );
+        let locked = LockedRequirements::from_imported(
+            Vec::new(),
+            spec.git_preferences.clone(),
+            Some(&markers),
+        )?;
+        for (_, ResolvedRepositoryReference { reference, sha }) in locked.git {
+            state.git().insert(reference, sha);
+        }
+    }
+
     let validation_interpreter = existing_environment
         .as_ref()
         .map_or(&interpreter, |environment| {
@@ -593,7 +640,10 @@ pub async fn install(
     // If the requested and receipt requirements are the same...
     if let Some(environment) = existing_environment.as_ref().filter(|_| {
         // And the user didn't request a reinstall or upgrade...
-        !request.is_latest() && settings.reinstall.is_none() && settings.resolver.upgrade.is_none()
+        !request.is_latest()
+            && settings.reinstall.is_none()
+            && settings.resolver.upgrade.is_none()
+            && !has_preferences
     }) {
         if let Some(tool_receipt) = existing_tool_receipt.as_ref() {
             if !tool_locks
@@ -720,7 +770,7 @@ pub async fn install(
         let (environment, tool_lock) = if tool_locks {
             let site_packages = SitePackages::from_environment(&environment)?;
             let satisfied_tool_lock = match existing_tool_lock.take() {
-                Some(lock) if lock.is_satisfied() => Some(lock.into_lock()),
+                Some(lock) if lock.is_satisfied() && !has_preferences => Some(lock.into_lock()),
                 lock => {
                     existing_tool_lock = lock;
                     None
@@ -906,7 +956,7 @@ pub async fn install(
         (environment, tool_lock)
     } else {
         let satisfied_tool_lock = match existing_tool_lock.take() {
-            Some(lock) if lock.is_satisfied() => Some(lock.into_lock()),
+            Some(lock) if lock.is_satisfied() && !has_preferences => Some(lock.into_lock()),
             lock => {
                 existing_tool_lock = lock;
                 None
@@ -990,6 +1040,8 @@ pub async fn install(
                             interpreter.sys_executable().display()
                         );
 
+                        // The new interpreter can select different Git commits and distribution metadata.
+                        state = PlatformState::default();
                         match resolve_environment(
                             spec.clone(),
                             resolution_scope,

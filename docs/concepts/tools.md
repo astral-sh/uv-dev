@@ -183,6 +183,11 @@ Use `--with-requirements` to read dependencies from a requirements file, a scrip
 metadata, or project metadata such as `pyproject.toml`, `setup.cfg`, and `setup.py`. Project
 metadata contributes its base dependencies without installing the source project.
 
+A `pylock.toml` input contributes its default-selected packages, with recorded versions and Git
+commits used as preferences. Registry artifacts are resolved again; recorded artifact sizes and
+hashes are not enforced. For `uv tool install`, imported registry requirements are saved in the
+receipt without pinned versions, so subsequent upgrades can select newer versions.
+
 Pass `-` to read from stdin. Project metadata from stdin must be
 [self-contained](../pip/packages.md#installing-packages-from-files); reading `setup.py` requires
 selecting its format explicitly:

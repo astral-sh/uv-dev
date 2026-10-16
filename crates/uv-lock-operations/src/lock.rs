@@ -83,6 +83,7 @@ pub enum LockMode<'env> {
 pub struct LockOperation<'env> {
     mode: LockMode<'env>,
     constraints: Vec<NameRequirementSpecification>,
+    preferences: LockedRequirements,
     first_party_exclusions: BTreeSet<PackageName>,
     refresh: Option<&'env Refresh>,
     check_lockfile_contents: bool,
@@ -114,6 +115,7 @@ impl<'env> LockOperation<'env> {
         Self {
             mode,
             constraints: vec![],
+            preferences: LockedRequirements::default(),
             first_party_exclusions: BTreeSet::new(),
             refresh: None,
             check_lockfile_contents: false,
@@ -133,6 +135,13 @@ impl<'env> LockOperation<'env> {
     #[must_use]
     pub fn with_constraints(mut self, constraints: Vec<NameRequirementSpecification>) -> Self {
         self.constraints = constraints;
+        self
+    }
+
+    /// Prefer imported package versions and Git commits over the existing lockfile.
+    #[must_use]
+    pub fn with_preferences(mut self, preferences: LockedRequirements) -> Self {
+        self.preferences = preferences;
         self
     }
 
@@ -158,9 +167,11 @@ impl<'env> LockOperation<'env> {
     }
 
     /// Perform a [`LockOperation`].
-    pub async fn execute(self, target: LockTarget<'_>) -> Result<LockResult, LockError> {
+    pub async fn execute(mut self, target: LockTarget<'_>) -> Result<LockResult, LockError> {
         if !matches!(&self.mode, LockMode::Frozen(_)) {
-            target.validate_upgrade_groups(&self.settings.upgrade)?;
+            let upgrade_packages = target.upgrade_packages(&self.settings.upgrade)?;
+            self.preferences
+                .retain(|name| !self.settings.upgrade.is_all() && !upgrade_packages.contains(name));
         }
 
         match self.mode {
@@ -198,6 +209,7 @@ impl<'env> LockOperation<'env> {
                     self.mode,
                     check_lockfile_contents,
                     self.constraints,
+                    self.preferences,
                     self.first_party_exclusions,
                     self.refresh,
                     self.settings,
@@ -253,6 +265,7 @@ impl<'env> LockOperation<'env> {
                     self.mode,
                     check_lockfile_contents,
                     self.constraints,
+                    self.preferences,
                     self.first_party_exclusions,
                     self.refresh,
                     self.settings,
@@ -288,6 +301,7 @@ async fn do_lock(
     mode: LockMode<'_>,
     check_lockfile_contents: Option<String>,
     external: Vec<NameRequirementSpecification>,
+    imported_preferences: LockedRequirements,
     first_party_exclusions: BTreeSet<PackageName>,
     refresh: Option<&Refresh>,
     settings: &ResolverSettings,
@@ -837,17 +851,22 @@ async fn do_lock(
 
     match existing_lock {
         // Resolution from the lockfile succeeded.
-        Some(ValidatedLock::Satisfies(lock)) => {
+        Some(ValidatedLock::Satisfies(lock))
+            if imported_preferences.preferences.is_empty()
+                && imported_preferences.git.is_empty() =>
+        {
             // Print the success message after completing resolution.
             logger.on_complete(lock.len(), start, printer)?;
 
             Ok(LockResult::Unchanged(lock))
         }
 
-        // The lockfile did not contain enough information to obtain a resolution, fallback
-        // to a fresh resolve.
+        // Resolve when the lockfile is insufficient or imported preferences may change its packages.
         Some(
-            ValidatedLock::Unusable(_) | ValidatedLock::Versions(_) | ValidatedLock::Preferable(_),
+            ValidatedLock::Satisfies(_)
+            | ValidatedLock::Unusable(_)
+            | ValidatedLock::Versions(_)
+            | ValidatedLock::Preferable(_),
         )
         | None => {
             let recorder = if preview.is_enabled(PreviewFeature::ResolutionInputs) {
@@ -872,13 +891,15 @@ async fn do_lock(
             });
 
             // If an existing lockfile exists, build up a set of preferences.
-            let LockedRequirements { preferences, git } = versions_lock
+            let fallback = versions_lock
                 .map(|lock| read_lock_requirements(lock, target.install_path(), upgrade))
                 .transpose()?
                 .unwrap_or_default();
+            let LockedRequirements { preferences, git } =
+                imported_preferences.with_fallback(fallback);
 
             // Populate the Git resolver.
-            for ResolvedRepositoryReference { reference, sha } in git {
+            for (_, ResolvedRepositoryReference { reference, sha }) in git {
                 debug!("Inserting Git reference into resolver: `{reference:?}` at `{sha}`");
                 state.git().insert(reference, sha);
             }

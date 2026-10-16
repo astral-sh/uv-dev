@@ -9,13 +9,44 @@ use tracing::info_span;
 
 use uv_client::BaseClientBuilder;
 use uv_configuration::{DependencyGroups, ExtrasSpecification, Upgrade};
-use uv_distribution_types::UnresolvedRequirementSpecification;
+use uv_distribution_types::{IndexLocations, IndexUrl, UnresolvedRequirementSpecification};
 use uv_lock::PylockToml;
 use uv_normalize::{DefaultExtras, DefaultGroups, ExtraName, GroupName};
-use uv_pep508::{MarkerEnvironment, RequirementOrigin};
-use uv_requirements::PylockSource;
+use uv_pep508::{RequirementOrigin, VerbatimUrl};
+use uv_requirements::{GitPreference, PylockSource, RequirementsSpecification};
+use uv_resolver::{Preference, UniversalMarker, UpgradePackages};
 
-use crate::locked_requirements::LockedRequirements;
+/// Import a specification's `pylock.toml` before checking or resolving its requirements.
+pub async fn import_pylock_requirements(
+    spec: &mut RequirementsSpecification,
+    index_locations: &IndexLocations,
+    upgrade: &Upgrade,
+    client_builder: &BaseClientBuilder<'_>,
+) -> anyhow::Result<()> {
+    let Some(source) = spec.pylock.take() else {
+        return Ok(());
+    };
+
+    // Cache index credentials before fetching a lockfile hosted on an authenticated index.
+    client_builder.cache_index_credentials(index_locations)?;
+    let PylockRequirements {
+        requirements,
+        preferences,
+        git_preferences,
+        available_extras: _,
+    } = import_pylock_toml(
+        &source,
+        &ExtrasSpecification::default(),
+        &spec.pylock_groups,
+        upgrade,
+        client_builder,
+    )
+    .await?;
+    spec.requirements.extend(requirements);
+    spec.preferences.extend(preferences);
+    spec.git_preferences.extend(git_preferences);
+    Ok(())
+}
 
 /// Read and parse a `pylock.toml` input, reusing the contents retained for stdin.
 ///
@@ -89,7 +120,8 @@ pub fn select_pylock_packages(
 /// Requirements, preferences, and available extras imported from a `pylock.toml`.
 pub struct PylockRequirements {
     pub requirements: Vec<UnresolvedRequirementSpecification>,
-    pub locked: LockedRequirements,
+    pub preferences: Vec<Preference>,
+    pub git_preferences: Vec<GitPreference>,
     pub available_extras: Vec<ExtraName>,
 }
 
@@ -99,7 +131,6 @@ pub async fn import_pylock_toml(
     extras: &ExtrasSpecification,
     groups: &DependencyGroups,
     upgrade: &Upgrade,
-    environment: Option<&MarkerEnvironment>,
     client_builder: &BaseClientBuilder<'_>,
 ) -> anyhow::Result<PylockRequirements> {
     let (install_path, lock) = read_pylock_toml(source, client_builder).await?;
@@ -126,17 +157,41 @@ pub async fn import_pylock_toml(
             UnresolvedRequirementSpecification::from(requirement)
         })
         .collect();
-    let locked = LockedRequirements::from_pylock(
-        &lock,
-        &install_path,
-        &extras,
-        &groups,
-        upgrade,
-        environment,
-    )?;
+    let mut preferences = Vec::new();
+    let mut git_preferences = Vec::new();
+    if !upgrade.is_all() {
+        let upgrade_packages = UpgradePackages::for_non_project(upgrade);
+        for package in &lock.packages {
+            if upgrade_packages.contains(&package.name) {
+                continue;
+            }
+            let marker = package.marker().simplify_pep751(&extras, &groups);
+            if marker.is_false() {
+                continue;
+            }
+            if let Some(version) = &package.version {
+                preferences.push(Preference::from_locked(
+                    package.name.clone(),
+                    version.clone(),
+                    package.index.as_ref().map(|index| {
+                        IndexUrl::from(VerbatimUrl::from(index.without_credentials().into_owned()))
+                    }),
+                    vec![UniversalMarker::from_combined(marker)],
+                ));
+            }
+            if let Some(git) = package.as_git_ref(&install_path)? {
+                git_preferences.push(GitPreference {
+                    name: package.name.clone(),
+                    marker,
+                    git,
+                });
+            }
+        }
+    }
     Ok(PylockRequirements {
         requirements,
-        locked,
+        preferences,
+        git_preferences,
         available_extras: lock.extras,
     })
 }

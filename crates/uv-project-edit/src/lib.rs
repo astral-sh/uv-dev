@@ -10,10 +10,9 @@ use toml_edit::{
     Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TomlError, Value,
 };
 
-use uv_cache_key::CanonicalUrl;
 use uv_configuration::AddBoundsKind;
 use uv_distribution_types::{Index, IndexFormat, IndexUrl};
-use uv_fs::{PortablePath, is_same_file_allow_missing, try_relative_to_if};
+use uv_fs::{PortablePath, try_relative_to_if};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionParseError};
 use uv_pep508::{MarkerTree, Requirement, VersionOrUrl};
@@ -33,14 +32,7 @@ fn index_locations_equal(existing: &str, incoming: &IndexUrl, root_dir: &Path) -
         return false;
     };
 
-    if let (IndexUrl::Path(existing), IndexUrl::Path(incoming)) = (&existing, incoming)
-        && let (Ok(existing), Ok(incoming)) = (existing.to_file_path(), incoming.to_file_path())
-        && let Some(equal) = is_same_file_allow_missing(&existing, &incoming)
-    {
-        return equal;
-    }
-
-    CanonicalUrl::new(existing.url().clone()) == CanonicalUrl::new(incoming.url().clone())
+    existing.is_same_location(incoming)
 }
 
 #[derive(Error, Debug)]
@@ -297,6 +289,20 @@ impl PyProjectTomlMut {
 
     /// Add an [`Index`] to `tool.uv.index`.
     pub fn add_index(&mut self, index: &Index, root_dir: &Path) -> Result<(), Error> {
+        self.insert_index(index, root_dir, true)
+    }
+
+    /// Add an [`Index`] or update an existing index at its current TOML position.
+    pub fn set_index(&mut self, index: &Index, root_dir: &Path) -> Result<(), Error> {
+        self.insert_index(index, root_dir, false)
+    }
+
+    fn insert_index(
+        &mut self,
+        index: &Index,
+        root_dir: &Path,
+        prioritize: bool,
+    ) -> Result<(), Error> {
         let size = self.doc.len();
         let existing = self
             .doc
@@ -313,7 +319,7 @@ impl PyProjectTomlMut {
             .as_array_of_tables_mut()
             .ok_or(Error::MalformedSources)?;
 
-        // If there's already an index with the same name or URL, update it (and move it to the top).
+        // If there's already an index with the same name or URL, update it.
         let mut table = existing
             .iter()
             .find(|table| {
@@ -418,6 +424,20 @@ impl PyProjectTomlMut {
             }
         }
 
+        // Imported indexes can be restricted to packages with explicit source bindings.
+        if index.explicit && table.get("explicit").and_then(Item::as_bool) != Some(true) {
+            let mut formatted = Formatted::new(true);
+            if let Some(value) = table.get("explicit").and_then(Item::as_value) {
+                if let Some(prefix) = value.decor().prefix() {
+                    formatted.decor_mut().set_prefix(prefix.clone());
+                }
+                if let Some(suffix) = value.decor().suffix() {
+                    formatted.decor_mut().set_suffix(suffix.clone());
+                }
+            }
+            table.insert("explicit", Value::Boolean(formatted).into());
+        }
+
         // If the index location changed, sync the format to match the incoming index.
         if index_location_changed {
             match index.format {
@@ -479,19 +499,21 @@ impl PyProjectTomlMut {
             true
         });
 
-        // Set the position to the minimum, if it's not already the first element.
-        if let Some(min) = existing.iter().filter_map(Table::position).min() {
-            table.set_position(Some(min));
+        if prioritize || table.position().is_none() {
+            // Set the position to the minimum, if it's not already the first element.
+            if let Some(min) = existing.iter().filter_map(Table::position).min() {
+                table.set_position(Some(min));
 
-            // Increment the position of all existing elements.
-            for table in existing.iter_mut() {
-                if let Some(position) = table.position() {
-                    table.set_position(Some(position + 1));
+                // Increment the position of all existing elements.
+                for table in existing.iter_mut() {
+                    if let Some(position) = table.position() {
+                        table.set_position(Some(position + 1));
+                    }
                 }
+            } else {
+                let position = isize::try_from(size).expect("TOML table size fits in `isize`");
+                table.set_position(Some(position));
             }
-        } else {
-            let position = isize::try_from(size).expect("TOML table size fits in `isize`");
-            table.set_position(Some(position));
         }
 
         // Push the item to the table.

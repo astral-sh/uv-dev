@@ -211,6 +211,8 @@ pub async fn pip_compile(
         excludes,
         pylock,
         pylock_groups,
+        preferences: _,
+        git_preferences: _,
         source_trees,
         groups,
         extras: mut used_extras,
@@ -451,18 +453,16 @@ pub async fn pip_compile(
     let (imported, available_extras) = if let Some(pylock) = &pylock {
         let PylockRequirements {
             requirements: imported,
-            locked,
+            preferences,
+            git_preferences,
             available_extras,
-        } = import_pylock_toml(
-            pylock,
-            &extras,
-            &pylock_groups,
-            &upgrade,
-            resolver_env.marker_environment(),
-            &client_builder,
-        )
-        .await?;
+        } = import_pylock_toml(pylock, &extras, &pylock_groups, &upgrade, &client_builder).await?;
         requirements.extend(imported);
+        let locked = LockedRequirements::from_imported(
+            preferences,
+            git_preferences,
+            resolver_env.marker_environment(),
+        )?;
         (locked, available_extras)
     } else {
         (LockedRequirements::default(), Vec::new())
@@ -490,7 +490,7 @@ pub async fn pip_compile(
     let LockedRequirements { preferences, git } = imported.with_fallback(locked);
 
     // Populate the Git resolver.
-    for ResolvedRepositoryReference { reference, sha } in git {
+    for (_, ResolvedRepositoryReference { reference, sha }) in git {
         debug!("Inserting Git reference into resolver: `{reference:?}` at `{sha}`");
         state.git().insert(reference, sha);
     }

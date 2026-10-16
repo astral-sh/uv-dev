@@ -3378,11 +3378,15 @@ pub struct RunArgs {
     /// Run with the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// `pyproject.toml`, `setup.py`, and `setup.cfg`.
+    /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`.
     ///
     /// The same environment semantics as `--with` apply.
     ///
     /// Project metadata contributes its dependencies without installing the project itself.
+    ///
+    /// A `pylock.toml` contributes its default-selected packages, with recorded versions and Git
+    /// commits used as preferences. Registry artifacts are resolved again; recorded artifact sizes
+    /// and hashes are not enforced.
     #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
 
@@ -3390,7 +3394,6 @@ pub struct RunArgs {
     ///
     /// The format is detected by default. Select `setup.py` explicitly to execute Python and
     /// extract dependencies. Project metadata from stdin must be self-contained.
-    /// `pylock.toml` is not supported by this command.
     #[arg(long, value_enum)]
     pub input_format: Option<RequirementsFormat>,
 
@@ -3981,7 +3984,11 @@ pub struct AddArgs {
     /// Add the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// `pyproject.toml`, `setup.py`, and `setup.cfg`.
+    /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`.
+    ///
+    /// A `pylock.toml` contributes its default-selected packages, with recorded versions and Git
+    /// commits used as preferences. Registry artifacts are resolved again; recorded artifact sizes
+    /// and hashes are not enforced.
     #[arg(
         long,
         short,
@@ -3995,7 +4002,6 @@ pub struct AddArgs {
     ///
     /// The format is detected by default. Select `setup.py` explicitly to execute Python and
     /// extract dependencies. Project metadata from stdin must be self-contained.
-    /// `pylock.toml` is not supported by this command.
     #[arg(long, value_enum)]
     pub input_format: Option<RequirementsFormat>,
 
@@ -5368,8 +5374,12 @@ pub struct ToolRunArgs {
     /// Run with the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// `pyproject.toml`, `setup.py`, and `setup.cfg`. Project metadata contributes its dependencies
-    /// without installing the source project.
+    /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`. Project metadata contributes its
+    /// dependencies without installing the source project.
+    ///
+    /// A `pylock.toml` contributes its default-selected packages, with recorded versions and Git
+    /// commits used as preferences. Registry artifacts are resolved again; recorded artifact sizes
+    /// and hashes are not enforced.
     #[arg(
         long,
         value_delimiter = ',',
@@ -5381,7 +5391,6 @@ pub struct ToolRunArgs {
     ///
     /// The format is detected by default. Select `setup.py` explicitly to execute Python and extract
     /// dependencies. Project metadata from stdin must be self-contained.
-    /// `pylock.toml` is not supported by this command.
     #[arg(long, value_enum)]
     pub input_format: Option<RequirementsFormat>,
 
@@ -5550,8 +5559,12 @@ pub struct ToolInstallArgs {
     /// Install with the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// `pyproject.toml`, `setup.py`, and `setup.cfg`. Project metadata contributes its dependencies
-    /// without installing the source project.
+    /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`. Project metadata contributes its
+    /// dependencies without installing the source project.
+    ///
+    /// A `pylock.toml` contributes its default-selected packages, with recorded versions and Git
+    /// commits used as preferences. Registry artifacts are resolved again; recorded artifact sizes
+    /// and hashes are not enforced.
     #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
     with_requirements: Vec<Maybe<RequirementsInput>>,
 
@@ -5559,7 +5572,6 @@ pub struct ToolInstallArgs {
     ///
     /// The format is detected by default. Select `setup.py` explicitly to execute Python and extract
     /// dependencies. Project metadata from stdin must be self-contained.
-    /// `pylock.toml` is not supported by this command.
     #[arg(long, value_enum)]
     input_format: Option<RequirementsFormat>,
 
