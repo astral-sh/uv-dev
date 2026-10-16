@@ -12,6 +12,7 @@ use thiserror::Error;
 use url::{ParseError, Url};
 use uv_auth::RealmRef;
 use uv_cache_key::CanonicalUrl;
+use uv_fs::is_same_file_allow_missing;
 use uv_pep508::{Scheme, VerbatimUrl, VerbatimUrlError, split_scheme};
 use uv_pypi_types::HashAlgorithm;
 use uv_redacted::DisplaySafeUrl;
@@ -94,6 +95,22 @@ impl IndexUrl {
     /// Return the raw URL for the index.
     pub fn url(&self) -> &DisplaySafeUrl {
         self.inner().raw()
+    }
+
+    /// Return `true` if both URLs refer to the same index, by file identity or canonical URL.
+    pub fn is_same_location(&self, other: &Self) -> bool {
+        if self.url() == other.url() {
+            return true;
+        }
+
+        if let (Self::Path(existing), Self::Path(incoming)) = (self, other)
+            && let (Ok(existing), Ok(incoming)) = (existing.to_file_path(), incoming.to_file_path())
+            && let Some(equal) = is_same_file_allow_missing(&existing, &incoming)
+        {
+            return equal;
+        }
+
+        CanonicalUrl::new(self.url().clone()) == CanonicalUrl::new(other.url().clone())
     }
 
     /// Convert the index URL into a [`DisplaySafeUrl`].

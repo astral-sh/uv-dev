@@ -10,10 +10,9 @@ use toml_edit::{
     Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TomlError, Value,
 };
 
-use uv_cache_key::CanonicalUrl;
 use uv_configuration::AddBoundsKind;
 use uv_distribution_types::{Index, IndexFormat, IndexUrl};
-use uv_fs::{PortablePath, is_same_file_allow_missing, try_relative_to_if};
+use uv_fs::{PortablePath, try_relative_to_if};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionParseError};
 use uv_pep508::{MarkerTree, Requirement, VersionOrUrl};
@@ -33,19 +32,7 @@ fn index_locations_equal(existing: &str, incoming: &IndexUrl, root_dir: &Path) -
         return false;
     };
 
-    index_urls_equal(&existing, incoming)
-}
-
-/// Compare index locations by file identity or canonical URL.
-pub fn index_urls_equal(existing: &IndexUrl, incoming: &IndexUrl) -> bool {
-    if let (IndexUrl::Path(existing), IndexUrl::Path(incoming)) = (existing, incoming)
-        && let (Ok(existing), Ok(incoming)) = (existing.to_file_path(), incoming.to_file_path())
-        && let Some(equal) = is_same_file_allow_missing(&existing, &incoming)
-    {
-        return equal;
-    }
-
-    CanonicalUrl::new(existing.url().clone()) == CanonicalUrl::new(incoming.url().clone())
+    existing.is_same_location(incoming)
 }
 
 #[derive(Error, Debug)]

@@ -3,7 +3,6 @@ use std::str::FromStr;
 use rustc_hash::FxHashMap;
 use tracing::trace;
 
-use uv_cache_key::CanonicalUrl;
 use uv_distribution_types::{IndexUrl, InstalledDist, InstalledDistKind};
 use uv_normalize::PackageName;
 use uv_pep440::{Operator, Version};
@@ -164,10 +163,7 @@ impl PreferenceIndex {
         match self {
             Self::Any => true,
             Self::Implicit => false,
-            Self::Explicit(preference) => {
-                CanonicalUrl::new(preference.url().clone())
-                    == CanonicalUrl::new(index.url().clone())
-            }
+            Self::Explicit(preference) => preference.is_same_location(index),
         }
     }
 }

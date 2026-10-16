@@ -15,6 +15,7 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::Path;
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
@@ -30,7 +31,7 @@ use uv_fs::Simplified;
 use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
-use uv_test::packse::{PackseServer, scenario::Scenario};
+use uv_test::packse::{PackseServer, generate_wheel, scenario::Scenario};
 use uv_test::{uv_snapshot, venv_bin_path};
 
 /// Add a PyPI requirement.
@@ -16666,6 +16667,99 @@ fn add_pylock_empty_index() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    Ok(())
+}
+
+/// A symlinked index retains an available imported version preference.
+#[test]
+fn add_pylock_symlinked_index_preference() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "index-link"
+        explicit = true
+    "#})?;
+    let index = context.temp_dir.child("index");
+    index.child("imported/index.html").write_str(indoc! {r#"
+        <!DOCTYPE html>
+        <a href="imported-1.0.0-py3-none-any.whl">imported-1.0.0-py3-none-any.whl</a>
+        <a href="imported-2.0.0-py3-none-any.whl">imported-2.0.0-py3-none-any.whl</a>
+    "#})?;
+    let (filename, wheel) = generate_wheel(
+        &"imported".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    index
+        .child("imported")
+        .child(filename)
+        .write_binary(&wheel)?;
+    let (filename, wheel) = generate_wheel(
+        &"imported".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    index
+        .child("imported")
+        .child(filename)
+        .write_binary(&wheel)?;
+    uv_fs::create_symlink(index.path(), context.temp_dir.child("index-link").path())?;
+    let index_url = Url::from_directory_path(index.path()).expect("absolute temporary index path");
+    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "imported"
+        version = "1.0.0"
+        index = "{index_url}"
+        wheels = [{{ url = "https://example.com/imported-1.0.0-py3-none-any.whl", hashes = {{ sha256 = "0000000000000000000000000000000000000000000000000000000000000000" }} }}]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "-r", "pylock.toml"])
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + imported==1.0.0
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "imported>=1.0.0",
+    ]
+
+    [[tool.uv.index]]
+    name = "local"
+    url = "index-link"
+    explicit = true
+
+    [tool.uv.sources]
+    imported = { index = "local" }
+    "#);
     Ok(())
 }
 

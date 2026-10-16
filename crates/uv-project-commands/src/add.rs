@@ -40,7 +40,7 @@ use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, DefaultGroups, ExtraName, PackageName};
 use uv_pep508::{MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
-use uv_project_edit::{ArrayEdit, DependencyTarget, PyProjectTomlMut, index_urls_equal};
+use uv_project_edit::{ArrayEdit, DependencyTarget, PyProjectTomlMut};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
@@ -431,7 +431,7 @@ pub async fn add(
             .chain(settings.resolver.index_locations.defined_indexes())
             .chain(indexes.iter())
             .chain(existing_indexes)
-            .find(|index| index_urls_equal(&index.url, &metadata.url))
+            .find(|index| index.url.is_same_location(&metadata.url))
             .cloned()
             .unwrap_or_else(|| {
                 let mut index = Index::from_extra_index_url(metadata.url.clone());
@@ -453,7 +453,7 @@ pub async fn add(
         }
         if !imported_indexes
             .iter()
-            .any(|existing| index_urls_equal(&existing.url, &index.url))
+            .any(|existing| existing.url.is_same_location(&index.url))
         {
             imported_indexes.push(index);
         }
@@ -914,7 +914,7 @@ pub async fn add(
         for index in indexes {
             if command_line_indexes
                 .iter()
-                .any(|existing| index_urls_equal(&existing.url, &index.url))
+                .any(|existing| existing.url.is_same_location(&index.url))
             {
                 toml.add_index(index, root_dir)?;
             } else {
