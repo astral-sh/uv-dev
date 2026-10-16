@@ -40,6 +40,7 @@ fs-err = { workspace = true, features = ["tokio"] }
 futures = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
+memchr = { workspace = true }
 owo-colors = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }

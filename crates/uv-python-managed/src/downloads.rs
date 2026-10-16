@@ -124,6 +124,10 @@ pub enum Error {
     InvalidPythonDownloadsNdjsonLine(String, usize, #[source] serde_json::Error),
     #[error("Error while fetching remote python downloads NDJSON from '{0}'")]
     FetchingPythonDownloadsNdjsonError(String, #[source] Box<Self>),
+    #[error(
+        "Cached Python downloads metadata at `{0}` is incomplete for this request in offline mode"
+    )]
+    IncompletePythonDownloadsCache(SafeUrl),
     #[error("An offline Python installation was requested, but `{file}` (from `{url}`) is missing in `{}`", python_builds_dir.user_display())]
     OfflinePythonMissing {
         file: Box<PythonInstallationKey>,
@@ -171,6 +175,8 @@ impl RetriableError for Error {
             Self::NetworkError(..)
             | Self::NetworkMiddlewareError(..)
             | Self::NetworkErrorWithRetries { .. } => true,
+            // Another source may have enough cached records to satisfy an offline request.
+            Self::IncompletePythonDownloadsCache(..) => true,
             // `Io` uses `#[error(transparent)]`, so `source()` delegates to the inner error's
             // own source rather than returning the `io::Error` itself. We must unwrap it
             // explicitly so that `retryable_on_request_failure` can inspect the io error kind.
@@ -248,8 +254,28 @@ const NDJSON_KNOWN_FLAVORS: &[&str] = &["full", "install_only", "install_only_st
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct VersionsCacheMeta {
     content_length: u64,
+    #[serde(default)]
+    representation_length: Option<u64>,
+    #[serde(default = "complete_versions_cache")]
+    complete: bool,
     etag: Option<String>,
     checked_at: SystemTime,
+}
+
+fn complete_versions_cache() -> bool {
+    true
+}
+
+impl VersionsCacheMeta {
+    fn from_response(response: &Response) -> Self {
+        Self {
+            content_length: 0,
+            representation_length: response_content_length(response),
+            complete: false,
+            etag: response_etag(response),
+            checked_at: SystemTime::now(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -489,6 +515,13 @@ async fn read_versions_cache(
         );
         return None;
     }
+    if meta.representation_length.is_some_and(|length| {
+        meta.content_length > length || (meta.complete && meta.content_length != length)
+    }) || (!meta.complete && content.last() != Some(&b'\n'))
+    {
+        debug!("Cached Python downloads metadata has an invalid prefix length");
+        return None;
+    }
     Some((content, meta))
 }
 
@@ -518,29 +551,6 @@ async fn write_versions_cache_meta(
     Ok(())
 }
 
-async fn refresh_versions_cache_meta(cache: &Cache, url: &SafeUrl, expected: &VersionsCacheMeta) {
-    let shard = versions_cache_shard(cache, url);
-    let Ok(_lock) = shard.lock().await else {
-        debug!("Failed to lock Python downloads cache");
-        return;
-    };
-    let (content_entry, meta_entry) = versions_cache_entries(&shard);
-    let Some((_, current)) = read_versions_cache(&content_entry, &meta_entry).await else {
-        return;
-    };
-    // A concurrent fetch may have replaced the contents while HEAD was in flight.
-    if current != *expected {
-        return;
-    }
-    let meta = VersionsCacheMeta {
-        checked_at: SystemTime::now(),
-        ..current
-    };
-    if let Err(err) = write_versions_cache_meta(&meta_entry, &meta).await {
-        debug!("Failed to refresh Python downloads cache metadata: {err}");
-    }
-}
-
 async fn write_versions_cache(
     content_entry: &CacheEntry,
     meta_entry: &CacheEntry,
@@ -560,36 +570,15 @@ async fn write_versions_cache(
 }
 
 fn validate_ndjson_bytes(source: &str, buf: &[u8]) -> Result<(), Error> {
-    parse_ndjson_bytes_with(source, buf, |_| ControlFlow::<()>::Continue(()))?;
+    for (index, line) in buf.split(|byte| *byte == b'\n').enumerate() {
+        if !line.iter().all(u8::is_ascii_whitespace) {
+            parse_ndjson_line(source, index + 1, line)?;
+        }
+    }
     Ok(())
 }
 
-fn ndjson_cache_content_is_valid(source: &str, content: &[u8]) -> bool {
-    match validate_ndjson_bytes(source, content) {
-        Ok(()) => true,
-        Err(err) => {
-            debug!(
-                "Skipping Python downloads metadata cache write because NDJSON did not parse: {err}"
-            );
-            false
-        }
-    }
-}
-
-async fn write_versions_cache_if_valid(
-    content_entry: &CacheEntry,
-    meta_entry: &CacheEntry,
-    source: &str,
-    content: &[u8],
-    meta: &VersionsCacheMeta,
-) {
-    if ndjson_cache_content_is_valid(source, content)
-        && let Err(err) = write_versions_cache(content_entry, meta_entry, content, meta).await
-    {
-        debug!("Failed to write cached Python downloads metadata: {err}");
-    }
-}
-
+#[cfg(test)]
 async fn read_versions_cache_content(
     cache: &Cache,
     url: &SafeUrl,
@@ -601,7 +590,13 @@ async fn read_versions_cache_content(
 }
 
 async fn fetch_versions_cache_head(client: &BaseClient, url: &SafeUrl) -> Option<Response> {
-    let response = match client.for_host(url).head(url.clone()).send().await {
+    let response = match client
+        .for_host(url)
+        .head(url.clone())
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .send()
+        .await
+    {
         Ok(response) => match response.error_for_status() {
             Ok(response) => response,
             Err(err) => {
@@ -624,44 +619,41 @@ async fn fetch_versions_cache_head(client: &BaseClient, url: &SafeUrl) -> Option
     Some(response)
 }
 
-async fn write_streamed_versions_cache(
-    cache: &Cache,
-    url: &SafeUrl,
-    content: &[u8],
-    etag: Option<String>,
-) {
-    let shard = versions_cache_shard(cache, url);
-    let Ok(_lock) = shard.lock().await else {
-        debug!("Failed to lock Python downloads cache");
-        return;
-    };
-    let (content_entry, meta_entry) = versions_cache_entries(&shard);
-    let meta = VersionsCacheMeta {
-        content_length: content.len() as u64,
-        etag,
-        checked_at: SystemTime::now(),
-    };
-    if let Err(err) = write_versions_cache(&content_entry, &meta_entry, content, &meta).await {
-        debug!("Failed to cache Python downloads metadata: {err}");
+trait DownloadQuery {
+    type Output;
+
+    fn visit(&mut self, download: ManagedPythonDownload) -> ControlFlow<()>;
+    fn finish(self) -> Self::Output;
+}
+
+struct DownloadCollector<'a, F> {
+    predicate: &'a F,
+    downloads: Vec<ManagedPythonDownload>,
+}
+
+impl<'a, F> DownloadCollector<'a, F> {
+    fn new(predicate: &'a F) -> Self {
+        Self {
+            predicate,
+            downloads: Vec::new(),
+        }
     }
 }
 
-fn prepend_versions_cache_content(
-    source: &str,
-    existing: &[u8],
-    new_content: &[u8],
-    content_length: u64,
-) -> Option<Vec<u8>> {
-    if new_content.last() != Some(&b'\n')
-        || existing.len() as u64 + new_content.len() as u64 != content_length
-    {
-        return None;
+impl<F: Fn(&ManagedPythonDownload) -> bool> DownloadQuery for DownloadCollector<'_, F> {
+    type Output = Vec<ManagedPythonDownload>;
+
+    fn visit(&mut self, download: ManagedPythonDownload) -> ControlFlow<()> {
+        if (self.predicate)(&download) {
+            self.downloads.push(download);
+        }
+        ControlFlow::Continue(())
     }
-    let mut combined = Vec::with_capacity(new_content.len() + existing.len());
-    combined.extend_from_slice(new_content);
-    combined.extend_from_slice(existing);
-    validate_ndjson_bytes(source, &combined).ok()?;
-    Some(combined)
+
+    fn finish(mut self) -> Self::Output {
+        self.downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+        self.downloads
+    }
 }
 
 fn response_etag(response: &Response) -> Option<String> {
@@ -672,24 +664,107 @@ fn response_etag(response: &Response) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-async fn fetch_bytes_from_url(
-    client: &BaseClient,
-    url: &SafeUrl,
-) -> Result<(Vec<u8>, Option<String>), Error> {
-    let response = fetch_http_response(client, url).await?;
-    let etag = response_etag(&response);
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|err| Error::NetworkError(url.clone(), WrappedReqwestError::from(err)))?;
-    Ok((bytes.to_vec(), etag))
+fn response_content_length(response: &Response) -> Option<u64> {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
 }
 
-async fn fetch_ndjson_cached(
+fn strong_etag(meta: &VersionsCacheMeta) -> Option<&str> {
+    meta.etag
+        .as_deref()
+        .filter(|etag| etag.starts_with('"') && etag.ends_with('"'))
+}
+
+fn matches_range(response: &Response, start: u64, end: u64, total: u64, etag: &str) -> bool {
+    response.status() == reqwest::StatusCode::PARTIAL_CONTENT
+        && response
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|value| value.to_str().ok())
+            == Some(format!("bytes {start}-{end}/{total}").as_str())
+        && response_etag(response).as_deref() == Some(etag)
+}
+
+/// Request the same byte representation for full responses and range requests.
+async fn fetch_versions_response(client: &BaseClient, url: &SafeUrl) -> Result<Response, Error> {
+    let response = client
+        .for_host(url)
+        .get(url.clone())
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .send()
+        .await
+        .map_err(|err| Error::from_reqwest_middleware(url.clone(), err))?
+        .error_for_status()
+        .map_err(|err| Error::NetworkError(url.clone(), WrappedReqwestError::from(err)))?;
+    if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Python downloads metadata response contained an unsolicited byte range",
+        )
+        .into());
+    }
+    Ok(response)
+}
+
+/// Update a cached catalog by fetching records prepended to its immutable history.
+async fn prepend_versions_cache(
+    client: &BaseClient,
+    url: &SafeUrl,
+    content: &[u8],
+    meta: &VersionsCacheMeta,
+    head: &Response,
+) -> Option<(Vec<u8>, VersionsCacheMeta)> {
+    let previous_length = meta.representation_length?;
+    let current_length = response_content_length(head)?;
+    let etag = response_etag(head)?;
+    if current_length <= previous_length || !etag.starts_with('"') || !etag.ends_with('"') {
+        return None;
+    }
+    let delta_length = current_length - previous_length;
+    let response = client
+        .for_host(url)
+        .get(url.clone())
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .header(
+            reqwest::header::RANGE,
+            format!("bytes=0-{}", delta_length - 1),
+        )
+        .header(reqwest::header::IF_MATCH, &etag)
+        .send()
+        .await
+        .ok()?;
+    if !matches_range(&response, 0, delta_length - 1, current_length, &etag) {
+        return None;
+    }
+    let delta = response.bytes().await.ok()?;
+    if delta.len() as u64 != delta_length || delta.last() != Some(&b'\n') {
+        return None;
+    }
+    validate_ndjson_bytes(&url.to_string(), &delta).ok()?;
+    let mut combined = Vec::with_capacity(delta.len() + content.len());
+    combined.extend_from_slice(&delta);
+    combined.extend_from_slice(content);
+    let meta = VersionsCacheMeta {
+        content_length: combined.len() as u64,
+        representation_length: Some(current_length),
+        complete: meta.complete,
+        etag: Some(etag),
+        checked_at: SystemTime::now(),
+    };
+    Some((combined, meta))
+}
+
+/// Cache complete records, resuming a prefix only while its representation is pinned by a strong `ETag`.
+async fn fetch_ndjson_cached_query<Q: DownloadQuery>(
     client: &BaseClient,
     url: &SafeUrl,
     cache: &Cache,
-) -> Result<Vec<u8>, Error> {
+    prepend_only: bool,
+    make_query: impl Fn() -> Q,
+) -> Result<Q::Output, Error> {
     let shard = versions_cache_shard(cache, url);
     let _lock = shard
         .lock()
@@ -699,158 +774,223 @@ async fn fetch_ndjson_cached(
     let cached = read_versions_cache(&content_entry, &meta_entry).await;
     let source = url.to_string();
 
-    if client.connectivity().is_offline() {
-        if let Some((content, _)) = cached {
-            debug!("Using cached Python downloads metadata in offline mode");
-            return Ok(content);
-        }
-        return fetch_bytes_from_url(client, url)
-            .await
-            .map(|(content, _)| content);
-    }
-
-    if let Some((content, meta)) = &cached
-        && versions_cache_is_fresh(cache, url, meta)
-    {
-        debug!("Using fresh cached Python downloads metadata without revalidation");
-        return Ok(content.clone());
-    }
-
-    let head_response = if cached.is_some() {
-        fetch_versions_cache_head(client, url).await
-    } else {
-        None
-    };
-
-    let Some(head_response) = head_response else {
-        return match fetch_bytes_from_url(client, url).await {
-            Ok((content, etag)) => {
-                let meta = VersionsCacheMeta {
-                    content_length: content.len() as u64,
-                    etag,
-                    checked_at: SystemTime::now(),
-                };
-                write_versions_cache_if_valid(
-                    &content_entry,
-                    &meta_entry,
-                    &source,
-                    &content,
-                    &meta,
-                )
-                .await;
-                Ok(content)
-            }
-            Err(err) => {
-                if let Some((content, _)) = cached {
-                    debug!("Using stale cached Python downloads metadata after HEAD failure");
-                    Ok(content)
+    let result = async {
+        let mut changed = false;
+        let mut refreshed = false;
+        let current = if let Some((content, meta)) = &cached {
+            if client.connectivity().is_offline() || versions_cache_is_fresh(cache, url, meta) {
+                Some((Cow::Borrowed(content.as_slice()), meta.clone()))
+            } else if let Some(head) = fetch_versions_cache_head(client, url).await {
+                let etag = response_etag(&head);
+                if etag.is_some()
+                    && etag == meta.etag
+                    && response_content_length(&head).is_none_or(|length| {
+                        meta.representation_length
+                            .is_none_or(|cached| cached == length)
+                    })
+                {
+                    refreshed = true;
+                    Some((
+                        Cow::Borrowed(content.as_slice()),
+                        VersionsCacheMeta {
+                            checked_at: SystemTime::now(),
+                            ..meta.clone()
+                        },
+                    ))
+                } else if prepend_only {
+                    let updated = prepend_versions_cache(client, url, content, meta, &head).await;
+                    changed = updated.is_some();
+                    updated.map(|(content, meta)| (Cow::Owned(content), meta))
                 } else {
-                    Err(err)
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let mut query = make_query();
+        if let Some((content, meta)) = &current {
+            let found =
+                parse_ndjson_bytes_with(&source, content, |download| query.visit(download))?
+                    .is_some();
+            if found || meta.complete {
+                if changed {
+                    if let Err(err) =
+                        write_versions_cache(&content_entry, &meta_entry, content, meta).await
+                    {
+                        debug!("Failed to cache Python downloads metadata: {err}");
+                    }
+                } else if refreshed
+                    && let Err(err) = write_versions_cache_meta(&meta_entry, meta).await
+                {
+                    debug!("Failed to refresh Python downloads cache metadata: {err}");
+                }
+                return Ok(query.finish());
+            }
+        }
+
+        if client.connectivity().is_offline() && cached.is_some() {
+            return Err(Error::IncompletePythonDownloadsCache(url.clone()));
+        }
+
+        let mut resumed = None;
+        if let Some((content, meta)) = current
+            && let Some(length) = meta.representation_length
+            && meta.content_length < length
+            && let Some(etag) = strong_etag(&meta)
+        {
+            let response = client
+                .for_host(url)
+                .get(url.clone())
+                .header(reqwest::header::ACCEPT_ENCODING, "identity")
+                .header(
+                    reqwest::header::RANGE,
+                    format!("bytes={}-", meta.content_length),
+                )
+                .header(reqwest::header::IF_MATCH, etag)
+                .send()
+                .await
+                .map_err(|err| Error::from_reqwest_middleware(url.clone(), err))?;
+            if matches_range(&response, meta.content_length, length - 1, length, etag) {
+                resumed = Some((response, content.into_owned(), meta));
+            } else if response.status() == reqwest::StatusCode::OK {
+                query = make_query();
+                let meta = VersionsCacheMeta::from_response(&response);
+                resumed = Some((response, Vec::new(), meta));
+            }
+        }
+
+        let (response, mut content, mut meta) = if let Some(resumed) = resumed {
+            resumed
+        } else {
+            query = make_query();
+            let response = fetch_versions_response(client, url).await?;
+            let meta = VersionsCacheMeta::from_response(&response);
+            (response, Vec::new(), meta)
+        };
+        meta.checked_at = SystemTime::now();
+        let mut line_number = memchr::memchr_iter(b'\n', &content).count();
+        let reader = response
+            .bytes_stream()
+            .map_err(io::Error::other)
+            .into_async_read()
+            .compat();
+        let mut reader = BufReader::new(reader);
+        let mut line = Vec::new();
+        let retain_complete = cached.as_ref().is_some_and(|(_, meta)| meta.complete);
+        let mut query_finished = false;
+        loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line).await {
+                Ok(0) => {
+                    meta.complete = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    if query_finished {
+                        debug!("Retaining the complete Python downloads cache after a refresh failure: {err}");
+                        return Ok(query.finish());
+                    }
+                    // Only records parsed before the interrupted read belong to the cached prefix.
+                    meta.content_length = content.len() as u64;
+                    let extends_cache = cached.as_ref().is_none_or(|(_, previous)| {
+                        previous.etag != meta.etag || previous.content_length < meta.content_length
+                    });
+                    if !retain_complete
+                        && !content.is_empty()
+                        && content.last() == Some(&b'\n')
+                        && meta
+                            .representation_length
+                            .is_none_or(|length| meta.content_length < length)
+                        && extends_cache
+                    {
+                        if let Err(err) =
+                            write_versions_cache(&content_entry, &meta_entry, &content, &meta).await
+                        {
+                            debug!("Failed to cache Python downloads metadata prefix: {err}");
+                        }
+                    }
+                    return Err(err.into());
                 }
             }
-        };
-    };
-
-    let current_length = head_response
-        .headers()
-        .get(reqwest::header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok());
-    let current_etag = response_etag(&head_response);
-
-    if let Some((cached_content, cached_meta)) = &cached {
-        if current_etag.is_some() && current_etag == cached_meta.etag {
-            debug!("Using cached Python downloads metadata with matching ETag");
+            line_number += 1;
+            content.extend_from_slice(&line);
+            if query_finished {
+                if !line.iter().all(u8::is_ascii_whitespace)
+                    && let Err(err) = parse_ndjson_line(&source, line_number, &line)
+                {
+                    debug!("Retaining the complete Python downloads cache after a refresh failure: {err}");
+                    return Ok(query.finish());
+                }
+            } else {
+                query_finished = visit_ndjson_line(&source, line_number, &line, &mut |download| {
+                    query.visit(download)
+                })?
+                .is_some();
+            }
+            // A line without its delimiter is the final record returned at EOF.
+            if line.last() != Some(&b'\n')
+                || meta.representation_length == Some(content.len() as u64)
+            {
+                meta.complete = true;
+            }
+            // Read the full replacement so a partial fetch cannot replace a complete snapshot.
+            if (query_finished && !retain_complete) || meta.complete {
+                break;
+            }
+        }
+        meta.content_length = content.len() as u64;
+        if meta.representation_length.is_some_and(|length| {
+            meta.content_length > length || (meta.complete && meta.content_length != length)
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "Python downloads metadata response did not match its representation length",
+            )
+            .into());
+        }
+        if let Some((_, previous)) = &cached
+            && previous.content_length > meta.content_length
+            && let Some(length) = meta.representation_length
+            && previous.representation_length == Some(length)
+            && let Some(etag) = strong_etag(&meta)
+            && strong_etag(previous) == Some(etag)
+        {
             let meta = VersionsCacheMeta {
-                checked_at: SystemTime::now(),
-                ..cached_meta.clone()
+                checked_at: meta.checked_at,
+                ..previous.clone()
             };
             if let Err(err) = write_versions_cache_meta(&meta_entry, &meta).await {
                 debug!("Failed to refresh Python downloads cache metadata: {err}");
             }
-            return Ok(cached_content.clone());
-        }
-
-        if supports_incremental_versions_cache(url)
-            && let Some(current_length) = current_length
-            && current_length > cached_meta.content_length
-            && let Some(etag) = current_etag
-                .as_deref()
-                .filter(|etag| !etag.starts_with("W/"))
+        } else if let Err(err) =
+            write_versions_cache(&content_entry, &meta_entry, &content, &meta).await
         {
-            let delta_size = current_length - cached_meta.content_length;
-            let range_header = format!("bytes=0-{}", delta_size - 1);
-            let content_range = format!("bytes 0-{}/{current_length}", delta_size - 1);
-            let response = client
-                .for_host(url)
-                .get(url.clone())
-                .header(reqwest::header::RANGE, &range_header)
-                .header(reqwest::header::IF_MATCH, etag)
-                .send()
-                .await;
-            match response {
-                Ok(response)
-                    if response.status() == reqwest::StatusCode::PARTIAL_CONTENT
-                        && response
-                            .headers()
-                            .get(reqwest::header::CONTENT_RANGE)
-                            .and_then(|value| value.to_str().ok())
-                            == Some(content_range.as_str())
-                        && response
-                            .headers()
-                            .get(reqwest::header::ETAG)
-                            .and_then(|value| value.to_str().ok())
-                            == Some(etag) =>
-                {
-                    if let Ok(delta) = response.bytes().await
-                        && let Some(combined) = prepend_versions_cache_content(
-                            &source,
-                            cached_content,
-                            &delta,
-                            current_length,
-                        )
-                    {
-                        let meta = VersionsCacheMeta {
-                            content_length: current_length,
-                            etag: current_etag.clone(),
-                            checked_at: SystemTime::now(),
-                        };
-                        if let Err(err) =
-                            write_versions_cache(&content_entry, &meta_entry, &combined, &meta)
-                                .await
-                        {
-                            debug!("Failed to write cached Python downloads metadata: {err}");
-                        }
-                        return Ok(combined);
-                    }
-                    debug!("Python downloads metadata delta was incomplete or invalid");
-                }
-                Ok(_) => debug!(
-                    "Python downloads metadata server did not return the requested representation"
-                ),
-                Err(err) => debug!("Failed to fetch Python downloads metadata delta: {err}"),
-            }
+            debug!("Failed to cache Python downloads metadata: {err}");
         }
+        Ok(query.finish())
     }
+    .await;
 
-    match fetch_bytes_from_url(client, url).await {
-        Ok((content, etag)) => {
-            let meta = VersionsCacheMeta {
-                content_length: content.len() as u64,
-                etag,
-                checked_at: SystemTime::now(),
-            };
-            write_versions_cache_if_valid(&content_entry, &meta_entry, &source, &content, &meta)
-                .await;
-            Ok(content)
-        }
+    match result {
+        Ok(result) => Ok(result),
+        Err(err @ Error::InvalidPythonDownloadsNdjsonLine(..)) => Err(err),
         Err(err) => {
-            if let Some((content, _)) = cached {
-                debug!("Using stale cached Python downloads metadata after fetch failure");
-                Ok(content)
-            } else {
-                Err(err)
+            if let Some((content, meta)) = cached {
+                let mut query = make_query();
+                let found =
+                    parse_ndjson_bytes_with(&source, &content, |download| query.visit(download))?
+                        .is_some();
+                if found || meta.complete {
+                    debug!("Using stale cached Python downloads metadata after fetch failure");
+                    return Ok(query.finish());
+                }
             }
+            Err(err)
         }
     }
 }
@@ -936,8 +1076,7 @@ impl ManagedPythonDownloadList {
                     client_builder.retry_policy(),
                     "Python download metadata",
                     async |url| {
-                        let bytes = fetch_ndjson_cached(&client, &url, cache).await?;
-                        parse_ndjson_bytes(&url.to_string(), &bytes)
+                        fetch_ndjson_collect_streaming_cached(&client, &url, cache, |_| true).await
                     },
                 )
                 .await
@@ -992,13 +1131,7 @@ impl ManagedPythonDownloadList {
                     client_builder.retry_policy(),
                     "Python download metadata",
                     async |url| {
-                        if client.connectivity().is_offline() {
-                            let bytes = fetch_ndjson_cached(&client, &url, cache).await?;
-                            parse_ndjson_bytes_filtered(&url.to_string(), &bytes, predicate)
-                        } else {
-                            fetch_ndjson_collect_streaming_cached(&client, &url, cache, predicate)
-                                .await
-                        }
+                        fetch_ndjson_collect_streaming_cached(&client, &url, cache, predicate).await
                     },
                 )
                 .await
@@ -1242,14 +1375,7 @@ async fn find_matching_download(
                 urls,
                 client_builder.retry_policy(),
                 "Python download metadata",
-                async |url| {
-                    if client.connectivity().is_offline() {
-                        let bytes = fetch_ndjson_cached(&client, &url, cache).await?;
-                        parse_ndjson_bytes_find(&url.to_string(), &bytes, request)
-                    } else {
-                        fetch_ndjson_find_cached(&client, &url, cache, request).await
-                    }
-                },
+                async |url| fetch_ndjson_find_cached(&client, &url, cache, request).await,
             )
             .await
         }
@@ -2167,10 +2293,11 @@ impl<'a> DownloadSearch<'a> {
         }
     }
 
-    fn visit(&mut self, download: ManagedPythonDownload) -> ControlFlow<ManagedPythonDownload> {
+    fn visit(&mut self, download: ManagedPythonDownload) -> ControlFlow<()> {
         if download.matches_request(self.request) {
             if self.exact {
-                return ControlFlow::Break(download);
+                self.preferred = Some(download);
+                return ControlFlow::Break(());
             }
             if self
                 .preferred
@@ -2201,51 +2328,20 @@ fn parse_ndjson_bytes_find(
     request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
     let mut search = DownloadSearch::new(request);
-    let download = parse_ndjson_bytes_with(source, buf, |download| search.visit(download))?;
-    Ok(download.or_else(|| search.finish()))
+    parse_ndjson_bytes_with(source, buf, |download| search.visit(download))?;
+    Ok(search.finish())
 }
 
-async fn fetch_ndjson_streaming<T>(
-    client: &BaseClient,
-    url: &SafeUrl,
-    mut visitor: impl FnMut(ManagedPythonDownload) -> ControlFlow<T, ()>,
-) -> Result<Option<T>, Error> {
-    let source = url.to_string();
-    let (reader, _) = read_url(url, client).await?;
-    let mut reader = BufReader::new(reader);
-    let mut line = Vec::new();
-    let mut line_number = 0;
+impl DownloadQuery for DownloadSearch<'_> {
+    type Output = Option<ManagedPythonDownload>;
 
-    loop {
-        line.clear();
-        if reader.read_until(b'\n', &mut line).await? == 0 {
-            break;
-        }
-        line_number += 1;
-
-        if line.last() == Some(&b'\n') {
-            line.pop();
-        }
-        if line.last() == Some(&b'\r') {
-            line.pop();
-        }
-
-        if let Some(value) = visit_ndjson_line(&source, line_number, &line, &mut visitor)? {
-            return Ok(Some(value));
-        }
+    fn visit(&mut self, download: ManagedPythonDownload) -> ControlFlow<()> {
+        self.visit(download)
     }
 
-    Ok(None)
-}
-
-async fn fetch_ndjson_find(
-    client: &BaseClient,
-    url: &SafeUrl,
-    request: &PythonDownloadRequest,
-) -> Result<Option<ManagedPythonDownload>, Error> {
-    let mut search = DownloadSearch::new(request);
-    let download = fetch_ndjson_streaming(client, url, |download| search.visit(download)).await?;
-    Ok(download.or_else(|| search.finish()))
+    fn finish(self) -> Self::Output {
+        self.finish()
+    }
 }
 
 async fn fetch_ndjson_find_cached(
@@ -2254,36 +2350,14 @@ async fn fetch_ndjson_find_cached(
     cache: &Cache,
     request: &PythonDownloadRequest,
 ) -> Result<Option<ManagedPythonDownload>, Error> {
-    let source = url.to_string();
-    let cached = read_versions_cache_content(cache, url).await;
-    if let Some((content, meta)) = &cached
-        && versions_cache_is_fresh(cache, url, meta)
-    {
-        return parse_ndjson_bytes_find(&source, content, request);
-    }
-
-    if let Some((content, meta)) = &cached {
-        let etag = fetch_versions_cache_head(client, url)
-            .await
-            .as_ref()
-            .and_then(response_etag);
-        if etag.is_some() && etag == meta.etag {
-            refresh_versions_cache_meta(cache, url, meta).await;
-            return parse_ndjson_bytes_find(&source, content, request);
-        }
-    }
-
-    match fetch_ndjson_find(client, url, request).await {
-        Ok(download) => Ok(download),
-        Err(err @ Error::InvalidPythonDownloadsNdjsonLine(..)) => Err(err),
-        Err(err) => {
-            if let Some((content, _)) = cached {
-                debug!("Using stale cached Python downloads metadata after fetch failure");
-                return parse_ndjson_bytes_find(&source, &content, request);
-            }
-            Err(err)
-        }
-    }
+    fetch_ndjson_cached_query(
+        client,
+        url,
+        cache,
+        supports_incremental_versions_cache(url),
+        || DownloadSearch::new(request),
+    )
+    .await
 }
 
 async fn fetch_ndjson_collect_streaming_cached(
@@ -2292,84 +2366,14 @@ async fn fetch_ndjson_collect_streaming_cached(
     cache: &Cache,
     predicate: impl Fn(&ManagedPythonDownload) -> bool,
 ) -> Result<Vec<ManagedPythonDownload>, Error> {
-    let source = url.to_string();
-    let cached = read_versions_cache_content(cache, url).await;
-    if let Some((content, meta)) = &cached
-        && versions_cache_is_fresh(cache, url, meta)
-    {
-        return parse_ndjson_bytes_filtered(&source, content, predicate);
-    }
-
-    if let Some((content, meta)) = &cached {
-        let etag = fetch_versions_cache_head(client, url)
-            .await
-            .as_ref()
-            .and_then(response_etag);
-        if etag.is_some() && etag == meta.etag {
-            refresh_versions_cache_meta(cache, url, meta).await;
-            return parse_ndjson_bytes_filtered(&source, content, predicate);
-        }
-    }
-
-    let response = match fetch_http_response(client, url).await {
-        Ok(response) => response,
-        Err(err) => {
-            if let Some((content, _)) = cached {
-                debug!("Using stale cached Python downloads metadata after fetch failure");
-                return parse_ndjson_bytes_filtered(&source, &content, predicate);
-            }
-            return Err(err);
-        }
-    };
-    let etag = response_etag(&response);
-    let reader = response
-        .bytes_stream()
-        .map_err(io::Error::other)
-        .into_async_read()
-        .compat();
-    let mut reader = BufReader::new(reader);
-    let mut line = Vec::new();
-    let mut line_number = 0;
-    let mut content = Vec::new();
-    let mut downloads = Vec::new();
-    let mut visitor = |download| {
-        if predicate(&download) {
-            downloads.push(download);
-        }
-        ControlFlow::<()>::Continue(())
-    };
-
-    loop {
-        line.clear();
-        match reader.read_until(b'\n', &mut line).await {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(err) => {
-                if let Some((content, _)) = cached {
-                    debug!("Using stale cached Python downloads metadata after fetch failure");
-                    return parse_ndjson_bytes_filtered(&source, &content, predicate);
-                }
-                return Err(err.into());
-            }
-        }
-
-        line_number += 1;
-        content.extend_from_slice(&line);
-
-        if line.last() == Some(&b'\n') {
-            line.pop();
-        }
-        if line.last() == Some(&b'\r') {
-            line.pop();
-        }
-
-        visit_ndjson_line(&source, line_number, &line, &mut visitor)?;
-    }
-
-    write_streamed_versions_cache(cache, url, &content, etag).await;
-
-    downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
-    Ok(downloads)
+    fetch_ndjson_cached_query(
+        client,
+        url,
+        cache,
+        supports_incremental_versions_cache(url),
+        || DownloadCollector::new(&predicate),
+    )
+    .await
 }
 
 impl Error {
@@ -2520,6 +2524,9 @@ async fn read_url(
         Ok((Either::Right(stream.compat()), size))
     }
 }
+
+#[cfg(test)]
+mod cache_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2965,63 +2972,30 @@ mod tests {
     #[tokio::test]
     async fn versions_cache_cold_load_records_get_etag() {
         let content = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
-        for streaming in [false, true] {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            let address = listener.local_addr().unwrap();
-            let server = std::thread::spawn(move || {
-                let (mut stream, _) = listener.accept().unwrap();
-                let request = read_http_request(&mut stream);
-                assert!(request.starts_with("GET "));
-                write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nETag: \"new\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    content.len()
-                )
-                .unwrap();
-                stream.write_all(content).unwrap();
-            });
-            let cache = Cache::temp().unwrap().init().await.unwrap();
-            let url = SafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
-            let client = BaseClientBuilder::default().retries(0).build().unwrap();
-            if streaming {
-                fetch_ndjson_collect_streaming_cached(&client, &url, &cache, |_| true)
-                    .await
-                    .unwrap();
-            } else {
-                assert_eq!(
-                    fetch_ndjson_cached(&client, &url, &cache).await.unwrap(),
-                    content
-                );
-            }
-            let (cached, meta) = read_versions_cache_content(&cache, &url).await.unwrap();
-            assert_eq!(cached, content);
-            assert_eq!(meta.etag.as_deref(), Some("\"new\""));
-            server.join().unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn versions_cache_refresh_does_not_overwrite_newer_metadata() {
-        let content = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_http_request(&mut stream);
+            assert!(request.starts_with("GET "));
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nETag: \"new\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                content.len()
+            ).unwrap();
+            stream.write_all(content).unwrap();
+        });
         let cache = Cache::temp().unwrap().init().await.unwrap();
-        let url = SafeUrl::parse("https://example.com/versions.ndjson").unwrap();
-        let shard = versions_cache_shard(&cache, &url);
-        let (content_entry, meta_entry) = versions_cache_entries(&shard);
-        let old = VersionsCacheMeta {
-            content_length: content.len() as u64,
-            etag: Some("\"old\"".to_string()),
-            checked_at: SystemTime::UNIX_EPOCH,
-        };
-        let new = VersionsCacheMeta {
-            etag: Some("\"new\"".to_string()),
-            ..old.clone()
-        };
-        write_versions_cache(&content_entry, &meta_entry, content, &new)
+        let url = SafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap();
+        let client = BaseClientBuilder::default().retries(0).build().unwrap();
+        fetch_ndjson_collect_streaming_cached(&client, &url, &cache, |_| true)
             .await
             .unwrap();
-        refresh_versions_cache_meta(&cache, &url, &old).await;
-        let (_, current) = read_versions_cache_content(&cache, &url).await.unwrap();
-        assert_eq!(current, new);
+        let (cached, meta) = read_versions_cache_content(&cache, &url).await.unwrap();
+        assert_eq!(cached, content);
+        assert_eq!(meta.etag.as_deref(), Some("\"new\""));
+        assert!(meta.complete);
+        server.join().unwrap();
     }
 
     #[tokio::test]
@@ -3033,6 +3007,8 @@ mod tests {
         let (content_entry, meta_entry) = versions_cache_entries(&shard);
         let meta = VersionsCacheMeta {
             content_length: content.len() as u64,
+            representation_length: None,
+            complete: true,
             etag: None,
             checked_at: SystemTime::now(),
         };
@@ -3047,26 +3023,6 @@ mod tests {
             &url,
             &meta
         ));
-    }
-
-    #[test]
-    fn versions_cache_delta_requires_complete_records() {
-        let existing = b"{\"version\":\"3.14.0\",\"artifacts\":[]}\n";
-        let new = b"{\"version\":\"3.14.1\",\"artifacts\":[]}\n";
-        let length = (existing.len() + new.len()) as u64;
-        assert_eq!(
-            prepend_versions_cache_content("test", existing, new, length),
-            Some([new.as_slice(), existing.as_slice()].concat())
-        );
-        assert!(prepend_versions_cache_content("test", existing, new, length + 1).is_none());
-        assert!(
-            prepend_versions_cache_content("test", existing, &new[..new.len() - 1], length - 1)
-                .is_none()
-        );
-        assert!(
-            prepend_versions_cache_content("test", existing, b"{\n", existing.len() as u64 + 2)
-                .is_none()
-        );
     }
 
     #[tokio::test]
@@ -3086,9 +3042,15 @@ mod tests {
         });
         let client = BaseClientBuilder::default().retries(0).build()?;
         let url = SafeUrl::parse(&format!("http://{address}/versions.ndjson"))?;
-        let error = fetch_ndjson_find(&client, &url, &PythonDownloadRequest::from_str("3.99")?)
-            .await
-            .expect_err("third record is invalid");
+        let cache = Cache::temp()?.init().await?;
+        let error = fetch_ndjson_find_cached(
+            &client,
+            &url,
+            &cache,
+            &PythonDownloadRequest::from_str("3.99")?,
+        )
+        .await
+        .expect_err("third record is invalid");
         assert_matches!(error, Error::InvalidPythonDownloadsNdjsonLine(_, 3, _));
         server
             .join()
@@ -3194,6 +3156,8 @@ mod tests {
             cached,
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
+                representation_length: None,
+                complete: true,
                 etag: None,
                 checked_at: SystemTime::UNIX_EPOCH,
             },
@@ -3202,7 +3166,10 @@ mod tests {
         .unwrap();
 
         let client = BaseClientBuilder::default().build().unwrap();
-        let contents = fetch_ndjson_cached(&client, &url, &cache).await.unwrap();
+        fetch_ndjson_collect_streaming_cached(&client, &url, &cache, |_| true)
+            .await
+            .unwrap();
+        let (contents, _) = read_versions_cache_content(&cache, &url).await.unwrap();
 
         assert_eq!(contents, refreshed);
         assert_eq!(get_requests.load(Ordering::SeqCst), 1);
@@ -3220,6 +3187,8 @@ mod tests {
         assert_eq!(old.len(), new.len());
         let metadata = VersionsCacheMeta {
             content_length: old.len() as u64,
+            representation_length: None,
+            complete: true,
             etag: Some("old-etag".to_owned()),
             checked_at: SystemTime::now(),
         };
@@ -3297,6 +3266,8 @@ mod tests {
             cached,
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
+                representation_length: None,
+                complete: true,
                 etag: Some("\"v1\"".to_string()),
                 checked_at: SystemTime::UNIX_EPOCH,
             },
@@ -3365,6 +3336,8 @@ mod tests {
             cached,
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
+                representation_length: None,
+                complete: true,
                 etag: Some("\"v1\"".to_string()),
                 checked_at: SystemTime::UNIX_EPOCH,
             },
@@ -3431,6 +3404,8 @@ mod tests {
             cached,
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
+                representation_length: None,
+                complete: true,
                 etag: None,
                 checked_at: SystemTime::UNIX_EPOCH,
             },
@@ -3484,6 +3459,8 @@ mod tests {
             cached,
             &VersionsCacheMeta {
                 content_length: cached.len() as u64,
+                representation_length: None,
+                complete: true,
                 etag: None,
                 checked_at: SystemTime::UNIX_EPOCH,
             },
