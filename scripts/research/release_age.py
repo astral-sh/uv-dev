@@ -173,6 +173,12 @@ def replay(
     environment = {
         key: value for key, value in os.environ.items() if not key.startswith("UV_")
     }
+    for variable in ("NO_PROXY", "no_proxy"):
+        environment[variable] = ",".join(
+            filter(
+                None, [environment.get(variable, ""), "127.0.0.1", "localhost", "::1"]
+            )
+        )
     observations = []
     labels = {
         (release["name"], release["version"]): release.get("labels", [])
