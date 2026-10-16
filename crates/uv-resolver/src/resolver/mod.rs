@@ -928,7 +928,6 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             },
         })
     }
-
     /// Queue version forks against one immutable checkpoint.
     fn version_forks_to_fork_states(
         current_state: ForkState<'_>,
@@ -948,9 +947,14 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         incompatibility_arena: IncompatibilityArena<UvDependencyProvider>,
         requests: &MetadataRequests,
     ) -> Result<ForkState<'index>, ResolveError> {
+        let split_kind = match &pending.action {
+            ForkAction::Initial => "initial",
+            ForkAction::Dependencies { .. } => "dependencies",
+            ForkAction::Version(_) => "versions",
+        };
         let mut state = match Rc::try_unwrap(pending.state) {
             Ok(state) => state,
-            Err(state) => state.clone_for_fork(),
+            Err(state) => state.clone_for_fork(split_kind),
         };
         state
             .pubgrub
@@ -2912,23 +2916,48 @@ pub(crate) struct ForkState<'index> {
 }
 
 impl<'index> ForkState<'index> {
-    /// Clone a branch, recording its cost when resolver debug logging is enabled.
-    fn clone_for_fork(&self) -> Self {
-        let start = tracing::enabled!(Level::DEBUG).then(Instant::now);
-        let cloned = self.clone();
-        if let Some(start) = start {
-            debug!(
-                clone_us = %start.elapsed().as_micros(),
-                tracked_packages = self.pubgrub.incompatibilities.len(),
-                incompatibility_references = self
-                    .pubgrub
-                    .incompatibilities
-                    .values()
-                    .map(Vec::len)
-                    .sum::<usize>(),
-                "Cloned resolver fork state"
-            );
+    /// Clone a branch, attributing its cost when resolver debug logging is enabled.
+    fn clone_for_fork(&self, split_kind: &'static str) -> Self {
+        if !tracing::enabled!(Level::DEBUG) {
+            return self.clone();
         }
+        let start = Instant::now();
+        let pubgrub = self.pubgrub.clone();
+        let pubgrub_elapsed = start.elapsed();
+        let application_start = Instant::now();
+        // Enumerating fields makes newly added fork state part of the measured clone.
+        let cloned = Self {
+            pubgrub,
+            continuation: self.continuation.clone(),
+            next: self.next,
+            pins: self.pins.clone(),
+            fork_urls: self.fork_urls.clone(),
+            fork_indexes: self.fork_indexes.clone(),
+            priorities: self.priorities.clone(),
+            added_dependencies: self.added_dependencies.clone(),
+            pre_visited: self.pre_visited.clone(),
+            selected_versions: self.selected_versions.clone(),
+            known_versions: self.known_versions.clone(),
+            env: self.env.clone(),
+            python_requirement: self.python_requirement.clone(),
+            conflict_tracker: self.conflict_tracker.clone(),
+            prefetcher: self.prefetcher.clone(),
+        };
+        let application_elapsed = application_start.elapsed();
+        debug!(
+            split_kind,
+            clone_us = %start.elapsed().as_micros(),
+            pubgrub_us = %pubgrub_elapsed.as_micros(),
+            application_us = %application_elapsed.as_micros(),
+            tracked_packages = self.pubgrub.incompatibilities.len(),
+            incompatibility_references = self
+                .pubgrub
+                .incompatibilities
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+            "Cloned resolver fork state"
+        );
         cloned
     }
 

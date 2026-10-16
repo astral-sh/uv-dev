@@ -14,10 +14,16 @@ import zipfile
 from pathlib import Path
 
 
-def wheel(directory: Path, name: str, version: int, dependencies: list[str]) -> None:
+def wheel(
+    directory: Path,
+    name: str,
+    version: int,
+    dependencies: list[str],
+    requires_python: str = ">=3.12",
+) -> None:
     info = f"{name}-{version}.dist-info"
     metadata = f"Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n"
-    metadata += "Requires-Python: >=3.12\n"
+    metadata += f"Requires-Python: {requires_python}\n"
     metadata += "".join(f"Requires-Dist: {dependency}\n" for dependency in dependencies)
     files = {
         f"{info}/METADATA": metadata.encode(),
@@ -48,13 +54,19 @@ def main() -> None:
     parser.add_argument("--forks", type=int, default=8)
     parser.add_argument("--depth", type=int, default=32)
     parser.add_argument("--repeat", type=int, default=3)
+    parser.add_argument(
+        "--fork-kind", choices=("markers", "requires-python"), default="markers"
+    )
     args = parser.parse_args()
     if (
-        min(args.forks, args.depth, args.repeat) < 1
+        args.forks < 2
+        or min(args.depth, args.repeat) < 1
         or args.forks > 128
         or args.depth > 512
     ):
-        parser.error("positive counts are required; forks <= 128 and depth <= 512")
+        parser.error(
+            "forks must be between 2 and 128; depth between 1 and 512; repeat positive"
+        )
     args.work_dir = args.work_dir.resolve()
     args.work_dir.mkdir(parents=True, exist_ok=True)
     uv = args.uv.resolve(strict=True)
@@ -63,7 +75,12 @@ def main() -> None:
     environment = {
         key: value for key, value in os.environ.items() if not key.startswith("UV_")
     }
-    environment.update(UV_NO_CONFIG="1", UV_PYTHON_DOWNLOADS="never", NO_COLOR="1")
+    environment.update(
+        UV_NO_CONFIG="1",
+        UV_PYTHON_DOWNLOADS="never",
+        NO_COLOR="1",
+        RUST_LOG="uv_resolver=debug",
+    )
     with tempfile.TemporaryDirectory(
         prefix="fork-clone-", dir=args.work_dir
     ) as temporary:
@@ -83,10 +100,15 @@ def main() -> None:
             [
                 f"selected=={index + 1}; sys_platform == 'platform{index}'"
                 for index in range(args.forks)
-            ],
+            ]
+            if args.fork_kind == "markers"
+            else ["selected"],
         )
         for version in range(1, args.forks + 1):
-            wheel(wheelhouse, "selected", version, [])
+            minimum = (
+                ">=3.12" if args.fork_kind == "markers" else f">=3.12.{version - 1}"
+            )
+            wheel(wheelhouse, "selected", version, [], minimum)
         requirements = directory / "requirements.in"
         requirements.write_text("chain0==1\n")
         fingerprint = hashlib.sha256()
@@ -133,13 +155,19 @@ def main() -> None:
                 if "Cloned resolver fork state" in line:
                     fields = dict(
                         re.findall(
-                            r"(clone_us|tracked_packages|incompatibility_references)=(\d+)",
+                            r"(clone_us|pubgrub_us|application_us|tracked_packages|incompatibility_references)=(\d+)",
                             line,
                         )
                     )
-                    if len(fields) != 3:
+                    kind = re.search(r'split_kind="?(dependencies|versions)"?', line)
+                    if len(fields) != 5 or kind is None:
                         raise RuntimeError(f"unrecognized clone event: {line}")
-                    events.append({key: int(value) for key, value in fields.items()})
+                    events.append(
+                        {
+                            **{key: int(value) for key, value in fields.items()},
+                            "split_kind": kind[1],
+                        }
+                    )
             if not events:
                 raise RuntimeError(
                     "no clone events; use a uv binary built with fork-clone instrumentation"
@@ -149,6 +177,16 @@ def main() -> None:
                     "elapsed_seconds": elapsed,
                     "clone_count": len(events),
                     "clone_microseconds": sum(event["clone_us"] for event in events),
+                    "pubgrub_microseconds": sum(
+                        event["pubgrub_us"] for event in events
+                    ),
+                    "application_microseconds": sum(
+                        event["application_us"] for event in events
+                    ),
+                    "split_counts": {
+                        kind: sum(event["split_kind"] == kind for event in events)
+                        for kind in ("dependencies", "versions")
+                    },
                     "clones": events,
                     "solution_sha256": hashlib.sha256(
                         result.stdout.encode()
@@ -165,6 +203,8 @@ def main() -> None:
                     "binary_sha256": binary_sha256,
                     "version": version,
                     "forks": args.forks,
+                    "fork_kind": args.fork_kind,
+                    "log_filter": environment["RUST_LOG"],
                     "depth": args.depth,
                     "fixture_sha256": fingerprint.hexdigest(),
                     "runs": runs,
