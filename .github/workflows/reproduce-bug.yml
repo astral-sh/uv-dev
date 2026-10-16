@@ -286,9 +286,12 @@ jobs:
         with:
           save-if: false
 
+      - name: "Export Python download metadata for bootstrap uv"
+        run: uv run --no-project --python 3.12 scripts/python_download_metadata.py "${{ runner.temp }}/python-downloads.json"
+
       - name: "Install required Python versions"
         env:
-          UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+          UV_PYTHON_DOWNLOADS_JSON_URL: ${{ runner.temp }}/python-downloads.json
         run: uv python install
 
       - name: "Collect reproduction context"
