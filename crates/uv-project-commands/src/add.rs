@@ -389,41 +389,49 @@ pub async fn add(
         ..
     } = spec;
 
-    let import_sources = !source_trees.is_empty();
+    let requirements = requirements
+        .into_iter()
+        .map(|requirement| (requirement, false))
+        .collect::<Vec<_>>();
 
     // Initialize any shared state.
     let state = PlatformState::default();
 
     // Resolve project metadata and any unnamed requirements.
     let requirements = {
-        let partition_requirements = |requirements: Vec<UnresolvedRequirementSpecification>| {
-            requirements
-                .into_iter()
-                .map(|spec| {
-                    spec.requirement.augment_requirement(
-                        rev.as_deref(),
-                        tag.as_deref(),
-                        branch.as_deref(),
-                        lfs.into(),
-                        marker,
-                    )
-                })
-                .partition_map(|requirement| match requirement {
-                    UnresolvedRequirement::Named(requirement) => {
-                        itertools::Either::Left(requirement)
-                    }
-                    UnresolvedRequirement::Unnamed(requirement) => {
-                        itertools::Either::Right(requirement)
-                    }
-                })
-        };
+        let partition_requirements =
+            |requirements: Vec<(UnresolvedRequirementSpecification, bool)>| {
+                requirements
+                    .into_iter()
+                    .map(|(spec, imported)| {
+                        (
+                            spec.requirement.augment_requirement(
+                                rev.as_deref(),
+                                tag.as_deref(),
+                                branch.as_deref(),
+                                lfs.into(),
+                                marker,
+                            ),
+                            imported,
+                        )
+                    })
+                    .partition_map(|(requirement, imported)| match requirement {
+                        UnresolvedRequirement::Named(requirement) => {
+                            itertools::Either::Left((requirement, imported))
+                        }
+                        UnresolvedRequirement::Unnamed(requirement) => {
+                            itertools::Either::Right((requirement, imported))
+                        }
+                    })
+            };
 
-        let has_unnamed = requirements
-            .iter()
-            .any(|requirement| match requirement.requirement {
-                UnresolvedRequirement::Named(_) => false,
-                UnresolvedRequirement::Unnamed(_) => true,
-            });
+        let has_unnamed =
+            requirements
+                .iter()
+                .any(|(requirement, _)| match requirement.requirement {
+                    UnresolvedRequirement::Named(_) => false,
+                    UnresolvedRequirement::Unnamed(_) => true,
+                });
         if has_unnamed || !source_trees.is_empty() {
             // TODO(charlie): These are all default values. We should consider whether we want to
             // make them optional on the downstream APIs.
@@ -554,14 +562,13 @@ pub async fn add(
             let (mut requirements, unnamed): (Vec<_>, Vec<_>) = partition_requirements(
                 requirements
                     .into_iter()
-                    .chain(
-                        source_requirements
-                            .into_iter()
-                            .map(UnresolvedRequirementSpecification::from),
-                    )
+                    .chain(source_requirements.into_iter().map(|requirement| {
+                        (UnresolvedRequirementSpecification::from(requirement), true)
+                    }))
                     .collect(),
             );
 
+            let (unnamed, imported): (Vec<_>, Vec<_>) = unnamed.into_iter().unzip();
             requirements.extend(
                 NamedRequirementsResolver::new(
                     &hasher,
@@ -574,7 +581,9 @@ pub async fn add(
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
                 .resolve(unnamed.into_iter())
-                .await?,
+                .await?
+                .into_iter()
+                .zip(imported),
             );
             requirements
         } else {
@@ -587,7 +596,7 @@ pub async fn add(
     if matches!(dependency_type, DependencyType::Production) {
         if let EditTarget::Project(project) = &target {
             if let Some(project_name) = project.project_name() {
-                for requirement in &requirements {
+                for (requirement, _) in &requirements {
                     if requirement.name == *project_name {
                         bail!(
                             "Requirement name `{}` matches project name `{}`, but self-dependencies are not permitted without the `--dev` or `--optional` flags. If your project name (`{}`) is shadowing that of a third-party dependency, consider renaming the project.",
@@ -635,7 +644,7 @@ pub async fn add(
             // dependencies within the workspace.
             if let EditTarget::Project(ref project) = target {
                 let workspace_root = project.workspace().install_path();
-                requirements.iter().any(|req| {
+                requirements.iter().any(|(req, _)| {
                     if let RequirementSource::Directory {
                         install_path,
                         r#virtual: None,
@@ -672,7 +681,7 @@ pub async fn add(
         )?;
 
         // Check each requirement to see if it's a path dependency
-        for requirement in &requirements {
+        for (requirement, _) in &requirements {
             if let RequirementSource::Directory {
                 install_path,
                 r#virtual: None,
@@ -753,7 +762,6 @@ pub async fn add(
         editable.as_ref(),
         &dependency_type,
         raw,
-        import_sources,
         rev.as_deref(),
         tag.as_deref(),
         branch.as_deref(),
@@ -930,12 +938,11 @@ fn standard_library_package(
 }
 
 fn edits(
-    requirements: Vec<Requirement>,
+    requirements: Vec<(Requirement, bool)>,
     target: &EditTarget,
     editable: Option<&EditableMode>,
     dependency_type: &DependencyType,
     raw: bool,
-    import_sources: bool,
     rev: Option<&str>,
     tag: Option<&str>,
     branch: Option<&str>,
@@ -946,7 +953,7 @@ fn edits(
 ) -> Result<Vec<DependencyEdit>> {
     let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
     let mut imported_sources = BTreeMap::<PackageName, Vec<Source>>::new();
-    for mut requirement in requirements {
+    for (mut requirement, import_sources) in requirements {
         let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
 
         // Add the specified extras.

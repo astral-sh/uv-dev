@@ -15846,9 +15846,7 @@ fn add_pyproject_conditional_sources() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context.add()
-        .args(["--offline", "--frozen", "-r", "source/pyproject.toml"]), @"
-    exit_code: 0 (success)
-    ");
+        .args(["--offline", "--frozen", "-r", "source/pyproject.toml"]), @"exit_code: 0 (success)");
     assert_snapshot!(context.read("pyproject.toml"), @r#"
     [project]
     name = "project"
@@ -15955,9 +15953,7 @@ fn add_pyproject_git_lfs_sources() -> Result<()> {
     "#})?;
 
     uv_snapshot!(context.filters(), context.add()
-        .args(["--offline", "--frozen", "-r", "source/pyproject.toml"]), @"
-    exit_code: 0 (success)
-    ");
+        .args(["--offline", "--frozen", "-r", "source/pyproject.toml"]), @"exit_code: 0 (success)");
     assert_snapshot!(context.read("pyproject.toml"), @r#"
     [project]
     name = "project"
@@ -15971,6 +15967,166 @@ fn add_pyproject_git_lfs_sources() -> Result<()> {
     [tool.uv.sources]
     git-archive = { git = "https://example.com/project.git", path = "git_archive-1.0-py3-none-any.whl", lfs = true }
     git-directory = { git = "https://example.com/project.git", lfs = true }
+    "#);
+    Ok(())
+}
+
+/// An unrelated metadata input must not change the marker of a command-line source update.
+#[test]
+fn add_pyproject_mixed_source_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dependency"]
+
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/dependency.git", marker = "sys_platform == 'darwin'" }
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["dependency", "--rev", "abc", "--offline", "--frozen", "-r", "source/pyproject.toml"]), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "dependency",
+    ]
+
+    [tool.uv.sources]
+    dependency = { git = "https://example.com/dependency.git", rev = "abc", marker = "sys_platform == 'darwin'" }
+    "#);
+    Ok(())
+}
+
+/// Conflicting metadata sources must fail before a frozen add writes the target project.
+#[test]
+fn add_pyproject_conflicting_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("first/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "first"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/first.git" }
+    "#})?;
+    context
+        .temp_dir
+        .child("second/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "second"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/second.git" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "first/pyproject.toml", "-r", "second/pyproject.toml"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid sources for `dependency`
+      cause: When multiple sources are provided, each source must include a platform marker (e.g., `marker = "sys_platform == 'linux'"`)
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+    "#);
+    Ok(())
+}
+
+/// Check all source pairs when separately valid metadata inputs are combined.
+#[test]
+fn add_pyproject_overlapping_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("first/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "first"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/first.git", marker = "sys_platform == 'darwin'" }
+    "#})?;
+    context
+        .temp_dir
+        .child("second/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "second"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/second.git", marker = "sys_platform == 'linux'" }
+    "#})?;
+    context
+        .temp_dir
+        .child("third/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "third"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/third.git", marker = "sys_platform == 'darwin'" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "first/pyproject.toml", "-r", "second/pyproject.toml", "-r", "third/pyproject.toml"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid sources for `dependency`
+      cause: Source markers must be disjoint, but the following markers overlap: `sys_platform == 'darwin'` and `sys_platform == 'darwin'`.
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = []
     "#);
     Ok(())
 }

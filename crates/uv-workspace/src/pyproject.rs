@@ -1116,9 +1116,50 @@ impl Deref for SerdePattern {
 pub struct Sources(#[cfg_attr(feature = "schemars", schemars(with = "SourcesWire"))] Vec<Source>);
 
 impl Sources {
+    /// Validate a nonempty source list, requiring disjoint markers for sources with the same extra and group.
+    pub fn validate(sources: &[Source]) -> Result<(), SourceError> {
+        for (index, lhs) in sources.iter().enumerate() {
+            for rhs in &sources[index + 1..] {
+                if lhs.extra() != rhs.extra() {
+                    continue;
+                }
+                if lhs.group() != rhs.group() {
+                    continue;
+                }
+
+                let lhs = lhs.marker();
+                let rhs = rhs.marker();
+                if !lhs.is_disjoint(rhs) {
+                    let Some(left) = lhs.contents().map(|contents| contents.to_string()) else {
+                        return Err(SourceError::MissingMarkers);
+                    };
+
+                    let Some(right) = rhs.contents().map(|contents| contents.to_string()) else {
+                        return Err(SourceError::MissingMarkers);
+                    };
+
+                    let hint = lhs.negate().and(rhs);
+                    let hint = hint
+                        .contents()
+                        .map(|contents| contents.to_string())
+                        .unwrap_or_else(|| "true".to_string());
+
+                    return Err(SourceError::OverlappingMarkers(left, right, hint));
+                }
+            }
+        }
+
+        // Ensure that there is at least one source.
+        if sources.is_empty() {
+            return Err(SourceError::EmptySources);
+        }
+
+        Ok(())
+    }
+
     /// Return an [`Iterator`] over the sources.
     ///
-    /// If the iterator contains multiple entries, they will always use disjoint markers.
+    /// Entries with the same extra and group use disjoint markers.
     ///
     /// The iterator will contain at most one registry source.
     pub fn iter(&self) -> impl Iterator<Item = &Source> {
@@ -1194,41 +1235,7 @@ impl TryFrom<SourcesWire> for Sources {
         match wire {
             SourcesWire::One(source) => Ok(Self(vec![source])),
             SourcesWire::Many(sources) => {
-                for [lhs, rhs] in sources.array_windows() {
-                    if lhs.extra() != rhs.extra() {
-                        continue;
-                    }
-                    if lhs.group() != rhs.group() {
-                        continue;
-                    }
-
-                    let lhs = lhs.marker();
-                    let rhs = rhs.marker();
-                    if !lhs.is_disjoint(rhs) {
-                        let Some(left) = lhs.contents().map(|contents| contents.to_string()) else {
-                            return Err(SourceError::MissingMarkers);
-                        };
-
-                        let Some(right) = rhs.contents().map(|contents| contents.to_string())
-                        else {
-                            return Err(SourceError::MissingMarkers);
-                        };
-
-                        let hint = lhs.negate().and(rhs);
-                        let hint = hint
-                            .contents()
-                            .map(|contents| contents.to_string())
-                            .unwrap_or_else(|| "true".to_string());
-
-                        return Err(SourceError::OverlappingMarkers(left, right, hint));
-                    }
-                }
-
-                // Ensure that there is at least one source.
-                if sources.is_empty() {
-                    return Err(SourceError::EmptySources);
-                }
-
+                Self::validate(&sources)?;
                 Ok(Self(sources))
             }
         }

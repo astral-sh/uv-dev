@@ -17,7 +17,7 @@ use uv_fs::{PortablePath, is_same_file_allow_missing, try_relative_to_if};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionParseError};
 use uv_pep508::{MarkerTree, Requirement, VersionOrUrl};
-use uv_workspace::pyproject::{DependencyType, Source};
+use uv_workspace::pyproject::{DependencyType, Source, SourceError, Sources};
 
 /// Raw and mutable representation of a `pyproject.toml`.
 ///
@@ -55,6 +55,8 @@ pub enum Error {
     MalformedDependencies,
     #[error("Sources in `pyproject.toml` are malformed")]
     MalformedSources,
+    #[error("Invalid sources for `{0}`")]
+    InvalidSources(PackageName, #[source] Box<SourceError>),
     #[error("Workspace in `pyproject.toml` is malformed")]
     MalformedWorkspace,
     #[error("Expected a dependency at index {0}")]
@@ -923,6 +925,8 @@ impl PyProjectTomlMut {
 
     /// Replace a package's `tool.uv.sources` entry with the given sources.
     pub fn set_sources(&mut self, name: &PackageName, entries: &[Source]) -> Result<(), Error> {
+        Sources::validate(entries)
+            .map_err(|err| Error::InvalidSources(name.clone(), Box::new(err)))?;
         // Get or create `tool.uv.sources`.
         let sources = self
             .doc
