@@ -84,7 +84,7 @@ use std::collections::HashMap;
 use secret_service::{Collection, EncryptionType, Error, Item, SecretService};
 
 use crate::credential::{Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi};
-use crate::error::{Error as ErrorCode, Result, decode_password};
+use crate::error::{Error as ErrorCode, Result};
 
 /// The representation of an item in the secret-service.
 ///
@@ -98,23 +98,10 @@ use crate::error::{Error as ErrorCode, Result, decode_password};
 struct SsCredential {
     attributes: HashMap<String, String>,
     label: String,
-    target: Option<String>,
 }
 
 #[async_trait::async_trait]
 impl CredentialApi for SsCredential {
-    /// Sets the password on a unique matching item, if it exists, or creates one if necessary.
-    ///
-    /// If there are multiple matches,
-    /// returns an [`Ambiguous`](ErrorCode::Ambiguous) error with a credential for each
-    /// matching item.
-    ///
-    /// When creating, the item is put into a collection named by the credential's `target`
-    /// attribute.
-    async fn set_password(&self, password: &str) -> Result<()> {
-        self.set_secret(password.as_bytes()).await
-    }
-
     /// Sets the secret on a unique matching item, if it exists, or creates one if necessary.
     ///
     /// If there are multiple matches,
@@ -125,12 +112,11 @@ impl CredentialApi for SsCredential {
     /// attribute.
     async fn set_secret(&self, secret: &[u8]) -> Result<()> {
         // first try to find a unique, existing, matching item and set its password
-        let secret_vec = secret.to_vec();
         match self
-            .map_matching_items(async move |i| set_item_secret(i, &secret_vec).await, true)
+            .with_unique_item(async move |item| set_item_secret(item, secret).await)
             .await
         {
-            Ok(_) => return Ok(()),
+            Ok(()) => return Ok(()),
             Err(ErrorCode::NoEntry) => {}
             Err(err) => return Err(err),
         }
@@ -141,7 +127,7 @@ impl CredentialApi for SsCredential {
         let ss = SecretService::connect(EncryptionType::Dh)
             .await
             .map_err(platform_failure)?;
-        let name = self.target.as_ref().ok_or_else(empty_target)?;
+        let name = self.target().ok_or_else(empty_target)?;
         let collection = match get_collection(&ss, name).await {
             Ok(collection) => collection,
             Err(_) => create_collection(&ss, name).await?,
@@ -159,20 +145,6 @@ impl CredentialApi for SsCredential {
         Ok(())
     }
 
-    /// Gets the password on a unique matching item, if it exists.
-    ///
-    /// If there are no
-    /// matching items, returns a [`NoEntry`](ErrorCode::NoEntry) error.
-    /// If there are multiple matches,
-    /// returns an [`Ambiguous`](ErrorCode::Ambiguous)
-    /// error with a credential for each matching item.
-    async fn get_password(&self) -> Result<String> {
-        Ok(self
-            .map_matching_items(get_item_password, true)
-            .await?
-            .remove(0))
-    }
-
     /// Gets the secret on a unique matching item, if it exists.
     ///
     /// If there are no
@@ -181,39 +153,18 @@ impl CredentialApi for SsCredential {
     /// returns an [`Ambiguous`](ErrorCode::Ambiguous)
     /// error with a credential for each matching item.
     async fn get_secret(&self) -> Result<Vec<u8>> {
-        Ok(self
-            .map_matching_items(get_item_secret, true)
-            .await?
-            .remove(0))
+        self.with_unique_item(get_item_secret).await
     }
 
     /// Get attributes on a unique matching item, if it exists
     async fn get_attributes(&self) -> Result<HashMap<String, String>> {
-        let attributes: Vec<HashMap<String, String>> =
-            self.map_matching_items(get_item_attributes, true).await?;
-        Ok(attributes.into_iter().next().unwrap())
+        self.with_unique_item(get_item_attributes).await
     }
 
     /// Update attributes on a unique matching item, if it exists
     async fn update_attributes(&self, attributes: &HashMap<&str, &str>) -> Result<()> {
-        // Convert to owned data to avoid lifetime issues
-        let attributes_owned: HashMap<String, String> = attributes
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect();
-
-        self.map_matching_items(
-            async move |item| {
-                let attrs_ref: HashMap<&str, &str> = attributes_owned
-                    .iter()
-                    .map(|(k, v)| (k.as_str(), v.as_str()))
-                    .collect();
-                update_item_attributes(item, &attrs_ref).await
-            },
-            true,
-        )
-        .await?;
-        Ok(())
+        self.with_unique_item(async move |item| update_item_attributes(item, attributes).await)
+            .await
     }
 
     /// Deletes the unique matching item, if it exists.
@@ -224,8 +175,7 @@ impl CredentialApi for SsCredential {
     /// returns an [`Ambiguous`](ErrorCode::Ambiguous)
     /// error with a credential for each matching item.
     async fn delete_credential(&self) -> Result<()> {
-        self.map_matching_items(delete_item, true).await?;
-        Ok(())
+        self.with_unique_item(delete_item).await
     }
 
     /// Return the underlying credential object with an `Any` type so that it can
@@ -267,7 +217,6 @@ impl SsCredential {
                 "{user}@{service}:{target} (uv v{})",
                 env!("CARGO_PKG_VERSION"),
             ),
-            target: Some(target.to_string()),
         })
     }
 
@@ -275,7 +224,7 @@ impl SsCredential {
     ///
     /// This emulates what keyring v1 did, and can be very handy when you need to
     /// access an old v1 credential that's in your secret service default collection.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-auth"))]
     fn new_with_no_target(service: &str, user: &str) -> Self {
         let attributes = HashMap::from([
             ("service".to_string(), service.to_string()),
@@ -288,7 +237,6 @@ impl SsCredential {
                 "uv v{} for no target, service '{service}', user '{user}'",
                 env!("CARGO_PKG_VERSION"),
             ),
-            target: None,
         }
     }
 
@@ -298,74 +246,53 @@ impl SsCredential {
     /// of the underlying item, so you can examine them.
     async fn new_from_item(item: &Item<'_>) -> Result<Self> {
         let attributes = item.get_attributes().await.map_err(decode_error)?;
-        let target = attributes.get("target").cloned();
         Ok(Self {
             attributes,
             label: item.get_label().await.map_err(decode_error)?,
-            target,
         })
+    }
+
+    fn target(&self) -> Option<&str> {
+        self.attributes.get("target").map(String::as_str)
     }
 
     /// Construct a credential for this credential's underlying matching item,
     /// if there is exactly one.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-auth"))]
     async fn new_from_matching_item(&self) -> Result<Self> {
-        Ok(self
-            .map_matching_items(Self::new_from_item, true)
-            .await?
-            .remove(0))
+        self.with_unique_item(Self::new_from_item).await
     }
 
-    /// Map an async function over the items matching this credential.
+    /// Apply an async function to the unique item matching this credential.
     ///
-    /// Items are unlocked before the function is applied.
-    ///
-    /// If `require_unique` is true, and there are no matching items, then
-    /// a [`NoEntry`](ErrorCode::NoEntry) error is returned.
-    /// If `require_unique` is true, and there are multiple matches,
-    /// then an [`Ambiguous`](ErrorCode::Ambiguous) error is returned
-    /// with a vector containing one
-    /// credential for each of the matching items.
-    async fn map_matching_items<F, T>(&self, f: F, require_unique: bool) -> Result<Vec<T>>
+    /// A locked service-wide match is unlocked before the function is applied.
+    async fn with_unique_item<F, T>(&self, f: F) -> Result<T>
     where
-        F: AsyncFn(&Item<'_>) -> Result<T>,
-        T: Sized,
+        F: AsyncFnOnce(&Item<'_>) -> Result<T>,
     {
         let ss = SecretService::connect(EncryptionType::Dh)
             .await
             .map_err(platform_failure)?;
-        let attributes: HashMap<&str, &str> = self.search_attributes(false).into_iter().collect();
+        let mut attributes = self.search_attributes();
+        if let Some(target) = self.target() {
+            attributes.insert("target", target);
+        }
         let search = ss.search_items(attributes).await.map_err(decode_error)?;
-        let count = search.locked.len() + search.unlocked.len();
-        if count == 0 {
-            if let Some("default") = self.target.as_deref() {
-                return self.map_matching_legacy_items(&ss, f, require_unique).await;
+        match (search.locked.as_slice(), search.unlocked.as_slice()) {
+            ([], []) if self.target() == Some("default") => {
+                self.with_unique_legacy_item(&ss, f).await
             }
-        }
-        if require_unique {
-            if count == 0 {
-                return Err(ErrorCode::NoEntry);
-            } else if count > 1 {
-                let mut creds: Vec<Box<Credential>> = vec![];
-                for item in search.locked.iter().chain(search.unlocked.iter()) {
-                    let cred = Self::new_from_item(item).await?;
-                    creds.push(Box::new(cred));
-                }
-                return Err(ErrorCode::Ambiguous(creds));
+            ([], []) => Err(ErrorCode::NoEntry),
+            ([], [item]) => f(item).await,
+            ([item], []) => {
+                item.unlock().await.map_err(decode_error)?;
+                f(item).await
             }
+            _ => Err(Self::ambiguous_error(&search.locked, &search.unlocked).await?),
         }
-        let mut results: Vec<T> = vec![];
-        for item in &search.unlocked {
-            results.push(f(item).await?);
-        }
-        for item in &search.locked {
-            item.unlock().await.map_err(decode_error)?;
-            results.push(f(item).await?);
-        }
-        Ok(results)
     }
 
-    /// Map an async function over items that older versions of keyring
+    /// Apply an async function to the unique item that older versions of keyring
     /// would have matched against this credential.
     ///
     /// Keyring v1 created secret service items that had no target attribute, and it was
@@ -387,39 +314,28 @@ impl SsCredential {
     /// credential, and the credential being searched for has the default target, we fall back and search the default collection for a v1-style credential.
     /// That preserves the legacy behavior at the cost of a second round-trip through
     /// the secret service for the collection search.
-    async fn map_matching_legacy_items<F, T>(
-        &self,
-        ss: &SecretService<'_>,
-        f: F,
-        require_unique: bool,
-    ) -> Result<Vec<T>>
+    async fn with_unique_legacy_item<F, T>(&self, ss: &SecretService<'_>, f: F) -> Result<T>
     where
-        F: AsyncFn(&Item<'_>) -> Result<T>,
-        T: Sized,
+        F: AsyncFnOnce(&Item<'_>) -> Result<T>,
     {
         let collection = ss.get_default_collection().await.map_err(decode_error)?;
-        let attributes = self.search_attributes(true);
         let search = collection
-            .search_items(attributes)
+            .search_items(self.search_attributes())
             .await
             .map_err(decode_error)?;
-        if require_unique {
-            if search.is_empty() && require_unique {
-                return Err(ErrorCode::NoEntry);
-            } else if search.len() > 1 {
-                let mut creds: Vec<Box<Credential>> = vec![];
-                for item in &search {
-                    let cred = Self::new_from_item(item).await?;
-                    creds.push(Box::new(cred));
-                }
-                return Err(ErrorCode::Ambiguous(creds));
-            }
+        match search.as_slice() {
+            [] => Err(ErrorCode::NoEntry),
+            [item] => f(item).await,
+            _ => Err(Self::ambiguous_error(&search, &[]).await?),
         }
-        let mut results: Vec<T> = vec![];
-        for item in &search {
-            results.push(f(item).await?);
+    }
+
+    async fn ambiguous_error<'a>(items: &[Item<'a>], more_items: &[Item<'a>]) -> Result<ErrorCode> {
+        let mut credentials: Vec<Box<Credential>> = Vec::new();
+        for item in items.iter().chain(more_items) {
+            credentials.push(Box::new(Self::new_from_item(item).await?));
         }
-        Ok(results)
+        Ok(ErrorCode::Ambiguous(credentials))
     }
 
     /// Using strings in the credential map makes managing the lifetime
@@ -433,16 +349,12 @@ impl SsCredential {
             .collect()
     }
 
-    /// Similar to [`all_attributes`](SsCredential::all_attributes),
-    /// but this just selects the ones we search on
-    fn search_attributes(&self, omit_target: bool) -> HashMap<&str, &str> {
-        let mut result: HashMap<&str, &str> = HashMap::new();
-        if self.target.is_some() && !omit_target {
-            result.insert("target", self.attributes["target"].as_str());
-        }
-        result.insert("service", self.attributes["service"].as_str());
-        result.insert("username", self.attributes["username"].as_str());
-        result
+    /// The attributes shared by service-wide and legacy collection searches.
+    fn search_attributes(&self) -> HashMap<&str, &str> {
+        HashMap::from([
+            ("service", self.attributes["service"].as_str()),
+            ("username", self.attributes["username"].as_str()),
+        ])
     }
 }
 
@@ -464,12 +376,6 @@ impl CredentialBuilderApi for SsCredentialBuilder {
         Ok(Box::new(SsCredential::new_with_target(
             target, service, user,
         )?))
-    }
-
-    /// Return the underlying builder object with an `Any` type so that it can
-    /// be downgraded to an [`SsCredentialBuilder`] for platform-specific processing.
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 
@@ -522,12 +428,6 @@ async fn set_item_secret(item: &Item<'_>, secret: &[u8]) -> Result<()> {
         .map_err(decode_error)
 }
 
-/// Given an existing item, retrieve and decode its password.
-async fn get_item_password(item: &Item<'_>) -> Result<String> {
-    let bytes = item.get_secret().await.map_err(decode_error)?;
-    decode_password(bytes)
-}
-
 /// Given an existing item, retrieve its secret.
 async fn get_item_secret(item: &Item<'_>) -> Result<Vec<u8>> {
     let secret = item.get_secret().await.map_err(decode_error)?;
@@ -547,34 +447,34 @@ async fn get_item_attributes(item: &Item<'_>) -> Result<HashMap<String, String>>
     Ok(attributes)
 }
 
-/// Given an existing item, retrieve its non-controlled attributes.
+/// Update an existing item's non-controlled attributes.
 async fn update_item_attributes(item: &Item<'_>, attributes: &HashMap<&str, &str>) -> Result<()> {
     let existing = item.get_attributes().await.map_err(decode_error)?;
-    let mut updated: HashMap<&str, &str> = HashMap::new();
-    for (k, v) in &existing {
-        updated.insert(k, v);
-    }
-    for (k, v) in attributes {
-        if k.eq(&"target") || k.eq(&"service") || k.eq(&"username") {
-            continue;
-        }
-        if k.eq(&"label") {
-            if v.is_empty() {
-                return Err(ErrorCode::Invalid(
-                    "label".to_string(),
-                    "cannot be empty".to_string(),
-                ));
+    let mut updated: HashMap<&str, &str> = existing
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    for (&key, &value) in attributes {
+        match key {
+            "target" | "service" | "username" => {}
+            "label" => {
+                if value.is_empty() {
+                    return Err(ErrorCode::Invalid(
+                        "label".to_string(),
+                        "cannot be empty".to_string(),
+                    ));
+                }
+                item.set_label(value).await.map_err(decode_error)?;
+                if let Some(label) = updated.get_mut("label") {
+                    *label = value;
+                }
             }
-            item.set_label(v).await.map_err(decode_error)?;
-            if updated.contains_key("label") {
-                updated.insert("label", v);
+            _ => {
+                updated.insert(key, value);
             }
-        } else {
-            updated.insert(k, v);
         }
     }
-    item.set_attributes(updated).await.map_err(decode_error)?;
-    Ok(())
+    item.set_attributes(updated).await.map_err(decode_error)
 }
 
 // Given an existing item, delete it.
@@ -642,6 +542,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_ambiguous_entry() {
+        let name = generate_random_string();
+        let credential = SsCredential::new_with_target(None, &name, &name).unwrap();
+        let service = SecretService::connect(EncryptionType::Dh).await.unwrap();
+        let collection = service.get_default_collection().await.unwrap();
+        let mut items = Vec::new();
+        for label in ["first", "second"] {
+            items.push(
+                collection
+                    .create_item(
+                        label,
+                        credential.all_attributes(),
+                        b"secret",
+                        false,
+                        "text/plain",
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
+
+        let result = Entry::new_with_credential(Box::new(credential))
+            .get_password()
+            .await;
+        for item in items {
+            item.delete().await.unwrap();
+        }
+        assert_matches!(result, Err(Error::Ambiguous(credentials)) if credentials.len() == 2);
+    }
+
+    #[tokio::test]
     async fn test_empty_password() {
         crate::tests::test_empty_password(entry_new).await;
     }
@@ -675,7 +606,8 @@ mod tests {
             .await
             .expect("Can't set password for get_credential");
         let credential: &SsCredential = entry
-            .get_credential()
+            .inner
+            .as_any()
             .downcast_ref()
             .expect("Not a secret service credential");
         let actual = credential
