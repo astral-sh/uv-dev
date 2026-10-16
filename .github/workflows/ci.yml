@@ -96,6 +96,8 @@ jobs:
           foreach ($address in $addresses) {
             pktmon filter add "mirror-$($address.IPAddress)" -i $address.IPAddress -t TCP -p 443
           }
+          Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, LinkSpeed | Format-List | Out-File python-download-traces/adapters.txt
+          netsh interface tcp show global | Out-File python-download-traces/tcp-settings.txt
           netstat -s -p tcp | Out-File python-download-traces/tcp-before.txt
           pktmon start --capture --comp nics --pkt-size 128 --file-name python-download-traces/mirror.etl --file-size 128 --log-mode circular
 
@@ -138,6 +140,7 @@ jobs:
         continue-on-error: true
         working-directory: ${{ env.UV_WORKSPACE }}
         run: |
+          pktmon counters | Out-File python-download-traces/pktmon-counters.txt
           pktmon stop
           netstat -s -p tcp | Out-File python-download-traces/tcp-after.txt
           pktmon etl2pcap python-download-traces/mirror.etl --out python-download-traces/mirror.pcapng

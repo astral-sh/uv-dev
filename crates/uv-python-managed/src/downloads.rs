@@ -1202,6 +1202,8 @@ struct DiagnosticTransfer {
     read_polls: AtomicU64,
     read_wakes: AtomicU64,
     last_read_poll_ms: AtomicU64,
+    last_read_return_ms: AtomicU64,
+    longest_read_poll_ms: AtomicU64,
     last_read_wake_ms: AtomicU64,
     write_polls: AtomicU64,
     last_read_ms: AtomicU64,
@@ -1221,6 +1223,8 @@ impl DiagnosticTransfer {
             read_polls: AtomicU64::new(0),
             read_wakes: AtomicU64::new(0),
             last_read_poll_ms: AtomicU64::new(0),
+            last_read_return_ms: AtomicU64::new(0),
+            longest_read_poll_ms: AtomicU64::new(0),
             last_read_wake_ms: AtomicU64::new(0),
             write_polls: AtomicU64::new(0),
             last_read_ms: AtomicU64::new(0),
@@ -1246,13 +1250,15 @@ impl DiagnosticTransfer {
 
     fn report(&self, url: &str) {
         debug!(
-            "DIAGNOSTIC transfer {url}: elapsed={:?} read_bytes={} write_bytes={} read_polls={} read_wakes={} last_read_poll_ms={} last_read_wake_ms={} write_polls={} last_read_ms={} last_write_ms={} read={} write={} flush={}",
+            "DIAGNOSTIC transfer {url}: elapsed={:?} read_bytes={} write_bytes={} read_polls={} read_wakes={} last_read_poll_ms={} last_read_return_ms={} longest_read_poll_ms={} last_read_wake_ms={} write_polls={} last_read_ms={} last_write_ms={} read={} write={} flush={}",
             self.started.elapsed(),
             self.read_bytes.load(Ordering::Relaxed),
             self.write_bytes.load(Ordering::Relaxed),
             self.read_polls.load(Ordering::Relaxed),
             self.read_wakes.load(Ordering::Relaxed),
             self.last_read_poll_ms.load(Ordering::Relaxed),
+            self.last_read_return_ms.load(Ordering::Relaxed),
+            self.longest_read_poll_ms.load(Ordering::Relaxed),
             self.last_read_wake_ms.load(Ordering::Relaxed),
             self.write_polls.load(Ordering::Relaxed),
             self.last_read_ms.load(Ordering::Relaxed),
@@ -1299,6 +1305,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for DiagnosticIo<R> {
         let this = self.get_mut();
         this.transfer.read_polls.fetch_add(1, Ordering::Relaxed);
         this.transfer.read_state.store(1, Ordering::Relaxed);
+        let poll_started = Instant::now();
         this.transfer.last_read_poll_ms.store(
             u64::try_from(this.transfer.started.elapsed().as_millis()).unwrap_or(u64::MAX),
             Ordering::Relaxed,
@@ -1319,6 +1326,14 @@ impl<R: AsyncRead + Unpin> AsyncRead for DiagnosticIo<R> {
         let mut diagnostic_context = Context::from_waker(&waker);
         let before = buf.filled().len();
         let result = Pin::new(&mut this.inner).poll_read(&mut diagnostic_context, buf);
+        this.transfer.last_read_return_ms.store(
+            u64::try_from(this.transfer.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        this.transfer.longest_read_poll_ms.fetch_max(
+            u64::try_from(poll_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
         let state = match &result {
             Poll::Pending => 2,
             Poll::Ready(Ok(())) => {
