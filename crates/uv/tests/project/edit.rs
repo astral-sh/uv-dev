@@ -16840,3 +16840,40 @@ fn add_pylock_existing_index_priority() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// An unrelated lockfile input must not change the marker of a command-line source update.
+#[test]
+fn add_pylock_mixed_source_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dependency"]
+
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/dependency.git", marker = "sys_platform == 'darwin'" }
+    "#})?;
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["dependency", "--rev", "abc", "--offline", "--frozen", "-r", "pylock.toml"]), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "dependency",
+    ]
+
+    [tool.uv.sources]
+    dependency = { git = "https://example.com/dependency.git", rev = "abc", marker = "sys_platform == 'darwin'" }
+    "#);
+    Ok(())
+}
