@@ -22,6 +22,8 @@ loopback index of generated wheels. Wheel sizes vary, and the index advertises t
 metadata hashes. Each sample installs the same hashed requirements into a new environment, first
 with a cold uv cache and then with the populated cache. Environment creation and installed-payload
 verification are outside the timed interval. Configuration order is shuffled with a recorded seed.
+The client bypasses environment proxies for loopback addresses, and the server's listen backlog is
+sized to the corpus and recorded in the results.
 
 ```shell
 python scripts/benchmark/preparation-concurrency.py \

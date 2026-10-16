@@ -115,6 +115,7 @@ def corpus(
 
 class ReplayServer(ThreadingHTTPServer):
     def __init__(self, routes: dict, latency: float, chunk_delay: float):
+        self.request_queue_size = max(128, len(routes))
         super().__init__(("127.0.0.1", 0), ReplayHandler)
         self.routes = routes
         self.latency = latency
@@ -166,15 +167,16 @@ class ReplayHandler(BaseHTTPRequestHandler):
 
 
 def command(arguments: list[str], environment: dict, log: Path) -> None:
-    result = subprocess.run(
-        arguments,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=300,
-    )
-    log.write_text(result.stdout + result.stderr)
+    with log.open("w") as output:
+        result = subprocess.run(
+            arguments,
+            env=environment,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=300,
+        )
     if result.returncode:
         raise RuntimeError(f"Command failed ({result.returncode}); see {log}")
 
@@ -316,6 +318,9 @@ def main() -> None:
             "TRACING_DURATIONS_FILE",
         }
     }
+    environment.update(
+        NO_PROXY="127.0.0.1,localhost,::1", no_proxy="127.0.0.1,localhost,::1"
+    )
     routes, manifest = corpus(
         args.packages, args.max_kib, args.seed, args.compression, args.payload
     )
@@ -343,6 +348,7 @@ def main() -> None:
         "summary": [],
     }
     server = ReplayServer(routes, args.latency_ms / 1000, args.chunk_delay_ms / 1000)
+    evidence["server_backlog"] = server.request_queue_size
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
