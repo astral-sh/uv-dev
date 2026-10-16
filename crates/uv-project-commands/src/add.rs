@@ -389,6 +389,8 @@ pub async fn add(
         ..
     } = spec;
 
+    let import_sources = !source_trees.is_empty();
+
     // Initialize any shared state.
     let state = PlatformState::default();
 
@@ -634,7 +636,12 @@ pub async fn add(
             if let EditTarget::Project(ref project) = target {
                 let workspace_root = project.workspace().install_path();
                 requirements.iter().any(|req| {
-                    if let RequirementSource::Directory { install_path, .. } = &req.source {
+                    if let RequirementSource::Directory {
+                        install_path,
+                        r#virtual: None,
+                        ..
+                    } = &req.source
+                    {
                         let absolute_path = if install_path.is_absolute() {
                             install_path.to_path_buf()
                         } else {
@@ -666,7 +673,12 @@ pub async fn add(
 
         // Check each requirement to see if it's a path dependency
         for requirement in &requirements {
-            if let RequirementSource::Directory { install_path, .. } = &requirement.source {
+            if let RequirementSource::Directory {
+                install_path,
+                r#virtual: None,
+                ..
+            } = &requirement.source
+            {
                 let absolute_path = if install_path.is_absolute() {
                     install_path.to_path_buf()
                 } else {
@@ -741,6 +753,7 @@ pub async fn add(
         editable.as_ref(),
         &dependency_type,
         raw,
+        import_sources,
         rev.as_deref(),
         tag.as_deref(),
         branch.as_deref(),
@@ -922,6 +935,7 @@ fn edits(
     editable: Option<&EditableMode>,
     dependency_type: &DependencyType,
     raw: bool,
+    import_sources: bool,
     rev: Option<&str>,
     tag: Option<&str>,
     branch: Option<&str>,
@@ -931,6 +945,7 @@ fn edits(
     toml: &mut PyProjectTomlMut,
 ) -> Result<Vec<DependencyEdit>> {
     let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
+    let mut imported_sources = BTreeMap::<PackageName, Vec<Source>>::new();
     for mut requirement in requirements {
         let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
 
@@ -971,10 +986,18 @@ fn edits(
                     .and_then(|tool| tool.uv.as_ref())
                     .and_then(|uv| uv.sources.as_ref())
                     .map(ToolUvSources::inner);
+                // Workspace sources cannot represent a per-dependency `package` setting.
                 let is_workspace_member = project
                     .workspace()
                     .packages()
-                    .contains_key(&requirement.name);
+                    .contains_key(&requirement.name)
+                    && !matches!(
+                        requirement.source,
+                        RequirementSource::Directory {
+                            r#virtual: Some(_),
+                            ..
+                        }
+                    );
                 resolve_requirement(
                     requirement,
                     is_workspace_member,
@@ -1031,6 +1054,28 @@ fn edits(
             }
             _ => source,
         };
+
+        let source = source.map(|source| {
+            if import_sources {
+                let source = source.with_marker(requirement.marker);
+                let entries = imported_sources
+                    .entry(requirement.name.clone())
+                    .or_default();
+                if let Some(existing) = entries.iter_mut().find(|existing| {
+                    Source::clone(existing).with_marker(MarkerTree::TRUE)
+                        == source.clone().with_marker(MarkerTree::TRUE)
+                }) {
+                    *existing = existing
+                        .clone()
+                        .with_marker(existing.marker().or(source.marker()));
+                } else {
+                    entries.push(source.clone());
+                }
+                source
+            } else {
+                source
+            }
+        });
 
         // Determine the dependency type.
         let dependency_type = match &dependency_type {
@@ -1110,6 +1155,9 @@ fn edits(
             source,
             edit,
         });
+    }
+    for (name, sources) in imported_sources {
+        toml.set_sources(&name, &sources)?;
     }
     Ok(edits)
 }

@@ -15815,3 +15815,162 @@ fn add_pyproject_requirements_index_binding() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Import conditional sources alongside the registry fallback for other platforms.
+#[test]
+fn add_pyproject_conditional_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["iniconfig>=2"]
+        [tool.uv.sources]
+        iniconfig = [
+            { git = "https://example.com/macos.git", marker = "sys_platform == 'darwin'" },
+            { git = "https://example.com/linux.git", marker = "sys_platform == 'linux'" },
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "source/pyproject.toml"]), @"
+    exit_code: 0 (success)
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig>=2 ; sys_platform != 'darwin' and sys_platform != 'linux'",
+        "iniconfig ; sys_platform == 'darwin'",
+        "iniconfig ; sys_platform == 'linux'",
+    ]
+
+    [tool.uv.sources]
+    iniconfig = [{ git = "https://example.com/macos.git", marker = "sys_platform == 'darwin'" }, { git = "https://example.com/linux.git", marker = "sys_platform == 'linux'" }]
+    "#);
+    Ok(())
+}
+
+/// A virtual source contributes dependencies without building or installing the source itself.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn add_pyproject_virtual_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("dependency/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { path = "../dependency", package = false }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["-r", "source/pyproject.toml"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "dependency",
+    ]
+
+    [tool.uv.sources]
+    dependency = { path = "dependency", editable = false, package = false }
+    "#);
+    Ok(())
+}
+
+/// Retain LFS settings for both Git directories and archives when importing their declarations.
+#[test]
+fn add_pyproject_git_lfs_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context.temp_dir.child("source/pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["git-directory", "git-archive"]
+        [tool.uv.sources]
+        git-directory = { git = "https://example.com/project.git", lfs = true }
+        git-archive = { git = "https://example.com/project.git", path = "git_archive-1.0-py3-none-any.whl", lfs = true }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "source/pyproject.toml"]), @"
+    exit_code: 0 (success)
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "git-archive",
+        "git-directory",
+    ]
+
+    [tool.uv.sources]
+    git-archive = { git = "https://example.com/project.git", path = "git_archive-1.0-py3-none-any.whl", lfs = true }
+    git-directory = { git = "https://example.com/project.git", lfs = true }
+    "#);
+    Ok(())
+}

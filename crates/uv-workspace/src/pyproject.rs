@@ -1893,11 +1893,11 @@ impl Source {
             RequirementSource::Directory {
                 install_path,
                 editable: is_editable,
+                r#virtual: is_virtual,
                 url,
-                ..
             } => Self::Path {
                 editable: editable.or(is_editable),
-                package: None,
+                package: is_virtual.map(|is_virtual| !is_virtual),
                 path: PortablePathBuf::from(
                     try_relative_to_if(&install_path, root, url.prefers_relative())
                         .map_err(SourceError::Absolute)?
@@ -1921,13 +1921,14 @@ impl Source {
             RequirementSource::GitDirectory {
                 git, subdirectory, ..
             } => {
+                let lfs = Option::<bool>::from(lfs).or_else(|| git.lfs().enabled().then_some(true));
                 if rev.is_none() && tag.is_none() && branch.is_none() {
                     let rev = git.reference().as_str().map(str::to_owned);
                     Self::Git {
                         rev,
                         tag,
                         branch,
-                        lfs: lfs.into(),
+                        lfs,
                         git: git.url().clone(),
                         subdirectory: subdirectory.map(PortablePathBuf::from),
                         path: None,
@@ -1940,7 +1941,7 @@ impl Source {
                         rev,
                         tag,
                         branch,
-                        lfs: lfs.into(),
+                        lfs,
                         git: git.url().clone(),
                         subdirectory: subdirectory.map(PortablePathBuf::from),
                         path: None,
@@ -1953,13 +1954,14 @@ impl Source {
             RequirementSource::GitPath {
                 git, install_path, ..
             } => {
+                let lfs = Option::<bool>::from(lfs).or_else(|| git.lfs().enabled().then_some(true));
                 if rev.is_none() && tag.is_none() && branch.is_none() {
                     let rev = git.reference().as_str().map(str::to_owned);
                     Self::Git {
                         rev,
                         tag,
                         branch,
-                        lfs: lfs.into(),
+                        lfs,
                         git: git.url().clone(),
                         subdirectory: None,
                         path: Some(PortablePathBuf::from(install_path.as_path())),
@@ -1972,7 +1974,7 @@ impl Source {
                         rev,
                         tag,
                         branch,
-                        lfs: lfs.into(),
+                        lfs,
                         git: git.url().clone(),
                         subdirectory: None,
                         path: Some(PortablePathBuf::from(install_path.as_path())),
@@ -1996,6 +1998,29 @@ impl Source {
             Self::Registry { marker, .. } => *marker,
             Self::Workspace { marker, .. } => *marker,
         }
+    }
+
+    /// Replace the environment marker for the source.
+    #[must_use]
+    pub fn with_marker(mut self, marker: MarkerTree) -> Self {
+        match &mut self {
+            Self::Git {
+                marker: current, ..
+            }
+            | Self::Url {
+                marker: current, ..
+            }
+            | Self::Path {
+                marker: current, ..
+            }
+            | Self::Registry {
+                marker: current, ..
+            }
+            | Self::Workspace {
+                marker: current, ..
+            } => *current = marker,
+        }
+        self
     }
 
     /// Return the extra name for the source.
