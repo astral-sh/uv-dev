@@ -5,9 +5,10 @@
         --work-dir work/recovery --boundary install
 
 The experiment stops and kills uv after observing either removal of an old
-payload or creation of a new payload. A missed interruption is an error. It first
-attempts an ordinary retry and then runs `--reinstall`. It compares each result
-with an independent clean installation, including `RECORD` and absence of old payload files.
+payload or creation of a new payload. A missed interruption is an error. It copies
+the interrupted target and cache before applying an ordinary retry and
+`--reinstall` independently. It compares each result with a clean installation,
+including `RECORD` and absence of old payload files.
 Exit status 1 means the clean-tree oracle failed; the JSON report contains the
 remaining differences. Use `--expect residue` to verify a known leftover-file case.
 
@@ -26,6 +27,12 @@ import sys
 import time
 import zipfile
 from pathlib import Path
+
+
+def environment() -> dict[str, str]:
+    return {
+        key: value for key, value in os.environ.items() if not key.startswith("UV_")
+    }
 
 
 def wheel(root: Path, generation: int, file_count: int) -> Path:
@@ -64,6 +71,7 @@ def command(uv: str, artifact: Path, target: Path, cache: Path) -> list[str]:
         "install",
         "--no-index",
         "--no-deps",
+        "--no-compile-bytecode",
         "--python",
         sys.executable,
         "--link-mode",
@@ -77,8 +85,10 @@ def command(uv: str, artifact: Path, target: Path, cache: Path) -> list[str]:
 def snapshot(target: Path) -> dict[str, str]:
     result = {}
     for root in [target / "recovery_probe", *target.glob("recovery_probe-*.dist-info")]:
-        for path in root.rglob("*"):
-            if path.is_file():
+        for path in [root, *root.rglob("*")]:
+            if path.is_dir():
+                result[path.relative_to(target).as_posix() + "/"] = "directory"
+            elif path.is_file():
                 result[path.relative_to(target).as_posix()] = hashlib.sha256(
                     path.read_bytes()
                 ).hexdigest()
@@ -104,7 +114,9 @@ def interrupt(arguments: list[str], target: Path, boundary: str, log: Path) -> d
     start = time.monotonic()
     observed = False
     with log.open("w") as output:
-        process = subprocess.Popen(arguments, stdout=output, stderr=output, text=True)
+        process = subprocess.Popen(
+            arguments, env=environment(), stdout=output, stderr=output, text=True
+        )
         try:
             while process.poll() is None:
                 observed = not old.exists() if boundary == "uninstall" else new.exists()
@@ -163,43 +175,111 @@ def main() -> int:
     new = wheel(root, 2, args.files)
     target = root / "interrupted"
     cache = root / "shared-cache"
-    subprocess.run(command(uv, old, target, cache), check=True, capture_output=True)
+    subprocess.run(
+        command(uv, old, target, cache),
+        env=environment(),
+        check=True,
+        capture_output=True,
+    )
 
     # Prepare the replacement in the same cache before selecting an installation boundary.
     subprocess.run(
-        command(uv, new, root / "prepared", cache), check=True, capture_output=True
+        command(uv, new, root / "prepared", cache),
+        env=environment(),
+        check=True,
+        capture_output=True,
     )
     interruption = interrupt(
         command(uv, new, target, cache), target, args.boundary, root / "interrupted.log"
     )
     interrupted = snapshot(target)
+    retry_target = root / "ordinary-retry"
+    repair_target = root / "explicit-reinstall"
+    retry_cache = root / "retry-cache"
+    repair_cache = root / "repair-cache"
+    shutil.copytree(target, retry_target, symlinks=True)
+    shutil.copytree(target, repair_target, symlinks=True)
+    shutil.copytree(cache, retry_cache, symlinks=True)
+    shutil.copytree(cache, repair_cache, symlinks=True)
+    for copied_cache in (retry_cache, repair_cache):
+        assert all(
+            path.resolve().is_relative_to(copied_cache)
+            for path in copied_cache.rglob("*")
+            if path.is_symlink()
+        ), "a copied cache link refers outside its independent cache"
+    assert snapshot(retry_target) == interrupted, "retry starting state changed"
+    assert snapshot(repair_target) == interrupted, "reinstall starting state changed"
     retry = subprocess.run(
-        command(uv, new, target, cache), capture_output=True, text=True, check=False
-    )
-    retried = snapshot(target)
-    repair = subprocess.run(
-        [*command(uv, new, target, cache), "--reinstall"],
+        command(uv, new, retry_target, retry_cache),
+        env=environment(),
         capture_output=True,
         text=True,
         check=False,
     )
-    repaired = snapshot(target)
+    retried = snapshot(retry_target)
+    repair = subprocess.run(
+        [*command(uv, new, repair_target, repair_cache), "--reinstall"],
+        env=environment(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    repaired = snapshot(repair_target)
+    assert snapshot(target) == interrupted, (
+        "recovery modified the original interrupted state"
+    )
     clean_target = root / "clean"
     subprocess.run(
         command(uv, new, clean_target, root / "fresh-cache"),
+        env=environment(),
         check=True,
         capture_output=True,
     )
     clean = snapshot(clean_target)
+    ghost_target = root / "empty-dist-info-control"
+    shutil.copytree(clean_target, ghost_target)
+    ghost = ghost_target / "recovery_probe-1.0.0.dist-info"
+    ghost.mkdir()
+    ghost_difference = difference(snapshot(ghost_target), clean)
+    assert ghost_difference["unexpected"] == [ghost.name + "/"]
+    ghost_listing = subprocess.run(
+        [
+            uv,
+            "--no-config",
+            "--cache-dir",
+            str(root / "listing-cache"),
+            "pip",
+            "list",
+            "--target",
+            str(ghost_target),
+            "--format",
+            "json",
+        ],
+        env=environment(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     retry_difference = difference(retried, clean)
     repair_difference = difference(repaired, clean)
     report = {
         "uv": binary_identity(uv),
-        "oracle": "explicit reinstall recreates the clean package tree, including RECORD",
+        "oracle": "each recovery independently recreates the clean package tree, including RECORD",
         "fault_model": "process interruption only; no power-loss simulation",
         "interruption": interruption,
-        "interrupted_file_count": len(interrupted),
-        "clean_file_count": len(clean),
+        "interrupted_entry_count": len(interrupted),
+        "starting_state": {
+            "identical_for_both_recovery_paths": True,
+            "sha256": hashlib.sha256(
+                json.dumps(interrupted, sort_keys=True).encode()
+            ).hexdigest(),
+            "independent_target_and_cache_copies": True,
+        },
+        "clean_entry_count": len(clean),
+        "empty_dist_info_control": {
+            "difference": ghost_difference,
+            "installed_distributions": json.loads(ghost_listing.stdout),
+        },
         "ordinary_retry": {
             "returncode": retry.returncode,
             "difference": retry_difference,
@@ -220,14 +300,16 @@ def main() -> int:
         }
     report["full_report"] = str(report_path)
     print(json.dumps(report, indent=2))
-    clean_repair = repair.returncode == 0 and not any(repair_difference.values())
-    residue = (
-        repair.returncode == 0
-        and not repair_difference["missing"]
-        and not repair_difference["changed"]
-        and bool(repair_difference["unexpected"])
+    clean = (
+        retry.returncode == repair.returncode == 0
+        and not any(retry_difference.values())
+        and not any(repair_difference.values())
     )
-    return 0 if (clean_repair if args.expect == "clean" else residue) else 1
+    residue = retry.returncode == repair.returncode == 0 and all(
+        not result["missing"] and not result["changed"] and result["unexpected"]
+        for result in (retry_difference, repair_difference)
+    )
+    return 0 if (clean if args.expect == "clean" else residue) else 1
 
 
 if __name__ == "__main__":
