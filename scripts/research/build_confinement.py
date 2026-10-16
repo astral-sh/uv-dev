@@ -99,6 +99,12 @@ def sandbox_command(
     return command + ["--"]
 
 
+def decoded_output(output: str | bytes | None) -> str:
+    if isinstance(output, bytes):
+        return output.decode(errors="replace")
+    return output or ""
+
+
 def observe(uv: str, workspace: Path, mode: str, port: int, bwrap: str | None) -> dict:
     writable = workspace / mode
     writable.mkdir()
@@ -180,14 +186,25 @@ def observe(uv: str, workspace: Path, mode: str, port: int, bwrap: str | None) -
             str(entered),
         ]
         started = time.perf_counter()
-        process = subprocess.run(
-            prefix + launcher + command,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=60,
-        )
+        timed_out = False
+        try:
+            process = subprocess.run(
+                prefix + launcher + command,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired as error:
+            timed_out = True
+            returncode = None
+            stdout = decoded_output(error.stdout)
+            stderr = decoded_output(error.stderr)
+        else:
+            returncode = process.returncode
+            stdout = process.stdout
+            stderr = process.stderr
         probes = (
             [json.loads(line) for line in log.read_text().splitlines()]
             if log.exists()
@@ -196,17 +213,21 @@ def observe(uv: str, workspace: Path, mode: str, port: int, bwrap: str | None) -
         runs.append(
             {
                 "command": command[2],
-                "returncode": process.returncode,
+                "returncode": returncode,
+                "timed_out": timed_out,
                 "entered": entered.exists(),
                 "probe_start": probe_start,
                 "probe_count": len(probes) - probe_start,
                 "seconds": time.perf_counter() - started,
-                "stderr": process.stderr,
+                "stdout": stdout,
+                "stderr": stderr,
             }
         )
-        if process.returncode:
+        if timed_out or returncode:
             status = (
-                "setup-failed"
+                "timed-out"
+                if timed_out
+                else "setup-failed"
                 if not entered.exists()
                 else "build-failed"
                 if len(probes) > probe_start
