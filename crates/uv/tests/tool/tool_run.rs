@@ -8,6 +8,7 @@ use assert_fs::prelude::*;
 use fs_err::{metadata, set_permissions};
 use indoc::indoc;
 use uv_static::EnvVars;
+use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{copy_dir_ignore, uv_snapshot, venv_bin_path};
 
 #[test]
@@ -353,6 +354,60 @@ fn tool_run_warn_executable_not_in_from() {
      + websockets==12.0
     warning: An executable named `fastapi` is not provided by package `fastapi` but is available via the dependency `fastapi-cli`. Consider using `uv tool run --from fastapi-cli fastapi` instead.
     ");
+}
+
+#[test]
+fn tool_run_warn_executable_from_multiple_dependencies() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "multiple-executable-providers"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.root-tool.versions."1.0.0"]
+        requires = ["provider-a", "provider-b"]
+        sdist = false
+
+        [packages.provider-a.versions."1.0.0"]
+        entry_points = ["shared-tool"]
+        sdist = false
+
+        [packages.provider-b.versions."1.0.0"]
+        entry_points = ["shared-tool"]
+        sdist = false
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filter((
+            r"(?m)^Hello from provider-[ab]!\r?$",
+            "Hello from [PROVIDER]!",
+        ));
+
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--index-url")
+        .arg(index.index_url())
+        .args(["--from", "root-tool", "shared-tool"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from [PROVIDER]!
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + provider-a==1.0.0
+     + provider-b==1.0.0
+     + root-tool==1.0.0
+    warning: An executable named `shared-tool` is not provided by package `root-tool` but is available via the following dependencies:
+    - provider-a
+    - provider-b
+    Consider using `uv tool run --from PKG shared-tool` instead.
+    ");
+
+    Ok(())
 }
 
 #[test]
