@@ -179,6 +179,21 @@ $ uv tool install --with <extra-package> <tool-package>
 
 The `--with` option can be provided multiple times to include additional packages.
 
+Use `--with-requirements` to read dependencies from a requirements file, a script with inline
+metadata, or project metadata such as `pyproject.toml`, `setup.cfg`, and `setup.py`. Project
+metadata contributes its base dependencies without installing the source project.
+
+Pass `-` to read from stdin. Project metadata from stdin must be
+[self-contained](../pip/packages.md#installing-packages-from-files); reading `setup.py` requires
+selecting its format explicitly:
+
+```console
+$ cat setup.py | uvx --with-requirements - --input-format setup.py <tool>
+```
+
+These options are also available on `uv tool install`. Imported dependencies are saved in the tool
+receipt for subsequent upgrades.
+
 The `--with` option supports package specifications, so a specific version can be requested:
 
 ```console

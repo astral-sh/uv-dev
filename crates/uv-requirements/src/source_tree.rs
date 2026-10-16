@@ -229,6 +229,7 @@ impl<'a, Context: BuildContext> SourceTreeResolver<'a, Context> {
                 path.user_display()
             )
         })?;
+        let path = path.simplified();
 
         // If the path is a `pyproject.toml`, attempt to extract the requirements statically. The
         // distribution database will do this too, but we can be even more aggressive here since we

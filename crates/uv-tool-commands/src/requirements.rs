@@ -192,6 +192,10 @@ pub(super) async fn resolve_requirements(
             .into_iter()
             .chain(source_requirements.into_iter().flat_map(|source| {
                 Box::into_iter(source.into_requirements())
+                    .filter_map(|mut requirement| {
+                        requirement.marker = requirement.marker.simplify_not_extras_with(|_| true);
+                        (!requirement.marker.is_false()).then_some(requirement)
+                    })
                     .map(UnresolvedRequirementSpecification::from)
             }))
             .collect(),

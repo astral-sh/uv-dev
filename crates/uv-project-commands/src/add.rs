@@ -17,13 +17,13 @@ use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, AddBoundsKind, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
     DevMode, DryRun, EditableMode, ExtrasSpecification, ExtrasSpecificationWithDefaults,
-    GitLfsSetting, InstallOptions, Modifications, NoSources,
+    GitLfsSetting, InstallOptions, Modifications,
 };
 use uv_dispatch::{BuildDispatch, PlatformState, UniversalState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
     Identifier, Index, IndexLocations, IndexName, IndexUrl, NameRequirementSpecification,
-    Requirement, RequirementSource, UnresolvedRequirement,
+    Requirement, RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
@@ -32,7 +32,7 @@ use uv_environment_operations::{
     ProjectEnvironmentTarget, ProjectInterpreter, sync_from_lock,
 };
 use uv_errors::HintOrdering;
-use uv_fs::Simplified;
+use uv_fs::{Simplified, is_same_file_allow_missing};
 use uv_git::store_credentials;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
@@ -48,7 +48,9 @@ use uv_python_discovery::init_script_python_requirement;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_redacted::DisplaySafeUrl;
-use uv_requirements::{NamedRequirementsResolver, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{
+    NamedRequirementsResolver, RequirementsSource, RequirementsSpecification, SourceTreeResolver,
+};
 use uv_resolve_operations::Error as ResolveError;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolver::FlatIndex;
@@ -140,27 +142,8 @@ pub async fn add(
     malware_settings: &MalwareCheckSettings,
 ) -> Result<ExitStatus> {
     for source in &requirements {
-        match source {
-            RequirementsSource::PyprojectToml(_) => {
-                bail!("Adding requirements from a `pyproject.toml` is not supported in `uv add`");
-            }
-            RequirementsSource::SetupPy(_) => {
-                bail!("Adding requirements from a `setup.py` is not supported in `uv add`");
-            }
-            RequirementsSource::Pep723Script(_) => {
-                bail!("Adding requirements from a PEP 723 script is not supported in `uv add`");
-            }
-            RequirementsSource::SetupCfg(_) => {
-                bail!("Adding requirements from a `setup.cfg` is not supported in `uv add`");
-            }
-            RequirementsSource::PylockToml(_) => {
-                bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
-            }
-            RequirementsSource::Package(_)
-            | RequirementsSource::Editable(_)
-            | RequirementsSource::RequirementsTxt(_)
-            | RequirementsSource::Extensionless(_)
-            | RequirementsSource::EnvironmentYml(_) => {}
+        if let RequirementsSource::PylockToml(_) = source {
+            bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
         }
     }
 
@@ -399,48 +382,61 @@ pub async fn add(
     if spec.pylock.is_some() {
         bail!("Adding requirements from a `pylock.toml` is not supported in `uv add`");
     }
-    if let Some(source_tree) = spec.source_trees.first() {
-        bail!(
-            "Adding requirements from a `{}` is not supported in `uv add`",
-            source_tree.filename()
-        );
-    }
     let RequirementsSpecification {
         requirements,
         constraints,
+        source_trees,
         ..
     } = spec;
+
+    let requirements = requirements
+        .into_iter()
+        .map(|requirement| (requirement, false))
+        .collect::<Vec<_>>();
 
     // Initialize any shared state.
     let state = PlatformState::default();
 
-    // Resolve any unnamed requirements.
+    // Resolve project metadata and any unnamed requirements.
     let requirements = {
-        // Partition the requirements into named and unnamed requirements.
-        let (mut requirements, unnamed): (Vec<_>, Vec<_>) = requirements
-            .into_iter()
-            .map(|spec| {
-                spec.requirement.augment_requirement(
-                    rev.as_deref(),
-                    tag.as_deref(),
-                    branch.as_deref(),
-                    lfs.into(),
-                    marker,
-                )
-            })
-            .partition_map(|requirement| match requirement {
-                UnresolvedRequirement::Named(requirement) => itertools::Either::Left(requirement),
-                UnresolvedRequirement::Unnamed(requirement) => {
-                    itertools::Either::Right(requirement)
-                }
-            });
+        let partition_requirements =
+            |requirements: Vec<(UnresolvedRequirementSpecification, bool)>| {
+                requirements
+                    .into_iter()
+                    .map(|(spec, imported)| {
+                        (
+                            spec.requirement.augment_requirement(
+                                rev.as_deref(),
+                                tag.as_deref(),
+                                branch.as_deref(),
+                                lfs.into(),
+                                marker,
+                            ),
+                            imported,
+                        )
+                    })
+                    .partition_map(|(requirement, imported)| match requirement {
+                        UnresolvedRequirement::Named(requirement) => {
+                            itertools::Either::Left((requirement, imported))
+                        }
+                        UnresolvedRequirement::Unnamed(requirement) => {
+                            itertools::Either::Right((requirement, imported))
+                        }
+                    })
+            };
 
-        // Resolve any unnamed requirements.
-        if !unnamed.is_empty() {
+        let has_unnamed =
+            requirements
+                .iter()
+                .any(|(requirement, _)| match requirement.requirement {
+                    UnresolvedRequirement::Named(_) => false,
+                    UnresolvedRequirement::Unnamed(_) => true,
+                });
+        if has_unnamed || !source_trees.is_empty() {
             // TODO(charlie): These are all default values. We should consider whether we want to
             // make them optional on the downstream APIs.
             let hasher = HashStrategy::default();
-            let sources = NoSources::None;
+            let sources = settings.resolver.sources.clone();
 
             // Initialize the registry client.
             let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
@@ -532,6 +528,47 @@ pub async fn add(
                 preview,
             );
 
+            let source_requirements = SourceTreeResolver::new(
+                &ExtrasSpecification::default(),
+                &hasher,
+                state.index(),
+                DistributionDatabase::new(
+                    &client,
+                    &build_dispatch,
+                    concurrency.downloads_semaphore.clone(),
+                ),
+            )
+            .with_reporter(Arc::new(ResolverReporter::from(printer)))
+            .resolve(source_trees.iter())
+            .await?;
+
+            // Evaluate source extra markers with no extras selected.
+            let source_requirements = source_requirements
+                .into_iter()
+                .flat_map(|source| Box::into_iter(source.into_requirements()))
+                .filter_map(|mut requirement| {
+                    requirement.marker = requirement.marker.simplify_not_extras_with(|_| true);
+                    (!requirement.marker.is_false()).then_some(requirement)
+                })
+                .collect::<Vec<_>>();
+            for requirement in &source_requirements {
+                if let RequirementSource::Registry { index: Some(_), .. } = &requirement.source {
+                    bail!(
+                        "Cannot import the index binding for `{}` from project metadata. Use `--no-sources` to ignore source overrides.",
+                        requirement.name
+                    );
+                }
+            }
+            let (mut requirements, unnamed): (Vec<_>, Vec<_>) = partition_requirements(
+                requirements
+                    .into_iter()
+                    .chain(source_requirements.into_iter().map(|requirement| {
+                        (UnresolvedRequirementSpecification::from(requirement), true)
+                    }))
+                    .collect(),
+            );
+
+            let (unnamed, imported): (Vec<_>, Vec<_>) = unnamed.into_iter().unzip();
             requirements.extend(
                 NamedRequirementsResolver::new(
                     &hasher,
@@ -544,18 +581,22 @@ pub async fn add(
                 )
                 .with_reporter(Arc::new(ResolverReporter::from(printer)))
                 .resolve(unnamed.into_iter())
-                .await?,
+                .await?
+                .into_iter()
+                .zip(imported),
             );
+            requirements
+        } else {
+            let (requirements, _): (Vec<_>, Vec<_>) = partition_requirements(requirements);
+            requirements
         }
-
-        requirements
     };
 
     // If any of the requirements are self-dependencies, bail.
     if matches!(dependency_type, DependencyType::Production) {
         if let EditTarget::Project(project) = &target {
             if let Some(project_name) = project.project_name() {
-                for requirement in &requirements {
+                for (requirement, _) in &requirements {
                     if requirement.name == *project_name {
                         bail!(
                             "Requirement name `{}` matches project name `{}`, but self-dependencies are not permitted without the `--dev` or `--optional` flags. If your project name (`{}`) is shadowing that of a third-party dependency, consider renaming the project.",
@@ -603,8 +644,13 @@ pub async fn add(
             // dependencies within the workspace.
             if let EditTarget::Project(ref project) = target {
                 let workspace_root = project.workspace().install_path();
-                requirements.iter().any(|req| {
-                    if let RequirementSource::Directory { install_path, .. } = &req.source {
+                requirements.iter().any(|(req, _)| {
+                    if let RequirementSource::Directory {
+                        install_path,
+                        r#virtual: None,
+                        ..
+                    } = &req.source
+                    {
                         let absolute_path = if install_path.is_absolute() {
                             install_path.to_path_buf()
                         } else {
@@ -635,8 +681,14 @@ pub async fn add(
         )?;
 
         // Check each requirement to see if it's a path dependency
-        for requirement in &requirements {
-            if let RequirementSource::Directory { install_path, .. } = &requirement.source {
+        for (requirement, _) in &requirements {
+            if let RequirementSource::Directory {
+                install_path,
+                r#virtual: is_virtual,
+                ..
+            } = &requirement.source
+                && (is_virtual.is_none() || workspace == Some(true))
+            {
                 let absolute_path = if install_path.is_absolute() {
                     install_path.to_path_buf()
                 } else {
@@ -887,7 +939,7 @@ fn standard_library_package(
 }
 
 fn edits(
-    requirements: Vec<Requirement>,
+    requirements: Vec<(Requirement, bool)>,
     target: &EditTarget,
     editable: Option<&EditableMode>,
     dependency_type: &DependencyType,
@@ -901,8 +953,18 @@ fn edits(
     toml: &mut PyProjectTomlMut,
 ) -> Result<Vec<DependencyEdit>> {
     let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
-    for mut requirement in requirements {
-        let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
+    let mut imported_sources = BTreeMap::<PackageName, Vec<Source>>::new();
+    for (mut requirement, import_sources) in requirements {
+        let imported_editable = if import_sources
+            && let RequirementSource::Directory { editable, .. } = &requirement.source
+        {
+            *editable
+        } else {
+            None
+        };
+        let editable = editable
+            .and_then(|editable| editable.for_package(&requirement.name))
+            .or(imported_editable);
 
         // Add the specified extras.
         let mut ex = requirement.extras.to_vec();
@@ -941,10 +1003,34 @@ fn edits(
                     .and_then(|tool| tool.uv.as_ref())
                     .and_then(|uv| uv.sources.as_ref())
                     .map(ToolUvSources::inner);
-                let is_workspace_member = project
-                    .workspace()
-                    .packages()
-                    .contains_key(&requirement.name);
+                let workspace_member = project.workspace().packages().get(&requirement.name);
+                if import_sources
+                    && let Some(member) = workspace_member
+                    && let RequirementSource::Directory {
+                        install_path,
+                        r#virtual: is_virtual,
+                        ..
+                    } = &requirement.source
+                {
+                    if !is_same_file_allow_missing(member.root(), install_path)
+                        .unwrap_or(member.root().as_path() == install_path.as_ref())
+                    {
+                        bail!(
+                            "Cannot import a different directory for workspace member `{}`: {}",
+                            requirement.name,
+                            install_path.user_display()
+                        );
+                    }
+                    if is_virtual.is_some_and(|is_virtual| {
+                        is_virtual == member.pyproject_toml().is_package(false)
+                    }) {
+                        bail!(
+                            "Imported `package` setting conflicts with workspace member `{}`",
+                            requirement.name
+                        );
+                    }
+                }
+                let is_workspace_member = workspace_member.is_some();
                 resolve_requirement(
                     requirement,
                     is_workspace_member,
@@ -1001,6 +1087,28 @@ fn edits(
             }
             _ => source,
         };
+
+        let source = source.map(|source| {
+            if import_sources {
+                let source = source.with_marker(requirement.marker);
+                let entries = imported_sources
+                    .entry(requirement.name.clone())
+                    .or_default();
+                if let Some(existing) = entries.iter_mut().find(|existing| {
+                    Source::clone(existing).with_marker(MarkerTree::TRUE)
+                        == source.clone().with_marker(MarkerTree::TRUE)
+                }) {
+                    *existing = existing
+                        .clone()
+                        .with_marker(existing.marker().or(source.marker()));
+                } else {
+                    entries.push(source.clone());
+                }
+                source
+            } else {
+                source
+            }
+        });
 
         // Determine the dependency type.
         let dependency_type = match &dependency_type {
@@ -1080,6 +1188,9 @@ fn edits(
             source,
             edit,
         });
+    }
+    for (name, sources) in imported_sources {
+        toml.set_sources(&name, &sources)?;
     }
     Ok(edits)
 }

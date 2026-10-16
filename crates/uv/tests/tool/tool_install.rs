@@ -6588,6 +6588,8 @@ fn tool_install_pyproject_stdin_receipt() -> Result<()> {
         name = "stdin-project"
         version = "1.0"
         dependencies = ["iniconfig==2.0.0"]
+        [project.optional-dependencies]
+        test = ["idna==3.6"]
     "#})?;
 
     uv_snapshot!(context.filters(), context.tool_install()
@@ -6700,5 +6702,44 @@ fn tool_install_pyproject_stdin_lock() -> Result<()> {
     cowsay    6.1
     iniconfig 2.0.0
     ");
+    Ok(())
+}
+
+#[test]
+fn tool_install_setup_py_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        from setuptools import setup
+        setup(name="stdin-project", version="1.0", install_requires=["iniconfig==2.0.0"])
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["cowsay", "--with-requirements", "-", "--input-format", "setup.py"])
+        .env(EnvVars::PATH, bin_dir.as_os_str())
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + cowsay==6.1
+     + iniconfig==2.0.0
+    Installed 1 executable: cowsay
+    ");
+
+    uv_snapshot!(context.filters(), context.pip_list()
+        .arg("--python").arg(context.temp_dir.child("tools/cowsay").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Package   Version
+    --------- -------
+    cowsay    6.1
+    iniconfig 2.0.0
+    ");
+
     Ok(())
 }

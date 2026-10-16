@@ -17,7 +17,7 @@ use uv_fs::{PortablePath, is_same_file_allow_missing, try_relative_to_if};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionParseError};
 use uv_pep508::{MarkerTree, Requirement, VersionOrUrl};
-use uv_workspace::pyproject::{DependencyType, Source};
+use uv_workspace::pyproject::{DependencyType, Source, SourceError, Sources};
 
 /// Raw and mutable representation of a `pyproject.toml`.
 ///
@@ -55,6 +55,8 @@ pub enum Error {
     MalformedDependencies,
     #[error("Sources in `pyproject.toml` are malformed")]
     MalformedSources,
+    #[error("Invalid sources for `{0}`")]
+    InvalidSources(PackageName, #[source] Box<SourceError>),
     #[error("Workspace in `pyproject.toml` is malformed")]
     MalformedWorkspace,
     #[error("Expected a dependency at index {0}")]
@@ -918,6 +920,13 @@ impl PyProjectTomlMut {
 
     /// Adds a source to `tool.uv.sources`.
     fn add_source(&mut self, name: &PackageName, source: &Source) -> Result<(), Error> {
+        self.set_sources(name, std::slice::from_ref(source))
+    }
+
+    /// Replace a package's `tool.uv.sources` entry with the given sources.
+    pub fn set_sources(&mut self, name: &PackageName, entries: &[Source]) -> Result<(), Error> {
+        Sources::validate(entries)
+            .map_err(|err| Error::InvalidSources(name.clone(), Box::new(err)))?;
         // Get or create `tool.uv.sources`.
         let sources = self
             .doc
@@ -937,7 +946,16 @@ impl PyProjectTomlMut {
         if let Some(key) = find_source(name, sources) {
             sources.remove(&key);
         }
-        add_source(name, source, sources)?;
+        let value = match entries {
+            [source] => source_value(source)?,
+            entries => Value::Array(
+                entries
+                    .iter()
+                    .map(source_value)
+                    .collect::<Result<Array, Error>>()?,
+            ),
+        };
+        sources.insert(name.as_ref(), Item::Value(value));
 
         Ok(())
     }
@@ -1657,18 +1675,15 @@ fn find_source(name: &PackageName, sources: &Table) -> Option<String> {
     None
 }
 
-// Add a source to `tool.uv.sources`.
-fn add_source(req: &PackageName, source: &Source, sources: &mut Table) -> Result<(), Error> {
-    // Serialize as an inline table.
+// Serialize a source as an inline table.
+fn source_value(source: &Source) -> Result<Value, Error> {
     let mut doc = toml::to_string(&source)
         .map_err(Box::new)?
         .parse::<DocumentMut>()
-        .unwrap();
+        .map_err(Box::new)?;
     let table = mem::take(doc.as_table_mut()).into_inline_table();
 
-    sources.insert(req.as_ref(), Item::Value(Value::InlineTable(table)));
-
-    Ok(())
+    Ok(Value::InlineTable(table))
 }
 
 impl fmt::Display for PyProjectTomlMut {

@@ -35,6 +35,21 @@ pub enum RequirementsSource {
 }
 
 impl RequirementsSource {
+    /// Return whether this source reads requirements from stdin.
+    pub fn is_stdin(&self) -> bool {
+        match self {
+            Self::Package(_) | Self::Editable(_) => false,
+            Self::Pep723Script(input)
+            | Self::PylockToml(input)
+            | Self::RequirementsTxt(input)
+            | Self::PyprojectToml(input)
+            | Self::SetupPy(input)
+            | Self::SetupCfg(input)
+            | Self::EnvironmentYml(input)
+            | Self::Extensionless(input) => matches!(input, RequirementsInput::Stdin),
+        }
+    }
+
     /// Parse a requirements input, overriding format detection for stdin when a format is provided.
     pub fn from_requirements_file_with_format(
         input: RequirementsInput,

@@ -5689,11 +5689,11 @@ fn add_requirements_file() -> Result<()> {
     Checked [N] packages in [TIME]
     ");
 
-    // Passing a `setup.py` should fail.
+    // Passing a missing `setup.py` should fail.
     uv_snapshot!(context.filters(), context.add().arg("-r").arg("setup.py"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Adding requirements from a `setup.py` is not supported in `uv add`
+    error: File not found: setup.py
     ");
 
     // Passing nothing should fail.
@@ -7428,6 +7428,49 @@ fn add_extensionless_script() -> Result<()> {
         "#
         );
     });
+    Ok(())
+}
+
+/// Add from a named PEP 723 script via `-r`.
+#[test]
+fn add_requirements_from_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context.temp_dir.child("script.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+        import iniconfig
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("-r").arg("script.py"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig==2.0.0",
+    ]
+    "#);
+
     Ok(())
 }
 
@@ -15613,15 +15656,767 @@ fn add_pyproject_stdin() -> Result<()> {
         [project]
         name = "stdin-project"
         version = "1.0"
-        dependencies = ["iniconfig"]
+        dependencies = ["iniconfig==2.0.0"]
+        [tool.uv.sources]
+        iniconfig = { path = "missing" }
     "#})?;
 
-    uv_snapshot!(context.filters(), context.add().arg("--offline").arg("--no-sync").arg("-r").arg("-")
+    uv_snapshot!(context.filters(), context.add().arg("-r").arg("-").arg("--no-sources")
         .stdin(fs_err::File::open(input.path())?.into_file()), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: Adding requirements from a `pyproject.toml` is not supported in `uv add`
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
     ");
 
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig==2.0.0",
+    ]
+    "#);
+
+    Ok(())
+}
+
+#[test]
+fn add_setup_py_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        from setuptools import setup
+        setup(name="stdin-project", version="1.0", install_requires=["iniconfig==2.0.0"])
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("-r").arg("-")
+        .arg("--input-format").arg("setup.py")
+        .arg("--marker").arg("python_version >= '3.12'")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig==2.0.0 ; python_full_version >= '3.12'",
+    ]
+    "#);
+
+    Ok(())
+}
+
+/// Source extras are not target extras, even when an optional requirement names the target.
+#[test]
+fn add_pyproject_stdin_base_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        [project]
+        name = "stdin-project"
+        version = "1.0"
+        dependencies = ["iniconfig==2.0.0; python_version >= '3.12'"]
+        [project.optional-dependencies]
+        test = ["project", "idna==3.6"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().args(["-r", "-", "--no-sync"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig==2.0.0 ; python_full_version >= '3.12'",
+    ]
+    "#);
+    Ok(())
+}
+
+#[test]
+fn add_pyproject_requirements_index_binding() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["iniconfig==2.0.0"]
+        [tool.uv.sources]
+        iniconfig = { index = "private" }
+        [[tool.uv.index]]
+        name = "private"
+        url = "https://example.org/simple"
+        explicit = true
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["-r", "source/pyproject.toml", "--frozen"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot import the index binding for `iniconfig` from project metadata. Use `--no-sources` to ignore source overrides.
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+    "#);
+    Ok(())
+}
+
+/// Import conditional sources alongside the registry fallback for other platforms.
+#[test]
+fn add_pyproject_conditional_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["iniconfig>=2"]
+        [tool.uv.sources]
+        iniconfig = [
+            { git = "https://example.com/macos.git", marker = "sys_platform == 'darwin'" },
+            { git = "https://example.com/linux.git", marker = "sys_platform == 'linux'" },
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "source/pyproject.toml"]), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig>=2 ; sys_platform != 'darwin' and sys_platform != 'linux'",
+        "iniconfig ; sys_platform == 'darwin'",
+        "iniconfig ; sys_platform == 'linux'",
+    ]
+
+    [tool.uv.sources]
+    iniconfig = [{ git = "https://example.com/macos.git", marker = "sys_platform == 'darwin'" }, { git = "https://example.com/linux.git", marker = "sys_platform == 'linux'" }]
+    "#);
+    Ok(())
+}
+
+/// A virtual source contributes dependencies without building or installing the source itself.
+#[test]
+#[cfg(feature = "test-pypi")]
+fn add_pyproject_virtual_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("dependency/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { path = "../dependency", package = false }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["-r", "source/pyproject.toml"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "dependency",
+    ]
+
+    [tool.uv.sources]
+    dependency = { path = "dependency", editable = false, package = false }
+    "#);
+    Ok(())
+}
+
+/// An editable override must not save an invalid virtual source, including with `--frozen`.
+#[test]
+fn add_pyproject_virtual_source_editable() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("dependency/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "1.0"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { path = "../dependency", package = false }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--editable", "--offline", "--frozen", "-r", "source/pyproject.toml"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot install virtual dependency `dependency` as editable
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+    "#);
+    Ok(())
+}
+
+/// Retain LFS settings for both Git directories and archives when importing their declarations.
+#[test]
+fn add_pyproject_git_lfs_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context.temp_dir.child("source/pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["git-directory", "git-archive"]
+        [tool.uv.sources]
+        git-directory = { git = "https://example.com/project.git", lfs = true }
+        git-archive = { git = "https://example.com/project.git", path = "git_archive-1.0-py3-none-any.whl", lfs = true }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "source/pyproject.toml"]), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "git-archive",
+        "git-directory",
+    ]
+
+    [tool.uv.sources]
+    git-archive = { git = "https://example.com/project.git", path = "git_archive-1.0-py3-none-any.whl", lfs = true }
+    git-directory = { git = "https://example.com/project.git", lfs = true }
+    "#);
+    Ok(())
+}
+
+/// Imported Git tags and branches retain their reference kinds for later resolution.
+#[test]
+fn add_pyproject_git_reference_kinds() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context.temp_dir.child("source/pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["tag-directory", "branch-directory", "tag-archive", "branch-archive"]
+
+        [tool.uv.sources]
+        tag-directory = { git = "https://example.com/project.git", tag = "v1" }
+        branch-directory = { git = "https://example.com/project.git", branch = "main" }
+        tag-archive = { git = "https://example.com/project.git", tag = "v1", path = "tag_archive-1.0-py3-none-any.whl" }
+        branch-archive = { git = "https://example.com/project.git", branch = "main", path = "branch_archive-1.0-py3-none-any.whl" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "source/pyproject.toml"]), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "branch-archive",
+        "branch-directory",
+        "tag-archive",
+        "tag-directory",
+    ]
+
+    [tool.uv.sources]
+    branch-archive = { git = "https://example.com/project.git", path = "branch_archive-1.0-py3-none-any.whl", branch = "main" }
+    branch-directory = { git = "https://example.com/project.git", branch = "main" }
+    tag-archive = { git = "https://example.com/project.git", path = "tag_archive-1.0-py3-none-any.whl", tag = "v1" }
+    tag-directory = { git = "https://example.com/project.git", tag = "v1" }
+    "#);
+    Ok(())
+}
+
+/// An unrelated metadata input must not change the marker of a command-line source update.
+#[test]
+fn add_pyproject_mixed_source_marker() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dependency"]
+
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/dependency.git", marker = "sys_platform == 'darwin'" }
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["dependency", "--rev", "abc", "--offline", "--frozen", "-r", "source/pyproject.toml"]), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "dependency",
+    ]
+
+    [tool.uv.sources]
+    dependency = { git = "https://example.com/dependency.git", rev = "abc", marker = "sys_platform == 'darwin'" }
+    "#);
+    Ok(())
+}
+
+/// Conflicting metadata sources must fail before a frozen add writes the target project.
+#[test]
+fn add_pyproject_conflicting_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("first/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "first"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/first.git" }
+    "#})?;
+    context
+        .temp_dir
+        .child("second/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "second"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/second.git" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "first/pyproject.toml", "-r", "second/pyproject.toml"]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid sources for `dependency`
+      cause: When multiple sources are provided, each source must include a platform marker (e.g., `marker = "sys_platform == 'linux'"`)
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+    "#);
+    Ok(())
+}
+
+/// Check all source pairs when separately valid metadata inputs are combined.
+#[test]
+fn add_pyproject_overlapping_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("first/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "first"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/first.git", marker = "sys_platform == 'darwin'" }
+    "#})?;
+    context
+        .temp_dir
+        .child("second/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "second"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/second.git", marker = "sys_platform == 'linux'" }
+    "#})?;
+    context
+        .temp_dir
+        .child("third/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "third"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { git = "https://example.com/third.git", marker = "sys_platform == 'darwin'" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "first/pyproject.toml", "-r", "second/pyproject.toml", "-r", "third/pyproject.toml"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid sources for `dependency`
+      cause: Source markers must be disjoint, but the following markers overlap: `sys_platform == 'darwin'` and `sys_platform == 'darwin'`.
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+    "#);
+    Ok(())
+}
+
+/// Imported workspace dependencies retain their workspace binding and editability.
+#[test]
+fn add_pyproject_workspace_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv.workspace]
+        members = ["a", "b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("a/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["b"]
+
+        [tool.uv.sources]
+        b = { workspace = true, editable = false }
+    "#})?;
+    context
+        .temp_dir
+        .child("b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "a/pyproject.toml"]), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "b",
+    ]
+
+    [tool.uv.workspace]
+    members = ["a", "b"]
+
+    [tool.uv.sources]
+    b = { workspace = true, editable = false }
+    "#);
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Workspace members cannot accept a conflicting per-dependency `package` setting.
+#[test]
+fn add_pyproject_workspace_package_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [tool.uv.workspace]
+        members = ["b"]
+    "#})?;
+    context
+        .temp_dir
+        .child("b/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["b"]
+
+        [tool.uv.sources]
+        b = { path = "../b", package = false }
+
+        [tool.uv.workspace]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "source/pyproject.toml"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Imported `package` setting conflicts with workspace member `b`
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+
+    [tool.uv.workspace]
+    members = ["b"]
+    "#);
+    Ok(())
+}
+
+/// `--workspace` adds imported path dependencies as workspace members and retains their editability.
+#[test]
+fn add_pyproject_path_workspace() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("dependency/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["dependency"]
+        [tool.uv.sources]
+        dependency = { path = "../dependency", editable = false }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "--workspace", "-r", "source/pyproject.toml"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Added `dependency` to workspace members
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "dependency",
+    ]
+
+    [tool.uv.workspace]
+    members = [
+        "dependency",
+    ]
+
+    [tool.uv.sources]
+    dependency = { workspace = true, editable = false }
+    "#);
     Ok(())
 }

@@ -1588,7 +1588,12 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 requirements.extend(
                     args.with_requirements
                         .into_iter()
-                        .map(RequirementsSource::from_requirements_file)
+                        .map(|input| {
+                            RequirementsSource::from_requirements_file_with_format(
+                                input,
+                                args.input_format,
+                            )
+                        })
                         .collect::<Result<Vec<_>, _>>()?,
                 );
                 requirements
@@ -1681,7 +1686,10 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 requirements.push(RequirementsSource::from_editable(&pkg)?);
             }
             for path in args.with_requirements {
-                requirements.push(RequirementsSource::from_requirements_file(path)?);
+                requirements.push(RequirementsSource::from_requirements_file_with_format(
+                    path,
+                    args.input_format,
+                )?);
             }
             for pkg in &args.with_executables_from {
                 let source = RequirementsSource::from_with_package_argument(pkg)?;
@@ -2363,7 +2371,12 @@ async fn run_project(
             requirements.extend(
                 args.with_requirements
                     .into_iter()
-                    .map(RequirementsSource::from_requirements_file)
+                    .map(|input| {
+                        RequirementsSource::from_requirements_file_with_format(
+                            input,
+                            args.input_format,
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?,
             );
 
@@ -2572,11 +2585,9 @@ async fn run_project(
                 .iter()
                 .map(String::as_str)
                 .map(RequirementsSource::from_package_argument)
-                .chain(
-                    args.requirements
-                        .into_iter()
-                        .map(RequirementsSource::from_requirements_file),
-                )
+                .chain(args.requirements.into_iter().map(|input| {
+                    RequirementsSource::from_requirements_file_with_format(input, args.input_format)
+                }))
                 .collect::<Result<Vec<_>>>()?;
 
             // Special-case: any local source trees specified on the command-line are automatically

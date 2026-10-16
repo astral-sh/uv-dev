@@ -3373,13 +3373,21 @@ pub struct RunArgs {
     /// Run with the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// and `pylock.toml`.
+    /// `pyproject.toml`, `setup.py`, and `setup.cfg`.
     ///
     /// The same environment semantics as `--with` apply.
     ///
-    /// Using `pyproject.toml`, `setup.py`, or `setup.cfg` files is not allowed.
+    /// Project metadata contributes its dependencies without installing the project itself.
     #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
+
+    /// The format of requirements read from stdin via `--with-requirements -`.
+    ///
+    /// The format is detected by default. Select `setup.py` explicitly to execute Python and
+    /// extract dependencies. Project metadata from stdin must be self-contained.
+    /// `pylock.toml` is not supported by this command.
+    #[arg(long, value_enum)]
+    pub input_format: Option<RequirementsFormat>,
 
     /// Run the command in an isolated virtual environment [env: UV_ISOLATED=]
     ///
@@ -3968,7 +3976,7 @@ pub struct AddArgs {
     /// Add the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`.
+    /// `pyproject.toml`, `setup.py`, and `setup.cfg`.
     #[arg(
         long,
         short,
@@ -3977,6 +3985,14 @@ pub struct AddArgs {
         value_hint = ValueHint::FilePath,
     )]
     pub requirements: Vec<RequirementsInput>,
+
+    /// The format of requirements read from stdin via `--requirements -`.
+    ///
+    /// The format is detected by default. Select `setup.py` explicitly to execute Python and
+    /// extract dependencies. Project metadata from stdin must be self-contained.
+    /// `pylock.toml` is not supported by this command.
+    #[arg(long, value_enum)]
+    pub input_format: Option<RequirementsFormat>,
 
     /// Constrain versions using the given requirements files [env: `UV_CONSTRAINT`=]
     ///
@@ -5347,13 +5363,22 @@ pub struct ToolRunArgs {
     /// Run with the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// and `pylock.toml`.
+    /// `pyproject.toml`, `setup.py`, and `setup.cfg`. Project metadata contributes its dependencies
+    /// without installing the source project.
     #[arg(
         long,
         value_delimiter = ',',
         value_hint = ValueHint::FilePath,
     )]
     pub with_requirements: Vec<Maybe<RequirementsInput>>,
+
+    /// The format of requirements read from stdin.
+    ///
+    /// The format is detected by default. Select `setup.py` explicitly to execute Python and extract
+    /// dependencies. Project metadata from stdin must be self-contained.
+    /// `pylock.toml` is not supported by this command.
+    #[arg(long, value_enum)]
+    pub input_format: Option<RequirementsFormat>,
 
     /// Constrain versions using the given requirements files [env: `UV_CONSTRAINT`=]
     ///
@@ -5517,12 +5542,21 @@ pub struct ToolInstallArgs {
     #[arg(short = 'w', long, value_hint = ValueHint::Other)]
     with: Vec<comma::CommaSeparatedRequirements>,
 
-    /// Run with the packages listed in the given files.
+    /// Install with the packages listed in the given files.
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
-    /// and `pylock.toml`.
+    /// `pyproject.toml`, `setup.py`, and `setup.cfg`. Project metadata contributes its dependencies
+    /// without installing the source project.
     #[arg(long, value_delimiter = ',', value_hint = ValueHint::FilePath)]
     with_requirements: Vec<Maybe<RequirementsInput>>,
+
+    /// The format of requirements read from stdin.
+    ///
+    /// The format is detected by default. Select `setup.py` explicitly to execute Python and extract
+    /// dependencies. Project metadata from stdin must be self-contained.
+    /// `pylock.toml` is not supported by this command.
+    #[arg(long, value_enum)]
+    input_format: Option<RequirementsFormat>,
 
     /// Install the target package in editable mode, such that changes in the package's source
     /// directory are reflected without reinstallation.

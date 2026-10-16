@@ -89,6 +89,22 @@ uv add -r requirements.txt
 See the [pip migration guide](../../guides/migration/pip-to-project.md#importing-requirements-files)
 for more details.
 
+Dependencies can also be imported from `pyproject.toml`, `setup.cfg`, `setup.py`, or a Python script
+with inline metadata. Project metadata contributes its base dependencies; optional dependencies,
+dependency groups, and the source project itself are not added:
+
+```console
+$ uv add -r ../other-project/pyproject.toml
+```
+
+Use `-r -` to read dependencies from stdin. Project metadata from stdin must be
+[self-contained](../../pip/packages.md#installing-packages-from-files); reading `setup.py` requires
+selecting its format explicitly:
+
+```console
+$ cat setup.py | uv add -r - --input-format setup.py
+```
+
 ## Removing dependencies
 
 To remove a dependency:

@@ -25,6 +25,7 @@ use uv_distribution_types::{
     Index, IndexName, MinimumLibcVersion, NameRequirementSpecification, RequirementSource,
 };
 use uv_fs::{PortablePathBuf, try_relative_to_if};
+use uv_git_types::GitReference;
 use uv_macros::OptionsMetadata;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_options_metadata::{OptionSet, OptionsMetadata, Visit};
@@ -1116,9 +1117,50 @@ impl Deref for SerdePattern {
 pub struct Sources(#[cfg_attr(feature = "schemars", schemars(with = "SourcesWire"))] Vec<Source>);
 
 impl Sources {
+    /// Validate a nonempty source list, requiring disjoint markers for sources with the same extra and group.
+    pub fn validate(sources: &[Source]) -> Result<(), SourceError> {
+        for (index, lhs) in sources.iter().enumerate() {
+            for rhs in &sources[index + 1..] {
+                if lhs.extra() != rhs.extra() {
+                    continue;
+                }
+                if lhs.group() != rhs.group() {
+                    continue;
+                }
+
+                let lhs = lhs.marker();
+                let rhs = rhs.marker();
+                if !lhs.is_disjoint(rhs) {
+                    let Some(left) = lhs.contents().map(|contents| contents.to_string()) else {
+                        return Err(SourceError::MissingMarkers);
+                    };
+
+                    let Some(right) = rhs.contents().map(|contents| contents.to_string()) else {
+                        return Err(SourceError::MissingMarkers);
+                    };
+
+                    let hint = lhs.negate().and(rhs);
+                    let hint = hint
+                        .contents()
+                        .map(|contents| contents.to_string())
+                        .unwrap_or_else(|| "true".to_string());
+
+                    return Err(SourceError::OverlappingMarkers(left, right, hint));
+                }
+            }
+        }
+
+        // Ensure that there is at least one source.
+        if sources.is_empty() {
+            return Err(SourceError::EmptySources);
+        }
+
+        Ok(())
+    }
+
     /// Return an [`Iterator`] over the sources.
     ///
-    /// If the iterator contains multiple entries, they will always use disjoint markers.
+    /// Entries with the same extra and group use disjoint markers.
     ///
     /// The iterator will contain at most one registry source.
     pub fn iter(&self) -> impl Iterator<Item = &Source> {
@@ -1194,41 +1236,7 @@ impl TryFrom<SourcesWire> for Sources {
         match wire {
             SourcesWire::One(source) => Ok(Self(vec![source])),
             SourcesWire::Many(sources) => {
-                for [lhs, rhs] in sources.array_windows() {
-                    if lhs.extra() != rhs.extra() {
-                        continue;
-                    }
-                    if lhs.group() != rhs.group() {
-                        continue;
-                    }
-
-                    let lhs = lhs.marker();
-                    let rhs = rhs.marker();
-                    if !lhs.is_disjoint(rhs) {
-                        let Some(left) = lhs.contents().map(|contents| contents.to_string()) else {
-                            return Err(SourceError::MissingMarkers);
-                        };
-
-                        let Some(right) = rhs.contents().map(|contents| contents.to_string())
-                        else {
-                            return Err(SourceError::MissingMarkers);
-                        };
-
-                        let hint = lhs.negate().and(rhs);
-                        let hint = hint
-                            .contents()
-                            .map(|contents| contents.to_string())
-                            .unwrap_or_else(|| "true".to_string());
-
-                        return Err(SourceError::OverlappingMarkers(left, right, hint));
-                    }
-                }
-
-                // Ensure that there is at least one source.
-                if sources.is_empty() {
-                    return Err(SourceError::EmptySources);
-                }
-
+                Self::validate(&sources)?;
                 Ok(Self(sources))
             }
         }
@@ -1736,6 +1744,8 @@ pub enum SourceError {
         "`{0}` did not resolve to a local directory, but the `--editable` flag was provided. Editable installs are only supported for local directories."
     )]
     UnusedEditable(String),
+    #[error("Cannot install virtual dependency `{0}` as editable")]
+    EditableVirtual(String),
     #[error("Failed to resolve absolute path")]
     Absolute(#[from] std::io::Error),
     #[error("Path contains invalid characters: {}", _0.display())]
@@ -1863,6 +1873,24 @@ impl Source {
             };
         }
 
+        let (mut rev, mut tag, mut branch) = (rev, tag, branch);
+        if rev.is_none()
+            && tag.is_none()
+            && branch.is_none()
+            && let RequirementSource::GitDirectory { git, .. }
+            | RequirementSource::GitPath { git, .. } = &source
+        {
+            match git.reference() {
+                GitReference::Commit(commit) => rev = Some(commit.to_string()),
+                GitReference::Tag(reference) => tag = Some(reference.clone()),
+                GitReference::Branch(reference) => branch = Some(reference.clone()),
+                GitReference::BranchOrTag(reference)
+                | GitReference::BranchOrTagOrCommit(reference)
+                | GitReference::NamedRef(reference) => rev = Some(reference.clone()),
+                GitReference::DefaultBranch => {}
+            }
+        }
+
         let source = match source {
             RequirementSource::Registry { index: Some(_), .. } => {
                 return Ok(None);
@@ -1893,20 +1921,26 @@ impl Source {
             RequirementSource::Directory {
                 install_path,
                 editable: is_editable,
+                r#virtual: is_virtual,
                 url,
-                ..
-            } => Self::Path {
-                editable: editable.or(is_editable),
-                package: None,
-                path: PortablePathBuf::from(
-                    try_relative_to_if(&install_path, root, url.prefers_relative())
-                        .map_err(SourceError::Absolute)?
-                        .into_boxed_path(),
-                ),
-                marker: MarkerTree::TRUE,
-                extra: None,
-                group: None,
-            },
+            } => {
+                let editable = editable.or(is_editable);
+                if editable == Some(true) && is_virtual == Some(true) {
+                    return Err(SourceError::EditableVirtual(name.to_string()));
+                }
+                Self::Path {
+                    editable,
+                    package: is_virtual.map(|is_virtual| !is_virtual),
+                    path: PortablePathBuf::from(
+                        try_relative_to_if(&install_path, root, url.prefers_relative())
+                            .map_err(SourceError::Absolute)?
+                            .into_boxed_path(),
+                    ),
+                    marker: MarkerTree::TRUE,
+                    extra: None,
+                    group: None,
+                }
+            }
             RequirementSource::Url {
                 location,
                 subdirectory,
@@ -1921,65 +1955,35 @@ impl Source {
             RequirementSource::GitDirectory {
                 git, subdirectory, ..
             } => {
-                if rev.is_none() && tag.is_none() && branch.is_none() {
-                    let rev = git.reference().as_str().map(str::to_owned);
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: subdirectory.map(PortablePathBuf::from),
-                        path: None,
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                } else {
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: subdirectory.map(PortablePathBuf::from),
-                        path: None,
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
+                let lfs = Option::<bool>::from(lfs).or_else(|| git.lfs().enabled().then_some(true));
+                Self::Git {
+                    rev,
+                    tag,
+                    branch,
+                    lfs,
+                    git: git.url().clone(),
+                    subdirectory: subdirectory.map(PortablePathBuf::from),
+                    path: None,
+                    marker: MarkerTree::TRUE,
+                    extra: None,
+                    group: None,
                 }
             }
             RequirementSource::GitPath {
                 git, install_path, ..
             } => {
-                if rev.is_none() && tag.is_none() && branch.is_none() {
-                    let rev = git.reference().as_str().map(str::to_owned);
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: None,
-                        path: Some(PortablePathBuf::from(install_path.as_path())),
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                } else {
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs: lfs.into(),
-                        git: git.url().clone(),
-                        subdirectory: None,
-                        path: Some(PortablePathBuf::from(install_path.as_path())),
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
+                let lfs = Option::<bool>::from(lfs).or_else(|| git.lfs().enabled().then_some(true));
+                Self::Git {
+                    rev,
+                    tag,
+                    branch,
+                    lfs,
+                    git: git.url().clone(),
+                    subdirectory: None,
+                    path: Some(PortablePathBuf::from(install_path.as_path())),
+                    marker: MarkerTree::TRUE,
+                    extra: None,
+                    group: None,
                 }
             }
         };
@@ -1996,6 +2000,29 @@ impl Source {
             Self::Registry { marker, .. } => *marker,
             Self::Workspace { marker, .. } => *marker,
         }
+    }
+
+    /// Replace the environment marker for the source.
+    #[must_use]
+    pub fn with_marker(mut self, marker: MarkerTree) -> Self {
+        match &mut self {
+            Self::Git {
+                marker: current, ..
+            }
+            | Self::Url {
+                marker: current, ..
+            }
+            | Self::Path {
+                marker: current, ..
+            }
+            | Self::Registry {
+                marker: current, ..
+            }
+            | Self::Workspace {
+                marker: current, ..
+            } => *current = marker,
+        }
+        self
     }
 
     /// Return the extra name for the source.
