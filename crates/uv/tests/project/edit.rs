@@ -15971,6 +15971,56 @@ fn add_pyproject_git_lfs_sources() -> Result<()> {
     Ok(())
 }
 
+/// Imported Git tags and branches retain their reference kinds for later resolution.
+#[test]
+fn add_pyproject_git_reference_kinds() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context.temp_dir.child("source/pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "source-project"
+        version = "1.0"
+        dependencies = ["tag-directory", "branch-directory", "tag-archive", "branch-archive"]
+
+        [tool.uv.sources]
+        tag-directory = { git = "https://example.com/project.git", tag = "v1" }
+        branch-directory = { git = "https://example.com/project.git", branch = "main" }
+        tag-archive = { git = "https://example.com/project.git", tag = "v1", path = "tag_archive-1.0-py3-none-any.whl" }
+        branch-archive = { git = "https://example.com/project.git", branch = "main", path = "branch_archive-1.0-py3-none-any.whl" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "source/pyproject.toml"]), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "branch-archive",
+        "branch-directory",
+        "tag-archive",
+        "tag-directory",
+    ]
+
+    [tool.uv.sources]
+    branch-archive = { git = "https://example.com/project.git", path = "branch_archive-1.0-py3-none-any.whl", branch = "main" }
+    branch-directory = { git = "https://example.com/project.git", branch = "main" }
+    tag-archive = { git = "https://example.com/project.git", path = "tag_archive-1.0-py3-none-any.whl", tag = "v1" }
+    tag-directory = { git = "https://example.com/project.git", tag = "v1" }
+    "#);
+    Ok(())
+}
+
 /// An unrelated metadata input must not change the marker of a command-line source update.
 #[test]
 fn add_pyproject_mixed_source_marker() -> Result<()> {

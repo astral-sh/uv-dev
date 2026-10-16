@@ -25,6 +25,7 @@ use uv_distribution_types::{
     Index, IndexName, MinimumLibcVersion, NameRequirementSpecification, RequirementSource,
 };
 use uv_fs::{PortablePathBuf, try_relative_to_if};
+use uv_git_types::GitReference;
 use uv_macros::OptionsMetadata;
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, ExtraName, GroupName, PackageName};
 use uv_options_metadata::{OptionSet, OptionsMetadata, Visit};
@@ -1870,6 +1871,24 @@ impl Source {
             };
         }
 
+        let (mut rev, mut tag, mut branch) = (rev, tag, branch);
+        if rev.is_none()
+            && tag.is_none()
+            && branch.is_none()
+            && let RequirementSource::GitDirectory { git, .. }
+            | RequirementSource::GitPath { git, .. } = &source
+        {
+            match git.reference() {
+                GitReference::Commit(commit) => rev = Some(commit.to_string()),
+                GitReference::Tag(reference) => tag = Some(reference.clone()),
+                GitReference::Branch(reference) => branch = Some(reference.clone()),
+                GitReference::BranchOrTag(reference)
+                | GitReference::BranchOrTagOrCommit(reference)
+                | GitReference::NamedRef(reference) => rev = Some(reference.clone()),
+                GitReference::DefaultBranch => {}
+            }
+        }
+
         let source = match source {
             RequirementSource::Registry { index: Some(_), .. } => {
                 return Ok(None);
@@ -1929,66 +1948,34 @@ impl Source {
                 git, subdirectory, ..
             } => {
                 let lfs = Option::<bool>::from(lfs).or_else(|| git.lfs().enabled().then_some(true));
-                if rev.is_none() && tag.is_none() && branch.is_none() {
-                    let rev = git.reference().as_str().map(str::to_owned);
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs,
-                        git: git.url().clone(),
-                        subdirectory: subdirectory.map(PortablePathBuf::from),
-                        path: None,
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                } else {
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs,
-                        git: git.url().clone(),
-                        subdirectory: subdirectory.map(PortablePathBuf::from),
-                        path: None,
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
+                Self::Git {
+                    rev,
+                    tag,
+                    branch,
+                    lfs,
+                    git: git.url().clone(),
+                    subdirectory: subdirectory.map(PortablePathBuf::from),
+                    path: None,
+                    marker: MarkerTree::TRUE,
+                    extra: None,
+                    group: None,
                 }
             }
             RequirementSource::GitPath {
                 git, install_path, ..
             } => {
                 let lfs = Option::<bool>::from(lfs).or_else(|| git.lfs().enabled().then_some(true));
-                if rev.is_none() && tag.is_none() && branch.is_none() {
-                    let rev = git.reference().as_str().map(str::to_owned);
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs,
-                        git: git.url().clone(),
-                        subdirectory: None,
-                        path: Some(PortablePathBuf::from(install_path.as_path())),
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
-                } else {
-                    Self::Git {
-                        rev,
-                        tag,
-                        branch,
-                        lfs,
-                        git: git.url().clone(),
-                        subdirectory: None,
-                        path: Some(PortablePathBuf::from(install_path.as_path())),
-                        marker: MarkerTree::TRUE,
-                        extra: None,
-                        group: None,
-                    }
+                Self::Git {
+                    rev,
+                    tag,
+                    branch,
+                    lfs,
+                    git: git.url().clone(),
+                    subdirectory: None,
+                    path: Some(PortablePathBuf::from(install_path.as_path())),
+                    marker: MarkerTree::TRUE,
+                    extra: None,
+                    group: None,
                 }
             }
         };
