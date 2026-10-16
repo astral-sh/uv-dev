@@ -4389,7 +4389,7 @@ fn python_install_with_debug_ndjson_manifest() {
     let manifest = context.temp_dir.child("python-downloads.ndjson");
     manifest
         .write_str(&format!(
-            "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"debug+full\"}}]}}\n",
+            "{{\"version\":\"{version}\",\"artifacts\":[{{\"url\":\"{}\",\"platform\":\"{}\",\"sha256\":\"{}\",\"variant\":\"debug+custom-build\"}}]}}\n",
             download.url(),
             Platform::from_env().unwrap().as_cargo_dist_triple(),
             sha256,
