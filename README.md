@@ -10,14 +10,18 @@ The changing code-signing identifiers are independently reproduced in the offici
 
 The reporter expects a stable, distinct identity for each executable so identity-based rules survive upgrades. They report repeated Little Snitch approval prompts and incompatibility with allowlists that pin designated requirements. Those application-level effects were not exercised: artifact inspection ran on Linux, without macOS, Little Snitch, or an MDM/PPPC policy. The observed metadata establishes identifier changes, not whether every security product or policy necessarily prompts.
 
+Maintainer zanieb linked the open, non-draft adoption PR astral-sh/uv#22648. Its dependency, astral-sh/github-actions#20, is merged and sets explicit identifiers to `sh.astral.<filename>`. The proposed uv adoption therefore uses distinct `sh.astral.uv`, `sh.astral.uvx`, and `sh.astral.uv-build` identities. As checked on 2026-10-16, the uv PR is not merged; no release containing the fix or post-fix artifact validation is established here.
+
 ## Classification
 
 Retain the bug classification as a release identity compatibility problem following the introduction of Developer ID signing. This is distinct from the completed request to introduce signing in astral-sh/uv#14870. No last-known-good signed release with stable identifiers is supplied or established; the earliest signed release cited by the report already has hash-suffixed identifiers. This reproduction therefore does not establish a regression introduced by a particular later upgrade.
 
-The requested stable identifier naming contract remains a maintainer decision. Reproducing changing identifiers alone does not establish a signature-validity defect, and no signature-validity failure was observed or tested here. The source's omission of an explicit identifier is consistent with the report's inheritance explanation, but the linker-to-signer inheritance mechanism was not independently reproduced.
+The merged shared-action implementation chooses distinct filename-derived identifiers; adoption in uv is pending in astral-sh/uv#22648. That PR was created in response to this issue and does not make the issue a duplicate. Reproducing changing identifiers alone does not establish a signature-validity defect, and no signature-validity failure was observed or tested here. The source's omission of an explicit identifier is consistent with the report's inheritance explanation, but the linker-to-signer inheritance mechanism was not independently reproduced.
 
 ## Related
 
+- astral-sh/uv#22648 — Adopt stable macOS signing identifiers (open, non-draft; created 2026-10-16). Linked by maintainer zanieb in the new issue comment. Its diff updates the macOS signing action pin from `a30f3520f325da7fed035847afec51629d0ef4fa` to `bc129f0373fce6ac3089ca20b7f62c04f441e841` to adopt astral-sh/github-actions#20. The PR is the concrete proposed fix for this report, not evidence of a published fix.
+- astral-sh/github-actions#20 — Use stable macOS signing identifiers (merged 2026-10-16 at 16:45:34 UTC). Explicitly references this issue and adds `--binary-identifier` with `f"sh.astral.{source.name}"` to the shared signer. Its documentation specifies stability across architectures and releases while filenames remain unchanged.
 - astral-sh/uv#14870 — Sign published executables for macOS (closed issue). Maintainers confirmed that Developer ID signing shipped in 0.12.12 for official archives and PyPI wheels. The original request included organizational allowlists and repeated approvals after upgrades; this report concerns identity stability in the resulting signed executables. Maintainers also clarified that Homebrew builds its own binaries.
 - astral-sh/uv#21754 — Use shared release signing actions (merged 2026-10-02). Moved signing, notarization, assembly, and verification into astral-sh/github-actions, following astral-sh/github-actions#3. The currently pinned shared signer does not pass `--binary-identifier`. The refactor does not establish identifier stability.
 - astral-sh/uv#21526 — Sign release binaries from the wheel inventory (merged 2026-09-07). Signs the executable inventory extracted from wheels and verifies expected executable sets in wheels and GitHub archives. This connects the two distribution formats to the same signing pipeline.
@@ -102,7 +106,7 @@ The 0.12.12 `scripts/sign-release-macos.py` invokes `rcodesign sign` without `--
 
 ## Search scope and excluded candidates
 
-The preceding issue-context investigation searched open and closed issues and pull requests for the reported identifiers, `sh.astral.uv`, signing identifiers, designated requirements, `binary-identifier`, Little Snitch, changed program identity, firewall rules, allowlists, Santa, MDM/PPPC, and keychain approvals. It supplemented incomplete PR search results with workflow history, open PR titles, recent closed PR listings, and direct inspection of related changes. That search found no existing stable-identifier fix or duplicate. This reproduction adds independent artifact evidence; it does not claim to have repeated the full duplicate search.
+The preceding issue-context investigation searched open and closed issues and pull requests for the reported identifiers, `sh.astral.uv`, signing identifiers, designated requirements, `binary-identifier`, Little Snitch, changed program identity, firewall rules, allowlists, Santa, MDM/PPPC, and keychain approvals. It supplemented incomplete PR search results with workflow history, open PR titles, recent closed PR listings, and direct inspection of related changes. At that time, the search found no existing stable-identifier fix or duplicate. The subsequent maintainer-linked astral-sh/uv#22648 and its merged dependency astral-sh/github-actions#20 now provide a concrete fix path. This update inspected both PRs, their descriptions, comments, and diffs; it did not repeat the full duplicate search or artifact reproduction.
 
 - astral-sh/uv#16726 concerns uv-managed Python interpreters being killed and requests SDK/MDM details, not changing uv or uvx identities.
 - astral-sh/uv#8069 concerns self-update downloads through a mirror behind a firewall.
@@ -110,16 +114,18 @@ The preceding issue-context investigation searched open and closed issues and pu
 - Open signing prototypes astral-sh/uv#20660 and astral-sh/uv#20641 concern earlier wheel-signing and assembly approaches; the preceding investigation found no explicit identifier setting in their diffs.
 - Closed, unmerged astral-sh/uv#21552 was superseded by astral-sh/uv#21754.
 
-## Identifier design discussion
+## Identifier design and fix status
 
-In the 2026-10-16 comment on astral-sh/uv#22627, maintainer woodruffw describes the identifier as an abstract program identity rather than a build identity and supports keeping it independent of executable content across releases. They also suggest that uv and uvx might both use `sh.astral.uv`, instead of the reporter's separate `sh.astral.uv` and `sh.astral.uvx` identifiers.
+Maintainer woodruffw describes the identifier as an abstract program identity rather than a build identity and supports keeping it independent of executable content across releases. Their suggestion that uv and uvx might share `sh.astral.uv` was tentative. The merged implementation in astral-sh/github-actions#20 instead uses distinct identities derived from each executable's filename, and astral-sh/uv#22648 proposes adopting that implementation.
 
-This is a tentative naming proposal, not a final maintainer decision. Stable identifiers across releases and distinct identifiers between executables are separate choices; the discussion leaves the latter open. The comment adds no new reproduction evidence or completed fix.
+The shared signer now explicitly passes `--binary-identifier` with `f"sh.astral.{source.name}"`. For uv's executable names, this produces `sh.astral.uv`, `sh.astral.uvx`, and `sh.astral.uv-build` across architectures. Stability depends on retaining those filenames. The uv adoption diff changes only the signing-action pin; it adds no verification assertion. These findings come from the PR diffs, not from executing the updated signing pipeline.
+
+Both PR descriptions note that existing x86_64 binaries use unprefixed filenames as identifiers and that rules tied to those identifiers will need a one-time update. This migration detail is reported by the PR authors; Intel artifacts were not independently inspected in the reproduction above. The new identifiers also differ from the ARM64 hash-suffixed identifiers already measured. A stable identity going forward does not make an exact rule for an old identifier match the new one automatically.
 
 ## Recommended next step
 
-Decide whether uv and uvx should share a program identity or have separate identities, while keeping the chosen identifier for each executable stable across releases. Investigate configuring that choice in the shared macOS signing action. Both the reporter's separate identifiers and woodruffw's shared `sh.astral.uv` proposal remain options, not an established naming contract.
+Follow the review and adoption of astral-sh/uv#22648 rather than starting a separate identifier implementation. Once the updated action is used, validate the final archives and wheels for both supported macOS architectures against `sh.astral.uv`, `sh.astral.uvx`, and `sh.astral.uv-build`.
 
-Add release verification for the chosen identifiers and compare separately built versions, including the final archives and wheels for both supported macOS architectures. Use native macOS checks to confirm that a rule based on the chosen identity continues to match after an upgrade. No completed fix or release timeline is established.
+Add release verification for the chosen identifiers and compare separately built versions. Use native macOS checks to confirm that a rule based on the new identity continues to match after a subsequent upgrade, accounting for the initial identity transition. The shared-action fix is merged, but uv adoption, a release containing it, and post-fix artifact or security-product validation remain unconfirmed here.
 
 Only this temporary issue-context README and reproduction files under `/tmp` were written. No checkout files or GitHub state were changed.
