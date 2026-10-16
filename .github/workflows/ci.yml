@@ -1,7 +1,12 @@
 name: CI
-run-name: Trace Python find installation setup
+run-name: Trace Python downloads (${{ inputs.mode }})
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        default: full
+        options: [full, network]
 permissions:
   contents: read
 env:
@@ -15,6 +20,7 @@ env:
 
 jobs:
   cargo-test-windows:
+    if: inputs.mode != 'network'
     timeout-minutes: 25
     runs-on: namespace-profile-windows-2022-x86-64-16x32
     name: "cargo test on windows ${{ matrix.partition }} of 3"
@@ -216,3 +222,56 @@ jobs:
           path: ${{ env.UV_WORKSPACE }}/target/nextest/ci*/junit.xml
           if-no-files-found: ignore
           retention-days: 14
+
+  compare-network-providers:
+    if: inputs.mode == 'network'
+    name: "Archive downloads on ${{ matrix.provider }} Windows"
+    timeout-minutes: 15
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: namespace
+            runner: namespace-profile-windows-2022-x86-64-16x32
+          - provider: github
+            runner: windows-2022
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Capture mirror TCP headers
+        continue-on-error: true
+        run: |
+          New-Item -ItemType Directory -Force python-network-traces
+          $addresses = Resolve-DnsName releases.astral.sh -Type A | Where-Object IPAddress
+          $addresses | Format-List | Out-File python-network-traces/dns.txt
+          pktmon filter remove
+          foreach ($address in $addresses) {
+            pktmon filter add "mirror-$($address.IPAddress)" -i $address.IPAddress -t TCP -p 443
+          }
+          Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, LinkSpeed | Format-List | Out-File python-network-traces/adapters.txt
+          netsh interface tcp show global | Out-File python-network-traces/tcp-settings.txt
+          pktmon start --capture --comp nics --pkt-size 128 --file-name python-network-traces/mirror.etl --file-size 128 --log-mode circular
+      - name: Compare mirror and GitHub downloads
+        env:
+          DIAGNOSTIC_PROVIDER: ${{ matrix.provider }}
+        run: ./scripts/trace-python-download-network.ps1
+      - name: Save mirror TCP headers
+        if: always()
+        continue-on-error: true
+        run: |
+          pktmon counters | Out-File python-network-traces/pktmon-counters.txt
+          pktmon stop
+          pktmon etl2pcap python-network-traces/mirror.etl --out python-network-traces/mirror.pcapng
+      - name: Upload network traces
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-network-traces-${{ matrix.provider }}
+          path: |
+            python-network-traces/*.txt
+            python-network-traces/*.json
+            python-network-traces/*.pcapng
+            python-network-traces/*/*.log
+          retention-days: 7
