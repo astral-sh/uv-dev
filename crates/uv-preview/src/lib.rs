@@ -434,6 +434,8 @@ pub enum PreviewFeature {
     ///
     /// Repositories using URL credentials or `--allow-insecure-host` use full fetches.
     GitPartialFetches,
+    /// Shares Git objects across source checkouts using worktrees with Git 2.48 or later.
+    GitWorktrees,
     /// uv omits `exclude-newer-package` entries from the lockfile when the corresponding packages
     /// are absent from the resolved dependencies. This keeps cutoffs for unrelated packages out of
     /// `uv.lock`.
