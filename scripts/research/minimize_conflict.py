@@ -63,10 +63,12 @@ class Oracle:
         roots: list[str],
         max_solves: int,
         seconds: float,
+        background: list[str] | None = None,
     ):
         self.uv = uv
         self.directory = directory
         self.roots = roots
+        self.background = background or []
         self.max_solves = max_solves
         self.deadline = time.monotonic() + seconds
         self.cache: dict[tuple[int, ...], bool] = {}
@@ -92,7 +94,15 @@ class Oracle:
         if self.solves >= self.max_solves or remaining <= 0:
             raise BudgetExceeded
         requirements = self.directory / "requirements.in"
-        requirements.write_text("".join(f"{self.roots[index]}\n" for index in key))
+        requirements.write_text(
+            "".join(
+                f"{requirement}\n"
+                for requirement in [
+                    *self.background,
+                    *(self.roots[index] for index in key),
+                ]
+            )
+        )
         self.solves += 1
         try:
             result = subprocess.run(
@@ -128,6 +138,15 @@ class Oracle:
         if result.returncode == 0:
             unsat = False
         elif (
+            "invalid metadata" in result.stderr
+            or "could not be parsed" in result.stderr
+        ):
+            # uv can represent an unreadable candidate as unavailable in a no-solution report.
+            # That is not evidence of a conflict in the intended frozen dependency model.
+            raise RuntimeError(
+                f"invalid candidate metadata prevents conflict classification:\n{result.stderr}"
+            )
+        elif (
             result.returncode == 1
             and "No solution found when resolving dependencies" in result.stderr
         ):
@@ -162,9 +181,19 @@ def main() -> None:
     parser.add_argument("--uv", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--demo", action="store_true")
+    source.add_argument(
+        "--demo",
+        nargs="?",
+        const="single",
+        choices=("single", "multiple", "invalid-metadata"),
+    )
     source.add_argument("--requirements", type=Path)
     parser.add_argument("--wheelhouse", type=Path)
+    parser.add_argument(
+        "--background",
+        type=Path,
+        help="Fixed requirements present in every solve and excluded from minimization",
+    )
     parser.add_argument("--max-solves", type=int, default=64)
     parser.add_argument("--seconds", type=float, default=30)
     args = parser.parse_args()
@@ -193,6 +222,15 @@ def main() -> None:
             demo_wheel(wheelhouse, "common", 2)
             demo_wheel(wheelhouse, "noise1", 1)
             demo_wheel(wheelhouse, "noise2", 1)
+            if args.demo == "multiple":
+                demo_wheel(wheelhouse, "otherleft", 1, "other==1")
+                demo_wheel(wheelhouse, "otherright", 1, "other==2")
+                demo_wheel(wheelhouse, "other", 1)
+                demo_wheel(wheelhouse, "other", 2)
+                roots.extend(["otherleft==1", "otherright==1"])
+            elif args.demo == "invalid-metadata":
+                demo_wheel(wheelhouse, "broken", 1, "??invalid??")
+                roots = ["broken==1"]
         else:
             roots = [
                 line.strip()
@@ -201,6 +239,15 @@ def main() -> None:
             ]
             for path in sorted(args.wheelhouse.glob("*.whl")):
                 shutil.copyfile(path, wheelhouse / path.name)
+        background = (
+            []
+            if args.background is None
+            else [
+                line.strip()
+                for line in args.background.read_text().splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            ]
+        )
         if not roots or len(roots) > 256 or len(set(roots)) != len(roots):
             parser.error("provide between 1 and 256 distinct root requirements")
         if any(
@@ -208,7 +255,7 @@ def main() -> None:
                 r"[A-Za-z0-9][A-Za-z0-9_.-]*(?:[<>=!~][A-Za-z0-9.*+,!<>=~ -]+)?", root
             )
             is None
-            for root in roots
+            for root in [*roots, *background]
         ):
             parser.error(
                 "roots must be package names with optional version specifiers; no options, markers, extras, or URLs"
@@ -230,14 +277,19 @@ def main() -> None:
                         "direct references in wheel dependencies are outside the frozen corpus"
                     )
         digest = fingerprint(wheelhouse)
-        oracle = Oracle(uv, directory, roots, args.max_solves, args.seconds)
+        oracle = Oracle(uv, directory, roots, args.max_solves, args.seconds, background)
         started = time.monotonic()
         status = "budget_exhausted"
         minimal = False
         conflict = None
+        background_consistent = None
         try:
             all_roots = tuple(range(len(roots)))
-            if not oracle.unsat(all_roots):
+            background_consistent = not oracle.unsat(())
+            if not background_consistent:
+                status = "background_conflict"
+                conflict = ()
+            elif not oracle.unsat(all_roots):
                 status = "satisfiable"
             else:
                 conflict = oracle.quickxplain((), all_roots)
@@ -269,6 +321,8 @@ def main() -> None:
                     "status": status,
                     "subset_minimal": minimal,
                     "roots": roots,
+                    "background": background,
+                    "background_consistent": background_consistent,
                     "conflict": None
                     if conflict is None
                     else [roots[index] for index in conflict],
