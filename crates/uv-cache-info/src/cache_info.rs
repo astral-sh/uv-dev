@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::de::{IgnoredAny, MapAccess, Visitor, value::MapAccessDeserializer};
-use serde::{Deserialize, Deserializer};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tracing::{debug, info_span, warn};
 
 use uv_cache_key::cache_digest;
@@ -25,7 +26,7 @@ pub enum CacheInfoError {
 
 /// The information used to determine whether a built distribution is up-to-date, based on the
 /// timestamps of relevant files, the current commit of a repository, etc.
-#[derive(Default, Debug, Clone, Hash, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Default, Debug, Clone, Hash, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CacheInfo {
     /// The timestamp of the most recent `ctime` of any relevant files, at the time of the build.
@@ -47,6 +48,23 @@ pub struct CacheInfo {
     /// Removing an input can leave the maximum timestamp unchanged.
     #[serde(default)]
     files: Option<String>,
+}
+
+impl Serialize for CacheInfo {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Shared cache buckets require older readers to ignore newly added fields.
+        let mut map = serializer.serialize_map(Some(6))?;
+        map.serialize_entry("timestamp", &self.timestamp)?;
+        map.serialize_entry("commit", &self.commit)?;
+        map.serialize_entry("tags", &self.tags)?;
+        map.serialize_entry("env", &self.env)?;
+        map.serialize_entry("directories", &self.directories)?;
+        map.serialize_entry("files", &self.files)?;
+        map.end()
+    }
 }
 
 impl CacheInfo {
@@ -501,9 +519,14 @@ enum DirectoryTimestamp {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+    use std::collections::BTreeMap;
+
     use anyhow::Result;
 
-    use super::{CacheInfo, CacheKey, ToolUv};
+    use super::{
+        CacheInfo, CacheKey, Commit, DirectoryTimestamp, Tags, Timestamp, ToolUv,
+    };
 
     #[test]
     fn cache_key_forms() -> Result<(), toml::de::Error> {
@@ -578,7 +601,6 @@ mod tests {
         extra cache key field
         "#);
     }
-
     /// Removing a glob match must invalidate the cache even if the newest input is unchanged.
     #[test]
     fn removed_glob_match_changes_cache_info() -> Result<()> {
@@ -597,6 +619,28 @@ mod tests {
 
         assert_eq!(before.timestamp, after.timestamp);
         assert_ne!(before, after);
+        Ok(())
+    }
+
+    /// A literal cache key has the same membership requirement as a glob match.
+    #[test]
+    fn removed_literal_file_changes_cache_info() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        fs_err::write(
+            directory.path().join("pyproject.toml"),
+            "[tool.uv]\ncache-keys = ['older.txt', 'newer.txt']\n",
+        )?;
+        let older = directory.path().join("older.txt");
+        fs_err::write(&older, "older input")?;
+        fs_err::write(directory.path().join("newer.txt"), "newer input")?;
+
+        let before = CacheInfo::from_directory(directory.path())?;
+        fs_err::remove_file(older)?;
+        let after = CacheInfo::from_directory(directory.path())?;
+
+        assert_eq!(before.timestamp, after.timestamp);
+        assert_ne!(before, after);
+        assert_eq!(after, CacheInfo::from_directory(directory.path())?);
         Ok(())
     }
 
@@ -624,18 +668,51 @@ mod tests {
         );
         Ok(())
     }
+
+    /// Older readers must accept records produced in the shared source cache bucket.
+    #[test]
+    fn cache_info_is_readable_without_membership() -> Result<()> {
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        struct LegacyCacheInfo {
+            timestamp: Option<Timestamp>,
+            commit: Option<Commit>,
+            tags: Option<Tags>,
+            #[serde(default)]
+            env: BTreeMap<String, Option<String>>,
+            #[serde(default)]
+            directories: BTreeMap<Cow<'static, str>, Option<DirectoryTimestamp>>,
+        }
+
+        let directory = tempfile::tempdir()?;
+        fs_err::write(directory.path().join("pyproject.toml"), "")?;
+        let current = CacheInfo::from_directory(directory.path())?;
+        let previous: LegacyCacheInfo = rmp_serde::from_slice(&rmp_serde::to_vec(&current)?)?;
+        assert_eq!(
+            previous,
+            LegacyCacheInfo {
+                timestamp: current.timestamp,
+                commit: current.commit,
+                tags: current.tags,
+                env: current.env,
+                directories: current.directories,
+            }
+        );
+        Ok(())
+    }
 }
 
 #[cfg(all(test, unix))]
 mod tests_unix {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt;
+    #[cfg(target_os = "linux")]
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
     use anyhow::Result;
 
     use super::{CacheInfo, Timestamp};
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn non_utf8_glob_membership_is_serializable() -> Result<()> {
         let directory = tempfile::tempdir()?;
         fs_err::write(
