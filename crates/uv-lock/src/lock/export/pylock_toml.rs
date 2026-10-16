@@ -150,6 +150,8 @@ pub enum PylockTomlErrorKind {
     WheelVersionMismatch(WheelFilename, Version),
     #[error("Failed to convert path to URL")]
     PathToUrl,
+    #[error("Invalid path in file URL: {0}")]
+    InvalidFileUrl(DisplaySafeUrl),
     #[error(
         "Package `{0}` can't be installed because it doesn't have a source distribution or wheel for the current platform"
     )]
@@ -1947,13 +1949,25 @@ impl PylockTomlArchive {
         install_path: &Path,
         name: &PackageName,
     ) -> Result<RequirementSource, PylockTomlErrorKind> {
-        if let Some(path) = &self.path {
+        let path = if let Some(path) = &self.path {
+            Some(normalize_path(install_path.join(path)).into_owned())
+        } else if let Some(url) = &self.url
+            && url.scheme() == "file"
+        {
+            Some(
+                url.to_file_path()
+                    .map_err(|()| PylockTomlErrorKind::InvalidFileUrl(url.clone()))?,
+            )
+        } else {
+            None
+        };
+
+        if let Some(install_path) = path {
             if self.subdirectory.is_some() {
                 return Err(PylockTomlErrorKind::ArchiveSubdirectoryUnsupported(
                     name.clone(),
                 ));
             }
-            let install_path = normalize_path(install_path.join(path)).into_owned();
             let ext = DistExtension::from_path(&install_path)?;
             let url = VerbatimUrl::from_absolute_path(&install_path)
                 .map_err(|_| PylockTomlErrorKind::PathToUrl)?;

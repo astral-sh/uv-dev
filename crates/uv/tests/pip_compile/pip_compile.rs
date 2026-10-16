@@ -23,9 +23,7 @@ use fs_err::{File, read};
 use fs_err::{read_to_string, remove_file, write};
 #[cfg(feature = "test-python-managed")]
 use http::StatusCode;
-#[cfg(feature = "test-universal")]
-use indoc::formatdoc;
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
 use regex::Regex;
@@ -284,6 +282,67 @@ fn compile_pylock_direct_sources() -> Result<()> {
 
     ----- stderr -----
     Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// File URLs import local archives without fetching them through HTTP or enforcing recorded hashes.
+#[test]
+fn compile_pylock_file_url_archive() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"imported-wheel".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let archive = context.temp_dir.child("local wheels").child(filename);
+    archive.write_binary(&wheel)?;
+    let url = Url::from_file_path(archive.path()).expect("absolute temporary archive path");
+    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "imported-wheel"
+        version = "1.0.0"
+        archive = {{ url = "{url}", size = 0, hashes = {{ sha256 = "0000000000000000000000000000000000000000000000000000000000000000" }} }}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pylock.toml", "--offline", "--no-index", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    imported-wheel @ file://[TEMP_DIR]/local%20wheels/imported_wheel-1.0.0-py3-none-any.whl
+        # via -r pylock.toml
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn compile_pylock_file_url_subdirectory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let archive = context.temp_dir.child("imported-1.0.0.tar.gz");
+    let url = Url::from_file_path(archive.path()).expect("absolute temporary archive path");
+    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "imported"
+        version = "1.0.0"
+        archive = {{ url = "{url}", subdirectory = "project", hashes = {{ sha256 = "0000000000000000000000000000000000000000000000000000000000000000" }} }}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pylock.toml", "--offline", "--no-index", "--no-header"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot import a local archive with a subdirectory for `imported`
     ");
     Ok(())
 }
