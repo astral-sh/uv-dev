@@ -994,6 +994,83 @@ async fn python_list_remote_python_downloads_ndjson_default_source() -> Result<(
 }
 
 #[tokio::test]
+async fn python_list_pypy_skips_remote_metadata() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_collapsed_whitespace();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "remote-python-download-metadata")
+        .env(EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL, format!("{}/versions.ndjson", server.uri()))
+        .arg("pypy-3.11.15-windows-x86_64-none")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    pypy-3.11.15-windows-x86_64-none <download available>
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn python_list_pyodide_skips_remote_metadata() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_collapsed_whitespace();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/versions.ndjson"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .env(EnvVars::UV_PREVIEW_FEATURES, "remote-python-download-metadata")
+        .env(EnvVars::UV_INTERNAL__TEST_PYTHON_DOWNLOADS_JSON_URL, format!("{}/versions.ndjson", server.uri()))
+        .arg("pyodide@3.12.7")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    pyodide-3.12.7-emscripten-wasm32-musl <download available>
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn python_list_alternative_implementation_uses_explicit_catalog() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/custom.ndjson"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("", "application/x-ndjson"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
+        .arg("pypy")
+        .arg("--only-downloads")
+        .arg("--all-platforms")
+        .arg("--all-arches")
+        .arg("--python-downloads-json-url")
+        .arg(format!("{}/custom.ndjson", server.uri())), @"
+    exit_code: 0 (success)
+    ");
+    Ok(())
+}
+
+#[tokio::test]
 async fn python_list_remote_python_downloads_ndjson_cache_reuse() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_collapsed_whitespace();
     let server = MockServer::start().await;

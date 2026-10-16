@@ -391,6 +391,11 @@ fn resolve_download_list_source(
 }
 
 impl DownloadListSource {
+    /// The default remote catalog only contains native CPython builds.
+    fn uses_embedded_downloads(&self, request: &PythonDownloadRequest) -> bool {
+        self.implicit && request.allows_alternative_implementations()
+    }
+
     fn merge_downloads(
         &self,
         downloads: Vec<ManagedPythonDownload>,
@@ -962,6 +967,11 @@ impl ManagedPythonDownloadList {
                 downloads: filter_downloads(embedded_downloads()?, filter),
             });
         };
+        if filter.is_some_and(|request| source.uses_embedded_downloads(request)) {
+            return Ok(Self {
+                downloads: filter_downloads(embedded_non_cpython_downloads()?, filter),
+            });
+        }
         let predicate = |download: &ManagedPythonDownload| {
             filter.is_none_or(|request| download.matches_request(request))
         };
@@ -1040,10 +1050,7 @@ impl ManagedPythonDownloadList {
                 Err(err) => Err(err),
             };
         }
-        if request
-            .implementation()
-            .is_some_and(|implementation| *implementation != ImplementationName::CPython)
-        {
+        if source.uses_embedded_downloads(request) {
             return find_in_embedded_downloads_with_prereleases(request);
         }
         find_matching_download(client_builder, &source, cache, request).await
