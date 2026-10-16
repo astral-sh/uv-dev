@@ -200,8 +200,27 @@ def source_jobs(api, run_id, attempt):
     for number in range(1, attempt + 1):
         execution = {}
         for job in jobs_for_attempt(api, run_id, number):
-            job["run_attempt"] = number
-            execution.setdefault(job_key(job), []).append(job)
+            key = job_key(job)
+            previous = latest.get(key, [])
+            # GitHub can return an earlier execution under a new job ID on a retry.
+            if (
+                len(previous) == 1
+                and job["steps"]
+                and all(
+                    job[field] == previous[0][field]
+                    for field in (
+                        "status",
+                        "conclusion",
+                        "started_at",
+                        "completed_at",
+                        "steps",
+                    )
+                )
+            ):
+                job = previous[0]
+            else:
+                job["run_attempt"] = number
+            execution.setdefault(key, []).append(job)
         latest.update(execution)
     return [job for group in latest.values() for job in group]
 
