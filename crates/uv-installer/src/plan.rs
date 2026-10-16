@@ -481,11 +481,15 @@ impl<'a> Planner<'a> {
                             let cache_info = pointer.to_cache_info();
                             let build_info = pointer.to_build_info();
                             let archive = pointer.into_archive();
-                            if archive.satisfies(hasher.archive_policy(dist.as_ref()))
-                                && wheel
+                            if !archive.satisfies(hasher.archive_policy(dist.as_ref()))
+                                || wheel
                                     .size
-                                    .is_none_or(|expected| archive.size == Some(expected))
+                                    .is_some_and(|expected| archive.size != Some(expected))
                             {
+                                debug!(
+                                    "Cached URL wheel requirement does not match expected hashes or size for: {wheel}"
+                                );
+                            } else if let Some(path) = archive.existing_path(cache) {
                                 let cached_dist = CachedDirectUrlDist {
                                     filename: wheel.filename.clone(),
                                     url: VerbatimParsedUrl {
@@ -495,16 +499,13 @@ impl<'a> Planner<'a> {
                                     hashes: archive.hashes,
                                     cache_info,
                                     build_info,
-                                    path: cache.archive(&archive.id).into_boxed_path(),
+                                    path: path.into_boxed_path(),
                                 };
 
                                 debug!("URL wheel requirement already cached: {cached_dist}");
                                 cached.push(CachedDist::Url(cached_dist));
                                 continue;
                             }
-                            debug!(
-                                "Cached URL wheel requirement does not match expected hashes or size for: {wheel}"
-                            );
                         }
                         Ok(None) => {}
                         Err(err) => {
@@ -552,7 +553,11 @@ impl<'a> Planner<'a> {
                                     let cache_info = pointer.to_cache_info();
                                     let build_info = pointer.to_build_info();
                                     let archive = pointer.into_archive();
-                                    if archive.satisfies(hasher.archive_policy(dist.as_ref())) {
+                                    if !archive.satisfies(hasher.archive_policy(dist.as_ref())) {
+                                        debug!(
+                                            "Cached path wheel requirement does not match expected hash policy for: {wheel}"
+                                        );
+                                    } else if let Some(path) = archive.existing_path(cache) {
                                         let cached_dist = CachedDirectUrlDist {
                                             filename: wheel.filename.clone(),
                                             url: VerbatimParsedUrl {
@@ -562,7 +567,7 @@ impl<'a> Planner<'a> {
                                             hashes: archive.hashes,
                                             cache_info,
                                             build_info,
-                                            path: cache.archive(&archive.id).into_boxed_path(),
+                                            path: path.into_boxed_path(),
                                         };
                                         debug!(
                                             "Path wheel requirement already cached: {cached_dist}"
@@ -570,9 +575,6 @@ impl<'a> Planner<'a> {
                                         cached.push(CachedDist::Url(cached_dist));
                                         continue;
                                     }
-                                    debug!(
-                                        "Cached path wheel requirement does not match expected hash policy for: {wheel}"
-                                    );
                                 }
                             }
                             Err(err) => {
@@ -610,7 +612,9 @@ impl<'a> Planner<'a> {
                             let cache_info = pointer.to_cache_info();
                             let build_info = pointer.to_build_info();
                             let archive = pointer.into_archive();
-                            if archive.satisfies(hasher.archive_policy(dist.as_ref())) {
+                            if archive.satisfies(hasher.archive_policy(dist.as_ref()))
+                                && let Some(path) = archive.existing_path(cache)
+                            {
                                 let cached_dist = CachedDirectUrlDist {
                                     filename: wheel.filename.clone(),
                                     url: VerbatimParsedUrl {
@@ -620,7 +624,7 @@ impl<'a> Planner<'a> {
                                     hashes: archive.hashes,
                                     cache_info,
                                     build_info,
-                                    path: cache.archive(&archive.id).into_boxed_path(),
+                                    path: path.into_boxed_path(),
                                 };
 
                                 debug!("Git wheel requirement already cached: {cached_dist}");
