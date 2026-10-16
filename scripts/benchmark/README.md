@@ -45,9 +45,10 @@ extraction time directly.
 
 `results.json` records binary versions and digests, every sample, p50/p95 latency, request
 intervals, download bytes, and peak simultaneous wheel requests. The corpus manifest and command
-logs are retained. Virtual environments and caches are removed after successful samples. Request
-intervals show server-side overlap; they do not identify time spent in extraction, installation, or
-scheduler queues. Use profiles or tracing to attribute changes before modifying scheduling policy.
+logs are retained. Failed runs retain completed samples and report the error with binary identities.
+Virtual environments and caches are removed after successful samples. Request intervals show
+server-side overlap; they do not identify time spent in extraction, installation, or scheduler
+queues. Use profiles or tracing to attribute changes before modifying scheduling policy.
 
 This experiment follows the end-to-end measurement motivation of
 [Coz](https://arxiv.org/abs/1608.03676) and the measurement-variability concerns of

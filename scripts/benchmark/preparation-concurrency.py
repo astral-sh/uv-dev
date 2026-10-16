@@ -415,6 +415,10 @@ def main() -> None:
                 }
             )
         (output / "results.json").write_text(json.dumps(evidence, indent=2) + "\n")
+    except Exception as error:
+        evidence["error"] = {"type": type(error).__name__, "message": str(error)}
+        (output / "results.json").write_text(json.dumps(evidence, indent=2) + "\n")
+        raise
     finally:
         server.shutdown()
         server.server_close()
