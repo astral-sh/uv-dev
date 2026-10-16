@@ -110,9 +110,15 @@ The preceding issue-context investigation searched open and closed issues and pu
 - Open signing prototypes astral-sh/uv#20660 and astral-sh/uv#20641 concern earlier wheel-signing and assembly approaches; the preceding investigation found no explicit identifier setting in their diffs.
 - Closed, unmerged astral-sh/uv#21552 was superseded by astral-sh/uv#21754.
 
+## Identifier design discussion
+
+In the 2026-10-16 comment on astral-sh/uv#22627, maintainer woodruffw describes the identifier as an abstract program identity rather than a build identity and supports keeping it independent of executable content across releases. They also suggest that uv and uvx might both use `sh.astral.uv`, instead of the reporter's separate `sh.astral.uv` and `sh.astral.uvx` identifiers.
+
+This is a tentative naming proposal, not a final maintainer decision. Stable identifiers across releases and distinct identifiers between executables are separate choices; the discussion leaves the latter open. The comment adds no new reproduction evidence or completed fix.
+
 ## Recommended next step
 
-Decide on stable, distinct identities for uv and uvx and investigate configuring them in the shared macOS signing action. The reporter's `sh.astral.uv` and `sh.astral.uvx` are suggestions, not an established naming contract.
+Decide whether uv and uvx should share a program identity or have separate identities, while keeping the chosen identifier for each executable stable across releases. Investigate configuring that choice in the shared macOS signing action. Both the reporter's separate identifiers and woodruffw's shared `sh.astral.uv` proposal remain options, not an established naming contract.
 
 Add release verification for the chosen identifiers and compare separately built versions, including the final archives and wheels for both supported macOS architectures. Use native macOS checks to confirm that a rule based on the chosen identity continues to match after an upgrade. No completed fix or release timeline is established.
 
