@@ -7,17 +7,22 @@ use tracing::{debug, warn};
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_configuration::{DryRun, KeyringProviderType};
-use uv_distribution_types::Requirement;
-use uv_distribution_types::{InstalledMetadata, Name, UnresolvedRequirement};
+use uv_configuration::{Concurrency, Constraints, DryRun, ExtrasSpecification, GitLfsSetting};
+use uv_dispatch::SharedState;
+use uv_distribution_types::{Index, InstalledMetadata, Name, Origin, UnresolvedRequirement};
+use uv_distribution_types::{NameRequirementSpecification, Requirement};
 use uv_fs::Simplified;
 use uv_pep508::UnnamedRequirement;
+use uv_preview::Preview;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python_discovery::find_environment;
 use uv_python_types::{
     EnvironmentPreference, Prefix, PythonArchitecture, PythonPreference, PythonRequest, Target,
 };
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{PylockInputMode, RequirementsSource, RequirementsSpecification};
+use uv_resolve_operations::pylock::{read_pylock_toml, select_pylock_packages};
+use uv_settings::ResolverSettings;
+use uv_workspace::WorkspaceCache;
 
 use crate::reporters::report_target_environment;
 use uv_command_support::Printer;
@@ -27,33 +32,59 @@ use uv_command_support::{ExitStatus, elapsed};
 pub async fn pip_uninstall(
     python_arch: Option<PythonArchitecture>,
     sources: &[RequirementsSource],
+    build_constraints: &[RequirementsSource],
+    build_constraints_from_workspace: Vec<NameRequirementSpecification>,
     python: Option<String>,
     system: bool,
     break_system_packages: bool,
     target: Option<Target>,
     prefix: Option<Prefix>,
     cache: Cache,
-    keyring_provider: KeyringProviderType,
+    settings: ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
     dry_run: DryRun,
+    concurrency: Concurrency,
+    workspace_cache: WorkspaceCache,
     printer: Printer,
+    preview: Preview,
 ) -> Result<ExitStatus> {
     let start = std::time::Instant::now();
 
-    let client_builder = client_builder.clone().keyring(keyring_provider);
+    let client_builder = client_builder.clone().keyring(settings.keyring_provider);
 
     // Read all requirements from the provided sources.
-    let spec =
-        RequirementsSpecification::from_simple_sources(sources, &client_builder, &cache).await?;
-    if spec.pylock.is_some() {
-        anyhow::bail!("`pylock.toml` is not a supported input format for `uv pip uninstall`");
-    }
-    if let Some(source_tree) = spec.source_trees.first() {
-        anyhow::bail!(
-            "`{}` is not a supported input format for `uv pip uninstall`",
-            source_tree.filename()
-        );
-    }
+    let spec = RequirementsSpecification::from_sources(
+        sources,
+        &[],
+        &[],
+        &[],
+        None,
+        PylockInputMode::Import,
+        &client_builder,
+        &cache,
+    )
+    .await?;
+
+    let settings = ResolverSettings {
+        index_locations: settings.index_locations.combine(
+            spec.extra_index_urls
+                .into_iter()
+                .map(Index::from_extra_index_url)
+                .chain(spec.index_url.map(Index::from_index_url))
+                .map(|index| index.with_origin(Origin::RequirementsTxt))
+                .collect(),
+            spec.find_links
+                .into_iter()
+                .map(Index::from_find_links)
+                .map(|index| index.with_origin(Origin::RequirementsTxt))
+                .collect(),
+            spec.no_index,
+        ),
+        build_options: settings
+            .build_options
+            .combine(spec.no_binary, spec.no_build),
+        ..settings
+    };
 
     // Detect the current Python interpreter.
     let environment = find_environment(
@@ -114,6 +145,58 @@ pub async fn pip_uninstall(
         })
         .ok();
 
+    let mut source_names = Vec::new();
+    if let Some(source) = &spec.pylock {
+        client_builder.cache_index_credentials(&settings.index_locations)?;
+        let (_, lock) = read_pylock_toml(source, &client_builder).await?;
+        let selection =
+            select_pylock_packages(&lock, &ExtrasSpecification::default(), &spec.pylock_groups);
+        let markers = environment.interpreter().to_resolver_marker_environment();
+        source_names.extend(lock.packages.into_iter().filter_map(|package| {
+            package
+                .marker()
+                .evaluate_pep751(&markers, &selection.extras, &selection.groups)
+                .then_some(package.name)
+        }));
+    }
+
+    let mut dynamic_sources = Vec::new();
+    for source in &spec.source_trees {
+        if let Some(names) = source.static_dependency_names()? {
+            source_names.extend(names);
+        } else {
+            dynamic_sources.push(source.clone());
+        }
+    }
+    if !dynamic_sources.is_empty() {
+        let build_constraints = Constraints::from_specifications(
+            uv_resolve_operations::read_constraints(build_constraints, &client_builder, &cache)
+                .await?
+                .into_iter()
+                .chain(build_constraints_from_workspace),
+        );
+        source_names.extend(
+            uv_resolve_operations::resolve_requirements(
+                Vec::new(),
+                &dynamic_sources,
+                environment.interpreter(),
+                &settings,
+                &build_constraints,
+                &client_builder,
+                &SharedState::default(),
+                &concurrency,
+                &cache,
+                &workspace_cache,
+                printer,
+                preview,
+                GitLfsSetting::default(),
+            )
+            .await?
+            .into_iter()
+            .map(|requirement| requirement.name),
+        );
+    }
+
     // Index the current `site-packages` directory.
     let site_packages = uv_installer::SitePackages::from_environment(&environment)?;
 
@@ -132,6 +215,7 @@ pub async fn pip_uninstall(
         let mut packages = named
             .into_iter()
             .map(|requirement| requirement.name)
+            .chain(source_names)
             .collect::<Vec<_>>();
         packages.sort_unstable();
         packages.dedup();

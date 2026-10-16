@@ -7740,6 +7740,7 @@ dependencies = [
  "uv-pep440",
  "uv-pep508",
  "uv-platform-tags",
+ "uv-preview",
  "uv-pypi-types",
  "uv-python-interpreter",
  "uv-python-types",
@@ -7747,8 +7748,11 @@ dependencies = [
  "uv-requirements",
  "uv-requirements-txt",
  "uv-resolver",
+ "uv-settings",
+ "uv-torch",
  "uv-types",
  "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]
@@ -8084,7 +8088,6 @@ dependencies = [
  "uv-shell",
  "uv-static",
  "uv-tool",
- "uv-torch",
  "uv-types",
  "uv-virtualenv",
  "uv-warnings",

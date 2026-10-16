@@ -814,25 +814,6 @@ impl RequirementsSpecification {
         Ok(UnresolvedRequirementSpecification::from(requirement))
     }
 
-    /// Read the requirements from a set of sources.
-    pub async fn from_simple_sources(
-        requirements: &[RequirementsSource],
-        client_builder: &BaseClientBuilder<'_>,
-        cache: &Cache,
-    ) -> Result<Self> {
-        Self::from_sources(
-            requirements,
-            &[],
-            &[],
-            &[],
-            None,
-            PylockInputMode::Install,
-            client_builder,
-            cache,
-        )
-        .await
-    }
-
     /// Initialize a [`RequirementsSpecification`] from a list of [`Requirement`], including
     /// constraints, overrides, and excludes.
     pub fn from_excludes(

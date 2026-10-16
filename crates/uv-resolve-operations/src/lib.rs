@@ -47,9 +47,11 @@ pub mod loggers;
 mod markers;
 pub mod pylock;
 pub mod reporters;
+mod requirements;
 
 pub use error::Error;
 pub use markers::{resolution_markers, resolution_tags};
+pub use requirements::resolve_requirements;
 
 /// Consolidate the requirements for an installation.
 pub async fn read_requirements(

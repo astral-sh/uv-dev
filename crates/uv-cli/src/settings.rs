@@ -67,9 +67,10 @@ use crate::{
     VersionArgs, VersionBumpSpec, VersionFormat,
 };
 use crate::{
-    AuthorFrom, BuildArgs, BuildOptionsArgs, CheckArgs, ExcludeNewerArgs, ExportArgs, FormatArgs,
-    HashCheckingArgs, PackageExcludeNewerArgs, PublishArgs, PythonDirArgs, RegistryClientArgs,
-    ResolverArgs, ResolverInstallerArgs, ToolUpgradeArgs,
+    AuthorFrom, BuildArgs, BuildIsolationArgs, BuildOptionsArgs, CheckArgs, ExcludeNewerArgs,
+    ExportArgs, FormatArgs, HashCheckingArgs, PackageBuildIsolationArgs, PackageExcludeNewerArgs,
+    PublishArgs, PythonDirArgs, RegistryClientArgs, ResolverArgs, ResolverInstallerArgs,
+    SourcesArgs, ToolUpgradeArgs,
     options::{
         Flag, FlagSource, IntoPipOptions, check_conflicts, flag, resolve_flag, resolve_flag_pair,
         resolver_installer_options, resolver_options, upgrade_options,
@@ -3951,6 +3952,10 @@ impl PipInstallSettings {
 pub struct PipUninstallSettings {
     pub package: Vec<String>,
     pub requirements: Vec<RequirementsInput>,
+    pub input_format: Option<RequirementsFormat>,
+    pub build_constraints: Vec<RequirementsInput>,
+    pub build_constraints_from_workspace: Vec<NameRequirementSpecification>,
+    pub build_hash_checking: HashCheckingMode,
     pub dry_run: DryRun,
     pub settings: PipSettings,
 }
@@ -3965,8 +3970,33 @@ impl PipUninstallSettings {
         let PipUninstallArgs {
             package,
             requirements,
+            input_format,
+            build_constraints,
+            fetch,
+            no_build,
+            build,
+            no_binary,
+            only_binary,
+            require_build_hashes,
+            no_require_build_hashes,
+            build_isolation:
+                PackageBuildIsolationArgs {
+                    build_isolation:
+                        BuildIsolationArgs {
+                            no_build_isolation,
+                            build_isolation,
+                        },
+                    no_build_isolation_package,
+                },
+            sources:
+                SourcesArgs {
+                    no_sources,
+                    no_sources_package,
+                },
+            config_setting,
+            config_settings_package,
+            link_mode,
             python,
-            keyring_provider,
             system,
             no_system,
             break_system_packages,
@@ -3977,9 +4007,44 @@ impl PipUninstallSettings {
             compat_args: _,
         } = args;
 
+        if input_format.is_some() && !requirements.contains(&RequirementsInput::Stdin) {
+            bail!("`--input-format` requires a requirements input of `-`");
+        }
+
+        let build_constraints_from_workspace = filesystem
+            .as_ref()
+            .and_then(|configuration| configuration.build_constraint_dependencies.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|requirement| {
+                let (requirement, hashes) = requirement.into_parts();
+                NameRequirementSpecification {
+                    requirement: Requirement::from(
+                        requirement.with_origin(RequirementOrigin::Workspace),
+                    ),
+                    hashes,
+                }
+            })
+            .collect();
+
         Ok(Self {
             package,
             requirements,
+            input_format,
+            build_constraints: requirement_files(
+                build_constraints,
+                environment.build_constraints.clone(),
+            ),
+            build_constraints_from_workspace,
+            build_hash_checking: resolve_pip_build_hash_checking(
+                flag(
+                    require_build_hashes,
+                    no_require_build_hashes,
+                    "require-build-hashes",
+                )?,
+                filesystem.as_ref(),
+                &environment,
+            ),
             dry_run: DryRun::from_args(dry_run),
             settings: PipSettings::combine(
                 PipOptions {
@@ -3992,8 +4057,23 @@ impl PipUninstallSettings {
                     )?,
                     target,
                     prefix,
-                    keyring_provider,
-                    ..PipOptions::default()
+                    no_build: flag(no_build, build, "build")?,
+                    no_binary,
+                    only_binary,
+                    no_build_isolation: flag(
+                        no_build_isolation,
+                        build_isolation,
+                        "build-isolation",
+                    )?,
+                    no_build_isolation_package: Some(no_build_isolation_package),
+                    no_sources: no_sources.then_some(true),
+                    no_sources_package: (!no_sources_package.is_empty())
+                        .then_some(no_sources_package),
+                    config_settings: config_setting.map(|entries| entries.into_iter().collect()),
+                    config_settings_package: config_settings_package
+                        .map(|entries| entries.into_iter().collect()),
+                    link_mode,
+                    ..fetch.into_pip_options(configured_indexes(filesystem.as_ref()))?
                 },
                 filesystem,
                 environment,
@@ -4664,6 +4744,33 @@ pub struct PipSettings {
 }
 
 impl PipSettings {
+    /// Extract the resolver settings used to build project metadata.
+    pub fn resolver_settings(&self, build_hash_checking: HashCheckingMode) -> ResolverSettings {
+        ResolverSettings {
+            build_options: self.build_options.clone(),
+            config_setting: self.config_setting.clone(),
+            config_settings_package: self.config_settings_package.clone(),
+            dependency_metadata: self.dependency_metadata.clone(),
+            exclude_newer: self.exclude_newer.clone(),
+            fork_strategy: self.fork_strategy,
+            index_locations: self.index_locations.clone(),
+            index_strategy: self.index_strategy,
+            keyring_provider: self.keyring_provider,
+            link_mode: self.link_mode,
+            build_hash_checking,
+            build_isolation: self.build_isolation.clone(),
+            extra_build_dependencies: self.extra_build_dependencies.clone(),
+            extra_build_variables: self.extra_build_variables.clone(),
+            prerelease: self.prerelease.clone(),
+            resolution: self.resolution,
+            sources: self.sources.clone(),
+            torch_backend: self.torch_backend,
+            cuda_driver_version: self.cuda_driver_version.clone(),
+            amd_gpu_architecture: self.amd_gpu_architecture,
+            upgrade: self.upgrade.clone(),
+        }
+    }
+
     /// Resolve the [`PipSettings`] from the CLI and filesystem configuration.
     fn combine(
         args: PipOptions,

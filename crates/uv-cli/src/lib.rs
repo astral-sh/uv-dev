@@ -2360,8 +2360,117 @@ pub struct PipUninstallArgs {
     ///
     /// The following formats are supported: `requirements.txt`, `.py` files with inline metadata,
     /// `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg`.
+    ///
+    /// Use `-` to read from stdin. Lockfiles select packages for the current environment and their
+    /// default dependency groups; project metadata contributes base dependencies. Recorded versions
+    /// and artifacts are ignored.
     #[arg(long, short, alias = "requirement", group = "sources", value_hint = ValueHint::FilePath)]
     pub requirements: Vec<RequirementsInput>,
+
+    /// The format of requirements read from stdin.
+    ///
+    /// By default, uv detects `pylock.toml`, `pyproject.toml`, `setup.cfg`, and PEP 723 script
+    /// metadata, and otherwise reads `requirements.txt`. Select `setup.py` explicitly to execute
+    /// Python and extract dependencies. Project metadata from stdin must be self-contained.
+    ///
+    /// Requires a requirements input of `-`. Named files keep their inferred format.
+    #[arg(long, value_enum)]
+    pub input_format: Option<RequirementsFormat>,
+
+    /// Constrain build dependencies when extracting dynamic project metadata.
+    #[arg(long = "build-constraints", alias = "build-constraint", value_hint = ValueHint::FilePath)]
+    pub build_constraints: Vec<Maybe<RequirementsInput>>,
+
+    #[command(flatten)]
+    pub fetch: FetchArgs,
+
+    /// Don't build source distributions.
+    ///
+    /// When enabled, uv will reuse cached wheels from previously built source distributions, but
+    /// operations that require building a source distribution will exit with an error. uv may
+    /// still build editable requirements, and their build backends may run arbitrary Python code.
+    ///
+    /// Alias for `--only-binary :all:`.
+    #[arg(
+        long,
+        conflicts_with = "no_binary",
+        conflicts_with = "only_binary",
+        overrides_with("build")
+    )]
+    pub no_build: bool,
+
+    #[arg(
+        long,
+        conflicts_with = "no_binary",
+        conflicts_with = "only_binary",
+        overrides_with("no_build"),
+        hide = true
+    )]
+    pub build: bool,
+
+    /// Don't use pre-built wheels for build dependencies.
+    ///
+    /// When installing build dependencies to extract dynamic project metadata, build the specified
+    /// packages from source. The resolver will still use pre-built wheels to extract package metadata,
+    /// if available.
+    ///
+    /// Multiple packages may be provided. Disable binaries for all packages with `:all:`. Clear
+    /// previously specified packages with `:none:`.
+    #[arg(long, value_delimiter = ',', conflicts_with = "no_build")]
+    pub no_binary: Option<Vec<PackageNameSpecifier>>,
+
+    /// Only use pre-built wheels for build dependencies.
+    ///
+    /// When enabled, uv will reuse cached wheels from previously built source distributions, but
+    /// operations that require building a source distribution for the given packages will exit
+    /// with an error. uv may still build editable requirements, and their build backends may run
+    /// arbitrary Python code.
+    ///
+    /// Multiple packages may be provided. Require binaries for all packages with `:all:`. Clear
+    /// previously specified packages with `:none:`.
+    #[arg(long, value_delimiter = ',', conflicts_with = "no_build")]
+    pub only_binary: Option<Vec<PackageNameSpecifier>>,
+
+    /// Require hashes for all build dependencies.
+    ///
+    /// Provide requirements with hashes in a file passed to `--build-constraint`. This does not
+    /// require hashes for the packages being removed.
+    ///
+    /// No hash is required when uv uses its bundled `uv_build` backend, since it is part of the uv
+    /// executable. When build isolation is disabled, build dependencies must already be installed
+    /// and their hashes are not checked.
+    #[arg(long, overrides_with("no_require_build_hashes"))]
+    pub require_build_hashes: bool,
+
+    #[arg(long, overrides_with("require_build_hashes"), hide = true)]
+    pub no_require_build_hashes: bool,
+
+    #[command(flatten)]
+    pub build_isolation: PackageBuildIsolationArgs,
+
+    #[command(flatten)]
+    pub sources: SourcesArgs,
+
+    /// Settings to pass to the PEP 517 build backend, specified as `KEY=VALUE` pairs.
+    #[arg(
+        long,
+        short = 'C',
+        alias = "config-settings",
+        help_heading = "Build options"
+    )]
+    pub config_setting: Option<Vec<ConfigSettingEntry>>,
+
+    /// Settings to pass to the PEP 517 build backend for a specific package, specified as `PACKAGE:KEY=VALUE` pairs.
+    #[arg(
+        long,
+        alias = "config-settings-package",
+        help_heading = "Build options"
+    )]
+    pub config_settings_package: Option<Vec<ConfigSettingPackageEntry>>,
+
+    /// The method to use when installing build dependencies from the global cache.
+    #[arg(long, value_enum, env = EnvVars::UV_LINK_MODE, help_heading = "Build options")]
+    pub link_mode: Option<uv_install_wheel::LinkMode>,
 
     /// The Python interpreter from which packages should be uninstalled.
     ///
@@ -2379,15 +2488,6 @@ pub struct PipUninstallArgs {
         value_hint = ValueHint::Other,
     )]
     pub python: Option<Maybe<String>>,
-
-    /// Attempt to use `keyring` for authentication for remote requirements files.
-    ///
-    /// At present, only `--keyring-provider subprocess` is supported, which configures uv to use
-    /// the `keyring` CLI to handle authentication.
-    ///
-    /// Defaults to `disabled`.
-    #[arg(long, value_enum, env = EnvVars::UV_KEYRING_PROVIDER)]
-    pub keyring_provider: Option<KeyringProviderType>,
 
     /// Use the system Python to uninstall packages.
     ///
