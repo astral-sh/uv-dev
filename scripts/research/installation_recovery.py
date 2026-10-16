@@ -313,4 +313,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except subprocess.CalledProcessError as error:
+        if error.stderr:
+            if isinstance(error.stderr, bytes):
+                sys.stderr.buffer.write(error.stderr)
+            else:
+                sys.stderr.write(error.stderr)
+        raise
