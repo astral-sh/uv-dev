@@ -97,7 +97,7 @@ jobs:
             -Z panic-abort-tests \
             -Z checksum-freshness \
             --no-default-features \
-            --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native \
+            --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth \
             -p uv --test python \
             --profile ci-windows \
             -E 'test(=python_find::python_find_freethreaded_313) + test(=python_find::python_find_prerelease_version_specifiers)' \
@@ -133,7 +133,7 @@ jobs:
             -Z panic-abort-tests \
             -Z checksum-freshness \
             --no-default-features \
-            --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native \
+            --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth \
             -p uv --test python \
             --profile ci-windows \
             -E 'test(=python_find::python_find_freethreaded_313) + test(=python_find::python_find_prerelease_version_specifiers)' \
