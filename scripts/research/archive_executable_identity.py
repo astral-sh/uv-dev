@@ -193,6 +193,7 @@ def main() -> int:
     run(
         [
             candidate,
+            "--no-config",
             "--cache-dir",
             str(root / "forward-cache"),
             "cache",
