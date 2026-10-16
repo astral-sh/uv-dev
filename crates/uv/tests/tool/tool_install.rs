@@ -7058,7 +7058,7 @@ fn tool_install_pylock_reresolve_git() -> Result<()> {
     Ok(())
 }
 
-/// An unnamed Git source must read metadata from the imported commit before caching it.
+/// Imported Git preferences guide Python selection and unnamed source metadata.
 #[test]
 #[cfg(feature = "test-git")]
 fn tool_install_pylock_unnamed_git() -> Result<()> {
@@ -7131,7 +7131,7 @@ fn tool_install_pylock_unnamed_git() -> Result<()> {
         [project]
         name = "git-dependency"
         version = "2.0.0"
-        requires-python = ">=3.8"
+        requires-python = ">=3.13"
         dependencies = ["new-dependency"]
         [project.scripts]
         git-dependency = "git_dependency:main"
@@ -7163,6 +7163,7 @@ fn tool_install_pylock_unnamed_git() -> Result<()> {
         created-by = "uv"
         [[packages]]
         name = "git-dependency"
+        marker = "python_version >= '3.12'"
         vcs = {{ type = "git", url = "{repository_url}", commit-id = "{old_commit}" }}
     "#
     ))?;

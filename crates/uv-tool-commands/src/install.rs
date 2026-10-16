@@ -125,6 +125,37 @@ pub async fn install(
         settings
     };
 
+    // If the user passed, e.g., `ruff@latest`, refresh the cache.
+    let refresh = if request.is_latest() {
+        refresh.combine(Refresh::All(Timestamp::now()))
+    } else {
+        refresh
+    };
+    let cache = cache.with_refresh(refresh.clone());
+
+    // Read the `--with` requirements.
+    let mut spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        excludes,
+        None,
+        PylockInputMode::Import,
+        &client_builder,
+        &cache,
+    )
+    .await?;
+
+    import_pylock_requirements(
+        &mut spec,
+        &settings.resolver.index_locations,
+        &settings.resolver.upgrade,
+        &client_builder
+            .clone()
+            .keyring(settings.resolver.keyring_provider),
+    )
+    .await?;
+
     let unresolved_target_requirements = match &request {
         ToolRequest::Package {
             target: Target::Unspecified(requirement),
@@ -150,6 +181,7 @@ pub async fn install(
             .as_ref()
             .and_then(|requirements| requirements.first())
             .map(|requirement| &requirement.requirement),
+        &spec.git_preferences,
         config_discovery,
         lfs,
         state.git(),
@@ -181,37 +213,6 @@ pub async fn install(
         operations::read_constraints(build_constraints, &client_builder, &cache).await?;
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
-
-    // If the user passed, e.g., `ruff@latest`, refresh the cache.
-    let refresh = if request.is_latest() {
-        refresh.combine(Refresh::All(Timestamp::now()))
-    } else {
-        refresh
-    };
-    let cache = cache.with_refresh(refresh.clone());
-
-    // Read the `--with` requirements.
-    let mut spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        excludes,
-        None,
-        PylockInputMode::Import,
-        &client_builder,
-        &cache,
-    )
-    .await?;
-
-    import_pylock_requirements(
-        &mut spec,
-        &settings.resolver.index_locations,
-        &settings.resolver.upgrade,
-        &client_builder
-            .clone()
-            .keyring(settings.resolver.keyring_provider),
-    )
-    .await?;
 
     // Select imported Git preferences before resolving unnamed requirements and caching their metadata.
     let markers = resolution_markers(None, python_platform.as_ref(), &interpreter);

@@ -23,13 +23,14 @@ use uv_distribution::{
 };
 use uv_distribution_types::{
     DependencyMetadata, HashCollection, IndexLocations, InstalledDist, Name,
-    NameRequirementSpecification, Requirement, RequiresPython, Resolution, UnresolvedRequirement,
+    NameRequirementSpecification, Requirement, RequirementSource, RequiresPython, Resolution,
+    UnresolvedRequirement,
 };
 use uv_errors::{ErrorWithHints, Hinted, Hints};
 #[cfg(unix)]
 use uv_fs::replace_symlink;
 use uv_fs::{CWD, Simplified};
-use uv_git::GitResolver;
+use uv_git::{GitResolver, RepositoryReference};
 use uv_installer::SitePackages;
 use uv_lock::{Installable, Lock, ResolverManifest};
 use uv_normalize::{DefaultExtras, GroupName, PackageName};
@@ -45,7 +46,7 @@ use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
     PythonVariant, VersionRequest,
 };
-use uv_requirements::RequirementsSpecification;
+use uv_requirements::{GitPreference, RequirementsSpecification};
 use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput};
 use uv_settings::{PythonInstallMirrors, ToolOptions};
 use uv_shell::Shell;
@@ -182,6 +183,7 @@ impl ToolPython {
     pub(super) async fn from_request(
         python_request: Option<PythonRequest>,
         requirement: Option<&UnresolvedRequirement>,
+        git_preferences: &[GitPreference],
         config_discovery: ConfigDiscovery,
         lfs: GitLfsSetting,
         git_resolver: &GitResolver,
@@ -193,6 +195,7 @@ impl ToolPython {
                 Some(requirement) => {
                     infer_requires_python_from_requirement(
                         requirement,
+                        git_preferences,
                         lfs,
                         git_resolver,
                         client_builder,
@@ -259,6 +262,7 @@ impl ToolPython {
 /// statically available, or the Git source cannot be fetched.
 async fn infer_requires_python_from_requirement(
     requirement: &UnresolvedRequirement,
+    git_preferences: &[GitPreference],
     lfs: GitLfsSetting,
     git_resolver: &GitResolver,
     client_builder: &BaseClientBuilder<'_>,
@@ -268,6 +272,25 @@ async fn infer_requires_python_from_requirement(
         .clone()
         .augment_requirement(None, None, None, lfs.into(), None);
     let source = requirement.source();
+
+    if let RequirementSource::GitDirectory { git, .. } | RequirementSource::GitPath { git, .. } =
+        source.as_ref()
+    {
+        let reference = RepositoryReference::from(git);
+        let mut preferences = git_preferences
+            .iter()
+            .filter(|preference| preference.git.reference == reference);
+        if let Some(preference) = preferences.next() {
+            // Skip source-based Python inference when the preferred commit is conditional or ambiguous.
+            if !preference.marker.is_true()
+                || preferences
+                    .any(|other| !other.marker.is_true() || other.git.sha != preference.git.sha)
+            {
+                return None;
+            }
+            git_resolver.insert(reference, preference.git.sha);
+        }
+    }
 
     match StaticMetadataDatabase::new(client_builder, git_resolver, cache)
         .requires_python(source.as_ref())

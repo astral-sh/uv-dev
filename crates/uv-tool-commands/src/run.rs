@@ -775,6 +775,27 @@ async fn get_or_create_environment(
     // Initialize any shared state.
     let mut state = PlatformState::default();
 
+    // Read the `--with` requirements.
+    let mut spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        &[],
+        None,
+        PylockInputMode::Import,
+        client_builder,
+        cache,
+    )
+    .await?;
+    import_pylock_requirements(
+        &mut spec,
+        &settings.resolver.index_locations,
+        &settings.resolver.upgrade,
+        &client_builder
+            .clone()
+            .keyring(settings.resolver.keyring_provider),
+    )
+    .await?;
     let unresolved_target_requirement = match request {
         ToolRequest::Package {
             target: Target::Unspecified(requirement),
@@ -814,6 +835,7 @@ async fn get_or_create_environment(
         unresolved_target_requirement
             .as_ref()
             .map(|requirement| &requirement.requirement),
+        &spec.git_preferences,
         ConfigDiscovery::Enabled,
         lfs,
         state.git(),
@@ -843,27 +865,6 @@ async fn get_or_create_environment(
         operations::read_constraints(build_constraints, client_builder, cache).await?,
     );
 
-    // Read the `--with` requirements.
-    let mut spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        &[],
-        None,
-        PylockInputMode::Import,
-        client_builder,
-        cache,
-    )
-    .await?;
-    import_pylock_requirements(
-        &mut spec,
-        &settings.resolver.index_locations,
-        &settings.resolver.upgrade,
-        &client_builder
-            .clone()
-            .keyring(settings.resolver.keyring_provider),
-    )
-    .await?;
     // Select imported Git preferences before resolving unnamed requirements and caching their metadata.
     let markers = resolution_markers(None, python_platform.as_ref(), &interpreter);
     let locked = LockedRequirements::from_imported(
