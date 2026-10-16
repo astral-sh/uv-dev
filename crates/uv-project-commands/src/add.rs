@@ -32,7 +32,7 @@ use uv_environment_operations::{
     ProjectEnvironmentTarget, ProjectInterpreter, sync_from_lock,
 };
 use uv_errors::HintOrdering;
-use uv_fs::Simplified;
+use uv_fs::{Simplified, is_same_file_allow_missing};
 use uv_git::store_credentials;
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
@@ -684,9 +684,10 @@ pub async fn add(
         for (requirement, _) in &requirements {
             if let RequirementSource::Directory {
                 install_path,
-                r#virtual: None,
+                r#virtual: is_virtual,
                 ..
             } = &requirement.source
+                && (is_virtual.is_none() || workspace == Some(true))
             {
                 let absolute_path = if install_path.is_absolute() {
                     install_path.to_path_buf()
@@ -954,7 +955,16 @@ fn edits(
     let mut edits = Vec::<DependencyEdit>::with_capacity(requirements.len());
     let mut imported_sources = BTreeMap::<PackageName, Vec<Source>>::new();
     for (mut requirement, import_sources) in requirements {
-        let editable = editable.and_then(|editable| editable.for_package(&requirement.name));
+        let imported_editable = if import_sources
+            && let RequirementSource::Directory { editable, .. } = &requirement.source
+        {
+            *editable
+        } else {
+            None
+        };
+        let editable = editable
+            .and_then(|editable| editable.for_package(&requirement.name))
+            .or(imported_editable);
 
         // Add the specified extras.
         let mut ex = requirement.extras.to_vec();
@@ -993,18 +1003,34 @@ fn edits(
                     .and_then(|tool| tool.uv.as_ref())
                     .and_then(|uv| uv.sources.as_ref())
                     .map(ToolUvSources::inner);
-                // Workspace sources cannot represent a per-dependency `package` setting.
-                let is_workspace_member = project
-                    .workspace()
-                    .packages()
-                    .contains_key(&requirement.name)
-                    && !matches!(
-                        requirement.source,
-                        RequirementSource::Directory {
-                            r#virtual: Some(_),
-                            ..
-                        }
-                    );
+                let workspace_member = project.workspace().packages().get(&requirement.name);
+                if import_sources
+                    && let Some(member) = workspace_member
+                    && let RequirementSource::Directory {
+                        install_path,
+                        r#virtual: is_virtual,
+                        ..
+                    } = &requirement.source
+                {
+                    if !is_same_file_allow_missing(member.root(), install_path)
+                        .unwrap_or(member.root().as_path() == install_path.as_ref())
+                    {
+                        bail!(
+                            "Cannot import a different directory for workspace member `{}`: {}",
+                            requirement.name,
+                            install_path.user_display()
+                        );
+                    }
+                    if is_virtual.is_some_and(|is_virtual| {
+                        is_virtual == member.pyproject_toml().is_package(false)
+                    }) {
+                        bail!(
+                            "Imported `package` setting conflicts with workspace member `{}`",
+                            requirement.name
+                        );
+                    }
+                }
+                let is_workspace_member = workspace_member.is_some();
                 resolve_requirement(
                     requirement,
                     is_workspace_member,
