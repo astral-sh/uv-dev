@@ -1257,25 +1257,22 @@ impl<'lock> PylockToml {
                     r#virtual: directory.r#virtual,
                 }
             } else if let Some(vcs) = &package.vcs {
-                let directory = vcs.to_sdist(install_path, &package.name)?;
-                let reference = vcs
-                    .requested_revision
-                    .clone()
-                    .map(GitReference::from_rev)
-                    .unwrap_or(GitReference::DefaultBranch);
+                let pinned =
+                    vcs.to_git_url(install_path, &package.name, GitReference::DefaultBranch)?;
                 let git = GitUrl::from_fields(
-                    directory.git.url().clone(),
-                    reference,
+                    pinned.url().clone(),
+                    pinned.reference().clone(),
                     None,
-                    directory.git.lfs(),
+                    pinned.lfs(),
                 )?;
+                let subdirectory = vcs.subdirectory.clone().map(Box::<Path>::from);
                 let url = VerbatimUrl::from_url(DisplaySafeUrl::from(ParsedGitDirectoryUrl {
                     url: git.clone(),
-                    subdirectory: directory.subdirectory.clone(),
+                    subdirectory: subdirectory.clone(),
                 }));
                 RequirementSource::GitDirectory {
                     git,
-                    subdirectory: directory.subdirectory,
+                    subdirectory,
                     url,
                 }
             } else if let Some(archive) = &package.archive {
@@ -1677,17 +1674,7 @@ impl PylockTomlPackage {
         let Some(vcs) = self.vcs.as_ref() else {
             return Ok(None);
         };
-        let directory = vcs.to_sdist(install_path, &self.name)?;
-        let reference = match vcs.requested_revision.as_ref() {
-            Some(rev) => GitReference::from_rev(rev.clone()),
-            None => GitReference::DefaultBranch,
-        };
-        let git = GitUrl::from_commit(
-            directory.git.url().clone(),
-            reference,
-            vcs.commit_id,
-            directory.git.lfs(),
-        )?;
+        let git = vcs.to_git_url(install_path, &self.name, GitReference::DefaultBranch)?;
         Ok(Some(ResolvedRepositoryReference {
             reference: RepositoryReference::from(&git),
             sha: vcs.commit_id,
@@ -1804,6 +1791,41 @@ impl PylockTomlDirectory {
 }
 
 impl PylockTomlVcs {
+    /// Convert the source to a pinned [`GitUrl`], using `fallback` when no revision was requested.
+    fn to_git_url(
+        &self,
+        install_path: &Path,
+        name: &PackageName,
+        fallback: GitReference,
+    ) -> Result<GitUrl, PylockTomlErrorKind> {
+        let mut url = if let Some(url) = self.url.as_ref() {
+            url.clone()
+        } else if let Some(path) = self.path.as_ref() {
+            DisplaySafeUrl::from_url(
+                Url::from_directory_path(install_path.join(path))
+                    .map_err(|()| PylockTomlErrorKind::PathToUrl)?,
+            )
+        } else {
+            return Err(PylockTomlErrorKind::VcsMissingPathUrl(name.clone()));
+        };
+        url.set_fragment(None);
+        url.set_query(None);
+
+        let reference = self
+            .requested_revision
+            .clone()
+            .map(GitReference::from_rev)
+            .unwrap_or(fallback);
+
+        // TODO(samypr100): GitLfs::from_env() as pylock.toml spec doesn't specify how to label LFS support
+        Ok(GitUrl::from_commit(
+            url,
+            reference,
+            self.commit_id,
+            GitLfs::from_env(),
+        )?)
+    }
+
     /// Convert the sdist to a [`GitDirectorySourceDist`].
     fn to_sdist(
         &self,
@@ -1812,31 +1834,7 @@ impl PylockTomlVcs {
     ) -> Result<GitDirectorySourceDist, PylockTomlErrorKind> {
         let subdirectory = self.subdirectory.clone().map(Box::<Path>::from);
 
-        // Reconstruct the `GitUrl` from the individual fields.
-        let git_url = {
-            let mut url = if let Some(url) = self.url.as_ref() {
-                url.clone()
-            } else if let Some(path) = self.path.as_ref() {
-                DisplaySafeUrl::from_url(
-                    Url::from_directory_path(install_path.join(path))
-                        .map_err(|()| PylockTomlErrorKind::PathToUrl)?,
-                )
-            } else {
-                return Err(PylockTomlErrorKind::VcsMissingPathUrl(name.clone()));
-            };
-            url.set_fragment(None);
-            url.set_query(None);
-
-            let reference = self
-                .requested_revision
-                .clone()
-                .map(GitReference::from_rev)
-                .unwrap_or(GitReference::Commit(self.commit_id));
-            let precise = self.commit_id;
-
-            // TODO(samypr100): GitLfs::from_env() as pylock.toml spec doesn't specify how to label LFS support
-            GitUrl::from_commit(url, reference, precise, GitLfs::from_env())?
-        };
+        let git_url = self.to_git_url(install_path, name, GitReference::Commit(self.commit_id))?;
 
         // Reconstruct the PEP 508-compatible URL from the `GitSource`.
         let url = DisplaySafeUrl::from(ParsedGitDirectoryUrl {
