@@ -11,6 +11,8 @@ modified. A local pure-Python wheel makes the dependency resolution identical.
 
 The oracle requires the reused environment to import the package and report the
 same Python version and package contents as a fresh cached environment.
+Repeated runs must reuse the same environment. Restoring the original interpreter
+must select its original cached environment and agree with a fresh installation.
 """
 
 import argparse
@@ -99,6 +101,12 @@ def binary_identity(executable: str) -> dict:
     }
 
 
+def equivalent(left: dict, right: dict) -> bool:
+    return left["returncode"] == right["returncode"] == 0 and all(
+        left["probe"][key] == right["probe"][key] for key in ("version", "value")
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uv", required=True)
@@ -121,6 +129,11 @@ def main() -> int:
     before = run(uv, executable, artifact, root / "shared-cache")
     if before["returncode"]:
         raise RuntimeError(f"initial environment failed: {before}")
+    unchanged = run(uv, executable, artifact, root / "shared-cache")
+    assert equivalent(before, unchanged), "unchanged interpreter changed the result"
+    assert unchanged["probe"]["module"] == before["probe"]["module"], (
+        "unchanged interpreter created a different environment"
+    )
 
     executable = replace_python(args.after_root.resolve(), root / "python")
     assert executable.resolve() == canonical_before, "canonical executable path changed"
@@ -131,8 +144,31 @@ def main() -> int:
     assert before["probe"]["version"] != fresh["probe"]["version"], (
         "the Python versions must differ"
     )
-    correct = reused["returncode"] == 0 and all(
-        reused["probe"][key] == fresh["probe"][key] for key in ("version", "value")
+    environment_changed = (
+        reused["returncode"] == 0
+        and reused["probe"]["module"] != before["probe"]["module"]
+    )
+    correct = equivalent(reused, fresh) and environment_changed
+    repeated = run(uv, executable, artifact, root / "shared-cache")
+    assert repeated["returncode"] == reused["returncode"]
+    if correct:
+        assert equivalent(repeated, fresh)
+        assert repeated["probe"]["module"] == reused["probe"]["module"], (
+            "replacement interpreter did not reuse its environment"
+        )
+
+    executable = replace_python(args.before_root.resolve(), root / "python")
+    assert executable.resolve() == canonical_before, "restored executable path changed"
+    restored = run(uv, executable, artifact, root / "shared-cache")
+    restored_fresh = run(uv, executable, artifact, root / "restored-fresh-cache")
+    assert equivalent(restored, restored_fresh), (
+        "restored interpreter differs from fresh"
+    )
+    assert equivalent(restored, before), (
+        "restored interpreter changed the package result"
+    )
+    assert restored["probe"]["module"] == before["probe"]["module"], (
+        "restored interpreter did not reuse its original cached environment"
     )
     print(
         json.dumps(
@@ -140,8 +176,14 @@ def main() -> int:
                 "uv": binary_identity(uv),
                 "canonical_executable": str(canonical_before),
                 "before": before,
+                "unchanged": unchanged,
                 "reused": reused,
                 "fresh": fresh,
+                "repeated": repeated,
+                "restored": restored,
+                "restored_fresh": restored_fresh,
+                "unchanged_and_restored_reuse_original_environment": True,
+                "replacement_changes_cached_environment": environment_changed,
                 "reuse_matches_fresh": correct,
             },
             indent=2,
