@@ -7,6 +7,8 @@
 The local backend has no build dependencies and embeds the declared input names
 in its wheel. Removing the older input leaves the maximum file timestamp intact.
 The oracle compares the installed package from the warm cache with a fresh build.
+Unchanged and unmatched inputs must reuse the wheel; deleting the last match
+must produce an empty payload and then remain reusable.
 """
 
 import argparse
@@ -79,7 +81,13 @@ def install(uv: str, project: Path, target: Path, cache: Path) -> dict:
         ],
         text=True,
     )
-    return {"inputs": json.loads(probe), "stderr": result.stderr}
+    return {
+        "inputs": json.loads(probe),
+        "stderr": result.stderr,
+        "backend_invocations": len(
+            (project / "invocations.log").read_text().splitlines()
+        ),
+    }
 
 
 def binary_identity(executable: str) -> dict:
@@ -129,19 +137,41 @@ def main() -> int:
     older.write_text("older input")
     (project / "inputs/newer.txt").write_text("newer input")
     before = install(uv, project, root / "before", root / "shared-cache")
+    unchanged = install(uv, project, root / "unchanged", root / "shared-cache")
+    assert unchanged["inputs"] == before["inputs"]
+    assert unchanged["backend_invocations"] == before["backend_invocations"]
+    (project / "inputs/ignored.dat").write_text("not a declared input")
+    unmatched = install(uv, project, root / "unmatched", root / "shared-cache")
+    assert unmatched["inputs"] == before["inputs"]
+    assert unmatched["backend_invocations"] == before["backend_invocations"]
     older.unlink()
     warm = install(uv, project, root / "warm", root / "shared-cache")
     fresh = install(uv, project, root / "fresh", root / "fresh-cache")
     assert before["inputs"] == ["newer.txt", "older.txt"]
     assert fresh["inputs"] == ["newer.txt"]
     correct = warm["inputs"] == fresh["inputs"]
+    warm_again = install(uv, project, root / "warm-again", root / "shared-cache")
+    assert warm_again["inputs"] == warm["inputs"]
+    assert warm_again["backend_invocations"] == fresh["backend_invocations"]
+    (project / "inputs/newer.txt").unlink()
+    empty = install(uv, project, root / "empty", root / "shared-cache")
+    empty_fresh = install(uv, project, root / "empty-fresh", root / "empty-cache")
+    empty_again = install(uv, project, root / "empty-again", root / "shared-cache")
+    assert empty["inputs"] == empty_fresh["inputs"] == empty_again["inputs"] == []
+    assert empty_again["backend_invocations"] == empty_fresh["backend_invocations"]
     print(
         json.dumps(
             {
                 "uv": binary_identity(uv),
                 "before": before,
+                "unchanged": unchanged,
+                "unmatched": unmatched,
                 "warm": warm,
                 "fresh": fresh,
+                "warm_again": warm_again,
+                "empty": empty,
+                "empty_fresh": empty_fresh,
+                "empty_again": empty_again,
                 "backend_invocations": len(
                     (project / "invocations.log").read_text().splitlines()
                 ),
