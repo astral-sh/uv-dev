@@ -928,6 +928,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             },
         })
     }
+
     /// Queue version forks against one immutable checkpoint.
     fn version_forks_to_fork_states(
         current_state: ForkState<'_>,
@@ -974,6 +975,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             ForkAction::Dependencies { fork, version } => {
                 let mut state = state.with_env(fork.env);
                 let package = state.next;
+
                 // Enrich the state with any URLs, etc.
                 state
                     .visit_package_version_dependencies(
@@ -2944,18 +2946,12 @@ impl<'index> ForkState<'index> {
             prefetcher: self.prefetcher.clone(),
         };
         let application_elapsed = application_start.elapsed();
+        let clone_elapsed = start.elapsed();
         debug!(
             split_kind,
-            clone_us = %start.elapsed().as_micros(),
+            clone_us = %clone_elapsed.as_micros(),
             pubgrub_us = %pubgrub_elapsed.as_micros(),
             application_us = %application_elapsed.as_micros(),
-            tracked_packages = self.pubgrub.incompatibilities.len(),
-            incompatibility_references = self
-                .pubgrub
-                .incompatibilities
-                .values()
-                .map(Vec::len)
-                .sum::<usize>(),
             "Cloned resolver fork state"
         );
         cloned

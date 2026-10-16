@@ -155,12 +155,12 @@ def main() -> None:
                 if "Cloned resolver fork state" in line:
                     fields = dict(
                         re.findall(
-                            r"(clone_us|pubgrub_us|application_us|tracked_packages|incompatibility_references)=(\d+)",
+                            r"(clone_us|pubgrub_us|application_us)=(\d+)",
                             line,
                         )
                     )
                     kind = re.search(r'split_kind="?(dependencies|versions)"?', line)
-                    if len(fields) != 5 or kind is None:
+                    if len(fields) != 3 or kind is None:
                         raise RuntimeError(f"unrecognized clone event: {line}")
                     events.append(
                         {
@@ -211,7 +211,7 @@ def main() -> None:
                     "median_elapsed_seconds": statistics.median(
                         run["elapsed_seconds"] for run in runs
                     ),
-                    "scope": "Two resolver split sites; debug logging enabled; references are not unique incompatibilities or bytes.",
+                    "scope": "Two resolver split sites; debug logging enabled.",
                 },
                 indent=2,
             )

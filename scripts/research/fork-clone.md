@@ -11,7 +11,7 @@ The fixture resolves a shared dependency chain before splitting on disjoint `sys
 Increasing `--depth` grows shared state; increasing `--forks` grows the number of branches. All
 metadata is held in deterministic local wheels. The command disables indexes, network access,
 builds, and persistent caches, and emits JSON with a fixture fingerprint, per-clone durations,
-tracked-package counts, incompatibility-reference counts, and wall time.
+split kinds, and wall time.
 
 `--fork-kind requires-python` uses release-specific Python 3.12 patch-version floors instead of
 platform markers. Eight releases create eight Python regions and seven version-split clones; eight
@@ -25,11 +25,10 @@ separately. All fields are copied once. Normal logging uses the derived clone di
 component costs before deciding whether solver-specific sharing addresses the larger cost.
 
 The instrumentation covers the two split sites in `ResolverState::forks_to_fork_states` and
-`ResolverState::version_forks_to_fork_states`. It is active only at debug log level. Reference
-counts can include the same incompatibility more than once and are not allocation or byte counts.
-Debug logging and a development build affect timings; these results are a measurement scaffold, not
-a production performance claim. The synthetic platform labels deliberately exercise marker
-partitioning rather than enumerate supported operating systems.
+`ResolverState::version_forks_to_fork_states`. It is active only at debug log level. Debug logging
+and a development build affect timings; these results are a measurement scaffold, not a production
+performance claim. The synthetic platform labels deliberately exercise marker partitioning rather
+than enumerate supported operating systems.
 
 [Ultimately Incremental SAT](https://ofers.dds.technion.ac.il/publications/sat14.pdf) motivates
 studying retained solver state. Sharing learned incompatibilities between uv forks additionally
