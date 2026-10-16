@@ -12,18 +12,16 @@ env:
   RUSTUP_MAX_RETRIES: 10
 
 jobs:
-  python-address-capture:
+  python-reference-capture:
     timeout-minutes: 25
     runs-on: namespace-profile-windows-2022-x86-64-16x32
-    name: "Python address capture on Windows ${{ matrix.runner }} of 2"
+    name: "Python reference capture on Windows ${{ matrix.runner }} of 2"
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: 1
-            sequence: ABBABAAB
           - runner: 2
-            sequence: BAABABBA
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,7 +48,7 @@ jobs:
           import subprocess
           from pathlib import Path
 
-          output = Path("address-diagnostics")
+          output = Path("reference-diagnostics")
           output.mkdir()
           path = output / "checkout.json"
           expected = os.environ["GITHUB_SHA"]
@@ -75,6 +73,13 @@ jobs:
               raise RuntimeError("Copied checkout is not clean after restoring the pinned revision")
           PY
 
+      - name: Verify the pinned curl distribution
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: >-
+          python scripts/python-reference-capture.py prepare-curl
+          --directory reference-tooling
+          --evidence reference-diagnostics/curl-provenance.json
+
       - name: Install Rust toolchain
         working-directory: ${{ env.UV_WORKSPACE }}
         run: rustup toolchain install --profile minimal
@@ -98,22 +103,22 @@ jobs:
           --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native
           --workspace --bin uv -Z checksum-freshness
 
-      - name: Run eight sequential address trials
+      - name: Run four paired client trials
         working-directory: ${{ env.UV_WORKSPACE }}
         run: >-
-          python scripts/python-address-capture.py
+          python scripts/python-reference-capture.py capture
+          --curl reference-tooling/curl.exe
           --uv target/fast-build-nightly/uv.exe
-          --output address-diagnostics
-          --workspace address-work
+          --output reference-diagnostics
+          --workspace reference-work
           --runner-index ${{ matrix.runner }}
-          --sequence ${{ matrix.sequence }}
           --expected-revision "$env:GITHUB_SHA"
 
-      - name: Upload address evidence
+      - name: Upload reference evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: address-capture-windows-${{ matrix.runner }}
-          path: ${{ env.UV_WORKSPACE }}/address-diagnostics/
+          name: reference-capture-windows-${{ matrix.runner }}
+          path: ${{ env.UV_WORKSPACE }}/reference-diagnostics/
           if-no-files-found: warn
           retention-days: 7
