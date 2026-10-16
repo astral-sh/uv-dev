@@ -52,6 +52,11 @@ class PullRequestCommentTests(unittest.TestCase):
         with patch.object(comments, "api", return_value=[self.reserved]):
             self.assertIsNone(comments.find_comment(7))
 
+    def test_find_skips_a_comment_without_an_author(self):
+        self.other["user"] = None
+        with patch.object(comments, "api", return_value=[self.other]):
+            self.assertIsNone(comments.find_comment(7))
+
     def test_find_rejects_a_marker_in_another_comment(self):
         self.reserved["body"] = f"Quoted example:\n{self.reserved['body']}"
         with patch.object(comments, "api", return_value=[self.reserved]):

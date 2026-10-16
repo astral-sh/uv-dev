@@ -27,9 +27,10 @@ def api(endpoint: str, *, body: str | None = None):
 
 
 def is_reserved(comment: dict) -> bool:
+    author = comment.get("user") or {}
     return (
-        comment.get("user", {}).get("id") == AUTOMATIONS_BOT_ID
-        and comment.get("user", {}).get("type") == "Bot"
+        author.get("id") == AUTOMATIONS_BOT_ID
+        and author.get("type") == "Bot"
         and (comment.get("body") or "").startswith(f"{COMMENT_MARKER}\n")
     )
 
