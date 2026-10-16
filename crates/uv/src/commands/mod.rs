@@ -43,6 +43,7 @@ pub(crate) use self_update::self_update;
 pub(crate) use tool::audit::audit as tool_audit;
 pub(crate) use tool::dir::dir as tool_dir;
 pub(crate) use tool::install::install as tool_install;
+pub(crate) use tool::list::ToolListOutput;
 pub(crate) use tool::list::list as tool_list;
 pub(crate) use tool::run::run as tool_run;
 pub(crate) use tool::uninstall::uninstall as tool_uninstall;
