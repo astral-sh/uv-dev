@@ -252,6 +252,18 @@
         "pull_requests": "write"
       },
       "target": "uv"
+    },
+    {
+      "caller": "uv-dev",
+      "environment": "automations",
+      "caller_ref": "refs/heads/main",
+      "caller_workflow": "pull-request-ci-timings.yml",
+      "on": ["workflow_dispatch"],
+      "permissions": {
+        "pull_requests": "write"
+      },
+      "target": "uv-dev",
+      "installation": "automations"
     }
   ]
 }

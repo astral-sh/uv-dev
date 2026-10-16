@@ -1,0 +1,104 @@
+name: Pull request CI timings
+
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "The completed CI run ID"
+        required: true
+        type: string
+      head_sha:
+        description: "The CI run head SHA"
+        required: true
+        type: string
+      run_attempt:
+        description: "The completed CI run attempt"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  context:
+    if: ${{ github.repository == 'astral-sh/uv-dev' && github.ref == 'refs/heads/main' }}
+    runs-on: github-ubuntu-24.04-x86_64-2
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      pull-request: ${{ steps.context.outputs.pull-request }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Find the current pull request
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.run }}
+          SOURCE_SHA: ${{ inputs.head_sha }}
+          SOURCE_ATTEMPT: ${{ inputs.run_attempt }}
+        run: |
+          python3 scripts/ci-timings.py context \
+            --run-id "$SOURCE_RUN" --head-sha "$SOURCE_SHA" \
+            --attempt "$SOURCE_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+  report:
+    needs: context
+    if: needs.context.outputs.pull-request != ''
+    runs-on: github-ubuntu-24.04-x86_64-2
+    timeout-minutes: 15
+    environment: automations
+    concurrency:
+      group: ci-timings-${{ github.repository }}-${{ needs.context.outputs.pull-request }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      id-token: write # for the pull request comment credential broker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare CI timings
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.run }}
+          SOURCE_SHA: ${{ inputs.head_sha }}
+          SOURCE_ATTEMPT: ${{ inputs.run_attempt }}
+        run: |
+          python3 scripts/ci-timings.py analyze \
+            --run-id "$SOURCE_RUN" --head-sha "$SOURCE_SHA" \
+            --attempt "$SOURCE_ATTEMPT" --output "$RUNNER_TEMP/ci-timings"
+          if test -f "$RUNNER_TEMP/ci-timings/report.json"; then
+            cat "$RUNNER_TEMP/ci-timings/comment.md" >> "$GITHUB_STEP_SUMMARY"
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Retain CI timing samples
+        if: steps.compare.outputs.ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-timings-${{ inputs.run }}-${{ inputs.run_attempt }}
+          path: ${{ runner.temp }}/ci-timings
+          retention-days: 30
+          if-no-files-found: error
+      - name: Get pull request comment token
+        id: token
+        if: steps.compare.outputs.ready == 'true'
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/uv-dev
+          permissions: |
+            pull_requests: write
+      - name: Update CI timing comment
+        if: steps.compare.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_TOKEN: ${{ steps.token.outputs.token }}
+        run: python3 scripts/ci-timings.py publish "$RUNNER_TEMP/ci-timings/report.json"
