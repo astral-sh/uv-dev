@@ -10,6 +10,10 @@ The experiment enables the `content-addressed-cache` preview. Only the ZIP
 executable bit differs between the two wheel files. Each order uses
 its own shared cache, with independent caches as controls. This probes archive
 identity through the actual installer; it does not model cache behavior.
+The payload uses a `.so` suffix to enter the shared file-object store regardless
+of executable status. Reports include archive and object identities, preview-off
+controls, and refresh versus package-cache-clean behavior. An optional
+`--candidate-uv` must also read the baseline-populated cache correctly.
 """
 
 import argparse
@@ -26,11 +30,24 @@ import zipfile
 from pathlib import Path
 
 
+def run(command: list[str]) -> subprocess.CompletedProcess:
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("UV_")
+    }
+    result = subprocess.run(
+        command, env=environment, capture_output=True, text=True, check=False
+    )
+    if result.returncode:
+        print(result.stderr, file=sys.stderr, end="")
+        result.check_returncode()
+    return result
+
+
 def wheel(directory: Path, executable: bool) -> Path:
     directory.mkdir()
     path = directory / "mode_probe-1.0.0-py3-none-any.whl"
     files = {
-        "mode_probe/probe": b"#!/bin/sh\nexit 0\n",
+        "mode_probe/probe.so": b"#!/bin/sh\nexit 0\n",
         "mode_probe-1.0.0.dist-info/METADATA": (
             b"Metadata-Version: 2.1\nName: mode-probe\nVersion: 1.0.0\n"
         ),
@@ -48,13 +65,22 @@ def wheel(directory: Path, executable: bool) -> Path:
         for name, contents in files.items():
             entry = zipfile.ZipInfo(name)
             entry.create_system = 3
-            mode = 0o755 if executable and name == "mode_probe/probe" else 0o644
+            mode = 0o755 if executable and name == "mode_probe/probe.so" else 0o644
             entry.external_attr = (stat.S_IFREG | mode) << 16
             archive.writestr(entry, contents)
     return path
 
 
-def install(uv: str, root: Path, name: str, artifact: Path, cache: str) -> dict:
+def install(
+    uv: str,
+    root: Path,
+    name: str,
+    artifact: Path,
+    cache: str,
+    *,
+    preview: bool = True,
+    refresh: bool = False,
+) -> dict:
     target = root / name
     command = [
         uv,
@@ -67,26 +93,43 @@ def install(uv: str, root: Path, name: str, artifact: Path, cache: str) -> dict:
         sys.executable,
         "--no-index",
         "--no-deps",
-        "--preview-features",
-        "content-addressed-cache",
         "--link-mode",
         "copy",
         "--target",
         str(target),
         str(artifact),
     ]
-    subprocess.run(command, check=True, capture_output=True, text=True)
-    installed = target / "mode_probe/probe"
+    if preview:
+        command.extend(["--preview-features", "content-addressed-cache"])
+    if refresh:
+        command.extend(["--refresh-package", "mode-probe"])
+    run(command)
+    installed = target / "mode_probe/probe.so"
     mode = stat.S_IMODE(installed.stat().st_mode)
+    contents = installed.read_bytes()
+    archive_ids = sorted(
+        path.relative_to(root / cache).as_posix()
+        for bucket in (root / cache).glob("archive-v*")
+        for path in bucket.iterdir()
+        if path.is_dir()
+    )
+    objects = []
+    for bucket in (root / cache).glob("files-v*"):
+        for path in bucket.rglob("*"):
+            if path.is_file() and path.read_bytes() == contents:
+                objects.append(
+                    {
+                        "id": path.relative_to(root / cache).as_posix(),
+                        "executable": bool(path.stat().st_mode & 0o111),
+                    }
+                )
     return {
         "mode": oct(mode),
         "executable": bool(mode & 0o111),
-        "sha256": hashlib.sha256(installed.read_bytes()).hexdigest(),
-        "archive_count": sum(
-            path.is_dir()
-            for bucket in (root / cache).glob("archive-v*")
-            for path in bucket.iterdir()
-        ),
+        "sha256": hashlib.sha256(contents).hexdigest(),
+        "archive_count": len(archive_ids),
+        "archive_ids": archive_ids,
+        "file_objects": sorted(objects, key=lambda item: item["id"]),
     }
 
 
@@ -105,6 +148,7 @@ def binary_identity(executable: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uv", required=True)
+    parser.add_argument("--candidate-uv")
     parser.add_argument("--work-dir", required=True, type=Path)
     parser.add_argument(
         "--expect", choices=["correct", "conflation"], default="correct"
@@ -115,6 +159,9 @@ def main() -> int:
     uv = shutil.which(args.uv)
     if uv is None:
         parser.error(f"uv executable not found: {args.uv}")
+    candidate = shutil.which(args.candidate_uv) if args.candidate_uv else uv
+    if candidate is None:
+        parser.error(f"candidate executable not found: {args.candidate_uv}")
     root = args.work_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
     plain = wheel(root / "plain-wheel", False)
@@ -131,22 +178,66 @@ def main() -> int:
         "executable": install(uv, root, "reverse-exec", executable, "reverse-cache"),
         "plain": install(uv, root, "reverse-plain", plain, "reverse-cache"),
     }
+    preview_off = {
+        "plain": install(uv, root, "off-plain", plain, "off-cache", preview=False),
+        "executable": install(
+            uv, root, "off-exec", executable, "off-cache", preview=False
+        ),
+    }
+    existing_pointer = install(
+        candidate, root, "existing-pointer", executable, "forward-cache"
+    )
+    refreshed_pointer = install(
+        candidate, root, "refreshed-pointer", executable, "forward-cache", refresh=True
+    )
+    run(
+        [
+            candidate,
+            "--cache-dir",
+            str(root / "forward-cache"),
+            "cache",
+            "clean",
+            "mode-probe",
+        ],
+    )
+    after_clean = install(candidate, root, "after-clean", executable, "forward-cache")
     assert not controls["plain"]["executable"], "plain control is executable"
     assert controls["executable"]["executable"], "executable control lost its mode"
     assert controls["plain"]["sha256"] == controls["executable"]["sha256"]
+    assert len(controls["plain"]["file_objects"]) == 1
+    assert len(controls["executable"]["file_objects"]) == 1
+    assert (
+        controls["plain"]["file_objects"][0]["id"]
+        != controls["executable"]["file_objects"][0]["id"]
+    ), "file-object identity conflates executable status"
+    assert not preview_off["plain"]["executable"]
+    assert preview_off["executable"]["executable"]
+    assert after_clean["executable"], (
+        "fresh extraction after cache clean lost executable status"
+    )
     conflation = (
         not forward["executable"]["executable"] and reverse["plain"]["executable"]
     )
     correct = forward["executable"]["executable"] and not reverse["plain"]["executable"]
+    migration_correct = (
+        existing_pointer["executable"] and refreshed_pointer["executable"]
+    )
     report = {
         "uv": binary_identity(uv),
         "controls": controls,
         "plain_then_executable": forward,
         "executable_then_plain": reverse,
+        "preview_disabled": preview_off,
+        "candidate": binary_identity(candidate),
+        "existing_pointer": existing_pointer,
+        "refreshed_pointer": refreshed_pointer,
+        "after_package_cache_clean": after_clean,
+        "candidate_reuses_seeded_cache_correctly": migration_correct,
         "order_dependent_permissions": conflation,
     }
     print(json.dumps(report, indent=2))
-    return 0 if (conflation if args.expect == "conflation" else correct) else 1
+    expected = conflation if args.expect == "conflation" else correct
+    return 0 if expected and (not args.candidate_uv or migration_correct) else 1
 
 
 if __name__ == "__main__":
