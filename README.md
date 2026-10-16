@@ -6,6 +6,8 @@ Classification: bug
 
 ## Summary
 
+A focused local fix now repairs installations whose canonical interpreter is missing during ordinary installation, automatic installation, and upgrade. The updated parent regression and directly related debug-profile integration tests pass. This is an uncommitted checkout change, not a released fix.
+
 Reproduced on Ubuntu 24.04.5 LTS x86_64 using the installed uv 0.13.0 and managed CPython 3.12.15. Deleting only the managed installation's `bin/python3.12` leaves an installation that `uv python install 3.12` reports as successfully installed without restoring its interpreter. `uv run --no-project --managed-python --python 3.12` fails with `Python interpreter not found` both before and after the ordinary install. Explicit `--reinstall` restores the interpreter and allows the same run command to succeed.
 
 The report describes Ubuntu 24.04 under WSL2 and Windows 11, Python 3.12.15, uv 0.13.1, and the same behavior on uv 0.12.23 and main at `3d9ce3cb`. The expected behavior is repair during a plain install and automatic download when a command needs the interpreter. Windows, the other uv versions, `uv sync`, and fallback to system Python were not independently exercised in this reproduction.
@@ -14,7 +16,7 @@ The existing related-work investigation identifies astral-sh/uv#22650 as the ope
 
 ## Draft response
 
-Reproduced with uv 0.13.0 on Ubuntu 24.04 and Python 3.12.15: after deleting the managed interpreter, plain install exits 0 and reports success while the file remains missing, and managed-only `uv run` exits 2. `uv python install --reinstall 3.12` restores the file and the run command succeeds. The proposed fix is tracked in astral-sh/uv#22650. This differs from the junction failure in astral-sh/uv#19622 and the finalization race in astral-sh/uv#19329.
+Reproduced the missing-interpreter failure and implemented a local fix that checks interpreter existence before accepting or reusing a managed installation. Regression coverage now verifies ordinary installation repair, automatic recovery through `uv run`, and repair when upgrade finds matching version/build metadata. The focused Linux integration checks pass. Until a fix is released, `uv python install --reinstall 3.12` remains the verified workaround. The existing proposed fix is tracked in astral-sh/uv#22650; its current GitHub status was not rechecked.
 
 ## Classification
 
@@ -92,10 +94,11 @@ Searched `crates/uv/tests/` and `crates/uv-client/tests/it/`, prioritizing the P
 - `python_install_automatic`: tests automatic download when Python is absent, reuse with downloads disabled, version requests, and ignoring a broken executable placed on the search path. It does not retain a managed installation directory while deleting its canonical interpreter.
 - `python_install_broken_link`: creates an external bin symlink pointing to a nonexistent target before installation, then asserts that installation replaces the symlink with the managed interpreter target. It does not remove the interpreter from an existing installation.
 
-No exact coverage of the retained-directory/missing-canonical-interpreter scenario was found in these existing tests. The module is gated by `test-python-managed` in `crates/uv/tests/python/main.rs:8`; `python_install_broken_link` is also Unix-only. The proposed tests in astral-sh/uv#22650 are separate from the checked-out tests and were not run here.
+At initial reproduction, no exact coverage of the retained-directory/missing-canonical-interpreter scenario was found in these tests. The subsequent parent regression from astral-sh/uv-dev#2814 is now present in the checkout and has been updated to require repair, as described under Fix. The installation and upgrade modules are gated by `test-python-managed` in `crates/uv/tests/python/main.rs`; the parent regression and new automatic-recovery test also retain Unix gates. The proposed tests in astral-sh/uv#22650 are separate from the locally validated changes.
 
 ## Related
 
+- astral-sh/uv-dev#2814 — parent regression pull request: supplies `python_install_missing_executable` in `crates/uv/tests/python/python_install.rs`. Its original passing assertions capture the undesirable behavior; the local fix updates them to require successful repair and execution.
 - astral-sh/uv#22650 — pull request, open: Reinstall managed Pythons whose executable is missing. Direct proposed fix, opened nine seconds after astral-sh/uv#22649 and explicitly closing it. The diff checks executable existence in installation matching, discovery, and download reuse, with separate tests for explicit installation and automatic recovery through uv run. It is not merged and does not make the originating issue a duplicate.
 - astral-sh/uv#19622 — issue, open: `uv python install --reinstall` cannot recover a dangling minor-version-link junction on Windows: "Missing expected target directory for Python minor version link". Related managed-installation recovery failure, but the patch-directory interpreter remains executable and the Windows junction fails to resolve; even --reinstall fails. Later comments associate that case with MSIX filesystem virtualization. Here the interpreter itself is absent, Linux is also affected, and --reinstall succeeds.
 - astral-sh/uv#19329 — issue, open: `uv python install` publishes managed Python before finalization, allowing `uv python find` to race and observe incomplete installs. Shares managed-installation discovery and completeness concerns, but tracks concurrent discovery before finalization and stale interpreter metadata. The new report removes the executable after installation completes and requires no concurrent process, so it is a separate bug.
@@ -103,7 +106,7 @@ No exact coverage of the retained-directory/missing-canonical-interpreter scenar
 
 ## Supporting evidence
 
-Source inspection used checkout commit `64e2ac873ff0c589024453666c2b9a5bd89dc250` dated 2026-10-16. This checkout was not built; the behavioral reproduction used the installed uv 0.13.0. The source findings below are consistent with the observed failure, but the reproduction does not trace each internal branch or validate a fix. The relevant crates have been split since some older reports, so their historical source paths differ.
+Initial source inspection used checkout commit `64e2ac873ff0c589024453666c2b9a5bd89dc250` dated 2026-10-16, and the initial behavioral reproduction used installed uv 0.13.0. The following findings describe the pre-fix implementation. The fix investigation subsequently built the checkout in the debug test profile and confirmed these failure paths with integration tests. The relevant crates have been split since some older reports, so their historical source paths differ.
 
 - `crates/uv-python-managed/src/managed.rs:198`: `find_all` enumerates installation directories and constructs installation records without checking interpreter existence.
 - `crates/uv-python-commands/src/install.rs:99` and `crates/uv-python-commands/src/install.rs:541`: `InstallRequest::matches_installation` matches the installation key; the ordinary install branch accepts that match as satisfied.
@@ -129,8 +132,43 @@ The strongest historical alternatives do not establish a regression:
 
 PR search results were incomplete: text searches returned empty results while direct issue timelines and PR listings exposed relevant PRs. The handoff therefore does not claim an exhaustive negative search over all historical PRs.
 
+## Fix
+
+Outcome: **fixed** in the local checkout.
+
+### Confirmed cause and scope
+
+The original parent test, `python_install::python_install_missing_executable`, passed with the undesirable behavior before edits. Changing its assertions to require the executable and a successful run made it fail because the executable remained absent. A separate automatic-recovery test failed with exit 2 and `Python interpreter not found`. Extending `python_upgrade::python_upgrade_build_version` demonstrated another concrete instance: even with the current build metadata, deleting Python made upgrade report that the latest patch was already installed without restoring the interpreter. All three failures were observed before production edits.
+
+The cause is treating the installation key, build metadata, or retained directory as sufficient evidence that Python can be reused. Inspection covered ordinary installation and explicit reinstall matching, upgrade matching, automatic discovery and download reuse, finalization, and nearby installation, upgrade, find, and list tests. Find/list reuse the discovery implementation; no additional command variants were added for that shared path. No unrelated project/configuration variants were pursued.
+
+### Implementation and regression coverage
+
+- `crates/uv-python-commands/src/install.rs`: ordinary install satisfaction now requires an existing canonical interpreter. Upgrade likewise reinstalls when the matching version/build lacks its interpreter. Key matching itself remains unchanged so explicit reinstall can still enumerate damaged installations, including older matching patches.
+- `crates/uv-python-discovery/src/discovery.rs`: skips managed installations whose canonical interpreter is absent, allowing automatic download to proceed.
+- `crates/uv-python-managed/src/downloads.rs`: returns `AlreadyAvailable` only when the retained installation contains its interpreter. Otherwise, the existing download-and-replace path replaces the incomplete directory.
+- `crates/uv/tests/python/python_install.rs`: retains and updates the parent regression to require the restored executable and a successful managed-only run with downloads disabled. It retains explicit-reinstall recovery coverage. Adds one separate test for automatic recovery, which exercises the discovery/download consumer rather than ordinary install matching.
+- `crates/uv/tests/python/python_upgrade.rs`: extends the existing build-version test to remove the interpreter after a successful build upgrade, verify repair despite matching metadata, and execute the repaired interpreter with downloads disabled. Healthy-build no-op and build-replacement assertions remain intact.
+
+Repair snapshots omit the executable-link suffix where the original external link becomes valid again after restoring its target; these commands do not need to recreate that link.
+
+### Successful focused validation
+
+All integration commands used `UV_PYTHON_CACHE_DIR=/tmp/uv-22649-python-cache`; expected-failure and final runs used `INSTA_UPDATE=no`. The initial baseline attempt encountered a read-only default cache directory; redirecting the shared Python download cache resolved that setup failure without changing tests.
+
+- Baseline: `cargo test -p uv --test python python_install::python_install_missing_executable -- --exact` — original parent regression passed.
+- After the fix: `cargo test -p uv --test python -- missing_executable python_upgrade::python_upgrade_build_version` — all 3 repair regressions passed, including producer/consumer execution with downloads disabled.
+- Neighboring checks: `cargo test -p uv --test python -- --exact python_install::python_install python_install::python_reinstall python_install::python_reinstall_patch python_install::python_install_automatic python_install::python_install_broken_link python_install::python_install_upgrade_build_version python_upgrade::python_upgrade python_upgrade::python_upgrade_without_version` — all 8 passed.
+- `RUSTUP_TOOLCHAIN=stable cargo fmt --all` and the corresponding `-- --check` — passed using the installed stable toolchain, which is also Rust 1.99.0. The explicitly named 1.99.0 toolchain lacks rustfmt and cannot be modified on this runner.
+- `CARGO_BUILD_WARNINGS=deny cargo +stable clippy -p uv-python-managed -p uv-python-discovery -p uv-python-commands --all-targets --locked -- -D warnings` — passed.
+- `git diff --check` — passed.
+
+### Limits
+
+Validation is on Linux. `cargo xwin clippy` could not run because cargo-xwin is unavailable; Windows compilation and execution remain unverified. No Windows-specific implementation was added. No full test suite or release-profile build was run. Only the three affected production files and two directly relevant integration-test files were modified in the checkout; the parent regression file is included. No commit, push, Git configuration change, or GitHub write was made.
+
 ## Next step and verification limits
 
-Review astral-sh/uv#22650 for both explicit repair and automatic recovery, including platform results for deletion of the actual canonical interpreter. Retain the distinction from the junction and publication-race work. The immediate documented workaround is `uv python install --reinstall 3.12`.
+Review the local fix alongside astral-sh/uv#22650, retaining the distinction from the junction and publication-race work. No released fix was verified. Windows/WSL2 runtime behavior, `uv sync`, system-interpreter fallback, and uninstall followed by install were not separately exercised. Related GitHub status and proposed-diff details are retained from the prior investigation, rather than refreshed during the fix attempt.
 
-The Linux reproduction independently confirms the missing-interpreter failure and the explicit-reinstall workaround. It does not verify Windows, WSL2, uv 0.13.1 or 0.12.23, the checkout binary, `uv sync`, system-interpreter fallback, or uninstall followed by install. No repository build or test suite was run, and no released fix was verified. Related GitHub status and proposed-diff details above are retained from the prior investigation. GitHub and checkout files were not changed; reproduction state and this handoff were written only to temporary directories.
+Pull request: https://github.com/astral-sh/uv-dev/pull/2815

@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Managed Python installations now require an existing interpreter before installation, upgrade, or download reuse treats them as complete. Updated the parent regression to require successful repair and execution, with additional coverage for automatic recovery and matching-build upgrades.",
+  "validation": [
+    "Three repair regression tests passed in the debug profile on Linux.",
+    "Eight related installation, reinstall, and upgrade integration tests passed.",
+    "Focused Clippy checks passed with warnings denied.",
+    "cargo fmt --all and git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2815"
+}
