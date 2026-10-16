@@ -62,6 +62,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
+          cache-suffix: test
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
           version: "0.13.0"
           checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
@@ -205,6 +206,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
+          cache-suffix: test
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
           version: "0.13.0"
           checksum: "a9c1b29002cf3c83f07fa9cd8a887a3be0107d90e23189721221e7257db8e3d6"
@@ -286,6 +288,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
+          cache-suffix: test
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
           version: "0.13.0"
           checksum: "088962f9e7b7bd9ea740c04c650b2a21c8928c345bd99ac24350dc924dba656c"

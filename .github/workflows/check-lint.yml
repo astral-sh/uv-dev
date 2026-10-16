@@ -32,6 +32,8 @@ jobs:
       - name: "Install uv"
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
+          cache-dependency-glob: uv.lock
+          cache-suffix: check
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
           version: "0.13.0"
           checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
@@ -47,6 +49,10 @@ jobs:
       - name: "Install uv"
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
+          cache-dependency-glob: |
+            uv.lock
+            **/*.py.lock
+          cache-suffix: check-scripts
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
           version: "0.13.0"
           checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
@@ -91,6 +97,8 @@ jobs:
       - name: "Install uv"
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
+          cache-dependency-glob: uv.lock
+          cache-suffix: check
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
           version: "0.13.0"
           checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
@@ -171,6 +179,8 @@ jobs:
       - name: "Install uv"
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
+          cache-dependency-glob: uv.lock
+          cache-suffix: dev
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
           version: "0.13.0"
           checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
@@ -220,6 +230,8 @@ jobs:
       - name: "Install uv"
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
+          cache-dependency-glob: uv.lock
+          cache-suffix: check
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
           version: "0.13.0"
           checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
@@ -235,6 +247,8 @@ jobs:
       - name: "Install uv"
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
+          cache-dependency-glob: uv.lock
+          cache-suffix: check
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
           version: "0.13.0"
           checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
