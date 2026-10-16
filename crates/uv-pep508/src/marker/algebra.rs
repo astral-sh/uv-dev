@@ -402,6 +402,9 @@ impl InternerGuard<'_> {
             "`and_nontrivial` requires a non-trivial conjunction"
         );
 
+        // Conjunction is commutative, so both operand orders share one cache entry.
+        let (xi, yi) = if xi <= yi { (xi, yi) } else { (yi, xi) };
+
         // The operation was memoized.
         if let Some(result) = self.state.cache.get(&(xi, yi)) {
             return *result;
@@ -1948,13 +1951,40 @@ impl fmt::Debug for NodeId {
 
 #[cfg(test)]
 mod tests {
-    use super::{INTERNER, NodeId};
+    use std::error::Error;
+
+    use super::{INTERNER, Interner, NodeId};
     use crate::MarkerExpression;
 
     fn expr(s: &str) -> NodeId {
         INTERNER
             .lock()
             .expression(MarkerExpression::from_str(s).unwrap().unwrap())
+    }
+
+    #[test]
+    fn conjunction_cache_is_commutative() -> Result<(), Box<dyn Error>> {
+        let interner = Interner::default();
+        let mut guard = interner.lock();
+        let left = guard.expression(
+            MarkerExpression::from_str("extra == 'foo'")?.ok_or("missing extra expression")?,
+        );
+        let right = guard.expression(
+            MarkerExpression::from_str("python_full_version >= '3.12'")?
+                .ok_or("missing version expression")?,
+        );
+
+        let result = guard.and(left, right);
+        let entries = guard.state.cache.len();
+        assert!(entries > 0);
+        assert_eq!(guard.and(right, left), result);
+        assert_eq!(guard.state.cache.len(), entries);
+
+        let result = guard.or(left, right.not());
+        let entries = guard.state.cache.len();
+        assert_eq!(guard.or(right.not(), left), result);
+        assert_eq!(guard.state.cache.len(), entries);
+        Ok(())
     }
 
     #[test]
