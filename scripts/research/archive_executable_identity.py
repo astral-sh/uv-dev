@@ -184,11 +184,17 @@ def main() -> int:
             uv, root, "off-exec", executable, "off-cache", preview=False
         ),
     }
+    refresh_seed = {
+        "plain": install(uv, root, "refresh-seed-plain", plain, "refresh-cache"),
+        "executable": install(
+            uv, root, "refresh-seed-exec", executable, "refresh-cache"
+        ),
+    }
     existing_pointer = install(
         candidate, root, "existing-pointer", executable, "forward-cache"
     )
     refreshed_pointer = install(
-        candidate, root, "refreshed-pointer", executable, "forward-cache", refresh=True
+        candidate, root, "refreshed-pointer", executable, "refresh-cache", refresh=True
     )
     run(
         [
@@ -231,6 +237,7 @@ def main() -> int:
         "preview_disabled": preview_off,
         "candidate": binary_identity(candidate),
         "existing_pointer": existing_pointer,
+        "refresh_cache_seed": refresh_seed,
         "refreshed_pointer": refreshed_pointer,
         "after_package_cache_clean": after_clean,
         "candidate_reuses_seeded_cache_correctly": migration_correct,
