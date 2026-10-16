@@ -2036,6 +2036,8 @@ impl fmt::Debug for NodeId {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use uv_pep440::{Version, VersionSpecifier};
 
     use super::{INTERNER, Interner, NodeId};
@@ -2092,6 +2094,7 @@ mod tests {
         );
         let result = guard.and(left, right);
         let entries = guard.state.cache.len();
+        assert!(entries > 0);
         assert_eq!(guard.and(right, left).0, result.0);
         assert_eq!(guard.state.cache.len(), entries);
 
@@ -2137,7 +2140,7 @@ mod tests {
                 conjunction_entries += entries;
                 trivial_conjunctions += usize::from(entries == 0);
                 maximum_entries = maximum_entries.max(entries);
-                assert_eq!(guard.and(right, left), conjunction);
+                assert_eq!(guard.and(right, left).0, conjunction.0);
                 assert_eq!(guard.state.cache.len(), entries);
 
                 guard.state.cache.clear();
@@ -2146,14 +2149,14 @@ mod tests {
                 disjunction_entries += entries;
                 trivial_disjunctions += usize::from(entries == 0);
                 maximum_entries = maximum_entries.max(entries);
-                assert_eq!(guard.or(right, left), disjunction);
+                assert_eq!(guard.or(right, left).0, disjunction.0);
                 assert_eq!(guard.state.cache.len(), entries);
 
-                assert_eq!(guard.or(left.not(), right.not()).not(), conjunction);
-                assert_eq!(guard.and(left.not(), right.not()).not(), disjunction);
+                assert_eq!(guard.or(left.not(), right.not()).not().0, conjunction.0);
+                assert_eq!(guard.and(left.not(), right.not()).not().0, disjunction.0);
                 if left == right.not() {
-                    assert_eq!(conjunction, NodeId::FALSE);
-                    assert_eq!(disjunction, NodeId::TRUE);
+                    assert_eq!(conjunction.0, NodeId::FALSE.0);
+                    assert_eq!(disjunction.0, NodeId::TRUE.0);
                 }
             }
         }
