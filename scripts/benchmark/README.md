@@ -35,6 +35,14 @@ adds a fixed delay before wheel responses; `--chunk-delay-ms` adds a delay per 6
 These model a controlled server, not a particular external network. The workload contains wheels
 only; it does not measure source builds. Cold refers to uv's cache, not the OS page cache.
 
+`--compression deflated` enables ZIP deflate, while `--payload repeated` generates compressible
+payloads from a repeated seeded block. The defaults are stored ZIP entries and random payloads.
+Compare stored and deflated runs with the same payload kind, seed, package count, and maximum size
+to hold installed bytes constant. Then compare random and repeated payloads at the same expanded
+size to vary transfer volume. Each output records both wheel bytes and expanded bytes; a smaller
+download does not imply less extraction work. These controls change the workload and do not measure
+extraction time directly.
+
 `results.json` records binary versions and digests, every sample, p50/p95 latency, request
 intervals, download bytes, and peak simultaneous wheel requests. The corpus manifest and command
 logs are retained. Virtual environments and caches are removed after successful samples. Request

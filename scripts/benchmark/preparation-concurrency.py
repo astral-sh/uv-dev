@@ -31,7 +31,7 @@ def positive(value: str) -> int:
     return number
 
 
-def wheel(name: str, payload: bytes) -> tuple[bytes, bytes]:
+def wheel(name: str, payload: bytes, compression: int) -> tuple[bytes, bytes, int]:
     metadata = f"Metadata-Version: 2.3\nName: {name}\nVersion: 1.0\n\n".encode()
     info = f"{name}-1.0.dist-info"
     members = {
@@ -48,15 +48,17 @@ def wheel(name: str, payload: bytes) -> tuple[bytes, bytes]:
         records.append(f"{path},sha256={digest.decode()},{len(data)}\n")
     members[f"{info}/RECORD"] = ("".join(records) + f"{info}/RECORD,,\n").encode()
     output = io.BytesIO()
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
+    with zipfile.ZipFile(output, "w") as archive:
         for path, data in sorted(members.items()):
             entry = zipfile.ZipInfo(path, date_time=(1980, 1, 1, 0, 0, 0))
             entry.external_attr = 0o100644 << 16
-            archive.writestr(entry, data)
-    return output.getvalue(), metadata
+            archive.writestr(entry, data, compress_type=compression, compresslevel=6)
+    return output.getvalue(), metadata, sum(map(len, members.values()))
 
 
-def corpus(packages: int, max_kib: int, seed: int) -> tuple[dict, list[dict]]:
+def corpus(
+    packages: int, max_kib: int, seed: int, compression: str, payload_kind: str
+) -> tuple[dict, list[dict]]:
     generator = random.Random(seed)
     routes = {}
     manifest = []
@@ -64,8 +66,16 @@ def corpus(packages: int, max_kib: int, seed: int) -> tuple[dict, list[dict]]:
         name = f"concurrency_fixture_{index:03}"
         # Interleave small and large wheels instead of ordering names by size.
         size = 1024 * max(1, max_kib // (2 ** (index % 5)))
-        payload = generator.randbytes(size)
-        data, metadata = wheel(name, payload)
+        if payload_kind == "random":
+            payload = generator.randbytes(size)
+        else:
+            block = generator.randbytes(64)
+            payload = (block * math.ceil(size / len(block)))[:size]
+        data, metadata, expanded_bytes = wheel(
+            name,
+            payload,
+            zipfile.ZIP_STORED if compression == "stored" else zipfile.ZIP_DEFLATED,
+        )
         filename = f"{name}-1.0-py3-none-any.whl"
         digest = hashlib.sha256(data).hexdigest()
         routes[f"/files/{filename}"] = (data, "application/octet-stream")
@@ -93,6 +103,10 @@ def corpus(packages: int, max_kib: int, seed: int) -> tuple[dict, list[dict]]:
                 "filename": filename,
                 "sha256": digest,
                 "size": len(data),
+                "expanded_bytes": expanded_bytes,
+                "payload_bytes": len(payload),
+                "compression": compression,
+                "payload_kind": payload_kind,
                 "payload_sha256": hashlib.sha256(payload).hexdigest(),
             }
         )
@@ -268,6 +282,10 @@ def main() -> None:
     parser.add_argument("--runs", type=positive, default=5)
     parser.add_argument("--packages", type=positive, default=16)
     parser.add_argument("--max-kib", type=positive, default=1024)
+    parser.add_argument(
+        "--compression", choices=("stored", "deflated"), default="stored"
+    )
+    parser.add_argument("--payload", choices=("random", "repeated"), default="random")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--latency-ms", type=float, default=0)
     parser.add_argument("--chunk-delay-ms", type=float, default=0)
@@ -298,7 +316,9 @@ def main() -> None:
             "TRACING_DURATIONS_FILE",
         }
     }
-    routes, manifest = corpus(args.packages, args.max_kib, args.seed)
+    routes, manifest = corpus(
+        args.packages, args.max_kib, args.seed, args.compression, args.payload
+    )
     (output / "corpus.json").write_text(json.dumps(manifest, indent=2) + "\n")
     requirements = output / "requirements.txt"
     requirements.write_text(
@@ -311,6 +331,13 @@ def main() -> None:
         "platform": platform.platform(),
         "python": sys.version,
         "arguments": vars(args) | {"output": str(output)},
+        "corpus": {
+            "wheel_bytes": sum(package["size"] for package in manifest),
+            "expanded_bytes": sum(package["expanded_bytes"] for package in manifest),
+            "payload_bytes": sum(package["payload_bytes"] for package in manifest),
+            "compression": args.compression,
+            "payload_kind": args.payload,
+        },
         "binaries": [],
         "samples": [],
         "summary": [],
