@@ -2728,9 +2728,10 @@ impl<'index> ForkState<'index> {
             prefetcher: self.prefetcher.clone(),
         };
         let application_elapsed = application_start.elapsed();
+        let clone_elapsed = start.elapsed();
         debug!(
             split_kind,
-            clone_us = %start.elapsed().as_micros(),
+            clone_us = %clone_elapsed.as_micros(),
             pubgrub_us = %pubgrub_elapsed.as_micros(),
             application_us = %application_elapsed.as_micros(),
             tracked_packages = self.pubgrub.incompatibilities.len(),
