@@ -73,6 +73,32 @@ jobs:
           New-Item -Path "C:\uv-smb" -ItemType Directory -Force
           New-SmbShare -Name "uv-alt-fs" -Path "C:\uv-smb" -FullAccess "Everyone"
 
+      - name: "Build diagnostic tests"
+        working-directory: ${{ env.UV_WORKSPACE }}
+        shell: bash
+        run: |
+          uv run --only-dev cargo nextest run --locked \
+            --cargo-profile fast-build-nightly \
+            -Z panic-abort-tests \
+            -Z checksum-freshness \
+            --no-default-features \
+            --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth \
+            -p uv --test python --no-run
+
+      - name: "Capture mirror TCP headers"
+        continue-on-error: true
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: |
+          New-Item -ItemType Directory -Force python-download-traces
+          $addresses = Resolve-DnsName releases.astral.sh -Type A | Where-Object IPAddress
+          $addresses | Format-List | Out-File python-download-traces/dns.txt
+          pktmon filter remove
+          foreach ($address in $addresses) {
+            pktmon filter add "mirror-$($address.IPAddress)" -i $address.IPAddress -t TCP -p 443
+          }
+          netstat -s -p tcp | Out-File python-download-traces/tcp-before.txt
+          pktmon start --capture --comp nics --pkt-size 128 --file-name python-download-traces/mirror.etl --file-size 128 --log-mode circular
+
       - name: "Trace unseeded Python find setup"
         continue-on-error: true
         working-directory: ${{ env.UV_WORKSPACE }}
@@ -102,6 +128,31 @@ jobs:
             --profile ci-windows \
             -E 'test(=python_find::python_find_freethreaded_313) + test(=python_find::python_find_prerelease_version_specifiers)' \
             --test-threads 1 --success-output final
+
+      - name: "Compare HTTP protocols with fresh archive caches"
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: python scripts/trace-python-download-protocols.py
+
+      - name: "Save mirror TCP headers"
+        if: always()
+        continue-on-error: true
+        working-directory: ${{ env.UV_WORKSPACE }}
+        run: |
+          pktmon stop
+          netstat -s -p tcp | Out-File python-download-traces/tcp-after.txt
+          pktmon etl2pcap python-download-traces/mirror.etl --out python-download-traces/mirror.pcapng
+
+      - name: "Upload download traces"
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-download-traces
+          path: |
+            ${{ env.UV_WORKSPACE }}/python-download-traces/*.txt
+            ${{ env.UV_WORKSPACE }}/python-download-traces/*.json
+            ${{ env.UV_WORKSPACE }}/python-download-traces/*.pcapng
+            ${{ env.UV_WORKSPACE }}/python-download-traces/*/*.log
+          retention-days: 7
 
       - name: "Seed the Python find archives"
         working-directory: ${{ env.UV_WORKSPACE }}

@@ -1261,8 +1261,9 @@ fn python_find_freethreaded_313() {
         .python_install()
         .env(
             "RUST_LOG",
-            "uv_python_managed=trace,uv_client=debug,uv_fs=debug",
+            "uv_python_managed=debug,uv_client=debug,uv_fs=debug,h2::codec=debug,hyper_util::client::legacy::connect=debug",
         )
+        .env("UV_LOG_CONTEXT", "1")
         .stderr(std::process::Stdio::inherit())
         .arg("--preview")
         .arg("3.13t")
@@ -1501,8 +1502,9 @@ fn python_find_prerelease_version_specifiers() {
         .arg("3.14.0rc2")
         .env(
             "RUST_LOG",
-            "uv_python_managed=trace,uv_client=debug,uv_fs=debug",
+            "uv_python_managed=debug,uv_client=debug,uv_fs=debug,h2::codec=debug,hyper_util::client::legacy::connect=debug",
         )
+        .env("UV_LOG_CONTEXT", "1")
         .stderr(std::process::Stdio::inherit())
         .assert()
         .success();
@@ -1514,8 +1516,9 @@ fn python_find_prerelease_version_specifiers() {
         .arg("3.14.0rc3")
         .env(
             "RUST_LOG",
-            "uv_python_managed=trace,uv_client=debug,uv_fs=debug",
+            "uv_python_managed=debug,uv_client=debug,uv_fs=debug,h2::codec=debug,hyper_util::client::legacy::connect=debug",
         )
+        .env("UV_LOG_CONTEXT", "1")
         .stderr(std::process::Stdio::inherit())
         .assert()
         .success();
@@ -1575,8 +1578,9 @@ fn python_find_prerelease_version_specifiers() {
         .arg("3.14.0")
         .env(
             "RUST_LOG",
-            "uv_python_managed=trace,uv_client=debug,uv_fs=debug",
+            "uv_python_managed=debug,uv_client=debug,uv_fs=debug,h2::codec=debug,hyper_util::client::legacy::connect=debug",
         )
+        .env("UV_LOG_CONTEXT", "1")
         .stderr(std::process::Stdio::inherit())
         .assert()
         .success();

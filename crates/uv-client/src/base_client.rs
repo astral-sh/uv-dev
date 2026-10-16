@@ -621,6 +621,13 @@ impl<'a> BaseClientBuilder<'a> {
             .connect_timeout(connect_timeout)
             .redirect(redirect_policy.reqwest_policy());
 
+        let client_builder = if env::var_os("UV_INTERNAL__DIAGNOSTIC_HTTP1").is_some() {
+            debug!("DIAGNOSTIC forcing HTTP/1.1");
+            client_builder.http1_only()
+        } else {
+            client_builder
+        };
+
         // If necessary, accept invalid certificates.
         let client_builder = match security {
             Security::Secure => client_builder,
