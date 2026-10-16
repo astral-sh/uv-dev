@@ -7,6 +7,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTimeError};
 use std::{env, io};
@@ -21,7 +23,7 @@ use reqwest_retry::policies::ExponentialBackoff;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncWriteExt, BufWriter, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter, ReadBuf};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tokio_util::either::Either;
 use tracing::{debug, instrument};
@@ -701,8 +703,8 @@ impl ManagedPythonDownload {
         );
 
         let diagnostic_started = std::time::Instant::now();
-        let (mut reader, size) = read_url(url, client).await?;
-        eprintln!(
+        let (reader, size) = read_url(url, client).await?;
+        debug!(
             "DIAGNOSTIC response headers for {url}: {:?}",
             diagnostic_started.elapsed()
         );
@@ -712,24 +714,57 @@ impl ManagedPythonDownload {
 
         // Download to a temporary file. We verify the hash when unpacking the file.
         {
-            let mut archive_writer = BufWriter::new(fs_err::tokio::File::create(&temp_file).await?);
-
-            // Download with or without progress bar.
-            if let Some(reporter) = reporter {
-                let key = reporter.on_request_start(Direction::Download, &self.key, size);
-                tokio::io::copy(
-                    &mut ProgressReader::new(reader, key, reporter),
-                    &mut archive_writer,
-                )
-                .await?;
-                reporter.on_request_complete(Direction::Download, key);
-            } else {
-                tokio::io::copy(&mut reader, &mut archive_writer).await?;
+            debug!("DIAGNOSTIC creating cache file for {url}");
+            let file = fs_err::tokio::File::create(&temp_file).await?;
+            debug!("DIAGNOSTIC created cache file for {url}");
+            let transfer = Arc::new(DiagnosticTransfer::new());
+            let mut reader = DiagnosticIo {
+                inner: reader,
+                transfer: Arc::clone(&transfer),
+            };
+            let mut archive_writer = BufWriter::new(DiagnosticIo {
+                inner: file,
+                transfer: Arc::clone(&transfer),
+            });
+            let heartbeat = Arc::clone(&transfer);
+            let diagnostic_url = url.to_string();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(Duration::from_secs(5));
+                    if heartbeat.done.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    heartbeat.report(&diagnostic_url);
+                }
+            });
+            let result: io::Result<()> = async {
+                // Download with or without progress bar.
+                if let Some(reporter) = reporter {
+                    let key = reporter.on_request_start(Direction::Download, &self.key, size);
+                    debug!("DIAGNOSTIC copying response with progress reporter for {url}");
+                    tokio::io::copy(
+                        &mut ProgressReader::new(reader, key, reporter),
+                        &mut archive_writer,
+                    )
+                    .await?;
+                    debug!("DIAGNOSTIC copy complete for {url}");
+                    reporter.on_request_complete(Direction::Download, key);
+                    debug!("DIAGNOSTIC reporter complete for {url}");
+                } else {
+                    debug!("DIAGNOSTIC copying response without progress reporter for {url}");
+                    tokio::io::copy(&mut reader, &mut archive_writer).await?;
+                    debug!("DIAGNOSTIC copy complete for {url}");
+                }
+                archive_writer.flush().await?;
+                debug!("DIAGNOSTIC flush complete for {url}");
+                Ok(())
             }
-
-            archive_writer.flush().await?;
+            .await;
+            transfer.done.store(true, Ordering::Relaxed);
+            transfer.report(url.as_str());
+            result?;
         }
-        eprintln!(
+        debug!(
             "DIAGNOSTIC archive body written for {url}: {:?}",
             diagnostic_started.elapsed()
         );
@@ -740,7 +775,7 @@ impl ManagedPythonDownload {
             Err(_) if target_cache_file.is_file() => {}
             Err(err) => return Err(err.into()),
         }
-        eprintln!(
+        debug!(
             "DIAGNOSTIC cached archive rename for {url}: {:?}",
             diagnostic_started.elapsed()
         );
@@ -782,7 +817,7 @@ impl ManagedPythonDownload {
             target
         };
         hasher.finish().await.map_err(Error::HashExhaustion)?;
-        eprintln!(
+        debug!(
             "DIAGNOSTIC archive extraction and hashing for {filename}: {:?}",
             diagnostic_started.elapsed()
         );
@@ -1158,6 +1193,153 @@ where
     }
 }
 
+struct DiagnosticTransfer {
+    started: Instant,
+    read_bytes: AtomicU64,
+    write_bytes: AtomicU64,
+    read_polls: AtomicU64,
+    write_polls: AtomicU64,
+    last_read_ms: AtomicU64,
+    last_write_ms: AtomicU64,
+    read_state: AtomicU8,
+    write_state: AtomicU8,
+    flush_state: AtomicU8,
+    done: AtomicBool,
+}
+
+impl DiagnosticTransfer {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            read_bytes: AtomicU64::new(0),
+            write_bytes: AtomicU64::new(0),
+            read_polls: AtomicU64::new(0),
+            write_polls: AtomicU64::new(0),
+            last_read_ms: AtomicU64::new(0),
+            last_write_ms: AtomicU64::new(0),
+            read_state: AtomicU8::new(0),
+            write_state: AtomicU8::new(0),
+            flush_state: AtomicU8::new(0),
+            done: AtomicBool::new(false),
+        }
+    }
+
+    fn state(state: &AtomicU8) -> &'static str {
+        match state.load(Ordering::Relaxed) {
+            0 => "idle",
+            1 => "polling",
+            2 => "pending",
+            3 => "ready",
+            4 => "eof",
+            5 => "error",
+            _ => "invalid",
+        }
+    }
+
+    fn report(&self, url: &str) {
+        debug!(
+            "DIAGNOSTIC transfer {url}: elapsed={:?} read_bytes={} write_bytes={} read_polls={} write_polls={} last_read_ms={} last_write_ms={} read={} write={} flush={}",
+            self.started.elapsed(),
+            self.read_bytes.load(Ordering::Relaxed),
+            self.write_bytes.load(Ordering::Relaxed),
+            self.read_polls.load(Ordering::Relaxed),
+            self.write_polls.load(Ordering::Relaxed),
+            self.last_read_ms.load(Ordering::Relaxed),
+            self.last_write_ms.load(Ordering::Relaxed),
+            Self::state(&self.read_state),
+            Self::state(&self.write_state),
+            Self::state(&self.flush_state),
+        );
+    }
+}
+
+struct DiagnosticIo<T> {
+    inner: T,
+    transfer: Arc<DiagnosticTransfer>,
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for DiagnosticIo<R> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        this.transfer.read_polls.fetch_add(1, Ordering::Relaxed);
+        this.transfer.read_state.store(1, Ordering::Relaxed);
+        let before = buf.filled().len();
+        let result = Pin::new(&mut this.inner).poll_read(cx, buf);
+        let state = match &result {
+            Poll::Pending => 2,
+            Poll::Ready(Ok(())) => {
+                let bytes = buf.filled().len() - before;
+                this.transfer
+                    .read_bytes
+                    .fetch_add(bytes as u64, Ordering::Relaxed);
+                if bytes == 0 {
+                    4
+                } else {
+                    this.transfer.last_read_ms.store(
+                        u64::try_from(this.transfer.started.elapsed().as_millis())
+                            .unwrap_or(u64::MAX),
+                        Ordering::Relaxed,
+                    );
+                    3
+                }
+            }
+            Poll::Ready(Err(_)) => 5,
+        };
+        this.transfer.read_state.store(state, Ordering::Relaxed);
+        result
+    }
+}
+
+impl<W: AsyncWrite + Unpin> AsyncWrite for DiagnosticIo<W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        this.transfer.write_polls.fetch_add(1, Ordering::Relaxed);
+        this.transfer.write_state.store(1, Ordering::Relaxed);
+        let result = Pin::new(&mut this.inner).poll_write(cx, buf);
+        let state = match &result {
+            Poll::Pending => 2,
+            Poll::Ready(Ok(bytes)) => {
+                this.transfer
+                    .write_bytes
+                    .fetch_add(*bytes as u64, Ordering::Relaxed);
+                this.transfer.last_write_ms.store(
+                    u64::try_from(this.transfer.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    Ordering::Relaxed,
+                );
+                3
+            }
+            Poll::Ready(Err(_)) => 5,
+        };
+        this.transfer.write_state.store(state, Ordering::Relaxed);
+        result
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        this.transfer.flush_state.store(1, Ordering::Relaxed);
+        let result = Pin::new(&mut this.inner).poll_flush(cx);
+        let state = match &result {
+            Poll::Pending => 2,
+            Poll::Ready(Ok(())) => 3,
+            Poll::Ready(Err(_)) => 5,
+        };
+        this.transfer.flush_state.store(state, Ordering::Relaxed);
+        result
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
 /// Convert a [`Url`] into an [`AsyncRead`] stream.
 async fn read_url(
     url: &DisplaySafeUrl,
@@ -1192,6 +1374,28 @@ async fn read_url(
             .error_for_status()
             .map_err(|err| Error::from_reqwest(url.clone(), err, retry_count, start))?;
 
+        debug!(
+            "DIAGNOSTIC HTTP response for {url}: status={} protocol={:?} remote={:?} length={:?}",
+            response.status(),
+            response.version(),
+            response.remote_addr(),
+            response.content_length(),
+        );
+        for name in [
+            "content-length",
+            "content-encoding",
+            "server",
+            "via",
+            "age",
+            "cf-ray",
+            "cf-cache-status",
+            "x-cache",
+            "x-served-by",
+        ] {
+            if let Some(value) = response.headers().get(name) {
+                debug!("DIAGNOSTIC HTTP header for {url}: {name}={value:?}");
+            }
+        }
         let size = response.content_length();
         let stream = response
             .bytes_stream()
