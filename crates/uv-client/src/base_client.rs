@@ -832,7 +832,7 @@ impl BaseClient {
     }
 
     /// The configured client read timeout.
-    pub(crate) fn read_timeout(&self) -> Duration {
+    pub fn read_timeout(&self) -> Duration {
         self.read_timeout
     }
 
@@ -1154,6 +1154,12 @@ impl<'a> RequestBuilder<'a> {
     #[cfg_attr(docsrs, doc(cfg(feature = "multipart")))]
     pub fn multipart(mut self, multipart: multipart::Form) -> Self {
         self.builder = self.builder.multipart(multipart);
+        self
+    }
+
+    /// Set a timeout for receiving the response headers and body.
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.builder = self.builder.timeout(timeout);
         self
     }
 
