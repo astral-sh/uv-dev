@@ -193,15 +193,44 @@ class TimingTests(unittest.TestCase):
 class ContextTests(unittest.TestCase):
     def test_partial_retry_keeps_successful_jobs_from_earlier_attempt(self):
         api = FakeAPI()
+        inherited = job(600)
+        inherited.update(id=202, run_attempt=2)
         api.collections["actions/runs/100/attempts/1/jobs"] = [
             job(600),
             job(name="test", conclusion="failure"),
         ]
-        api.collections["actions/runs/100/attempts/2/jobs"] = [job(name="test")]
+        api.collections["actions/runs/100/attempts/2/jobs"] = [
+            inherited,
+            job(name="test"),
+        ]
         measured = timings.measurements(timings.source_jobs(api, 100, 2))
         benchmark = measured[timings.job_key(job())]
-        self.assertEqual((benchmark["seconds"], benchmark["attempt"]), (600, 1))
+        self.assertEqual(
+            (benchmark["seconds"], benchmark["attempt"], benchmark["id"]), (600, 1, 101)
+        )
         self.assertEqual(measured[timings.job_key(job(name="test"))]["attempt"], 2)
+
+    def test_partial_retry_can_omit_jobs_that_were_not_rerun(self):
+        api = FakeAPI()
+        api.collections["actions/runs/100/attempts/1/jobs"] = [job(600)]
+        api.collections["actions/runs/100/attempts/2/jobs"] = []
+        measured = timings.measurements(timings.source_jobs(api, 100, 2))
+        self.assertEqual(measured[timings.job_key(job())]["attempt"], 1)
+
+    def test_successful_rerun_with_the_same_duration_is_a_new_execution(self):
+        api = FakeAPI()
+        retried = job(600)
+        retried["id"] = 202
+        for record in [retried, *retried["steps"]]:
+            for field in ("started_at", "completed_at"):
+                record[field] = (
+                    timings.timestamp(record[field]) + timedelta(hours=1)
+                ).isoformat()
+        api.collections["actions/runs/100/attempts/1/jobs"] = [job(600)]
+        api.collections["actions/runs/100/attempts/2/jobs"] = [retried]
+        measured = timings.measurements(timings.source_jobs(api, 100, 2))
+        benchmark = measured[timings.job_key(job())]
+        self.assertEqual((benchmark["attempt"], benchmark["id"]), (2, 202))
 
     def test_retry_replaces_previous_success_even_when_it_fails(self):
         api = FakeAPI()
