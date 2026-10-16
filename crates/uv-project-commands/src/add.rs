@@ -387,6 +387,21 @@ pub async fn add(
     )
     .await?;
     // Persist imported registry locations as named sources so later locks use the same indexes.
+    let existing_indexes = match &target {
+        EditTarget::Script(script) => script
+            .metadata
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.top_level.index.as_deref()),
+        EditTarget::Project(project) => project
+            .pyproject_toml()
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.index.as_deref()),
+    }
+    .unwrap_or(&[]);
     let mut imported_indexes = Vec::new();
     let mut imported_index_names = BTreeMap::new();
     let mut index_names = settings
@@ -394,6 +409,7 @@ pub async fn add(
         .index_locations
         .defined_indexes()
         .chain(indexes.iter())
+        .chain(existing_indexes)
         .filter_map(|index| index.name.clone())
         .collect::<BTreeSet<_>>();
     for requirement in &spec.requirements {
@@ -414,6 +430,7 @@ pub async fn add(
             .iter()
             .chain(settings.resolver.index_locations.defined_indexes())
             .chain(indexes.iter())
+            .chain(existing_indexes)
             .find(|index| index_urls_equal(&index.url, &metadata.url))
             .cloned()
             .unwrap_or_else(|| {

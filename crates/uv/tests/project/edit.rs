@@ -16877,3 +16877,71 @@ fn add_pylock_mixed_source_marker() -> Result<()> {
     "#);
     Ok(())
 }
+
+/// Existing index names and bindings remain available for import with `--no-index`.
+#[test]
+fn add_pylock_no_index_bindings() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = ["existing"]
+
+        [[tool.uv.index]]
+        name = "pylock-1"
+        url = "https://example.com/existing"
+        explicit = true
+
+        [tool.uv.sources]
+        existing = { index = "pylock-1" }
+    "#})?;
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        index = "https://example.com/new"
+        wheels = [{ url = "https://example.com/iniconfig-1.1.1-py2.py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+        [[packages]]
+        name = "reused"
+        version = "1.0"
+        index = "https://example.com/existing"
+        wheels = [{ url = "https://example.com/reused-1.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "--no-index", "-r", "pylock.toml"]), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "existing",
+        "iniconfig",
+        "reused",
+    ]
+
+    [[tool.uv.index]]
+    name = "pylock-2"
+    url = "https://example.com/new"
+    explicit = true
+
+    [[tool.uv.index]]
+    name = "pylock-1"
+    url = "https://example.com/existing"
+    explicit = true
+
+    [tool.uv.sources]
+    existing = { index = "pylock-1" }
+    iniconfig = { index = "pylock-2" }
+    reused = { index = "pylock-1" }
+    "#);
+    Ok(())
+}
