@@ -36,6 +36,8 @@ jobs:
           version: "0.13.0"
           checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
       - run: uv run --only-group check ruff check .
+      - name: "Test CI timing reports"
+        run: uv run --only-group check python -m unittest discover -s scripts/tests -p test_ci_timings.py
 
   ty:
     timeout-minutes: 10
