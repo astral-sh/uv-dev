@@ -700,7 +700,13 @@ impl ManagedPythonDownload {
             target_cache_file.simplified_display()
         );
 
+        let diagnostic_started = std::time::Instant::now();
         let (mut reader, size) = read_url(url, client).await?;
+        eprintln!(
+            "DIAGNOSTIC response headers for {url}: {:?}",
+            diagnostic_started.elapsed()
+        );
+        let diagnostic_started = std::time::Instant::now();
         let temp_dir = tempfile::tempdir_in(python_builds_dir)?;
         let temp_file = temp_dir.path().join("download");
 
@@ -723,12 +729,21 @@ impl ManagedPythonDownload {
 
             archive_writer.flush().await?;
         }
+        eprintln!(
+            "DIAGNOSTIC archive body written for {url}: {:?}",
+            diagnostic_started.elapsed()
+        );
+        let diagnostic_started = std::time::Instant::now();
         // Move the completed file into place, invalidating the `File` instance.
         match rename_with_retry(&temp_file, target_cache_file).await {
             Ok(()) => {}
             Err(_) if target_cache_file.is_file() => {}
             Err(err) => return Err(err.into()),
         }
+        eprintln!(
+            "DIAGNOSTIC cached archive rename for {url}: {:?}",
+            diagnostic_started.elapsed()
+        );
         Ok(())
     }
 
@@ -745,6 +760,7 @@ impl ManagedPythonDownload {
         direction: Direction,
         tar_backend: TarBackend,
     ) -> Result<TempDir, Error> {
+        let diagnostic_started = std::time::Instant::now();
         let mut hashers = self
             .sha256
             .as_ref()
@@ -766,6 +782,10 @@ impl ManagedPythonDownload {
             target
         };
         hasher.finish().await.map_err(Error::HashExhaustion)?;
+        eprintln!(
+            "DIAGNOSTIC archive extraction and hashing for {filename}: {:?}",
+            diagnostic_started.elapsed()
+        );
 
         // Check the hash
         if let Some((expected, hasher)) = self.sha256.as_ref().zip(hashers) {
