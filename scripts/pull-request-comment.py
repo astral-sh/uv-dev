@@ -1,3 +1,7 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
 """Reserve and find an automation comment near the start of uv-dev pull requests."""
 
 import argparse

@@ -8,7 +8,7 @@ attempts to create one if fewer than three comments are present when checked.
 To find the reservation, run:
 
 ```sh
-python3 scripts/pull-request-comment.py find --pull-request "$PULL_REQUEST_NUMBER"
+uv run --script scripts/pull-request-comment.py find --pull-request "$PULL_REQUEST_NUMBER"
 ```
 
 The command reads only the first three issue comments in one request and prints the first matching
