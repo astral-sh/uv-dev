@@ -218,7 +218,7 @@ impl<'a> FlatIndexClient<'a> {
             .client
             .uncached()
             .for_host(url)
-            .get(url.clone())
+            .get(url.clone().into_unsafe_url())
             .header("Accept-Encoding", "gzip")
             .header("Accept", "text/html")
             .build()

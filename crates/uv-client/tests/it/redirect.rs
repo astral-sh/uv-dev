@@ -8,7 +8,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_client::{AuthIntegration, BaseClientBuilder, ExtraMiddleware, RedirectPolicy};
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 
 #[derive(Clone, Default)]
 struct RequestLog(Vec<(&'static str, String)>);
@@ -51,7 +51,7 @@ async fn redirect_preserves_middleware_and_extensions() -> Result<()> {
         .mount(&server)
         .await;
 
-    let url = DisplaySafeUrl::parse(&format!("{}/source", server.uri()))?;
+    let url = SafeUrl::parse(&format!("{}/source", server.uri()))?;
     let base = BaseClientBuilder::default()
         .redirect(RedirectPolicy::RetriggerMiddleware)
         .retries(0)
@@ -114,7 +114,7 @@ async fn redirect_retries_each_hop() -> Result<()> {
         .mount(&server)
         .await;
 
-    let url = DisplaySafeUrl::parse(&format!("{}/source", server.uri()))?;
+    let url = SafeUrl::parse(&format!("{}/source", server.uri()))?;
     let client = BaseClientBuilder::default()
         .redirect(RedirectPolicy::RetriggerMiddleware)
         .retries(1)

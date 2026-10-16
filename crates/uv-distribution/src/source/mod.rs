@@ -2653,7 +2653,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .managed(async |client| {
                 let response = client
                     .uncached_client(git.url())
-                    .get(url.clone())
+                    .get(url.clone().into_unsafe_url())
                     .send()
                     .await?;
 
@@ -3214,7 +3214,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     fn request(url: SafeUrl, client: &RegistryClient) -> Result<reqwest::Request, reqwest::Error> {
         client
             .uncached_client(&url)
-            .get(url)
+            .get(url.into_unsafe_url())
             .header(
                 // `reqwest` defaults to accepting compressed responses.
                 // Specify identity encoding to get consistent .whl downloading

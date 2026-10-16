@@ -1365,7 +1365,7 @@ impl PublishSession<'_> {
         let mut request = self
             .upload_client
             .for_host(&url)
-            .post(url)
+            .post(url.into_unsafe_url())
             .multipart(form)
             // Ask PyPI for a structured error messages instead of HTML-markup error messages.
             // For other registries, we ask them to return plain text over HTML. See

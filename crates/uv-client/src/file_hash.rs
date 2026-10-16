@@ -40,7 +40,7 @@ impl RegistryClient {
         } else {
             let response = self
                 .uncached_client(url)
-                .get(url.clone())
+                .get(url.clone().into_unsafe_url())
                 .header(
                     // `reqwest` defaults to accepting compressed responses.
                     // Specify identity encoding to get consistent .whl downloading

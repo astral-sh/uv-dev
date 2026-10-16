@@ -628,7 +628,7 @@ impl RegistryClient {
     ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
         let simple_request = self
             .uncached_client(url)
-            .get(url.clone())
+            .get(url.clone().into_unsafe_url())
             .header("Accept-Encoding", "gzip, deflate, zstd")
             .header("Accept", MediaType::pypi())
             .build()
@@ -879,7 +879,7 @@ impl RegistryClient {
 
         let simple_request = self
             .uncached_client(url)
-            .get(url.clone())
+            .get(url.clone().into_unsafe_url())
             .header("Accept-Encoding", "gzip, deflate, zstd")
             .header("Accept", MediaType::pypi())
             .build()
@@ -1138,7 +1138,7 @@ impl RegistryClient {
             };
             let req = self
                 .uncached_client(&url)
-                .get(url.clone())
+                .get(url.clone().into_unsafe_url())
                 .build()
                 .map_err(|err| {
                     ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
@@ -1202,7 +1202,7 @@ impl RegistryClient {
         if index.is_none_or(|index| capabilities.supports_range_requests(index)) {
             let req = self
                 .uncached_client(url)
-                .head(url.clone())
+                .head(url.clone().into_unsafe_url())
                 .header(
                     "accept-encoding",
                     http::HeaderValue::from_static("identity"),
@@ -1296,7 +1296,7 @@ impl RegistryClient {
         // Create a request to stream the file.
         let req = self
             .uncached_client(url)
-            .get(url.clone())
+            .get(url.clone().into_unsafe_url())
             .header(
                 // `reqwest` defaults to accepting compressed responses.
                 // Specify identity encoding to get consistent .whl downloading
@@ -2017,7 +2017,7 @@ mod tests {
         assert_eq!(
             client
                 .for_host(&redirect_server_url)
-                .get(redirect_server_url.clone())
+                .get(redirect_server_url.clone().into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -2032,7 +2032,7 @@ mod tests {
         assert_eq!(
             client
                 .for_host(&redirect_server_url)
-                .get(url)
+                .get(url.into_unsafe_url())
                 .send()
                 .await?
                 .status(),
@@ -2080,7 +2080,12 @@ mod tests {
         let _ = url.set_password(Some(password));
 
         assert_eq!(
-            client.for_host(&url).get(url).send().await?.status(),
+            client
+                .for_host(&url)
+                .get(url.into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "Requests should succeed for relative URL"
         );
@@ -2125,7 +2130,12 @@ mod tests {
         let _ = url.set_password(Some(password));
 
         assert_eq!(
-            client.for_host(&url).get(url).send().await?.status(),
+            client
+                .for_host(&url)
+                .get(url.into_unsafe_url())
+                .send()
+                .await?
+                .status(),
             200,
             "Requests should succeed for relative URL"
         );

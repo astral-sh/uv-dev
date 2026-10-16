@@ -19,7 +19,6 @@ use serde_json::json;
 use std::path::Path;
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
-use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
@@ -14367,10 +14366,12 @@ async fn pip_install_redirect_with_netrc_cross_origin() -> Result<()> {
         .mount(&redirect_server)
         .await;
 
-    let mut redirect_url = Url::parse(&redirect_server.uri())?;
     // Netrc ignores ports, so use different hostnames to give credentials only to the
     // destination. A successful install must then look up credentials after the redirect.
-    redirect_url.set_host(Some("localhost"))?;
+    let redirect_url = SafeUrl::parse(&format!(
+        "http://localhost:{}",
+        redirect_server.address().port()
+    ))?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("anyio")
