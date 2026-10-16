@@ -865,8 +865,9 @@ pub async fn add(
 
     // Validate any indexes that were provided on the command-line to ensure
     // they point to existing non-empty directories when using path URLs.
-    let mut valid_indexes = Vec::with_capacity(indexes.len());
-    for index in indexes.into_iter().chain(imported_indexes) {
+    let command_line_indexes = indexes;
+    let mut valid_indexes = Vec::with_capacity(command_line_indexes.len());
+    for index in command_line_indexes.iter().cloned().chain(imported_indexes) {
         if let IndexUrl::Path(url) = &index.url {
             let path = url
                 .to_file_path()
@@ -883,7 +884,7 @@ pub async fn add(
     }
     let indexes = valid_indexes;
 
-    // Add any indexes that were provided on the command-line, in priority order.
+    // Prioritize command-line indexes and retain the priority of reused imported indexes.
     if !raw {
         let root_dir = match &target {
             EditTarget::Script(script) => script.path.parent().expect("script path has no parent"),
@@ -893,7 +894,14 @@ pub async fn add(
         let mut indexes = locations.defined_indexes().collect::<Vec<_>>();
         indexes.reverse();
         for index in indexes {
-            toml.add_index(index, root_dir)?;
+            if command_line_indexes
+                .iter()
+                .any(|existing| index_urls_equal(&existing.url, &index.url))
+            {
+                toml.add_index(index, root_dir)?;
+            } else {
+                toml.set_index(index, root_dir)?;
+            }
         }
     }
 

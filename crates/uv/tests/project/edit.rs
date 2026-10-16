@@ -16737,7 +16737,16 @@ fn add_pylock_conditional_indexes() -> Result<()> {
      + other==1.0.0
      + retained==1.0.0
     "#);
-    insta::with_settings!({ filters => context.filters() }, {
+    let first_url = regex::escape(&first.index_url());
+    let second_url = regex::escape(&second.index_url());
+    let filters = [
+        (first_url.as_str(), "http://[FIRST-INDEX]/simple/"),
+        (second_url.as_str(), "http://[SECOND-INDEX]/simple/"),
+    ]
+    .into_iter()
+    .chain(context.filters())
+    .collect::<Vec<_>>();
+    insta::with_settings!({ filters => filters }, {
         assert_snapshot!(context.read("pyproject.toml"), @r#"
         [project]
         name = "project"
@@ -16756,13 +16765,13 @@ fn add_pylock_conditional_indexes() -> Result<()> {
         other = { index = "internal" }
 
         [[tool.uv.index]]
-        name = "internal"
-        url = "http://[LOCALHOST]/simple/"
+        name = "pylock-1"
+        url = "http://[SECOND-INDEX]/simple/"
         explicit = true
 
         [[tool.uv.index]]
-        name = "pylock-1"
-        url = "http://[LOCALHOST]/simple/"
+        name = "internal"
+        url = "http://[FIRST-INDEX]/simple/"
         explicit = true
         "#);
     });
@@ -16770,6 +16779,64 @@ fn add_pylock_conditional_indexes() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
+    "#);
+    Ok(())
+}
+
+/// Naming a reused index must retain its priority relative to other configured indexes.
+#[test]
+fn add_pylock_existing_index_priority() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "first"
+        url = "https://example.com/first/simple"
+
+        [[tool.uv.index]]
+        url = "https://example.com/second/simple"
+    "#})?;
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "2.0.0"
+        index = "https://example.com/second/simple"
+        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "pylock.toml"]), @"
+    exit_code: 0 (success)
+    ");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "iniconfig",
+    ]
+
+    [[tool.uv.index]]
+    name = "first"
+    url = "https://example.com/first/simple"
+
+    [[tool.uv.index]]
+    url = "https://example.com/second/simple"
+    name = "pylock-1"
+
+    [tool.uv.sources]
+    iniconfig = { index = "pylock-1" }
     "#);
     Ok(())
 }
