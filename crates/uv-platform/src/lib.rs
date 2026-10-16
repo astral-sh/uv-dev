@@ -71,9 +71,9 @@ impl Platform {
     /// See [`Self::as_cargo_dist_triple`] for the inverse operation.
     pub fn from_cargo_dist_triple(triple: &str) -> Result<Self, Error> {
         let parts: Vec<&str> = triple.split('-').collect();
-        if parts.len() < 3 {
+        if !(3..=4).contains(&parts.len()) {
             return Err(Error::InvalidPlatformFormat(format!(
-                "expected at least 3 parts in cargo-dist triple, got {} in '{triple}'",
+                "expected 3 or 4 parts in cargo-dist triple, got {} in '{triple}'",
                 parts.len()
             )));
         }
@@ -584,6 +584,7 @@ mod tests {
     fn test_from_cargo_dist_triple_errors() {
         assert!(Platform::from_cargo_dist_triple("x86_64-unknown").is_err());
         assert!(Platform::from_cargo_dist_triple("x86_64").is_err());
+        assert!(Platform::from_cargo_dist_triple("x86_64-unknown-linux-gnu-extra").is_err());
         assert!(Platform::from_cargo_dist_triple("invalid_arch-unknown-linux-gnu").is_err());
         assert!(Platform::from_cargo_dist_triple("x86_64-unknown-invalid_os-gnu").is_err());
     }

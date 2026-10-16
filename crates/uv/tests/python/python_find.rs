@@ -246,6 +246,7 @@ fn python_find_skips_download_metadata_when_python_is_found() {
 
     uv_snapshot!(context.filters(), context
         .python_find()
+        .arg("--system")
         .arg("--python-downloads-json-url")
         .arg(missing_downloads.path()), @"
     exit_code: 0 (success)

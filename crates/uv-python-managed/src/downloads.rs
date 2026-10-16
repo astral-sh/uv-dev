@@ -49,8 +49,8 @@ use uv_static::{
 };
 
 use uv_python_types::{
-    ImplementationName, LenientImplementationName, PythonDownloadMirrors, PythonInstallationKey,
-    PythonVariant, PythonVersion,
+    ArchRequest, ImplementationName, LenientImplementationName, PythonDownloadMirrors,
+    PythonInstallationKey, PythonVariant, PythonVersion, VersionRequest,
 };
 
 #[derive(Error, DebugNoInline)]
@@ -1016,7 +1016,7 @@ impl ManagedPythonDownloadList {
         Ok(Self { downloads })
     }
 
-    /// Find the first matching download in newest-first NDJSON metadata.
+    /// Find the preferred matching download from the selected source.
     pub async fn find_streaming(
         client_builder: &BaseClientBuilder<'_>,
         cache: &Cache,
@@ -1158,21 +1158,13 @@ fn merge_with_embedded_non_cpython(
     downloads: Vec<ManagedPythonDownload>,
     filter: Option<&PythonDownloadRequest>,
 ) -> Result<Vec<ManagedPythonDownload>, Error> {
-    let mut merged = BTreeMap::new();
-
-    for download in downloads {
-        merged
-            .entry((download.key().clone(), download.build.clone()))
-            .or_insert(download);
-    }
-
-    for download in filter_downloads(embedded_non_cpython_downloads()?, filter) {
-        merged
-            .entry((download.key().clone(), download.build.clone()))
-            .or_insert(download);
-    }
-
-    Ok(merged.into_values().rev().collect())
+    let mut downloads = downloads
+        .into_iter()
+        .chain(filter_downloads(embedded_non_cpython_downloads()?, filter))
+        .unique_by(|download| (download.key().clone(), download.build.clone()))
+        .collect::<Vec<_>>();
+    downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+    Ok(downloads)
 }
 
 fn find_in_embedded_non_cpython(
@@ -1987,10 +1979,13 @@ fn parse_ndjson_platform(platform: &str) -> Option<(Platform, Vec<&str>)> {
     let mut platform = platform;
     let mut build_options = Vec::new();
 
-    for (suffix, build_option) in [("-debug", "debug"), ("-freethreaded", "freethreaded")] {
-        if let Some(stripped) = platform.strip_suffix(suffix) {
-            platform = stripped;
-            build_options.push(build_option);
+    while let Some((prefix, option)) = platform.rsplit_once('-') {
+        match option {
+            "static" | "shared" | "debug" | "freethreaded" => {
+                platform = prefix;
+                build_options.push(option);
+            }
+            _ => break,
         }
     }
 
@@ -2124,30 +2119,72 @@ fn parse_ndjson_bytes_filtered(
     Ok(downloads)
 }
 
-/// Keep the first prerelease while looking for the first preferred download in catalog order.
+/// Select the highest compatible version while retaining publication order for equal keys.
 struct DownloadSearch<'a> {
     request: &'a PythonDownloadRequest,
     prerelease_request: PythonDownloadRequest,
+    preferred: Option<ManagedPythonDownload>,
     prerelease: Option<ManagedPythonDownload>,
+    exact: bool,
 }
 
 impl<'a> DownloadSearch<'a> {
     fn new(request: &'a PythonDownloadRequest) -> Self {
+        let exact_version = match request.version() {
+            Some(
+                VersionRequest::MajorMinorPatch(..)
+                | VersionRequest::MajorMinorPrerelease(..)
+                | VersionRequest::MajorMinorPatchPrerelease(..),
+            ) => true,
+            None
+            | Some(
+                VersionRequest::Default
+                | VersionRequest::Any
+                | VersionRequest::Major(..)
+                | VersionRequest::MajorMinor(..)
+                | VersionRequest::Range(..),
+            ) => false,
+        };
+        let exact_platform = request.os.is_some()
+            && request.libc.is_some()
+            && request.arch.is_some_and(|arch| match arch {
+                ArchRequest::Explicit(_) => true,
+                ArchRequest::Environment(_) => false,
+            });
         Self {
             request,
             prerelease_request: request.clone().with_prereleases(true),
+            preferred: None,
             prerelease: None,
+            exact: exact_version && (exact_platform || request.build.is_some()),
         }
     }
 
     fn visit(&mut self, download: ManagedPythonDownload) -> ControlFlow<ManagedPythonDownload> {
         if download.matches_request(self.request) {
-            return ControlFlow::Break(download);
-        }
-        if self.prerelease.is_none() && download.matches_request(&self.prerelease_request) {
+            if self.exact {
+                return ControlFlow::Break(download);
+            }
+            if self
+                .preferred
+                .as_ref()
+                .is_none_or(|preferred| download.key > preferred.key)
+            {
+                self.preferred = Some(download);
+            }
+        } else if download.matches_request(&self.prerelease_request)
+            && self
+                .prerelease
+                .as_ref()
+                .is_none_or(|prerelease| download.key > prerelease.key)
+        {
             self.prerelease = Some(download);
         }
         ControlFlow::Continue(())
+    }
+
+    fn finish(self) -> Option<ManagedPythonDownload> {
+        self.preferred.or(self.prerelease)
     }
 }
 
@@ -2158,7 +2195,7 @@ fn parse_ndjson_bytes_find(
 ) -> Result<Option<ManagedPythonDownload>, Error> {
     let mut search = DownloadSearch::new(request);
     let download = parse_ndjson_bytes_with(source, buf, |download| search.visit(download))?;
-    Ok(download.or(search.prerelease))
+    Ok(download.or_else(|| search.finish()))
 }
 
 async fn fetch_ndjson_streaming<T>(
@@ -2201,7 +2238,7 @@ async fn fetch_ndjson_find(
 ) -> Result<Option<ManagedPythonDownload>, Error> {
     let mut search = DownloadSearch::new(request);
     let download = fetch_ndjson_streaming(client, url, |download| search.visit(download)).await?;
-    Ok(download.or(search.prerelease))
+    Ok(download.or_else(|| search.finish()))
 }
 
 async fn fetch_ndjson_find_cached(
@@ -2722,6 +2759,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_ndjson_bytes_find_prefers_version_over_publication_order() -> anyhow::Result<()> {
+        let ndjson = br#"{"version":"3.13.9+20261015","artifacts":[{"url":"https://example.com/rebuilt.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+{"version":"3.14.1+20261013","artifacts":[{"url":"https://example.com/preferred.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+{"version":"3.14.1+20261014","artifacts":[{"url":"https://example.com/previous.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+"#;
+        let request = PythonDownloadRequest::from_str("cpython-3-linux-x86_64-gnu")?;
+        let download = parse_ndjson_bytes_find("versions.ndjson", ndjson, &request)?
+            .expect("matching download");
+        let catalog = ManagedPythonDownloadList {
+            downloads: merge_with_embedded_non_cpython(
+                parse_ndjson_bytes("versions.ndjson", ndjson)?,
+                None,
+            )?,
+        };
+        assert_eq!(download, *catalog.find(&request)?);
+        assert_eq!(download.key().version().to_string(), "3.14.1");
+        assert_eq!(download.build(), Some("20261013"));
+        Ok(())
+    }
+
+    #[test]
     fn parse_ndjson_bytes_matches_generator_artifact_selection() {
         let ndjson = br#"{"version":"3.14.1+20260420","artifacts":[{"url":"https://example.com/cpython-3.14.1-aarch64-apple-darwin-install_only.tar.gz","platform":"aarch64-apple-darwin","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"},{"url":"https://example.com/cpython-3.14.1-aarch64-apple-darwin-install_only_stripped.tar.gz","platform":"aarch64-apple-darwin","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only_stripped"}]}
 {"version":"3.10.0+20211017","artifacts":[{"url":"https://example.com/cpython-3.10.0-x86_64-unknown-linux-gnu-pgo-lto-full.tar.zst","platform":"x86_64-unknown-linux-gnu","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","variant":"pgo+lto+full"}]}
@@ -2801,6 +2859,19 @@ mod tests {
         let downloads = parse_ndjson_bytes("test.ndjson", ndjson).expect("NDJSON should parse");
 
         assert!(downloads.is_empty());
+    }
+
+    #[test]
+    fn parse_ndjson_bytes_skips_static_and_unknown_platform_suffixes() -> anyhow::Result<()> {
+        let ndjson = br#"{"version":"3.8.3+20200517","artifacts":[{"url":"https://example.com/static.tar.zst","platform":"i686-pc-windows-msvc-static","variant":"noopt+full"},{"url":"https://example.com/unknown.tar.zst","platform":"aarch64-pc-windows-msvc-unknown","variant":"pgo+full"},{"url":"https://example.com/shared.tar.zst","platform":"x86_64-pc-windows-msvc-shared","variant":"pgo+full"}]}
+"#;
+        let downloads = parse_ndjson_bytes("versions.ndjson", ndjson)?;
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].url().as_ref(),
+            "https://example.com/shared.tar.zst"
+        );
+        Ok(())
     }
 
     #[test]
@@ -3038,7 +3109,7 @@ mod tests {
         });
 
         let cache = Cache::temp().unwrap().init().await.unwrap();
-        let request = PythonDownloadRequest::from_str("cpython-3.14-linux-x86_64-gnu").unwrap();
+        let request = PythonDownloadRequest::from_str("cpython-3.14.1-linux-x86_64-gnu").unwrap();
         let source = DownloadListSource {
             location: DownloadListLocation::Http(vec![
                 SafeUrl::parse(&format!("http://{address}/versions.ndjson")).unwrap(),
