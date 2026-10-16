@@ -1255,12 +1255,23 @@ fn python_find_freethreaded_313() {
         .with_filtered_python_names()
         .with_filtered_exe_suffix();
 
+    eprintln!("DIAGNOSTIC begin install 3.13t");
+    let started = std::time::Instant::now();
     context
         .python_install()
+        .env(
+            "RUST_LOG",
+            "uv_python_managed=trace,uv_client=debug,uv_fs=debug",
+        )
+        .stderr(std::process::Stdio::inherit())
         .arg("--preview")
         .arg("3.13t")
         .assert()
         .success();
+    eprintln!(
+        "DIAGNOSTIC end install 3.13t: {:?}; begin find",
+        started.elapsed()
+    );
 
     // Request Python 3.13 (without opt-in)
     uv_snapshot!(context.filters(), context.python_find().arg("3.13"), @"
@@ -1483,9 +1494,34 @@ fn python_find_prerelease_version_specifiers() {
         .with_filtered_python_names()
         .with_filtered_exe_suffix();
 
-    context.python_install().arg("3.14.0rc2").assert().success();
-    context.python_install().arg("3.14.0rc3").assert().success();
+    eprintln!("DIAGNOSTIC begin install 3.14.0rc2");
+    let started = std::time::Instant::now();
+    context
+        .python_install()
+        .arg("3.14.0rc2")
+        .env(
+            "RUST_LOG",
+            "uv_python_managed=trace,uv_client=debug,uv_fs=debug",
+        )
+        .stderr(std::process::Stdio::inherit())
+        .assert()
+        .success();
+    eprintln!("DIAGNOSTIC end install 3.14.0rc2: {:?}", started.elapsed());
+    eprintln!("DIAGNOSTIC begin install 3.14.0rc3");
+    let started = std::time::Instant::now();
+    context
+        .python_install()
+        .arg("3.14.0rc3")
+        .env(
+            "RUST_LOG",
+            "uv_python_managed=trace,uv_client=debug,uv_fs=debug",
+        )
+        .stderr(std::process::Stdio::inherit())
+        .assert()
+        .success();
+    eprintln!("DIAGNOSTIC end install 3.14.0rc3: {:?}", started.elapsed());
 
+    eprintln!("DIAGNOSTIC begin find assertions");
     // `>=3.14` should allow pre-release versions
     uv_snapshot!(context.filters(), context.python_find().arg(">=3.14").arg("--resolve-links"), @"
     exit_code: 0 (success)
@@ -1532,7 +1568,19 @@ fn python_find_prerelease_version_specifiers() {
     ");
 
     // Install the stable version
-    context.python_install().arg("3.14.0").assert().success();
+    eprintln!("DIAGNOSTIC begin install 3.14.0");
+    let started = std::time::Instant::now();
+    context
+        .python_install()
+        .arg("3.14.0")
+        .env(
+            "RUST_LOG",
+            "uv_python_managed=trace,uv_client=debug,uv_fs=debug",
+        )
+        .stderr(std::process::Stdio::inherit())
+        .assert()
+        .success();
+    eprintln!("DIAGNOSTIC end install 3.14.0: {:?}", started.elapsed());
 
     // `>=3.14` should prefer stable
     uv_snapshot!(context.filters(), context.python_find().arg(">=3.14").arg("--resolve-links"), @"
