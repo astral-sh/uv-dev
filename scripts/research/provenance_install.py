@@ -1,8 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["pypi-attestations==0.0.30"]
-# ///
+#!/usr/bin/env python3
 """Verify local PEP 740 evidence before an isolated, hash-checked uv wheel install."""
 
 from __future__ import annotations
@@ -40,13 +36,14 @@ def evidence_objects(data: bytes) -> list[dict]:
     return attestations
 
 
-def cache_evidence(cache: Path, key: dict, evidence: bytes) -> bool:
+def cache_evidence(cache: Path, key: dict, evidence: bytes) -> str:
     """Cache bytes, never a cryptographic acceptance decision."""
     identity = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
     cache.mkdir(parents=True, exist_ok=True)
     destination = cache / f"{identity}.json"
     if destination.is_file() and destination.read_bytes() == evidence:
-        return True
+        return "hit"
+    status = "repaired" if destination.exists() else "miss"
     with tempfile.NamedTemporaryFile(dir=cache, delete=False) as stream:
         temporary = Path(stream.name)
         stream.write(evidence)
@@ -54,7 +51,7 @@ def cache_evidence(cache: Path, key: dict, evidence: bytes) -> bool:
         temporary.replace(destination)
     finally:
         temporary.unlink(missing_ok=True)
-    return False
+    return status
 
 
 def verify_and_install(args: argparse.Namespace) -> dict:
@@ -64,47 +61,50 @@ def verify_and_install(args: argparse.Namespace) -> dict:
         )
     if args.target.exists():
         raise ValueError("Use a new target directory for each installation")
-    artifact_bytes = args.artifact.read_bytes()
-    evidence = args.attestation.read_bytes()
-    digest = hashlib.sha256(artifact_bytes).hexdigest()
-    identity_policy = {
-        "identity": args.identity,
-        "issuer": args.issuer,
-        "staging": args.staging,
-        "offline": args.offline,
-    }
-    verifier = {name: version(name) for name in ("pypi-attestations", "sigstore")}
-    key = {
-        "schema": 1,
-        "filename": args.artifact.name,
-        "artifact_sha256": digest,
-        "evidence_sha256": hashlib.sha256(evidence).hexdigest(),
-        "policy": identity_policy,
-        "verifier": verifier,
-    }
-    attestations = [
-        Attestation.model_validate(value) for value in evidence_objects(evidence)
-    ]
-    cache_hit = cache_evidence(args.evidence_cache, key, evidence)
-    distribution = Distribution(name=args.artifact.name, digest=digest)
-    identity = policy.Identity(identity=args.identity, issuer=args.issuer)
-    started = time.perf_counter()
-    predicates = []
-    for attestation in attestations:
-        predicate, _ = attestation.verify(
-            identity, distribution, staging=args.staging, offline=args.offline
-        )
-        predicates.append(predicate)
-    verification_seconds = time.perf_counter() - started
-
-    # Verification always runs, even on evidence-cache hits. The verifier owns trust-root
-    # refresh/expiry; a persisted acceptance decision must not bypass that lifecycle.
     with tempfile.TemporaryDirectory(
         prefix="verified-wheel-", dir=args.work_dir
     ) as directory:
         workspace = Path(directory).resolve()
         artifact = workspace / args.artifact.name
-        artifact.write_bytes(artifact_bytes)
+        hasher = hashlib.sha256()
+        with args.artifact.open("rb") as source, artifact.open("wb") as snapshot:
+            while chunk := source.read(1024 * 1024):
+                snapshot.write(chunk)
+                hasher.update(chunk)
+        digest = hasher.hexdigest()
+        evidence = args.attestation.read_bytes()
+        identity_policy = {
+            "identity": args.identity,
+            "issuer": args.issuer,
+            "staging": args.staging,
+            "offline": args.offline,
+        }
+        verifier = {name: version(name) for name in ("pypi-attestations", "sigstore")}
+        key = {
+            "schema": 1,
+            "filename": args.artifact.name,
+            "artifact_sha256": digest,
+            "evidence_sha256": hashlib.sha256(evidence).hexdigest(),
+            "policy": identity_policy,
+            "verifier": verifier,
+        }
+        attestations = [
+            Attestation.model_validate(value) for value in evidence_objects(evidence)
+        ]
+        cache_status = cache_evidence(args.evidence_cache, key, evidence)
+        distribution = Distribution(name=args.artifact.name, digest=digest)
+        identity = policy.Identity(identity=args.identity, issuer=args.issuer)
+        started = time.perf_counter()
+        predicates = []
+        for attestation in attestations:
+            predicate, _ = attestation.verify(
+                identity, distribution, staging=args.staging, offline=args.offline
+            )
+            predicates.append(predicate)
+        verification_seconds = time.perf_counter() - started
+
+        # Verification always runs, even on evidence-cache hits. The verifier owns trust-root
+        # refresh/expiry; a persisted acceptance decision must not bypass that lifecycle.
         requirements = workspace / "requirements.txt"
         requirements.write_text(f"{artifact.as_uri()} --hash=sha256:{digest}\n")
         environment = {
@@ -128,6 +128,7 @@ def verify_and_install(args: argparse.Namespace) -> dict:
             "--cache-dir",
             str(args.work_dir.resolve() / "uv-cache"),
         ]
+        args.target.mkdir(parents=True, exist_ok=False)
         process = subprocess.run(
             command,
             env=environment,
@@ -147,7 +148,8 @@ def verify_and_install(args: argparse.Namespace) -> dict:
         "uv_executable": str(Path(args.uv).resolve()),
         "uv": subprocess.check_output([args.uv, "--version"], text=True).strip(),
         "artifact_sha256": digest,
-        "evidence_cache_hit": cache_hit,
+        "evidence_cache_hit": cache_status == "hit",
+        "evidence_cache_status": cache_status,
         "cryptographic_verification_ran": True,
         "verification_seconds": verification_seconds,
         "verified_attestations": len(attestations),
