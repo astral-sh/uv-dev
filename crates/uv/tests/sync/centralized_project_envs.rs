@@ -7,6 +7,7 @@ use serde_json::json;
 use std::process::Command;
 
 use uv_fs::Simplified;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 #[cfg(unix)]
 use uv_test::ReadOnlyDirectoryGuard;
@@ -319,7 +320,7 @@ fn sync_centralized_env_reuses_symlinked_workspace() -> Result<()> {
 #[test]
 fn sync_centralized_env_respects_explicit_environments() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
-    let wheel_url = url::Url::from_file_path(
+    let wheel_url = SafeUrl::from_file_path(
         context
             .workspace_root
             .join("test/links/ok-1.0.0-py3-none-any.whl"),

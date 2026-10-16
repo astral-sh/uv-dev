@@ -17,7 +17,7 @@ async fn requires_python_prefetch() -> Result<()> {
         &"voluptuous".parse()?,
         &"0.14.2".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::default(),
         None,
         "py3-none-any",
         &[],

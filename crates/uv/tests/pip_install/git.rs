@@ -4,8 +4,8 @@ use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
-use url::Url;
 
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
 
@@ -69,7 +69,7 @@ fn install_git_with_git_envs_set() -> Result<()> {
         .assert()
         .success();
 
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("failed to convert repository path to a file URL"))?;
     let repository_url = repository_url.as_str().trim_end_matches('/');
     let inherited_path = context.temp_dir.child("inherited-git-path");
