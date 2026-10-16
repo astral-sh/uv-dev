@@ -15,7 +15,7 @@ use std::thread;
 use anyhow::Result;
 #[cfg(all(feature = "test-git", feature = "test-universal"))]
 use anyhow::{Context, anyhow};
-#[cfg(feature = "test-universal")]
+#[cfg(any(feature = "test-git", feature = "test-universal"))]
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use fs_err::{File, read};
@@ -23,9 +23,8 @@ use fs_err::{File, read};
 use fs_err::{read_to_string, remove_file, write};
 #[cfg(feature = "test-python-managed")]
 use http::StatusCode;
-#[cfg(feature = "test-universal")]
-use indoc::formatdoc;
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
+use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
 use regex::Regex;
 use sha2::{Digest, Sha256, Sha512};
@@ -62,18 +61,629 @@ fn compile_pylock_stdin() -> Result<()> {
     input.write_str(indoc! {r#"
         lock-version = "1.0"
         created-by = "uv"
-        packages = []
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        wheels = [{ url = "https://example.org/iniconfig-1.1.1-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
     "#})?;
 
     uv_snapshot!(context.pip_compile()
-        .arg("--offline")
+        .arg("--no-header")
         .arg("-")
         .stdin(File::open(input.path())?.into_file()), @"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==1.1.1
+        # via -r -
+
     ----- stderr -----
-    error: `pylock.toml` is not a supported input format for `uv pip compile`
+    Resolved 1 package in [TIME]
     ");
 
+    Ok(())
+}
+
+/// An imported version is a preference, so an explicit constraint can select another version.
+#[test]
+fn compile_pylock_preference_constraint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        wheels = [{ url = "https://example.org/iniconfig-1.1.1-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("iniconfig>=2.0.0")?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("idna==3.6")?;
+
+    uv_snapshot!(context.pip_compile()
+        .args(["pylock.toml", "requirements.in", "--constraint", "constraints.txt", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    idna==3.6
+        # via -r requirements.in
+    iniconfig==2.0.0
+        # via
+        #   -c constraints.txt
+        #   -r pylock.toml
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn compile_pylock_preference_upgrade() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        wheels = [{ url = "https://example.org/iniconfig-1.1.1-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+
+    uv_snapshot!(context.pip_compile()
+        .args(["pylock.toml", "--upgrade", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==2.0.0
+        # via -r pylock.toml
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn compile_pylock_groups() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        extras = ["test"]
+        dependency-groups = ["dev"]
+        default-groups = ["base"]
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        marker = "'base' in dependency_groups and 'dev' not in dependency_groups"
+        wheels = [{ url = "https://example.org/iniconfig-1.1.1-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+        [[packages]]
+        name = "idna"
+        version = "3.4"
+        marker = "'test' in extras"
+        wheels = [{ url = "https://example.org/idna-3.4-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+        [[packages]]
+        name = "sniffio"
+        version = "1.3.0"
+        marker = "'dev' in dependency_groups"
+        wheels = [{ url = "https://example.org/sniffio-1.3.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+
+    uv_snapshot!(context.pip_compile()
+        .args(["pylock.toml", "--extra", "test", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    idna==3.4
+        # via -r pylock.toml
+    iniconfig==1.1.1
+        # via -r pylock.toml
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    uv_snapshot!(context.pip_compile()
+        .args(["pylock.toml", "--group", "dev", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    sniffio==1.3.0
+        # via -r pylock.toml
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-universal")]
+fn compile_pylock_preference_markers() -> Result<()> {
+    let context = uv_test::test_context!("3.10");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        marker = "python_version < '3.11'"
+        wheels = [{ url = "https://example.org/iniconfig-1.1.1-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+        [[packages]]
+        name = "iniconfig"
+        version = "2.0.0"
+        marker = "python_version >= '3.11'"
+        wheels = [{ url = "https://example.org/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+
+    uv_snapshot!(context.pip_compile()
+        .args(["pylock.toml", "--universal", "--python-version", "3.10", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==1.1.1 ; python_full_version < '3.11'
+        # via -r pylock.toml
+    iniconfig==2.0.0 ; python_full_version >= '3.11'
+        # via -r pylock.toml
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// Relative direct sources retain their location, while recorded artifact hashes are not enforced.
+#[test]
+fn compile_pylock_direct_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"imported-wheel".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("locks/wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    context
+        .temp_dir
+        .child("locks/local-project/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+        dependencies = []
+    "#})?;
+    context.temp_dir.child("locks/pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "imported-wheel"
+        version = "1.0.0"
+        archive = { path = "wheels/imported_wheel-1.0.0-py3-none-any.whl", size = 0, hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }
+        [[packages]]
+        name = "local-project"
+        version = "1.0.0"
+        directory = { path = "local-project" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["locks/pylock.toml", "--no-index", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    imported-wheel @ file://[TEMP_DIR]/locks/wheels/imported_wheel-1.0.0-py3-none-any.whl
+        # via -r locks/pylock.toml
+    local-project @ file://[TEMP_DIR]/locks/local-project
+        # via -r locks/pylock.toml
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// File URLs import local archives without fetching them through HTTP or enforcing recorded hashes.
+#[test]
+fn compile_pylock_file_url_archive() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel(
+        &"imported-wheel".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let archive = context.temp_dir.child("local wheels").child(filename);
+    archive.write_binary(&wheel)?;
+    let url = Url::from_file_path(archive.path()).expect("absolute temporary archive path");
+    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "imported-wheel"
+        version = "1.0.0"
+        archive = {{ url = "{url}", size = 0, hashes = {{ sha256 = "0000000000000000000000000000000000000000000000000000000000000000" }} }}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pylock.toml", "--offline", "--no-index", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    imported-wheel @ file://[TEMP_DIR]/local%20wheels/imported_wheel-1.0.0-py3-none-any.whl
+        # via -r pylock.toml
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn compile_pylock_file_url_subdirectory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let archive = context.temp_dir.child("imported-1.0.0.tar.gz");
+    let url = Url::from_file_path(archive.path()).expect("absolute temporary archive path");
+    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "imported"
+        version = "1.0.0"
+        archive = {{ url = "{url}", subdirectory = "project", hashes = {{ sha256 = "0000000000000000000000000000000000000000000000000000000000000000" }} }}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pylock.toml", "--offline", "--no-index", "--no-header"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot import a local archive with a subdirectory for `imported`
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-git")]
+fn compile_pylock_git_preference() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "uv-public-pypackage"
+        version = "0.1.0"
+        vcs = { type = "git", url = "https://github.com/astral-test/uv-public-pypackage", commit-id = "0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .args(["pylock.toml", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@0dacfd662c64cb4ceb16e6cf65a157a8b715b979
+        # via -r pylock.toml
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-git")]
+fn compile_pylock_local_git_preference() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let repository = context.temp_dir.child("locks/repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "local-project"
+        version = "1.0.0"
+        dependencies = []
+    "#})?;
+    Command::new("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "First version",
+        ])
+        .assert()
+        .success();
+    let commit = Command::new("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    assert!(commit.status.success());
+    let commit = String::from_utf8(commit.stdout)?;
+    let commit = commit.trim();
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "local-project"
+        version = "2.0.0"
+        dependencies = []
+    "#})?;
+    Command::new("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    Command::new("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=ferris",
+            "-c",
+            "user.email=ferris@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "Second version",
+        ])
+        .assert()
+        .success();
+    let other_commit = Command::new("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .output()?;
+    assert!(other_commit.status.success());
+    let other_commit = String::from_utf8(other_commit.stdout)?;
+    let other_commit = other_commit.trim();
+    context
+        .temp_dir
+        .child("locks/pylock.toml")
+        .write_str(&format!(
+            r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "local-project"
+        version = "1.0.0"
+        marker = "python_version >= '3.12'"
+        vcs = {{ type = "git", path = "repository", commit-id = "{commit}" }}
+        [[packages]]
+        name = "local-project"
+        version = "2.0.0"
+        marker = "python_version < '3.12'"
+        vcs = {{ type = "git", path = "repository", commit-id = "{other_commit}" }}
+    "#
+        ))?;
+
+    let mut filters = context.filters();
+    filters.push((commit, "[COMMIT]"));
+    uv_snapshot!(filters, context.pip_compile()
+        .args(["locks/pylock.toml", "--no-index", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    local-project @ git+file://[TEMP_DIR]/locks/repository/@[COMMIT]
+        # via -r locks/pylock.toml
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn compile_pylock_preference_existing_output() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "1.1.1"
+        wheels = [{ url = "https://example.org/iniconfig-1.1.1-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig==2.0.0")?;
+
+    uv_snapshot!(context.pip_compile()
+        .args(["pylock.toml", "--output-file", "requirements.txt", "--no-header"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==1.1.1
+        # via -r pylock.toml
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// Extras are validated across all input files while still selecting dependencies from each input.
+#[test]
+fn compile_pylock_mixed_extras() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        extras = ["test"]
+        [[packages]]
+        name = "sniffio"
+        version = "1.3.0"
+        marker = "'test' in extras"
+        wheels = [{ url = "https://example.com/sniffio-1.3.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        dependencies = ["iniconfig"]
+        [project.optional-dependencies]
+        local = ["idna==3.6"]
+    "#})?;
+    uv_snapshot!(context.pip_compile().args(["pylock.toml", "pyproject.toml", "--extra", "test", "--extra", "local", "--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    idna==3.6
+    iniconfig==2.0.0
+    sniffio==1.3.0
+
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    ");
+    Ok(())
+}
+
+/// A preference outside the target environment must not discard the existing output pin.
+#[test]
+fn compile_pylock_inactive_preference() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "2.0.0"
+        marker = "python_version < '3.11'"
+        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("iniconfig")?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig==1.1.1")?;
+    uv_snapshot!(context.pip_compile().args(["pylock.toml", "requirements.in", "-o", "requirements.txt", "--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==1.1.1
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+/// Universal fallback preferences apply only outside the imported preference's marker domain.
+#[test]
+#[cfg(feature = "test-universal")]
+fn compile_pylock_fallback_markers() -> Result<()> {
+    let context = uv_test::test_context!("3.10");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "iniconfig"
+        version = "2.0.0"
+        marker = "python_version < '3.11'"
+        wheels = [{ url = "https://example.com/iniconfig-2.0.0-py3-none-any.whl", hashes = { sha256 = "0000000000000000000000000000000000000000000000000000000000000000" } }]
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("iniconfig")?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig==1.1.1")?;
+    uv_snapshot!(context.pip_compile().args(["pylock.toml", "requirements.in", "-o", "requirements.txt", "--universal", "--no-header", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==1.1.1 ; python_full_version >= '3.11'
+    iniconfig==2.0.0 ; python_full_version < '3.11'
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+#[cfg(all(feature = "test-git", feature = "test-universal"))]
+fn compile_pylock_conditional_git_universal() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "uv-public-pypackage"
+        marker = "python_version >= '3.13'"
+        vcs = { type = "git", url = "https://github.com/astral-test/uv-public-pypackage", commit-id = "0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
+        [[packages]]
+        name = "uv-public-pypackage"
+        marker = "python_version < '3.13'"
+        vcs = { type = "git", url = "https://github.com/astral-test/uv-public-pypackage", commit-id = "9d01a806f17ddacb9c7b66b1b68574adf790b63f" }
+    "#})?;
+    uv_snapshot!(context.pip_compile().args(["pylock.toml", "--universal", "--no-header"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot import conflicting Git commits for the repository reference used by `uv-public-pypackage`
+    ");
+    Ok(())
+}
+
+#[test]
+fn compile_pylock_missing_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        extras = ["test"]
+        packages = []
+    "#})?;
+    uv_snapshot!(context.pip_compile()
+        .args(["pylock.toml", "--extra", "typo", "--offline", "--no-header"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Requested extra not found: typo
+    ");
+    Ok(())
+}
+
+/// Reject unknown groups before replacing an existing output file.
+#[test]
+fn compile_pylock_missing_group() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pylock.toml").write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        dependency-groups = ["dev"]
+        default-groups = ["base"]
+        packages = []
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig==1.1.1\n")?;
+    uv_snapshot!(context.pip_compile()
+        .args(["pylock.toml", "--group", "typo", "--offline", "--no-header", "-o", "requirements.txt"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The dependency group 'typo' was not declared in the lockfile's `dependency-groups`: pylock.toml
+    ");
+    assert_snapshot!(context.read("requirements.txt"), @"
+    iniconfig==1.1.1
+    ");
     Ok(())
 }
 
@@ -1324,7 +1934,7 @@ fn compile_requirements_file_extra() -> Result<()> {
             @"
     exit_code: 2 (failure)
     ----- stderr -----
-    error: Requesting extras requires a `pyproject.toml`, `setup.cfg`, or `setup.py` file.
+    error: Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file.
     "
     );
 

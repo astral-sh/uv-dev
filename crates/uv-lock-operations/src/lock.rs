@@ -951,6 +951,7 @@ async fn do_lock(
                 None,
                 workspace_members,
                 &extras,
+                &[],
                 &groups,
                 preferences,
                 None,

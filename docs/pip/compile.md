@@ -57,6 +57,22 @@ The `--input-format` option is available for `uv pip compile`, `uv pip install`,
 Project metadata read from stdin must be
 [self-contained](./packages.md#installing-packages-from-files).
 
+To resolve requirements from a `pylock.toml`, pass it as an input file or through stdin:
+
+```console
+$ uv pip compile pylock.toml -o requirements.txt
+$ cat pylock.toml | uv pip compile -
+```
+
+The selected packages become requirements, and their recorded versions and Git commits are used as
+preferences. Constraints or `--upgrade` can change the resolution. uv retains direct sources and
+environment markers, but resolves registry artifacts again without retaining their recorded URLs.
+Recorded artifact sizes and hashes are not enforced, including for direct sources. Use
+`uv pip install` or `uv pip sync` to install the locked artifacts.
+
+Local archives with a `subdirectory` are not supported as imported requirements. Universal
+resolutions reject conflicting Git commit preferences for the same repository reference.
+
 To lock with optional dependencies enabled, e.g., the "foo" extra:
 
 ```console
@@ -96,9 +112,11 @@ $ uv pip compile --group some/path/pyproject.toml:foo --group other/pyproject.to
 
 !!! note
 
-    `--group` flags do not apply to other specified sources. For instance,
+    With project metadata inputs, `--group` flags do not apply to other specified sources. For instance,
     `uv pip compile some/path/pyproject.toml --group foo` sources `foo`
     from `./pyproject.toml` and **not** `some/path/pyproject.toml`.
+
+    When importing a `pylock.toml`, `--group` selects groups from that lockfile and cannot include paths.
 
 ## Upgrading requirements
 

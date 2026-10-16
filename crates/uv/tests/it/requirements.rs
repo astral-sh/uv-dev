@@ -8,7 +8,7 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::RequirementsInput;
 use uv_redacted::DisplaySafeUrl;
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{PylockInputMode, RequirementsSource, RequirementsSpecification};
 
 #[test]
 fn parse_requirements_input() -> Result<()> {
@@ -109,6 +109,7 @@ async fn constraint_specifications_preserve_hashes() -> Result<()> {
         &[],
         &[],
         None,
+        PylockInputMode::Install,
         &BaseClientBuilder::default(),
         &Cache::temp()?,
     )

@@ -31,7 +31,7 @@ use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
+use uv_requirements::{PylockInputMode, RequirementsSource, RequirementsSpecification};
 use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
 use uv_tool::{InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
@@ -380,6 +380,7 @@ pub async fn install(
         overrides,
         excludes,
         None,
+        PylockInputMode::Install,
         &client_builder,
         &cache,
     )

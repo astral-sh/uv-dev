@@ -1376,6 +1376,10 @@ pub struct PipCompileArgs {
     /// If a `pyproject.toml`, `setup.py`, or `setup.cfg` file is provided, uv will extract the
     /// requirements for the relevant project.
     ///
+    /// If a `pylock.toml` is provided, uv will import its selected packages as requirements and use their
+    /// versions and Git commits as preferences. Registry artifact URLs are not retained, and
+    /// recorded artifact sizes and hashes are not enforced, including for direct sources.
+    ///
     /// If `-` is provided, then requirements will be read from stdin.
     ///
     /// The order of the requirements files and the requirements in them is used to determine
@@ -1412,22 +1416,23 @@ pub struct PipCompileArgs {
 
     /// Include optional dependencies from the specified extra name; may be provided more than once.
     ///
-    /// Only applies to `pyproject.toml`, `setup.py`, and `setup.cfg` sources.
+    /// Only applies to `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg` sources.
     #[arg(long, value_delimiter = ',', conflicts_with = "all_extras", value_parser = extra_name_with_clap_error)]
     pub extra: Option<Vec<ExtraName>>,
 
     /// Include all optional dependencies.
     ///
-    /// Only applies to `pyproject.toml`, `setup.py`, and `setup.cfg` sources.
+    /// Only applies to `pylock.toml`, `pyproject.toml`, `setup.py`, and `setup.cfg` sources.
     #[arg(long, conflicts_with = "extra")]
     pub all_extras: bool,
 
     #[arg(long, overrides_with("all_extras"), hide = true)]
     pub no_all_extras: bool,
 
-    /// Install the specified dependency group from a `pyproject.toml`.
+    /// Include the specified dependency group from a `pyproject.toml` or the `pylock.toml` input.
     ///
-    /// If no path is provided, the `pyproject.toml` in the working directory is used.
+    /// When importing a `pylock.toml`, groups are selected from that lockfile and cannot specify
+    /// paths. Otherwise, if no path is provided, the `pyproject.toml` in the working directory is used.
     ///
     /// May be provided multiple times.
     #[arg(long, group = "sources")]

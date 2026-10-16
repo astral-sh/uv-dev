@@ -22,13 +22,14 @@ use uv_distribution_types::{
     UnresolvedRequirementSpecification,
 };
 use uv_installer::SitePackages;
-use uv_normalize::PackageName;
+use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::{MarkerEnvironment, RequirementOrigin};
 use uv_platform_tags::Tags;
 use uv_pypi_types::Conflicts;
 use uv_requirements::{
-    GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
-    RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
+    GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, PylockInputMode,
+    RequirementsSource, RequirementsSpecification, SourceTree, SourceTreeResolution,
+    SourceTreeResolver,
 };
 use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
@@ -44,6 +45,7 @@ pub mod latest;
 pub mod locked_requirements;
 pub mod loggers;
 mod markers;
+pub mod pylock;
 pub mod reporters;
 
 pub use error::Error;
@@ -67,6 +69,7 @@ pub async fn read_requirements(
         overrides,
         excludes,
         groups,
+        PylockInputMode::Install,
         client_builder,
         cache,
     )
@@ -96,6 +99,7 @@ pub async fn read_constraints(
         &[],
         &[],
         None,
+        PylockInputMode::Install,
         client_builder,
         cache,
     )
@@ -114,6 +118,7 @@ pub async fn resolve(
     mut project: Option<PackageName>,
     workspace_members: BTreeMap<PackageName, RequirementSource>,
     extras: &ExtrasSpecification,
+    available_extras: &[ExtraName],
     groups: &BTreeMap<PathBuf, DependencyGroups>,
     preferences: Vec<Preference>,
     installed_packages: Option<SitePackages>,
@@ -201,9 +206,10 @@ pub async fn resolve(
             let mut unused_extras = extras
                 .explicit_names()
                 .filter(|extra| {
-                    !resolutions
-                        .iter()
-                        .any(|resolution| resolution.extras().contains(extra))
+                    !available_extras.contains(extra)
+                        && !resolutions
+                            .iter()
+                            .any(|resolution| resolution.extras().contains(extra))
                 })
                 .collect::<Vec<_>>();
             if !unused_extras.is_empty() {

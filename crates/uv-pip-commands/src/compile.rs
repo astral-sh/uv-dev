@@ -30,7 +30,7 @@ use uv_fs::{CWD, Simplified};
 use uv_git::ResolvedRepositoryReference;
 use uv_install_wheel::LinkMode;
 use uv_lock::PylockToml;
-use uv_normalize::PackageName;
+use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::Version;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::{Conflicts, SupportedEnvironments};
@@ -41,7 +41,8 @@ use uv_python_types::{
     PythonVersion, VersionRequest,
 };
 use uv_requirements::{
-    GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
+    GroupsSpecification, PylockInputMode, RequirementsSource, RequirementsSpecification,
+    is_pylock_toml,
 };
 use uv_resolver::{
     AnnotationStyle, DependencyMode, DisplayResolutionGraph, ExcludeNewer, FlatIndex, ForkStrategy,
@@ -63,6 +64,7 @@ use uv_resolve_operations::locked_requirements::{
     LockedRequirements, read_pylock_toml_requirements, read_requirements_txt,
 };
 use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::pylock::{PylockRequirements, import_pylock_toml};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
 /// Resolve a set of requirements into a set of pinned versions.
@@ -202,16 +204,16 @@ pub async fn pip_compile(
     // Read all requirements from the provided sources.
     let RequirementsSpecification {
         project,
-        requirements,
+        mut requirements,
         constraints,
         overrides,
         mut override_dependencies,
         excludes,
         pylock,
-        pylock_groups: _,
+        pylock_groups,
         source_trees,
         groups,
-        extras: used_extras,
+        extras: mut used_extras,
         index_url,
         extra_index_urls,
         no_index,
@@ -225,6 +227,7 @@ pub async fn pip_compile(
         overrides,
         excludes,
         Some(&groups),
+        PylockInputMode::Import,
         &client_builder,
         &cache,
     )
@@ -232,16 +235,9 @@ pub async fn pip_compile(
 
     override_dependencies.extend(overrides_from_workspace);
 
-    // Reject `pylock.toml` files, which are valid outputs but not inputs.
-    if pylock.is_some() {
+    if !extras.is_empty() && source_trees.is_empty() && pylock.is_none() {
         return Err(anyhow!(
-            "`pylock.toml` is not a supported input format for `uv pip compile`"
-        ));
-    }
-
-    if !extras.is_empty() && source_trees.is_empty() {
-        return Err(anyhow!(
-            "Requesting extras requires a `pyproject.toml`, `setup.cfg`, or `setup.py` file."
+            "Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file."
         ));
     }
 
@@ -270,20 +266,8 @@ pub async fn pip_compile(
 
     // If all the metadata could be statically resolved, validate that every extra was used. If we
     // need to resolve metadata via PEP 517, we don't know which extras are used until much later.
-    if source_trees.is_empty() {
-        let mut unused_extras = extras
-            .explicit_names()
-            .filter(|extra| !used_extras.contains(extra))
-            .collect::<Vec<_>>();
-        if !unused_extras.is_empty() {
-            unused_extras.sort_unstable();
-            unused_extras.dedup();
-            let s = if unused_extras.len() == 1 { "" } else { "s" };
-            return Err(anyhow!(
-                "Requested extra{s} not found: {}",
-                unused_extras.iter().join(", ")
-            ));
-        }
+    if source_trees.is_empty() && pylock.is_none() {
+        validate_extras(&extras, &used_extras)?;
     }
 
     // Find an interpreter to use for building distributions
@@ -464,20 +448,46 @@ pub async fn pip_compile(
         .platform(interpreter.platform())
         .build()?;
 
-    // Read the lockfile, if present.
-    let LockedRequirements { preferences, git } =
-        if let Some(output_file) = output_file.filter(|output_file| output_file.is_file()) {
-            match format {
-                PipCompileFormat::RequirementsTxt => LockedRequirements::from_preferences(
-                    read_requirements_txt(output_file, &upgrade).await?,
-                ),
-                PipCompileFormat::PylockToml => {
-                    read_pylock_toml_requirements(output_file, &upgrade).await?
-                }
+    let (imported, available_extras) = if let Some(pylock) = &pylock {
+        let PylockRequirements {
+            requirements: imported,
+            locked,
+            available_extras,
+        } = import_pylock_toml(
+            pylock,
+            &extras,
+            &pylock_groups,
+            &upgrade,
+            resolver_env.marker_environment(),
+            &client_builder,
+        )
+        .await?;
+        requirements.extend(imported);
+        (locked, available_extras)
+    } else {
+        (LockedRequirements::default(), Vec::new())
+    };
+
+    if source_trees.is_empty() && pylock.is_some() {
+        used_extras.extend(available_extras.iter().cloned());
+        validate_extras(&extras, &used_extras)?;
+    }
+
+    // Prefer imported versions over versions recorded in the existing output file.
+    let locked = if let Some(output_file) = output_file.filter(|output_file| output_file.is_file())
+    {
+        match format {
+            PipCompileFormat::RequirementsTxt => LockedRequirements::from_preferences(
+                read_requirements_txt(output_file, &upgrade).await?,
+            ),
+            PipCompileFormat::PylockToml => {
+                read_pylock_toml_requirements(output_file, &upgrade).await?
             }
-        } else {
-            LockedRequirements::default()
-        };
+        }
+    } else {
+        LockedRequirements::default()
+    };
+    let LockedRequirements { preferences, git } = imported.with_fallback(locked);
 
     // Populate the Git resolver.
     for ResolvedRepositoryReference { reference, sha } in git {
@@ -581,6 +591,7 @@ pub async fn pip_compile(
         project,
         BTreeMap::default(),
         &extras,
+        &available_extras,
         &groups,
         preferences,
         None,
@@ -920,4 +931,22 @@ fn cmd(
         .flatten()
         .join(" ");
     format!("uv {args}")
+}
+
+/// Reject explicitly requested extras absent from all statically resolved inputs.
+fn validate_extras(extras: &ExtrasSpecification, available: &FxHashSet<ExtraName>) -> Result<()> {
+    let mut unused_extras = extras
+        .explicit_names()
+        .filter(|extra| !available.contains(extra))
+        .collect::<Vec<_>>();
+    if !unused_extras.is_empty() {
+        unused_extras.sort_unstable();
+        unused_extras.dedup();
+        let s = if unused_extras.len() == 1 { "" } else { "s" };
+        return Err(anyhow!(
+            "Requested extra{s} not found: {}",
+            unused_extras.iter().join(", ")
+        ));
+    }
+    Ok(())
 }

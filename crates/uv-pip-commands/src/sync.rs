@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use anyhow::Result;
-use itertools::Itertools;
 use owo_colors::OwoColorize;
 use tracing::{debug, warn};
 
@@ -22,7 +21,6 @@ use uv_distribution_types::{
 use uv_fs::Simplified;
 use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SitePackages};
-use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_pep440::Version;
 use uv_preview::{Preview, PreviewFeature};
 use uv_pypi_types::Conflicts;
@@ -46,7 +44,7 @@ use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
 use crate::install_report::write_install_report;
-use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
+use crate::pylock::resolve_pylock_toml;
 use crate::reporters::report_target_environment;
 use crate::resolve_build_hash_checking;
 use uv_command_support::{ExitStatus, Printer, UvError};
@@ -55,6 +53,7 @@ use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::report_interpreter;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::pylock::{PylockSelection, read_pylock_toml, select_pylock_packages};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
 /// Install a set of locked requirements into the current Python environment.
@@ -400,26 +399,8 @@ pub async fn pip_sync(
     let (resolution, hasher) = if let Some(pylock) = pylock {
         let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
 
-        // Convert the extras and groups specifications into a concrete form.
-        let extras = extras.with_defaults(DefaultExtras::default());
-        let extras = extras
-            .extra_names(lock.extras.iter())
-            .cloned()
-            .collect::<Vec<_>>();
-
-        let groups =
-            pylock_groups.with_defaults(DefaultGroups::from_groups(lock.default_groups.clone()));
-        let groups = groups
-            .group_names(lock.dependency_groups.iter())
-            // PEP 751 allows synthetic default groups that aren't publicly selectable.
-            .chain(
-                lock.default_groups
-                    .iter()
-                    .filter(|group| groups.contains_because_default(group)),
-            )
-            .unique()
-            .cloned()
-            .collect::<Vec<_>>();
+        let PylockSelection { extras, groups } =
+            select_pylock_packages(&lock, extras, &pylock_groups);
 
         resolve_pylock_toml(
             lock,
@@ -456,6 +437,7 @@ pub async fn pip_sync(
             project,
             BTreeMap::default(),
             extras,
+            &[],
             &groups,
             preferences,
             Some(site_packages.clone()),

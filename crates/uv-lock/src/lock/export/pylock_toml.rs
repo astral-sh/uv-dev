@@ -26,9 +26,10 @@ use uv_distribution_filename::{
 };
 use uv_distribution_types::{
     BuiltDist, DirectUrlBuiltDist, DirectUrlSourceDist, DirectorySourceDist, Dist, Edge,
-    FileLocation, FirstParty, GitDirectorySourceDist, IndexUrl, Name, Node, PathBuiltDist,
-    PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RemoteSource,
-    RequiresPython, Resolution, ResolvedDist, SourceDist, ToUrlError, UrlString,
+    FileLocation, FirstParty, GitDirectorySourceDist, IndexMetadata, IndexUrl, Name, Node,
+    PathBuiltDist, PathSourceDist, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    RemoteSource, Requirement, RequirementScope, RequirementSource, RequiresPython, Resolution,
+    ResolvedDist, SourceDist, ToUrlError, UrlString,
 };
 use uv_fs::{PortablePathBuf, normalize_path, try_relative_to_if};
 use uv_git::{RepositoryReference, ResolvedRepositoryReference};
@@ -129,6 +130,8 @@ pub enum PylockTomlErrorKind {
     SdistMissingPathUrl(PackageName),
     #[error("`packages.archive` entry for `{0}` must have a `path` or `url`")]
     ArchiveMissingPathUrl(PackageName),
+    #[error("Cannot import a local archive with a subdirectory for `{0}`")]
+    ArchiveSubdirectoryUnsupported(PackageName),
     #[error("`packages.vcs` entry for `{0}` must have a `url` or `path`")]
     VcsMissingPathUrl(PackageName),
     #[error("`{1}` entry for `{0}` has no hashes and no URL or path to compute them")]
@@ -147,6 +150,8 @@ pub enum PylockTomlErrorKind {
     WheelVersionMismatch(WheelFilename, Version),
     #[error("Failed to convert path to URL")]
     PathToUrl,
+    #[error("Invalid path in file URL: {0}")]
+    InvalidFileUrl(DisplaySafeUrl),
     #[error(
         "Package `{0}` can't be installed because it doesn't have a source distribution or wheel for the current platform"
     )]
@@ -1227,6 +1232,76 @@ impl<'lock> PylockToml {
         Ok(doc.to_string())
     }
 
+    /// Import package requirements without retaining registry versions, artifacts, or hashes.
+    ///
+    /// Direct sources and environment markers are retained. The recorded registry versions can be
+    /// used separately as resolver preferences.
+    pub fn to_requirements(
+        &self,
+        install_path: &Path,
+        extras: &[ExtraName],
+        groups: &[GroupName],
+    ) -> Result<Vec<Requirement>, PylockTomlErrorKind> {
+        let mut requirements = Vec::with_capacity(self.packages.len());
+        for package in &self.packages {
+            let marker = package.marker.simplify_pep751(extras, groups);
+            if marker.is_false() {
+                continue;
+            }
+            package.validate_sources()?;
+
+            let source = if let Some(directory) = &package.directory {
+                let directory = directory.to_sdist(install_path, &package.name)?;
+                RequirementSource::Directory {
+                    install_path: directory.install_path,
+                    url: directory.url,
+                    editable: directory.editable,
+                    r#virtual: directory.r#virtual,
+                }
+            } else if let Some(vcs) = &package.vcs {
+                let pinned =
+                    vcs.to_git_url(install_path, &package.name, GitReference::DefaultBranch)?;
+                let git = GitUrl::from_fields(
+                    pinned.url().clone(),
+                    pinned.reference().clone(),
+                    None,
+                    pinned.lfs(),
+                )?;
+                let subdirectory = vcs.subdirectory.clone().map(Box::<Path>::from);
+                let url = VerbatimUrl::from_url(DisplaySafeUrl::from(ParsedGitDirectoryUrl {
+                    url: git.clone(),
+                    subdirectory: subdirectory.clone(),
+                }));
+                RequirementSource::GitDirectory {
+                    git,
+                    subdirectory,
+                    url,
+                }
+            } else if let Some(archive) = &package.archive {
+                archive.to_requirement_source(install_path, &package.name)?
+            } else {
+                RequirementSource::Registry {
+                    specifier: uv_pep440::VersionSpecifiers::empty(),
+                    index: package.index.as_ref().map(|index| {
+                        IndexMetadata::from(IndexUrl::from(VerbatimUrl::from(index.clone())))
+                    }),
+                    conflict: None,
+                }
+            };
+
+            requirements.push(Requirement {
+                name: package.name.clone(),
+                extras: Box::new([]),
+                groups: Box::new([]),
+                marker,
+                source,
+                scope: RequirementScope::Global,
+                origin: None,
+            });
+        }
+        Ok(requirements)
+    }
+
     /// Convert the [`PylockToml`] to a [`Resolution`].
     pub fn to_resolution(
         self,
@@ -1275,55 +1350,7 @@ impl<'lock> PylockToml {
                 .into());
             }
 
-            match (
-                package.wheels.is_some(),
-                package.sdist.is_some(),
-                package.directory.is_some(),
-                package.vcs.is_some(),
-                package.archive.is_some(),
-            ) {
-                // `packages.wheels` is mutually exclusive with `packages.directory`, `packages.vcs`, and `packages.archive`.
-                (true, _, true, _, _) => {
-                    return Err(
-                        PylockTomlErrorKind::WheelWithDirectory(package.name.clone()).into(),
-                    );
-                }
-                (true, _, _, true, _) => {
-                    return Err(PylockTomlErrorKind::WheelWithVcs(package.name.clone()).into());
-                }
-                (true, _, _, _, true) => {
-                    return Err(PylockTomlErrorKind::WheelWithArchive(package.name.clone()).into());
-                }
-                // `packages.sdist` is mutually exclusive with `packages.directory`, `packages.vcs`, and `packages.archive`.
-                (_, true, true, _, _) => {
-                    return Err(
-                        PylockTomlErrorKind::SdistWithDirectory(package.name.clone()).into(),
-                    );
-                }
-                (_, true, _, true, _) => {
-                    return Err(PylockTomlErrorKind::SdistWithVcs(package.name.clone()).into());
-                }
-                (_, true, _, _, true) => {
-                    return Err(PylockTomlErrorKind::SdistWithArchive(package.name.clone()).into());
-                }
-                // `packages.directory` is mutually exclusive with `packages.vcs`, and `packages.archive`.
-                (_, _, true, true, _) => {
-                    return Err(PylockTomlErrorKind::DirectoryWithVcs(package.name.clone()).into());
-                }
-                (_, _, true, _, true) => {
-                    return Err(
-                        PylockTomlErrorKind::DirectoryWithArchive(package.name.clone()).into(),
-                    );
-                }
-                // `packages.vcs` is mutually exclusive with `packages.archive`.
-                (_, _, _, true, true) => {
-                    return Err(PylockTomlErrorKind::VcsWithArchive(package.name.clone()).into());
-                }
-                (false, false, false, false, false) => {
-                    return Err(PylockTomlErrorKind::MissingSource(package.name.clone()).into());
-                }
-                _ => {}
-            }
+            package.validate_sources()?;
 
             // Validate every active wheel before selecting the compatible candidate. Otherwise an
             // incompatible or malformed wheel can be silently ignored when an sdist is present.
@@ -1462,6 +1489,59 @@ impl<'lock> PylockToml {
 }
 
 impl PylockTomlPackage {
+    /// Return the marker selecting this package.
+    pub fn marker(&self) -> MarkerTree {
+        self.marker
+    }
+
+    /// Validate the package's source combinations.
+    fn validate_sources(&self) -> Result<(), PylockTomlErrorKind> {
+        match (
+            self.wheels.is_some(),
+            self.sdist.is_some(),
+            self.directory.is_some(),
+            self.vcs.is_some(),
+            self.archive.is_some(),
+        ) {
+            // `packages.wheels` is mutually exclusive with `packages.directory`, `packages.vcs`, and `packages.archive`.
+            (true, _, true, _, _) => {
+                return Err(PylockTomlErrorKind::WheelWithDirectory(self.name.clone()));
+            }
+            (true, _, _, true, _) => {
+                return Err(PylockTomlErrorKind::WheelWithVcs(self.name.clone()));
+            }
+            (true, _, _, _, true) => {
+                return Err(PylockTomlErrorKind::WheelWithArchive(self.name.clone()));
+            }
+            // `packages.sdist` is mutually exclusive with `packages.directory`, `packages.vcs`, and `packages.archive`.
+            (_, true, true, _, _) => {
+                return Err(PylockTomlErrorKind::SdistWithDirectory(self.name.clone()));
+            }
+            (_, true, _, true, _) => {
+                return Err(PylockTomlErrorKind::SdistWithVcs(self.name.clone()));
+            }
+            (_, true, _, _, true) => {
+                return Err(PylockTomlErrorKind::SdistWithArchive(self.name.clone()));
+            }
+            // `packages.directory` is mutually exclusive with `packages.vcs`, and `packages.archive`.
+            (_, _, true, true, _) => {
+                return Err(PylockTomlErrorKind::DirectoryWithVcs(self.name.clone()));
+            }
+            (_, _, true, _, true) => {
+                return Err(PylockTomlErrorKind::DirectoryWithArchive(self.name.clone()));
+            }
+            // `packages.vcs` is mutually exclusive with `packages.archive`.
+            (_, _, _, true, true) => {
+                return Err(PylockTomlErrorKind::VcsWithArchive(self.name.clone()));
+            }
+            (false, false, false, false, false) => {
+                return Err(PylockTomlErrorKind::MissingSource(self.name.clone()));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Convert the [`PylockTomlPackage`] to a TOML [`Table`].
     fn to_toml(&self) -> Result<Table, toml_edit::ser::Error> {
         let mut table = Table::new();
@@ -1589,18 +1669,14 @@ impl PylockTomlPackage {
     }
 
     /// Returns the [`ResolvedRepositoryReference`] for the package, if it is a Git source.
-    pub fn as_git_ref(&self) -> Result<Option<ResolvedRepositoryReference>, GitUrlParseError> {
+    pub fn as_git_ref(
+        &self,
+        install_path: &Path,
+    ) -> Result<Option<ResolvedRepositoryReference>, PylockTomlErrorKind> {
         let Some(vcs) = self.vcs.as_ref() else {
             return Ok(None);
         };
-        let Some(url) = vcs.url.as_ref() else {
-            return Ok(None);
-        };
-        let reference = match vcs.requested_revision.as_ref() {
-            Some(rev) => GitReference::from_rev(rev.clone()),
-            None => GitReference::DefaultBranch,
-        };
-        let git = GitUrl::from_commit(url.clone(), reference, vcs.commit_id, GitLfs::Disabled)?;
+        let git = vcs.to_git_url(install_path, &self.name, GitReference::DefaultBranch)?;
         Ok(Some(ResolvedRepositoryReference {
             reference: RepositoryReference::from(&git),
             sha: vcs.commit_id,
@@ -1717,6 +1793,41 @@ impl PylockTomlDirectory {
 }
 
 impl PylockTomlVcs {
+    /// Convert the source to a pinned [`GitUrl`], using `fallback` when no revision was requested.
+    fn to_git_url(
+        &self,
+        install_path: &Path,
+        name: &PackageName,
+        fallback: GitReference,
+    ) -> Result<GitUrl, PylockTomlErrorKind> {
+        let mut url = if let Some(url) = self.url.as_ref() {
+            url.clone()
+        } else if let Some(path) = self.path.as_ref() {
+            DisplaySafeUrl::from_url(
+                Url::from_directory_path(install_path.join(path))
+                    .map_err(|()| PylockTomlErrorKind::PathToUrl)?,
+            )
+        } else {
+            return Err(PylockTomlErrorKind::VcsMissingPathUrl(name.clone()));
+        };
+        url.set_fragment(None);
+        url.set_query(None);
+
+        let reference = self
+            .requested_revision
+            .clone()
+            .map(GitReference::from_rev)
+            .unwrap_or(fallback);
+
+        // TODO(samypr100): GitLfs::from_env() as pylock.toml spec doesn't specify how to label LFS support
+        Ok(GitUrl::from_commit(
+            url,
+            reference,
+            self.commit_id,
+            GitLfs::from_env(),
+        )?)
+    }
+
     /// Convert the sdist to a [`GitDirectorySourceDist`].
     fn to_sdist(
         &self,
@@ -1725,31 +1836,7 @@ impl PylockTomlVcs {
     ) -> Result<GitDirectorySourceDist, PylockTomlErrorKind> {
         let subdirectory = self.subdirectory.clone().map(Box::<Path>::from);
 
-        // Reconstruct the `GitUrl` from the individual fields.
-        let git_url = {
-            let mut url = if let Some(url) = self.url.as_ref() {
-                url.clone()
-            } else if let Some(path) = self.path.as_ref() {
-                DisplaySafeUrl::from_url(
-                    Url::from_directory_path(install_path.join(path))
-                        .map_err(|()| PylockTomlErrorKind::PathToUrl)?,
-                )
-            } else {
-                return Err(PylockTomlErrorKind::VcsMissingPathUrl(name.clone()));
-            };
-            url.set_fragment(None);
-            url.set_query(None);
-
-            let reference = self
-                .requested_revision
-                .clone()
-                .map(GitReference::from_rev)
-                .unwrap_or(GitReference::Commit(self.commit_id));
-            let precise = self.commit_id;
-
-            // TODO(samypr100): GitLfs::from_env() as pylock.toml spec doesn't specify how to label LFS support
-            GitUrl::from_commit(url, reference, precise, GitLfs::from_env())?
-        };
+        let git_url = self.to_git_url(install_path, name, GitReference::Commit(self.commit_id))?;
 
         // Reconstruct the PEP 508-compatible URL from the `GitSource`.
         let url = DisplaySafeUrl::from(ParsedGitDirectoryUrl {
@@ -1857,6 +1944,60 @@ impl PylockTomlSdist {
 }
 
 impl PylockTomlArchive {
+    fn to_requirement_source(
+        &self,
+        install_path: &Path,
+        name: &PackageName,
+    ) -> Result<RequirementSource, PylockTomlErrorKind> {
+        let path = if let Some(path) = &self.path {
+            Some(normalize_path(install_path.join(path)).into_owned())
+        } else if let Some(url) = &self.url
+            && url.scheme() == "file"
+        {
+            Some(
+                url.to_file_path()
+                    .map_err(|()| PylockTomlErrorKind::InvalidFileUrl(url.clone()))?,
+            )
+        } else {
+            None
+        };
+
+        if let Some(install_path) = path {
+            if self.subdirectory.is_some() {
+                return Err(PylockTomlErrorKind::ArchiveSubdirectoryUnsupported(
+                    name.clone(),
+                ));
+            }
+            let ext = DistExtension::from_path(&install_path)?;
+            let url = VerbatimUrl::from_absolute_path(&install_path)
+                .map_err(|_| PylockTomlErrorKind::PathToUrl)?;
+            Ok(RequirementSource::Path {
+                install_path: install_path.into_boxed_path(),
+                ext,
+                url,
+            })
+        } else if let Some(url) = &self.url {
+            let filename = url
+                .filename()
+                .map_err(|_| PylockTomlErrorKind::UrlMissingFilename(url.clone()))?;
+            let ext = DistExtension::from_path(filename.as_ref())?;
+            let mut location = url.clone();
+            location.set_fragment(None);
+            let mut url = location.clone();
+            if let Some(subdirectory) = &self.subdirectory {
+                url.set_fragment(Some(&format!("subdirectory={subdirectory}")));
+            }
+            Ok(RequirementSource::Url {
+                location,
+                subdirectory: self.subdirectory.clone().map(Box::<Path>::from),
+                ext,
+                url: VerbatimUrl::from_url(url),
+            })
+        } else {
+            Err(PylockTomlErrorKind::ArchiveMissingPathUrl(name.clone()))
+        }
+    }
+
     fn to_dist(
         &self,
         install_path: &Path,
