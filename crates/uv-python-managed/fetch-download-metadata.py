@@ -724,17 +724,69 @@ class GraalPyFinder(Finder):
                 download.sha256 = resp.text.strip()
 
 
-def render(downloads: list[PythonDownload]) -> None:
-    """Render `download-metadata.json`."""
+def prerelease_sort_key(prerelease: str) -> tuple[int, int]:
+    if prerelease.startswith("a"):
+        return 0, int(prerelease[1:])
+    if prerelease.startswith("b"):
+        return 1, int(prerelease[1:])
+    if prerelease.startswith("rc"):
+        return 2, int(prerelease[2:])
+    return 3, 0
 
-    def prerelease_sort_key(prerelease: str) -> tuple[int, int]:
-        if prerelease.startswith("a"):
-            return 0, int(prerelease[1:])
-        if prerelease.startswith("b"):
-            return 1, int(prerelease[1:])
-        if prerelease.startswith("rc"):
-            return 2, int(prerelease[2:])
-        return 3, 0
+
+def filter_cpython_versions(downloads: list[PythonDownload]) -> list[PythonDownload]:
+    """Keep recent CPython patches while retaining all other implementations."""
+    groups: dict[
+        tuple[int, int, PlatformTripleKey, Variant | None], list[PythonDownload]
+    ] = {}
+    other_downloads: list[PythonDownload] = []
+
+    for download in downloads:
+        if (
+            download.implementation != ImplementationName.CPYTHON
+            or download.triple.platform == "emscripten"
+        ):
+            other_downloads.append(download)
+            continue
+
+        group = (
+            download.version.major,
+            download.version.minor,
+            download.triple.key(),
+            download.variant,
+        )
+        groups.setdefault(group, []).append(download)
+
+    selected_downloads: list[PythonDownload] = []
+    for group_downloads in groups.values():
+        stable_downloads = [
+            download for download in group_downloads if not download.version.prerelease
+        ]
+        stable_downloads.sort(key=lambda download: download.version.patch, reverse=True)
+        selected_downloads.extend(stable_downloads[:3])
+
+        prerelease_downloads = [
+            download for download in group_downloads if download.version.prerelease
+        ]
+
+        if prerelease_downloads:
+            selected_downloads.append(
+                max(
+                    prerelease_downloads,
+                    key=lambda download: (
+                        download.version.patch,
+                        prerelease_sort_key(download.version.prerelease),
+                    ),
+                )
+            )
+
+    return selected_downloads + other_downloads
+
+
+def render(downloads: list[PythonDownload], *, prune: bool = False) -> None:
+    """Render `download-metadata.json`."""
+    if prune:
+        downloads = filter_cpython_versions(downloads)
 
     def variant_sort_key(variant: Variant | None) -> int:
         if variant is None:
@@ -803,7 +855,7 @@ def render(downloads: list[PythonDownload]) -> None:
     VERSIONS_FILE.write_text(json.dumps(results, indent=2) + "\n", newline="\n")
 
 
-async def find() -> None:
+async def find(*, prune: bool = False) -> None:
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
         logger.warning(
@@ -831,7 +883,7 @@ async def find() -> None:
             logger.info("Finding %s downloads...", finder.implementation)
             downloads.extend(await finder.find())
 
-    render(downloads)
+    render(downloads, prune=prune)
 
 
 def main() -> None:
@@ -847,6 +899,11 @@ def main() -> None:
         "--quiet",
         action="store_true",
         help="Disable logging",
+    )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="Retain only recent CPython releases in the generated metadata",
     )
     args = parser.parse_args()
 
@@ -866,7 +923,7 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-    asyncio.run(find())
+    asyncio.run(find(prune=args.prune))
 
 
 if __name__ == "__main__":
