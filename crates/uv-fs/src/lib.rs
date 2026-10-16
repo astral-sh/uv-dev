@@ -220,26 +220,24 @@ fn create_junction(target: &Path, path: &Path) -> std::io::Result<()> {
 
     let create_result = junction::create(target, path);
 
-    match path.metadata() {
-        Ok(_) if create_result.is_ok() => Ok(()),
-        Ok(_) => {
+    match (create_result, path.metadata()) {
+        (Ok(()), Ok(_)) => Ok(()),
+        (Err(create_err), Ok(_)) => {
             // Creation failed but left behind an empty directory. Only clean
             // it up if the directory wasn't already there before we tried.
-            if let Err(ref create_err) = create_result {
-                if !matches!(
-                    create_err
-                        .raw_os_error()
-                        .map(|err| WIN32_ERROR(err.cast_unsigned())),
-                    Some(ERROR_ALREADY_EXISTS)
-                ) {
-                    // Not a junction (metadata succeeded normally), just
-                    // an empty directory left behind by junction::create.
-                    let _ = fs_err::remove_dir(path);
-                }
+            if !matches!(
+                create_err
+                    .raw_os_error()
+                    .map(|err| WIN32_ERROR(err.cast_unsigned())),
+                Some(ERROR_ALREADY_EXISTS)
+            ) {
+                // Not a junction (metadata succeeded normally), just
+                // an empty directory left behind by junction::create.
+                let _ = fs_err::remove_dir(path);
             }
-            create_result
+            Err(create_err)
         }
-        Err(err)
+        (create_result, Err(err)) => {
             if matches!(
                 err.raw_os_error()
                     .map(|err| WIN32_ERROR(err.cast_unsigned())),
@@ -249,13 +247,12 @@ fn create_junction(target: &Path, path: &Path) -> std::io::Result<()> {
                         | ERROR_NOT_A_REPARSE_POINT
                         | ERROR_INVALID_REPARSE_DATA
                 )
-            ) =>
-        {
-            // Broken reparse point.
-            let _ = fs_err::remove_dir(path);
+            ) {
+                // Broken reparse point.
+                let _ = fs_err::remove_dir(path);
+            }
             Err(create_result.err().unwrap_or(err))
         }
-        Err(err) => Err(create_result.err().unwrap_or(err)),
     }
 }
 
@@ -407,6 +404,23 @@ mod windows_tests {
     use std::os::windows::ffi::OsStrExt;
 
     use super::*;
+
+    #[test]
+    fn persist_once_retains_file_after_failure() -> io::Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let mut file = tempfile_in(tempdir.path())?;
+        file.write_all(b"contents")?;
+        let mut file = Some(file);
+
+        assert!(matches!(
+            persist_once(&mut file, &tempdir.path().join("missing").join("file")),
+            Err(PersistRetryError::Persist(_))
+        ));
+        let target = tempdir.path().join("persisted");
+        assert!(persist_once(&mut file, &target).is_ok());
+        assert_eq!(fs_err::read(target)?, b"contents");
+        Ok(())
+    }
 
     #[test]
     fn fs_err_read_link_reads_created_directory_link() -> std::io::Result<()> {
@@ -688,6 +702,48 @@ enum PersistRetryError {
     LostState,
 }
 
+#[cfg(windows)]
+impl PersistRetryError {
+    fn is_retryable(&self) -> bool {
+        matches!(self, Self::Persist(_))
+    }
+
+    fn warn_retry(&self, to: &Path) {
+        if let Self::Persist(message) = self {
+            warn!(
+                "Retrying to persist temporary file to `{}`: {}",
+                to.display(),
+                message,
+            );
+        }
+    }
+
+    fn into_io_error(self, to: &Path) -> io::Error {
+        match self {
+            Self::Persist(message) => io::Error::other(format!(
+                "Failed to persist temporary file to `{}`: {}",
+                to.display(),
+                message,
+            )),
+            Self::LostState => io::Error::other(format!(
+                "Failed to retrieve temporary file while trying to persist to `{}`",
+                to.display()
+            )),
+        }
+    }
+}
+
+/// Attempt to persist a temporary file, retaining it for another attempt on failure.
+#[cfg(windows)]
+fn persist_once(from: &mut Option<NamedTempFile>, to: &Path) -> Result<(), PersistRetryError> {
+    let file = from.take().ok_or(PersistRetryError::LostState)?;
+    file.persist(to).map(|_| ()).map_err(|err| {
+        let message = err.to_string();
+        *from = Some(err.file);
+        PersistRetryError::Persist(message)
+    })
+}
+
 /// Persist a `NamedTempFile`, retrying (on Windows) if it fails due to transient operating system
 /// errors.
 #[cfg(feature = "tokio")]
@@ -705,79 +761,18 @@ async fn persist_with_retry(
         // See: <https://github.com/astral-sh/uv/issues/1491> & <https://github.com/astral-sh/uv/issues/9531>
         let to = to.as_ref();
 
-        // Ok there's a lot of complex ownership stuff going on here.
-        //
-        // the `NamedTempFile` `persist` method consumes `self`, and returns it back inside
-        // the Error in case of `PersistError`:
-        // https://docs.rs/tempfile/latest/tempfile/struct.NamedTempFile.html#method.persist
-        // So every time we fail, we need to reset the `NamedTempFile` to try again.
-        //
-        // Every time we (re)try we call this outer closure (`let persist = ...`), so it needs to
-        // be at least a `FnMut` (as opposed to `Fnonce`). However the closure needs to return a
-        // totally owned `Future` (so effectively it returns a `FnOnce`).
-        //
-        // But if the `Future` is totally owned it *necessarily* can't write back the `NamedTempFile`
-        // to somewhere the outer `FnMut` can see using references. So we need to use `Arc`s
-        // with interior mutability (`Mutex`) to have the closure and all the Futures it creates share
-        // a single memory location that the `NamedTempFile` can be shuttled in and out of.
-        //
-        // In spite of the Mutex all of this code will run logically serially, so there shouldn't be a
-        // chance for a race where we try to get the `NamedTempFile` but it's actually None. The code
-        // is just written pedantically/robustly.
-        let from = std::sync::Arc::new(std::sync::Mutex::new(Some(from)));
-        let persist = || {
-            // Turn our by-ref-captured Arc into an owned Arc that the Future can capture by-value
-            let from2 = from.clone();
-
-            async move {
-                let maybe_file: Option<NamedTempFile> = from2
-                    .lock()
-                    .map_err(|_| PersistRetryError::LostState)?
-                    .take();
-                if let Some(file) = maybe_file {
-                    file.persist(to).map_err(|err| {
-                        let error_message: String = err.to_string();
-                        // Set back the `NamedTempFile` returned back by the Error
-                        if let Ok(mut guard) = from2.lock() {
-                            *guard = Some(err.file);
-                            PersistRetryError::Persist(error_message)
-                        } else {
-                            PersistRetryError::LostState
-                        }
-                    })
-                } else {
-                    Err(PersistRetryError::LostState)
-                }
-            }
-        };
+        let mut from = Some(from);
+        // Persistence itself is synchronous; only the delay between attempts is asynchronous.
+        let persist = || std::future::ready(persist_once(&mut from, to));
 
         let persisted = persist
             .retry(backoff_file_move())
             .sleep(tokio::time::sleep)
-            .when(|err| matches!(err, PersistRetryError::Persist(_)))
-            .notify(|err, _dur| {
-                if let PersistRetryError::Persist(error_message) = err {
-                    warn!(
-                        "Retrying to persist temporary file to `{}`: {}",
-                        to.display(),
-                        error_message,
-                    );
-                }
-            })
+            .when(PersistRetryError::is_retryable)
+            .notify(|err, _dur| err.warn_retry(to))
             .await;
 
-        match persisted {
-            Ok(_) => Ok(()),
-            Err(PersistRetryError::Persist(error_message)) => Err(std::io::Error::other(format!(
-                "Failed to persist temporary file to `{}`: {}",
-                to.display(),
-                error_message,
-            ))),
-            Err(PersistRetryError::LostState) => Err(std::io::Error::other(format!(
-                "Failed to retrieve temporary file while trying to persist to `{}`",
-                to.display()
-            ))),
-        }
+        persisted.map_err(|err| err.into_io_error(to))
     }
     #[cfg(not(windows))]
     {
@@ -803,52 +798,17 @@ pub fn persist_with_retry_sync(
         // See: <https://github.com/astral-sh/uv/issues/1491> & <https://github.com/astral-sh/uv/issues/9531>
         let to = to.as_ref();
 
-        // the `NamedTempFile` `persist` method consumes `self`, and returns it back inside the Error in case of `PersistError`
-        // https://docs.rs/tempfile/latest/tempfile/struct.NamedTempFile.html#method.persist
-        // So we will update the `from` optional value in safe and borrow-checker friendly way every retry
-        // Allows us to use the NamedTempFile inside a FnMut closure used for backoff::retry
         let mut from = Some(from);
-        let persist = || {
-            // Needed because we cannot move out of `from`, a captured variable in an `FnMut` closure, and then pass it to the async move block
-            if let Some(file) = from.take() {
-                file.persist(to).map_err(|err| {
-                    let error_message = err.to_string();
-                    // Set back the NamedTempFile returned back by the Error
-                    from = Some(err.file);
-                    PersistRetryError::Persist(error_message)
-                })
-            } else {
-                Err(PersistRetryError::LostState)
-            }
-        };
+        let persist = || persist_once(&mut from, to);
 
         let persisted = persist
             .retry(backoff_file_move())
             .sleep(std::thread::sleep)
-            .when(|err| matches!(err, PersistRetryError::Persist(_)))
-            .notify(|err, _dur| {
-                if let PersistRetryError::Persist(error_message) = err {
-                    warn!(
-                        "Retrying to persist temporary file to `{}`: {}",
-                        to.display(),
-                        error_message,
-                    );
-                }
-            })
+            .when(PersistRetryError::is_retryable)
+            .notify(|err, _dur| err.warn_retry(to))
             .call();
 
-        match persisted {
-            Ok(_) => Ok(()),
-            Err(PersistRetryError::Persist(error_message)) => Err(std::io::Error::other(format!(
-                "Failed to persist temporary file to `{}`: {}",
-                to.display(),
-                error_message,
-            ))),
-            Err(PersistRetryError::LostState) => Err(std::io::Error::other(format!(
-                "Failed to retrieve temporary file while trying to persist to `{}`",
-                to.display()
-            ))),
-        }
+        persisted.map_err(|err| err.into_io_error(to))
     }
     #[cfg(not(windows))]
     {

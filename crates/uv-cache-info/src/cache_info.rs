@@ -54,7 +54,7 @@ impl CacheInfo {
     pub fn from_path(path: &Path) -> Result<Self, CacheInfoError> {
         let metadata = fs_err::metadata(path)?;
         if metadata.is_file() {
-            Ok(Self::from_file(path)?)
+            Ok(Self::from_timestamp(Timestamp::from_metadata(&metadata)))
         } else {
             Self::from_directory(path)
         }
@@ -68,25 +68,8 @@ impl CacheInfo {
         let mut directories = BTreeMap::new();
         let mut env = BTreeMap::new();
 
-        // Read the cache keys.
-        let pyproject_path = directory.join("pyproject.toml");
-        let cache_keys = if let Ok(contents) = fs_err::read_to_string(&pyproject_path) {
-            let result = info_span!("toml::from_str cache keys", path = %pyproject_path.display())
-                .in_scope(|| toml::from_str::<PyProjectToml>(&contents));
-            if let Ok(pyproject_toml) = result {
-                pyproject_toml
-                    .tool
-                    .and_then(|tool| tool.uv)
-                    .and_then(|tool_uv| tool_uv.cache_keys)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
         // If no cache keys were defined, use the defaults.
-        let cache_keys = cache_keys.unwrap_or_else(|| {
+        let cache_keys = read_cache_keys(directory).unwrap_or_else(|| {
             vec![
                 CacheKey::Path(Cow::Borrowed("pyproject.toml")),
                 CacheKey::Path(Cow::Borrowed("setup.py")),
@@ -132,9 +115,10 @@ impl CacheInfo {
                         continue;
                     }
                     let timestamp = Timestamp::from_metadata(&metadata);
-                    if last_changed.as_ref().is_none_or(|(_, prev_timestamp)| {
-                        *prev_timestamp < Timestamp::from_metadata(&metadata)
-                    }) {
+                    if last_changed
+                        .as_ref()
+                        .is_none_or(|(_, previous)| *previous < timestamp)
+                    {
                         last_changed = Some((path, timestamp));
                     }
                 }
@@ -185,18 +169,14 @@ impl CacheInfo {
                         }
                     }
                 }
-                CacheKey::Git {
-                    git: GitPattern::Bool(true),
-                } => match Commit::from_repository(directory) {
-                    Ok(commit_info) => commit = Some(commit_info),
-                    Err(err) => {
-                        debug!("Failed to read the current commit: {err}");
-                    }
-                },
-                CacheKey::Git {
-                    git: GitPattern::Set(set),
-                } => {
-                    if set.commit.unwrap_or(false) {
+                CacheKey::Git { git } => {
+                    let (include_commit, include_tags) = match git {
+                        GitPattern::Bool(commit) => (commit, false),
+                        GitPattern::Set(GitSet { commit, tags }) => {
+                            (commit.unwrap_or(false), tags.unwrap_or(false))
+                        }
+                    };
+                    if include_commit {
                         match Commit::from_repository(directory) {
                             Ok(commit_info) => commit = Some(commit_info),
                             Err(err) => {
@@ -204,7 +184,7 @@ impl CacheInfo {
                             }
                         }
                     }
-                    if set.tags.unwrap_or(false) {
+                    if include_tags {
                         match Tags::from_repository(directory) {
                             Ok(tags_info) => tags = Some(tags_info),
                             Err(err) => {
@@ -213,9 +193,6 @@ impl CacheInfo {
                         }
                     }
                 }
-                CacheKey::Git {
-                    git: GitPattern::Bool(false),
-                } => {}
                 CacheKey::Environment { env: var } => {
                     let value = std::env::var(&var).ok();
                     env.insert(var, value);
@@ -269,9 +246,10 @@ impl CacheInfo {
                         continue;
                     }
                     let timestamp = Timestamp::from_metadata(&metadata);
-                    if last_changed.as_ref().is_none_or(|(_, prev_timestamp)| {
-                        *prev_timestamp < Timestamp::from_metadata(&metadata)
-                    }) {
+                    if last_changed
+                        .as_ref()
+                        .is_none_or(|(_, previous)| *previous < timestamp)
+                    {
                         last_changed = Some((entry.into_path(), timestamp));
                     }
                 }
@@ -300,12 +278,7 @@ impl CacheInfo {
     /// Compute the cache info for a given file, assumed to be a binary or source distribution
     /// represented as (e.g.) a `.whl` or `.tar.gz` archive.
     pub fn from_file(path: impl AsRef<Path>) -> std::io::Result<Self> {
-        let metadata = fs_err::metadata(path.as_ref())?;
-        let timestamp = Timestamp::from_metadata(&metadata);
-        Ok(Self {
-            timestamp: Some(timestamp),
-            ..Self::default()
-        })
+        Ok(Self::from_timestamp(Timestamp::from_path(path)?))
     }
 
     /// Returns `true` if the cache info is empty.
@@ -316,6 +289,16 @@ impl CacheInfo {
             && self.env.is_empty()
             && self.directories.is_empty()
     }
+}
+
+/// Read configured cache keys, treating an unreadable or invalid project file as unconfigured.
+fn read_cache_keys(directory: &Path) -> Option<Vec<CacheKey>> {
+    let path = directory.join("pyproject.toml");
+    let contents = fs_err::read_to_string(&path).ok()?;
+    let project = info_span!("toml::from_str cache keys", path = %path.display())
+        .in_scope(|| toml::from_str::<PyProjectToml>(&contents))
+        .ok()?;
+    project.tool?.uv?.cache_keys
 }
 
 /// A `pyproject.toml` with an (optional) `[tool.uv]` section.
