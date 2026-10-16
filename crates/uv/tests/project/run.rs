@@ -9,6 +9,8 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+#[cfg(target_os = "linux")]
+use std::collections::BTreeMap;
 use std::path::Path;
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
@@ -5762,7 +5764,7 @@ fn run_with_replaced_interpreter() -> Result<()> {
         &"env-probe".parse()?,
         &"1.0.0".parse()?,
         &[],
-        &Default::default(),
+        &BTreeMap::default(),
         None,
         "py3-none-any",
         &[],
