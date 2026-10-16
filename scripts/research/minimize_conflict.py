@@ -21,9 +21,14 @@ class BudgetExceeded(Exception):
 
 
 def demo_wheel(
-    directory: Path, name: str, version: int, dependency: str | None = None
+    directory: Path,
+    name: str,
+    version: int,
+    dependency: str | None = None,
+    *,
+    dist_info: str | None = None,
 ) -> None:
-    info = f"{name}-{version}.dist-info"
+    info = dist_info or f"{name}-{version}.dist-info"
     metadata = f"Metadata-Version: 2.3\nName: {name}\nVersion: {version}\nRequires-Python: >=3.12\n"
     if dependency:
         metadata += f"Requires-Dist: {dependency}\n"
@@ -137,14 +142,19 @@ class Oracle:
             raise BudgetExceeded from error
         if result.returncode == 0:
             unsat = False
-        elif (
-            "invalid metadata" in result.stderr
-            or "could not be parsed" in result.stderr
+        elif any(
+            diagnostic in result.stderr
+            for diagnostic in (
+                "invalid metadata",
+                "inconsistent metadata",
+                "could not be parsed",
+                "invalid package format",
+            )
         ):
             # uv can represent an unreadable candidate as unavailable in a no-solution report.
             # That is not evidence of a conflict in the intended frozen dependency model.
             raise RuntimeError(
-                f"invalid candidate metadata prevents conflict classification:\n{result.stderr}"
+                f"malformed candidate artifact prevents conflict classification:\n{result.stderr}"
             )
         elif (
             result.returncode == 1
@@ -185,7 +195,7 @@ def main() -> None:
         "--demo",
         nargs="?",
         const="single",
-        choices=("single", "multiple", "invalid-metadata"),
+        choices=("single", "multiple", "invalid-metadata", "invalid-structure"),
     )
     source.add_argument("--requirements", type=Path)
     parser.add_argument("--wheelhouse", type=Path)
@@ -230,6 +240,9 @@ def main() -> None:
                 roots.extend(["otherleft==1", "otherright==1"])
             elif args.demo == "invalid-metadata":
                 demo_wheel(wheelhouse, "broken", 1, "??invalid??")
+                roots = ["broken==1"]
+            elif args.demo == "invalid-structure":
+                demo_wheel(wheelhouse, "broken", 1, dist_info="wrong-1.dist-info")
                 roots = ["broken==1"]
         else:
             roots = [

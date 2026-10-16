@@ -26,8 +26,8 @@ disables network access, indexes, source builds, and persistent caches. Roots su
 and version specifiers; options, markers, extras, and direct references are deliberately excluded.
 Resolution is fixed to Python 3.12 on Linux with `--prerelease allow`. Keeping candidate eligibility
 independent of explicit prerelease roots is required for the monotone consistency predicate used by
-QuickXplain. Metadata errors and unrecognized uv failures abort the experiment rather than count as
-conflicts.
+QuickXplain. Recognized malformed-artifact diagnostics and unrecognized uv failures abort the
+experiment rather than count as conflicts.
 
 The divide-and-conquer procedure follows
 [QuickXplain](https://link.springer.com/article/10.1007/s10462-022-10149-w). It memoizes subsets and
@@ -36,10 +36,16 @@ minimality. This is not a minimum-cardinality guarantee, and the result can depe
 The experiment minimizes user roots over immutable metadata; it does not minimize PubGrub's internal
 proof, modify uv's diagnostic rendering, or preserve user root priorities.
 
-uv may describe malformed candidate metadata inside a no-solution diagnostic. The wrapper rejects
-recognized invalid-metadata/parse diagnostics before treating no-solution output as a consistency
-answer. This classification depends on uv's textual diagnostics; it is not a structured proof API.
+uv may describe malformed candidate metadata or wheel structure inside a no-solution diagnostic. The
+wrapper rejects recognized invalid or inconsistent metadata, parse failures, and invalid package
+format diagnostics before treating no-solution output as a consistency answer. This classification
+depends on uv's textual diagnostics; it is not a structured proof API.
 
 Run with `--demo invalid-metadata` to exercise a malformed `Requires-Dist` control. It must exit
 with an error and emit no conflict JSON, even though uv wraps that metadata failure in a no-solution
 diagnostic.
+
+Run with `--demo invalid-structure` to exercise a wheel whose `.dist-info` directory names a
+different package. It contains exactly one readable `METADATA` file, so the corpus preflight accepts
+it, but uv rejects the wheel structure. The wrapper must exit with an error and emit no conflict
+JSON.
