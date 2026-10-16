@@ -3,7 +3,6 @@ use std::path::Path;
 use std::slice;
 
 use rustc_hash::FxHashSet;
-use tracing::debug;
 
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
@@ -11,13 +10,12 @@ use uv_configuration::NoSources;
 use uv_distribution_types::{IndexLocations, Requirement};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep508::MarkerTree;
-use uv_pypi_types::PyProjectToml;
 use uv_workspace::dependency_groups::FlatDependencyGroups;
 use uv_workspace::pyproject::{Sources, ToolUvSources};
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, ProjectWorkspace, WorkspaceCache};
 
+use crate::Metadata;
 use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
-use crate::{Error, Metadata};
 
 #[derive(Debug, Clone)]
 pub struct RequiresDist {
@@ -29,50 +27,6 @@ pub struct RequiresDist {
 }
 
 impl RequiresDist {
-    /// Extract static requirements and lower their project sources without creating a build context.
-    pub async fn from_pyproject_toml(
-        path: &Path,
-        pyproject_toml: &PyProjectToml,
-        locations: &IndexLocations,
-        sources: NoSources,
-        editable: bool,
-        cache: &Cache,
-        workspace_cache: &WorkspaceCache,
-        credentials_cache: &CredentialsCache,
-    ) -> Result<Option<Self>, Error> {
-        match uv_pypi_types::RequiresDist::from_pyproject_toml(pyproject_toml.clone()) {
-            Ok(requires_dist) => {
-                debug!("Found static `requires-dist` for: {}", path.display());
-                let requires_dist = Self::from_project_maybe_workspace(
-                    requires_dist,
-                    path,
-                    None,
-                    locations,
-                    sources,
-                    editable,
-                    cache,
-                    workspace_cache,
-                    credentials_cache,
-                )
-                .await?;
-                Ok(Some(requires_dist))
-            }
-            Err(
-                err @ (uv_pypi_types::MetadataError::Pep508Error(_)
-                | uv_pypi_types::MetadataError::DynamicField(_)
-                | uv_pypi_types::MetadataError::FieldNotFound(_)
-                | uv_pypi_types::MetadataError::PoetrySyntax),
-            ) => {
-                debug!(
-                    "No static `requires-dist` available for: {} ({err:?})",
-                    path.display()
-                );
-                Ok(None)
-            }
-            Err(err) => Err(Error::PyprojectToml(err)),
-        }
-    }
-
     /// Lower by considering `tool.uv` in `pyproject.toml` if present, used for Git and directory
     /// dependencies.
     pub(crate) async fn from_project_maybe_workspace(

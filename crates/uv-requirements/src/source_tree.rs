@@ -7,15 +7,14 @@ use futures::stream::FuturesOrdered;
 use tempfile::TempDir;
 use url::Url;
 
-use uv_auth::CredentialsCache;
 use uv_cache::Cache;
-use uv_configuration::{ExtrasSpecification, NoSources};
+use uv_configuration::ExtrasSpecification;
 use uv_distribution::{DistributionDatabase, FlatRequiresDist, Reporter, RequiresDist};
+use uv_distribution_types::Requirement;
 use uv_distribution_types::{
     BuildableSource, DirectorySourceUrl, HashCollection, HashValidation, Identifier,
     MetadataHashPolicy, SourceUrl,
 };
-use uv_distribution_types::{IndexLocations, Requirement};
 use uv_fs::Simplified;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::RequirementOrigin;
@@ -23,7 +22,6 @@ use uv_pypi_types::{MetadataError, PyProjectToml, RequiresDist as MetadataRequir
 use uv_redacted::DisplaySafeUrl;
 use uv_resolver::{InMemoryIndex, MetadataResponse};
 use uv_types::{BuildContext, HashStrategy, HashVerification};
-use uv_workspace::WorkspaceCache;
 
 #[derive(Debug, Clone)]
 pub enum SourceTree {
@@ -92,50 +90,6 @@ impl SourceTree {
         ))
     }
 
-    /// Extract statically available requirements without initializing a build backend.
-    pub async fn resolve_static(
-        &self,
-        extras: &ExtrasSpecification,
-        locations: &IndexLocations,
-        sources: NoSources,
-        editable: bool,
-        cache: &Cache,
-        workspace_cache: &WorkspaceCache,
-        credentials_cache: &CredentialsCache,
-    ) -> Result<Option<SourceTreeResolution>> {
-        let Some(pyproject_toml) = self.pyproject_toml() else {
-            return Ok(None);
-        };
-        let path = self.root()?;
-        Ok(RequiresDist::from_pyproject_toml(
-            &path,
-            pyproject_toml,
-            locations,
-            sources,
-            editable,
-            cache,
-            workspace_cache,
-            credentials_cache,
-        )
-        .await?
-        .map(|metadata| SourceTreeResolution::from_requires_dist(self, metadata, extras)))
-    }
-
-    fn root(&self) -> Result<PathBuf> {
-        let path = fs_err::canonicalize(self.path()).with_context(|| {
-            format!(
-                "Failed to canonicalize path to source tree: {}",
-                self.path().user_display()
-            )
-        })?;
-        path.parent()
-            .map(Path::to_path_buf)
-            .ok_or_else(|| anyhow::anyhow!(
-                "The file `{}` appears to be a `pyproject.toml`, `setup.py`, or `setup.cfg` file, which must be in a directory",
-                path.user_display()
-            ))
-    }
-
     /// Return the [`Path`] to the file representing the source tree (e.g., the `pyproject.toml`).
     fn path(&self) -> &Path {
         match self {
@@ -167,49 +121,6 @@ pub struct SourceTreeResolution {
 }
 
 impl SourceTreeResolution {
-    fn from_requires_dist(
-        source_tree: &SourceTree,
-        metadata: RequiresDist,
-        extras: &ExtrasSpecification,
-    ) -> Self {
-        let origin_path = match source_tree {
-            SourceTree::Stdin { .. } => PathBuf::from("-"),
-            SourceTree::PyProjectToml(..) | SourceTree::SetupPy(_) | SourceTree::SetupCfg(_) => {
-                source_tree.path().to_path_buf()
-            }
-        };
-        let origin = RequirementOrigin::Project(origin_path, metadata.name.clone());
-
-        // Determine the extras to include when resolving the requirements.
-        let extras = extras
-            .extra_names(metadata.provides_extra.iter())
-            .cloned()
-            .collect::<Vec<_>>();
-
-        let mut requirements = Vec::new();
-
-        // Flatten transitive extras and include dependencies.
-        requirements.extend(
-            FlatRequiresDist::from_requirements(metadata.requires_dist, &metadata.name)
-                .into_iter()
-                .map(|requirement| Requirement {
-                    origin: Some(origin.clone()),
-                    marker: requirement.marker.simplify_extras(&extras),
-                    ..requirement
-                }),
-        );
-
-        let requirements = requirements.into_boxed_slice();
-        let project = metadata.name;
-        let extras = metadata.provides_extra;
-
-        Self {
-            requirements,
-            project,
-            extras,
-        }
-    }
-
     /// Return the name of the project that was resolved.
     pub fn project(&self) -> &PackageName {
         &self.project
@@ -282,11 +193,44 @@ impl<'a, Context: BuildContext> SourceTreeResolver<'a, Context> {
     /// Infer the dependencies for a directory dependency.
     async fn resolve_source_tree(&self, source_tree: &SourceTree) -> Result<SourceTreeResolution> {
         let metadata = self.resolve_requires_dist(source_tree).await?;
-        Ok(SourceTreeResolution::from_requires_dist(
-            source_tree,
-            metadata,
-            self.extras,
-        ))
+        let origin_path = match source_tree {
+            SourceTree::Stdin { .. } => PathBuf::from("-"),
+            SourceTree::PyProjectToml(..) | SourceTree::SetupPy(_) | SourceTree::SetupCfg(_) => {
+                source_tree.path().to_path_buf()
+            }
+        };
+        let origin = RequirementOrigin::Project(origin_path, metadata.name.clone());
+
+        // Determine the extras to include when resolving the requirements.
+        let extras = self
+            .extras
+            .extra_names(metadata.provides_extra.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+
+        let mut requirements = Vec::new();
+
+        // Flatten any transitive extras and include dependencies
+        // (unless something like --only-group was passed)
+        requirements.extend(
+            FlatRequiresDist::from_requirements(metadata.requires_dist, &metadata.name)
+                .into_iter()
+                .map(|requirement| Requirement {
+                    origin: Some(origin.clone()),
+                    marker: requirement.marker.simplify_extras(&extras),
+                    ..requirement
+                }),
+        );
+
+        let requirements = requirements.into_boxed_slice();
+        let project = metadata.name;
+        let extras = metadata.provides_extra;
+
+        Ok(SourceTreeResolution {
+            requirements,
+            project,
+            extras,
+        })
     }
 
     /// Resolve the [`RequiresDist`] metadata for a given source tree. Attempts to resolve the

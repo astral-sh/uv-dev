@@ -25,7 +25,7 @@ use crate::reporters::ResolverReporter;
 
 /// Resolve project metadata and unnamed requirements into fully-qualified [`Requirement`] entries.
 pub async fn resolve_requirements(
-    mut requirements: Vec<UnresolvedRequirementSpecification>,
+    requirements: Vec<UnresolvedRequirementSpecification>,
     source_trees: &[SourceTree],
     interpreter: &Interpreter,
     settings: &ResolverSettings,
@@ -56,29 +56,6 @@ pub async fn resolve_requirements(
 
     // Named requirements without project metadata need no build context.
     if source_trees.is_empty()
-        && requirements.iter().all(|spec| match spec.requirement {
-            UnresolvedRequirement::Named(_) => true,
-            UnresolvedRequirement::Unnamed(_) => false,
-        })
-    {
-        let (requirements, _): (Vec<_>, Vec<_>) = partition_requirements(requirements);
-        return Ok(requirements);
-    }
-
-    let (static_requirements, dynamic_sources) = resolve_static_requirements(
-        source_trees,
-        settings,
-        client_builder,
-        cache,
-        workspace_cache,
-    )
-    .await?;
-    requirements.extend(
-        static_requirements
-            .into_iter()
-            .map(UnresolvedRequirementSpecification::from),
-    );
-    if dynamic_sources.is_empty()
         && requirements.iter().all(|spec| match spec.requirement {
             UnresolvedRequirement::Named(_) => true,
             UnresolvedRequirement::Unnamed(_) => false,
@@ -209,7 +186,7 @@ pub async fn resolve_requirements(
         ),
     )
     .with_reporter(Arc::new(ResolverReporter::from(printer)))
-    .resolve(dynamic_sources.iter())
+    .resolve(source_trees.iter())
     .await?;
     let (mut requirements, unnamed): (Vec<_>, Vec<_>) = partition_requirements(
         requirements
@@ -239,46 +216,6 @@ pub async fn resolve_requirements(
     );
 
     Ok(requirements)
-}
-
-/// Extract base dependencies from static metadata and return source trees that need a backend.
-async fn resolve_static_requirements(
-    source_trees: &[SourceTree],
-    settings: &ResolverSettings,
-    client_builder: &BaseClientBuilder<'_>,
-    cache: &Cache,
-    workspace_cache: &WorkspaceCache,
-) -> Result<(Vec<Requirement>, Vec<SourceTree>), Error> {
-    if source_trees.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
-    }
-    client_builder
-        .cache_index_credentials(&settings.index_locations)
-        .map_err(anyhow::Error::from)?;
-    let extras = ExtrasSpecification::default();
-    let mut requirements = Vec::new();
-    let mut dynamic_sources = Vec::new();
-    for source in source_trees {
-        if let Some(resolution) = source
-            .resolve_static(
-                &extras,
-                &settings.index_locations,
-                settings.sources.clone(),
-                SourceTreeEditablePolicy::Project.workspace_member_editable(None),
-                cache,
-                workspace_cache,
-                client_builder.credentials_cache(),
-            )
-            .await?
-        {
-            requirements.extend(
-                Box::into_iter(resolution.into_requirements()).filter_map(base_requirement),
-            );
-        } else {
-            dynamic_sources.push(source.clone());
-        }
-    }
-    Ok((requirements, dynamic_sources))
 }
 
 fn base_requirement(mut requirement: Requirement) -> Option<Requirement> {
