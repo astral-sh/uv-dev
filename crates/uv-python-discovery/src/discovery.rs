@@ -1521,9 +1521,9 @@ fn warn_on_unsupported_python(interpreter: &Interpreter) {
 /// See: <https://github.com/astral-sh/rye/blob/b0e9eccf05fe4ff0ae7b0250a248c54f2d780b4d/rye/src/cli/shim.rs#L108>
 #[cfg(windows)]
 fn is_windows_store_shim(path: &Path) -> bool {
+    use std::mem::size_of;
     use std::os::windows::fs::MetadataExt;
     use std::os::windows::prelude::OsStrExt;
-    use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
         FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_MODE, MAXIMUM_REPARSE_DATA_BUFFER_SIZE,
@@ -1531,7 +1531,7 @@ fn is_windows_store_shim(path: &Path) -> bool {
     };
     use windows::Win32::System::IO::DeviceIoControl;
     use windows::Win32::System::Ioctl::FSCTL_GET_REPARSE_POINT;
-    use windows::core::PCWSTR;
+    use windows::core::{Owned, PCWSTR};
 
     // The path must be absolute.
     if !path.is_absolute() {
@@ -1580,61 +1580,57 @@ fn is_windows_store_shim(path: &Path) -> bool {
         return false;
     }
 
-    let mut path_encoded = path
+    let path_encoded = path
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
 
-    // SAFETY: The path is null-terminated.
+    // SAFETY: The path is null-terminated, and a successful call returns an owned handle.
     #[allow(unsafe_code)]
     let reparse_handle = unsafe {
-        CreateFileW(
-            PCWSTR(path_encoded.as_mut_ptr()),
+        let Ok(handle) = CreateFileW(
+            PCWSTR(path_encoded.as_ptr()),
             0,
             FILE_SHARE_MODE(0),
             None,
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
             None,
-        )
+        ) else {
+            return false;
+        };
+        Owned::new(handle)
     };
 
-    let Ok(reparse_handle) = reparse_handle else {
-        return false;
-    };
-
-    let mut buf = [0u16; MAXIMUM_REPARSE_DATA_BUFFER_SIZE as usize];
+    let mut reparse_data = [0u16; MAXIMUM_REPARSE_DATA_BUFFER_SIZE as usize / size_of::<u16>()];
     let mut bytes_returned = 0;
 
     // SAFETY: The buffer is large enough to hold the reparse point.
-    #[allow(unsafe_code, clippy::cast_possible_truncation)]
+    #[allow(unsafe_code)]
     let success = unsafe {
         DeviceIoControl(
-            reparse_handle,
+            *reparse_handle,
             FSCTL_GET_REPARSE_POINT,
             None,
             0,
-            Some(buf.as_mut_ptr().cast()),
-            buf.len() as u32 * 2,
+            Some(reparse_data.as_mut_ptr().cast()),
+            MAXIMUM_REPARSE_DATA_BUFFER_SIZE,
             Some(&raw mut bytes_returned),
             None,
         )
         .is_ok()
     };
 
-    // SAFETY: The handle is valid.
-    #[allow(unsafe_code)]
-    unsafe {
-        let _ = CloseHandle(reparse_handle);
-    }
+    drop(reparse_handle);
 
     // If the operation failed, assume it's not a reparse point.
     if !success {
         return false;
     }
 
-    let reparse_point = String::from_utf16_lossy(&buf[..bytes_returned as usize]);
+    let code_units_returned = bytes_returned as usize / size_of::<u16>();
+    let reparse_point = String::from_utf16_lossy(&reparse_data[..code_units_returned]);
     reparse_point.contains("\\AppInstallerPythonRedirector.exe")
 }
 
