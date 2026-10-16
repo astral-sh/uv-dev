@@ -2,8 +2,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use serde::ser::SerializeMap;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::Deserialize;
 use tracing::{debug, info_span, warn};
 
 use uv_cache_key::cache_digest;
@@ -23,7 +22,7 @@ pub enum CacheInfoError {
 
 /// The information used to determine whether a built distribution is up-to-date, based on the
 /// timestamps of relevant files, the current commit of a repository, etc.
-#[derive(Default, Debug, Clone, Hash, PartialEq, Eq, serde::Deserialize)]
+#[derive(Default, Debug, Clone, Hash, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CacheInfo {
     /// The timestamp of the most recent `ctime` of any relevant files, at the time of the build.
@@ -45,23 +44,6 @@ pub struct CacheInfo {
     /// Removing an input can leave the maximum timestamp unchanged.
     #[serde(default)]
     files: Option<String>,
-}
-
-impl Serialize for CacheInfo {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // Shared cache buckets require older readers to ignore newly added fields.
-        let mut map = serializer.serialize_map(Some(6))?;
-        map.serialize_entry("timestamp", &self.timestamp)?;
-        map.serialize_entry("commit", &self.commit)?;
-        map.serialize_entry("tags", &self.tags)?;
-        map.serialize_entry("env", &self.env)?;
-        map.serialize_entry("directories", &self.directories)?;
-        map.serialize_entry("files", &self.files)?;
-        map.end()
-    }
 }
 
 impl CacheInfo {
@@ -412,12 +394,9 @@ enum DirectoryTimestamp {
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
-    use std::collections::BTreeMap;
-
     use anyhow::Result;
 
-    use super::{CacheInfo, Commit, DirectoryTimestamp, Tags, Timestamp};
+    use super::CacheInfo;
 
     /// Removing a glob match must invalidate the cache even if the newest input is unchanged.
     #[test]
@@ -483,38 +462,6 @@ mod tests {
         assert_eq!(
             rmp_serde::from_slice::<CacheInfo>(&rmp_serde::to_vec(&current)?)?,
             current,
-        );
-        Ok(())
-    }
-
-    /// Older readers must accept records produced in the shared source cache bucket.
-    #[test]
-    fn cache_info_is_readable_without_membership() -> Result<()> {
-        #[derive(Debug, PartialEq, serde::Deserialize)]
-        #[serde(rename_all = "kebab-case")]
-        struct LegacyCacheInfo {
-            timestamp: Option<Timestamp>,
-            commit: Option<Commit>,
-            tags: Option<Tags>,
-            #[serde(default)]
-            env: BTreeMap<String, Option<String>>,
-            #[serde(default)]
-            directories: BTreeMap<Cow<'static, str>, Option<DirectoryTimestamp>>,
-        }
-
-        let directory = tempfile::tempdir()?;
-        fs_err::write(directory.path().join("pyproject.toml"), "")?;
-        let current = CacheInfo::from_directory(directory.path())?;
-        let previous: LegacyCacheInfo = rmp_serde::from_slice(&rmp_serde::to_vec(&current)?)?;
-        assert_eq!(
-            previous,
-            LegacyCacheInfo {
-                timestamp: current.timestamp,
-                commit: current.commit,
-                tags: current.tags,
-                env: current.env,
-                directories: current.directories,
-            }
         );
         Ok(())
     }

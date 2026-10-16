@@ -6674,9 +6674,10 @@ fn invalidate_path_on_removed_glob_match() -> Result<()> {
      + source-probe==1.0.0 (from file://[TEMP_DIR]/project)
     ");
     context
-        .assert_command("from source_probe import INPUTS; print(INPUTS)")
-        .success()
-        .stdout("['newer.txt', 'older.txt']\n");
+        .assert_command(
+            "from source_probe import INPUTS; assert INPUTS == ['newer.txt', 'older.txt']",
+        )
+        .success();
 
     uv_snapshot!(context.filters(), context.pip_install()
         .arg("--no-index").arg("-r").arg("requirements.txt"), @"
@@ -6697,9 +6698,8 @@ fn invalidate_path_on_removed_glob_match() -> Result<()> {
      ~ source-probe==1.0.0 (from file://[TEMP_DIR]/project)
     ");
     context
-        .assert_command("from source_probe import INPUTS; print(INPUTS)")
-        .success()
-        .stdout("['newer.txt']\n");
+        .assert_command("from source_probe import INPUTS; assert INPUTS == ['newer.txt']")
+        .success();
     Ok(())
 }
 
