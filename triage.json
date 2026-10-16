@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22650,
+        "title": "Reinstall managed Pythons whose executable is missing",
+        "url": "https://github.com/astral-sh/uv/pull/22650",
+        "state": "open",
+        "reason": "Direct proposed fix, opened nine seconds after astral-sh/uv#22649 and explicitly closing it. The diff checks executable existence in installation matching, discovery, and download reuse, with separate tests for explicit installation and automatic recovery through uv run. It is not merged and does not make the originating issue a duplicate."
+      },
+      {
+        "kind": "issue",
+        "number": 19622,
+        "title": "`uv python install --reinstall` cannot recover a dangling minor-version-link junction on Windows: \"Missing expected target directory for Python minor version link\"",
+        "url": "https://github.com/astral-sh/uv/issues/19622",
+        "state": "open",
+        "reason": "Related managed-installation recovery failure, but the patch-directory interpreter remains executable and the Windows junction fails to resolve; even --reinstall fails. Later comments associate that case with MSIX filesystem virtualization. Here the interpreter itself is absent, Linux is also affected, and --reinstall succeeds."
+      },
+      {
+        "kind": "issue",
+        "number": 19329,
+        "title": "`uv python install` publishes managed Python before finalization, allowing `uv python find` to race and observe incomplete installs",
+        "url": "https://github.com/astral-sh/uv/issues/19329",
+        "state": "open",
+        "reason": "Shares managed-installation discovery and completeness concerns, but tracks concurrent discovery before finalization and stale interpreter metadata. The new report removes the executable after installation completes and requires no concurrent process, so it is a separate bug."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20309,
+        "title": "fix: finalize managed Python installation before atomic rename",
+        "url": "https://github.com/astral-sh/uv/pull/20309",
+        "state": "open",
+        "reason": "Proposed fix for astral-sh/uv#19329 moves finalization before publication. Its diff addresses the installation race, not executable loss from an existing installation. It remains unmerged and is neither a fix for this report nor evidence of a regression."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Literal searches covered 'Python interpreter not found', 'missing executable', 'python install', 'AlreadyAvailable', 'matches_installation', cpython-3.12.15, and 0.12.23. Separate conceptual searches covered repair, corrupt/broken/incomplete managed installations, deleted interpreters, and redownload/re-download; also used area:uv-python. Checked historical fixes and followed candidate comments and timelines. PR text searches returned no matches even for known candidates, so supplemented them with the latest 100 all-state PRs and direct inspection of linked PRs. Ruled out astral-sh/uv#8298 and merged astral-sh/uv#8310 (Windows free-threaded executable naming), astral-sh/uv#4933 and merged astral-sh/uv#4935 (recreating broken virtual environments), astral-sh/uv#8028 (tool-environment repair), and astral-sh/uv#11355 (a host .venv mounted into Docker). No earlier exact duplicate or previously merged fix for this behavior was established."
+  },
+  "type": "bug",
+  "type_reason": "The source accepts a matching managed installation without verifying its interpreter and returns AlreadyAvailable whenever the directory exists, explaining the failure to repair an unusable installation and the misleading success report. This is established incorrect behavior. The direct fix, astral-sh/uv#22650, was created in response to this issue, so duplicate classification does not apply. The related junction, finalization, executable-naming, and virtual-environment fixes address different conditions; no regression of a previously fixed version of this bug was established.",
+  "summary": "astral-sh/uv#22650 is the open proposed fix for both explicit installation repair and automatic recovery. astral-sh/uv#19622 and astral-sh/uv#19329, with its proposed fix astral-sh/uv#20309, concern adjacent but distinct failures. No earlier exact duplicate was found.",
+  "draft_response": "The current code confirms your diagnosis: installation matching does not check that the interpreter exists, and the download path reuses any existing installation directory. That explains why a plain install can report success while Python remains unusable. Your PR astral-sh/uv#22650 addresses both explicit installation and automatic recovery and remains open for review. For now, use `uv python install --reinstall 3.12` to restore the interpreter. This is separate from the junction failure in astral-sh/uv#19622 and the finalization race in astral-sh/uv#19329."
+}
