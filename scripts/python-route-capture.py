@@ -69,7 +69,7 @@ def write_json(path, value):
 def git(repository, *arguments):
     return subprocess.check_output(
         ["git", "-C", str(repository), *arguments], text=True
-    ).strip()
+    ).rstrip("\r\n")
 
 
 def archive_files(directory, expected_path):
@@ -359,7 +359,9 @@ def main():
     binary = args.uv.resolve()
     output = args.output.resolve()
     workspace = args.workspace.resolve()
-    output.mkdir(parents=True)
+    output.mkdir(parents=True, exist_ok=True)
+    if (output / "manifest.json").exists():
+        parser.error("The output directory already contains a capture manifest")
     workspace.mkdir(parents=True)
     manifest = {
         "schema_version": 1,
@@ -404,10 +406,33 @@ def main():
     write_json(output / "manifest.json", manifest)
     try:
         revision = git(repository, "rev-parse", "HEAD")
-        if revision != args.expected_revision or git(
+        tracked_status = git(
             repository, "status", "--porcelain", "--untracked-files=no"
+        )
+        manifest.update(
+            {
+                "revision": revision,
+                "tracked_status": tracked_status,
+                "source_sha256": {
+                    name: digest(repository / name) for name in SOURCE_FILES
+                },
+                "checkout_preparation": json.loads(
+                    (output / "checkout.json").read_text(encoding="utf-8")
+                ),
+            }
+        )
+        write_json(output / "manifest.json", manifest)
+        preparation = manifest["checkout_preparation"]
+        if (
+            preparation["expected_revision"] != args.expected_revision
+            or preparation["after_reset"]["revision"] != args.expected_revision
+            or preparation["after_reset"]["tracked_status"]
         ):
-            raise RuntimeError("Checkout does not match the clean expected revision")
+            raise RuntimeError("Pre-build checkout verification is missing or invalid")
+        if revision != args.expected_revision:
+            raise RuntimeError("Post-build checkout has the wrong revision")
+        if tracked_status:
+            raise RuntimeError("Post-build checkout has tracked changes")
         metadata = json.loads(
             (repository / "crates/uv-python-managed/download-metadata.json").read_text()
         )[DOWNLOAD_KEY]
@@ -419,15 +444,11 @@ def main():
         archive_name = f"{EXPECTED_ARCHIVE_SHA256[:9]}-{filename}"
         manifest.update(
             {
-                "revision": revision,
                 "binary_sha256": digest(binary),
                 "binary_size_bytes": binary.stat().st_size,
                 "binary_version": subprocess.check_output(
                     [str(binary), "--version"], text=True, timeout=10
                 ).strip(),
-                "source_sha256": {
-                    name: digest(repository / name) for name in SOURCE_FILES
-                },
                 "download_key": DOWNLOAD_KEY,
                 "build": BUILD,
                 "canonical_url": metadata["url"],

@@ -40,6 +40,41 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Prepare the pinned checkout before building
+        working-directory: ${{ env.UV_WORKSPACE }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          output = Path("route-diagnostics")
+          output.mkdir()
+          path = output / "checkout.json"
+          expected = os.environ["GITHUB_SHA"]
+
+          def git(*arguments):
+              return subprocess.check_output(["git", *arguments], text=True).rstrip("\r\n")
+
+          def state():
+              return {
+                  "revision": git("rev-parse", "HEAD"),
+                  "tracked_status": git("status", "--porcelain", "--untracked-files=no"),
+              }
+
+          record = {"expected_revision": expected, "before_reset": state()}
+          path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+          if record["before_reset"]["revision"] != expected:
+              raise RuntimeError("Copied checkout has the wrong revision")
+          git("reset", "--hard", expected)
+          record["after_reset"] = state()
+          path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+          if record["after_reset"]["revision"] != expected or record["after_reset"]["tracked_status"]:
+              raise RuntimeError("Copied checkout is not clean after restoring the pinned revision")
+          PY
+
       - name: Install Rust toolchain
         working-directory: ${{ env.UV_WORKSPACE }}
         run: rustup toolchain install --profile minimal
