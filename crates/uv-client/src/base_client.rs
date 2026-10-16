@@ -72,13 +72,17 @@ pub enum ClientBuildError {
     Credentials(#[from] CredentialsFromUrlError),
     #[error(transparent)]
     IndexCredentials(#[from] IndexCredentialsError),
+    #[error("invalid socket address in `UV_INTERNAL__TEST_RELEASES_ADDRESS`")]
+    InvalidDiagnosticAddress,
 }
 
 impl ClientBuildError {
     /// Return whether this is an expected user-facing failure.
     pub fn is_user_failure(&self) -> bool {
         match self {
-            Self::Credentials(_) | Self::IndexCredentials(_) => true,
+            Self::Credentials(_) | Self::IndexCredentials(_) | Self::InvalidDiagnosticAddress => {
+                true
+            }
             Self::Reqwest(_) => false,
         }
     }
@@ -611,11 +615,16 @@ impl<'a> BaseClientBuilder<'a> {
             .connect_timeout(connect_timeout)
             .redirect(redirect_policy.reqwest_policy());
 
-        let client_builder = if env::var_os(EnvVars::UV_INTERNAL__TEST_HTTP1_ONLY).is_some() {
-            client_builder.http1_only()
-        } else {
-            client_builder
-        };
+        let client_builder =
+            if let Some(address) = env::var_os(EnvVars::UV_INTERNAL__TEST_RELEASES_ADDRESS) {
+                let address = address
+                    .to_str()
+                    .and_then(|address| address.parse().ok())
+                    .ok_or(ClientBuildError::InvalidDiagnosticAddress)?;
+                client_builder.resolve("releases.astral.sh", address)
+            } else {
+                client_builder
+            };
 
         // If necessary, accept invalid certificates.
         let client_builder = match security {

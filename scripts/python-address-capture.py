@@ -1,4 +1,4 @@
-"""Capture eight sequential managed-Python downloads under two HTTP client modes."""
+"""Capture eight sequential managed-Python download trials with two assigned socket addresses."""
 
 import argparse
 import datetime
@@ -16,7 +16,10 @@ from urllib.parse import urlsplit, urlunsplit
 
 from windows_process_job import run_process_tree
 
-BASE_REVISION = "2a4aea8c15acb11f4bc654f3b83a72b34f295b3d"
+if sys.platform == "win32":
+    import winreg
+
+BASE_REVISION = "bd17f4970faaffecfa0e1f0fc33c0cbca8b0c0df"
 DOWNLOAD_KEY = "cpython-3.15.0-windows-x86_64-none"
 BUILD = "20261013"
 EXPECTED_ARCHIVE_SHA256 = (
@@ -26,9 +29,10 @@ DEADLINE_SECONDS = 120
 OFFLINE_CHECK_DEADLINE_SECONDS = 30
 MIRROR = "https://releases.astral.sh/github/python-build-standalone/releases/download"
 EXPECTED_RESPONSE_HOST = "releases.astral.sh"
+EXPECTED_PROTOCOL = "HTTP/2.0"
 ARMS = {
-    "A": {"client_mode": "default_negotiation", "expected_protocol": "HTTP/2.0"},
-    "B": {"client_mode": "http1_only", "expected_protocol": "HTTP/1.1"},
+    "A": {"expected_peer": "104.26.12.77:443"},
+    "B": {"expected_peer": "104.26.13.77:443"},
 }
 SEQUENCES = {1: "ABBABAAB", 2: "BAABABBA"}
 HTTP_SCHEME = "".join(
@@ -46,7 +50,7 @@ SOURCE_FILES = [
     "rust-toolchain.toml",
     ".github/workflows/ci.yml",
     ".github/workflows/test.yml",
-    "scripts/python-protocol-capture.py",
+    "scripts/python-address-capture.py",
     "scripts/windows_process_job.py",
     "crates/uv-client/src/base_client.rs",
     "crates/uv-static/src/env_vars.rs",
@@ -75,6 +79,55 @@ def git(repository, *arguments):
     return subprocess.check_output(
         ["git", "-C", str(repository), *arguments], text=True
     ).rstrip("\r\n")
+
+
+def system_proxy_observation():
+    result = {
+        "windows_registry": sys.platform == "win32",
+        "key_opened": False,
+        "proxy_enable_present": None,
+        "proxy_enabled": None,
+        "proxy_server_present": None,
+        "proxy_server_nonempty": None,
+        "proxy_override_present": None,
+        "proxy_override_nonempty": None,
+        "read_errors": [],
+    }
+    if sys.platform != "win32":
+        return result
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+        ) as settings:
+            result["key_opened"] = True
+            for name, field in [
+                ("ProxyEnable", "proxy_enable"),
+                ("ProxyServer", "proxy_server"),
+                ("ProxyOverride", "proxy_override"),
+            ]:
+                try:
+                    value, kind = winreg.QueryValueEx(settings, name)
+                except FileNotFoundError:
+                    result[f"{field}_present"] = False
+                    if name == "ProxyEnable":
+                        result["proxy_enabled"] = False
+                    else:
+                        result[f"{field}_nonempty"] = False
+                    continue
+                except OSError as error:
+                    result["read_errors"].append(
+                        {"field": field, "code": error.winerror}
+                    )
+                    continue
+                result[f"{field}_present"] = True
+                if name == "ProxyEnable":
+                    result["proxy_enabled"] = kind == winreg.REG_DWORD and value != 0
+                else:
+                    result[f"{field}_nonempty"] = kind == winreg.REG_SZ and bool(value)
+    except OSError as error:
+        result["read_errors"].append({"field": "key", "code": error.winerror})
+    return result
 
 
 def archive_files(directory, expected_path):
@@ -219,6 +272,7 @@ def trial_environment(workspace, traces, arm):
         "UV_COMPILE_BYTECODE",
         "UV_CONFIG_FILE",
         "UV_INTERNAL__TEST_HTTP1_ONLY",
+        "UV_INTERNAL__TEST_RELEASES_ADDRESS",
     ]:
         environment.pop(name, None)
     overrides = {
@@ -243,8 +297,7 @@ def trial_environment(workspace, traces, arm):
         "RUST_LOG": "error",
         "RUST_BACKTRACE": "1",
     }
-    if arm == "B":
-        overrides["UV_INTERNAL__TEST_HTTP1_ONLY"] = "1"
+    overrides["UV_INTERNAL__TEST_RELEASES_ADDRESS"] = ARMS[arm]["expected_peer"]
     environment.update(overrides)
     return environment, overrides
 
@@ -282,10 +335,11 @@ def offline_check(binary, output, workspace, arm):
     result = {
         "schema_version": 1,
         "kind": "offline_cli_preflight",
-        "included_in_protocol_observations": False,
+        "included_in_address_observations": False,
         "arm": arm,
-        "client_mode": ARMS[arm]["client_mode"],
-        "expected_protocol": ARMS[arm]["expected_protocol"],
+        "client_mode": "default_negotiation",
+        "expected_protocol": EXPECTED_PROTOCOL,
+        "expected_peer": ARMS[arm]["expected_peer"],
         "started_at": timestamp(),
         "outcome": "running",
         "command": arguments,
@@ -362,8 +416,10 @@ def response_control_errors(identities, arm):
     errors = []
     if identity["final_host"] != EXPECTED_RESPONSE_HOST:
         errors.append("Final response host differs from the pinned Astral host")
-    if identity["protocol"] != ARMS[arm]["expected_protocol"]:
-        errors.append("Observed response protocol differs from the assigned arm")
+    if identity["protocol"] != EXPECTED_PROTOCOL:
+        errors.append("Observed response protocol differs from the required HTTP/2")
+    if identity["peer_address"] != ARMS[arm]["expected_peer"]:
+        errors.append("Observed socket peer differs from the assigned address")
     return errors
 
 
@@ -385,8 +441,9 @@ def run_trial(binary, output, workspace, index, arm, archive_name):
         "schema_version": 1,
         "trial": index,
         "arm": arm,
-        "client_mode": ARMS[arm]["client_mode"],
-        "expected_protocol": ARMS[arm]["expected_protocol"],
+        "client_mode": "default_negotiation",
+        "expected_protocol": EXPECTED_PROTOCOL,
+        "expected_peer": ARMS[arm]["expected_peer"],
         "requested_mirror": MIRROR,
         "started_at": timestamp(),
         "outcome": "running",
@@ -512,12 +569,16 @@ def main():
         "arms": ARMS,
         "requested_mirror": MIRROR,
         "expected_response_host": EXPECTED_RESPONSE_HOST,
+        "expected_protocol": EXPECTED_PROTOCOL,
+        "client_mode": "default_negotiation",
         "trial_count": 8,
         "offline_check_count": 2,
         "binary": str(binary),
         "trials": [],
         "offline_checks": [],
-        "proxy_variables_present": {
+        "address_comparison_interpretable": None,
+        "system_proxy_observation": system_proxy_observation(),
+        "proxy_environment_nonempty": {
             name: bool(os.environ.get(name))
             for name in [
                 "HTTP_PROXY",
@@ -593,7 +654,7 @@ def main():
             write_json(output / "manifest.json", manifest)
             if result["outcome"] != "passed":
                 raise RuntimeError(
-                    "Offline CLI check failed; protocol trials were not started"
+                    "Offline CLI check failed; address trials were not started"
                 )
         for index, arm in enumerate(args.sequence, 1):
             result = run_trial(binary, output, workspace, index, arm, archive_name)
@@ -613,6 +674,11 @@ def main():
     ) as error:
         manifest.update({"status": "harness_error", "error": str(error)})
     manifest["finished_at"] = timestamp()
+    manifest["address_comparison_interpretable"] = (
+        manifest["status"] == "completed"
+        and len(manifest["trials"]) == 8
+        and all(trial["response_controls_verified"] for trial in manifest["trials"])
+    )
     write_json(output / "manifest.json", manifest)
     (output / "manifest.sha256").write_text(
         digest(output / "manifest.json") + "  manifest.json\n", encoding="utf-8"
