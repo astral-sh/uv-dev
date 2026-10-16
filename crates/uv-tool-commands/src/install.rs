@@ -569,6 +569,26 @@ pub async fn install(
             })
     };
 
+    if let Some(environment) = &existing_environment
+        && !environment.environment().uses(&interpreter)
+    {
+        // Metadata and Git preferences must follow the interpreter used by the tool environment.
+        state = PlatformState::default();
+        let markers = resolution_markers(
+            None,
+            python_platform.as_ref(),
+            environment.environment().interpreter(),
+        );
+        let locked = LockedRequirements::from_imported(
+            Vec::new(),
+            spec.git_preferences.clone(),
+            Some(&markers),
+        )?;
+        for (_, ResolvedRepositoryReference { reference, sha }) in locked.git {
+            state.git().insert(reference, sha);
+        }
+    }
+
     let validation_interpreter = existing_environment
         .as_ref()
         .map_or(&interpreter, |environment| {

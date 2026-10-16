@@ -7184,3 +7184,171 @@ fn tool_install_pylock_unnamed_git() -> Result<()> {
     ");
     Ok(())
 }
+
+/// Reusing a different tool interpreter must discard metadata from the initially selected Git
+/// commit.
+#[test]
+#[cfg(feature = "test-git")]
+fn tool_install_pylock_existing_interpreter() -> Result<()> {
+    let index = PackseServer::from_scenario(&toml::from_str::<Scenario>(indoc! {r#"
+        name = "pylock-existing-interpreter"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.old-dependency.versions."1.0.0"]
+        requires_python = ">=3.8"
+        sdist = false
+        [packages.new-dependency.versions."1.0.0"]
+        requires_python = ">=3.8"
+        sdist = false
+    "#})?);
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"])
+        .with_filtered_exe_suffix()
+        .with_tool_dirs()
+        .with_filter((r"@[0-9a-f]{40}", "@[COMMIT]"));
+    let repository = context.temp_dir.child("repository");
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "git-dependency"
+        version = "1.0.0"
+        requires-python = ">=3.8"
+        dependencies = ["old-dependency"]
+        [project.scripts]
+        git-dependency = "git_dependency:main"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    repository
+        .child("src/git_dependency/__init__.py")
+        .write_str("def main():\n    import sys\n    print(f'{sys.version_info.major}.{sys.version_info.minor}')\n")?;
+    context
+        .external_command("git")
+        .arg("init")
+        .arg(repository.path())
+        .assert()
+        .success();
+    context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args(["add", "."])
+        .assert()
+        .success();
+    context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-m",
+            "Initial metadata",
+        ])
+        .assert()
+        .success();
+    let old_commit = context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .assert()
+        .success();
+    let old_commit = String::from_utf8(old_commit.get_output().stdout.clone())?;
+    let old_commit = old_commit.trim();
+
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "git-dependency"
+        version = "2.0.0"
+        requires-python = ">=3.8"
+        dependencies = ["new-dependency"]
+        [project.scripts]
+        git-dependency = "git_dependency:main"
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args([
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=example@example.com",
+            "commit",
+            "-am",
+            "Updated metadata",
+        ])
+        .assert()
+        .success();
+    let new_commit = context
+        .external_command("git")
+        .current_dir(repository.path())
+        .args(["rev-parse", "HEAD"])
+        .assert()
+        .success();
+    let new_commit = String::from_utf8(new_commit.get_output().stdout.clone())?;
+    let new_commit = new_commit.trim();
+    let repository_url = Url::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    let repository_url = repository_url.as_str().trim_end_matches('/');
+
+    context.temp_dir.child("pylock.toml").write_str(&format!(
+        r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "git-dependency"
+        marker = "python_version >= '3.12'"
+        vcs = {{ type = "git", url = "{repository_url}", commit-id = "{new_commit}" }}
+        [[packages]]
+        name = "git-dependency"
+        marker = "python_version < '3.12'"
+        vcs = {{ type = "git", url = "{repository_url}", commit-id = "{old_commit}" }}
+    "#
+    ))?;
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("git-dependency")
+        .arg("--from").arg(format!("git+{repository_url}"))
+        .args(["--no-preview", "--python", "3.11"])
+        .arg("--default-index").arg(index.index_url())
+        .env(EnvVars::XDG_BIN_HOME, context.bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + git-dependency==2.0.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+     + new-dependency==1.0.0
+    Installed 1 executable: git-dependency
+    ");
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("git-dependency")
+        .arg("--from").arg(format!("git+{repository_url}"))
+        .args(["--no-preview", "--with-requirements", "pylock.toml"])
+        .arg("--default-index").arg(index.index_url())
+        .env(EnvVars::XDG_BIN_HOME, context.bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Uninstalled 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     - git-dependency==2.0.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+     + git-dependency==1.0.0 (from git+file://[TEMP_DIR]/repository@[COMMIT])
+     - new-dependency==1.0.0
+     + old-dependency==1.0.0
+    Installed 1 executable: git-dependency
+    ");
+    let executable = context
+        .bin_dir
+        .child(format!("git-dependency{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), context.external_command(executable.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    3.11
+    ");
+    Ok(())
+}
