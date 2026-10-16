@@ -1,0 +1,64 @@
+{
+  "base_revision": "24507dc125b83dab4a132872563cc48833f87fec",
+  "archive_url": "https://releases.astral.sh/github/python-build-standalone/releases/download/20261013/cpython-3.15.0%2B20261013-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+  "archive_size": 24417043,
+  "archive_sha256": "743d2269e74a98f7c4281dbc2e8710c171be1965693720aac818ff0157e4d965",
+  "peer_address": "104.26.13.77",
+  "peer_port": 443,
+  "curl_zip_sha256": "752ff19c45be64af5b5f8d5222dce64e0f7b03d740a7362a4055c220fa9637c6",
+  "curl_exe_sha256": "b2ad02d8334b4a24783cb08f615236f1572ee92edc08394baf775e509721dc81",
+  "curl_ca_sha256": "1fdcf2a55c9806c4c1e8391cb283871ee3b209d68a2879ce4c0898d949de2545",
+  "request_headers": {
+    "user-agent": "uv/0.13.1 {\"installer\":{\"name\":\"uv\",\"version\":\"0.13.1\",\"subcommand\":[\"python\",\"install\"]},\"python\":null,\"implementation\":{\"name\":null,\"version\":null},\"distro\":null,\"system\":{\"name\":null,\"release\":null},\"cpu\":null,\"openssl_version\":null,\"setuptools_version\":null,\"rustc_version\":null,\"ci\":true}",
+    "accept": "*/*",
+    "accept-encoding": "zstd,gzip,deflate"
+  },
+  "sequences": {
+    "1": ["h1", "h2"],
+    "2": ["h2", "h1"]
+  },
+  "pair_deadline_seconds": 120,
+  "pairs_per_runner": 2,
+  "runners": 2,
+  "logical_transfers_total": 8,
+  "application_retries": 0,
+  "wire_attempt_limit": null,
+  "slow_body_threshold_seconds": 10,
+  "stats_interval_ms": 100,
+  "stats_samples_limit": 1201,
+  "stats_bytes_limit": 2097152,
+  "trace_events_limit": 32768,
+  "trace_bytes_limit": 4194304,
+  "limitations": [
+    "Normal `curl` protocol-level replay remains enabled. Eight logical transfers is not a wire-attempt bound. Nonzero reported retry counts, unexpected connection counts or missing required identity make a transfer unmatched; replay not reflected in those observations remains possible.",
+    "TCP receiver counters describe the guest receiver. They cannot locate incoming loss or expose the remote sender congestion window. Zero duplicate ACKs does not exclude a lost tail or whole flight.",
+    "The reassembly queue value is a sequence-space span. Advertised receive windows are already bytes. RTT is a local-sender measurement and can remain stale during downloads.",
+    "HTTP/2 event timestamps are client callback observations, not wire arrival times. A sent `WINDOW_UPDATE` callback does not establish peer receipt.",
+    "The printed stream window pair is effective received bytes and effective local window, not exact remaining stream credit in every state. Preserve both raw values.",
+    "Counter sampling, pipe draining and body-file polling can perturb transfers. Actual coverage, queue limits and reader read-completion gaps are retained; incomplete telemetry is not a zero finding.",
+    "Paired processes do not guarantee overlapping response-body intervals. Separate TCP flows can differ even on the same address and runner.",
+    "A batch without a slow H2 control does not demonstrate that H1 fixes the symptom. Stop after the scheduled batch without reruns."
+  ],
+  "analysis_guidance": {
+    "counter_baselines": "Use the first fully live valid category sample within each `observed_generation` as its own baseline. Start a new baseline after disappearance/reappearance or `collection_continuity_changed`; never bridge generations or use incomplete spans as zero deltas.",
+    "connection_identity": "Process handle/PID/creation time remain tied to the owned child. Observed generations reflect sampled connection presence; a same-tuple reconnection entirely between polls is not excluded.",
+    "rtt_age": "Initial RTT age is unknown. `CountRtt` changes only bound an update between observations; retain the last observed change interval, not an invented actual RTT sample timestamp.",
+    "reader_time": "Read completion gaps include periods when `curl` emits no diagnostics; they are not pure reader scheduling delays. `curl` trace wall-clock values and reader monotonic observation times are distinct. Read/parse CPU, queue high-water and drops describe instrumentation cost.",
+    "native_controls": "Each control has its own 5- or 15-second Job Object, inside the 90-second native-preflight umbrella. Both 16 MiB local H2 controls use the same 2-second output-reader pause; one disables tracing to retain a local CPU/timing baseline. They generate no archive traffic.",
+    "portable_checks": "Linux `curl` 8.5 fixture checks do not validate the pinned Windows 8.23 trace format or Windows EStats/Job Object execution. Before archive trials, native gates require the trace forms produced by their fixture and zero recognized selected-line parse errors; later unrecognized forms remain a limitation."
+  },
+  "evidence_limits": {
+    "scope": "These are JSONL stream limits, not an all-artifact cap. Result, configuration, source-hash and package-provenance JSON are additional evidence with bounded fields and observation counts.",
+    "live_jsonl_bytes": 50331648,
+    "live_jsonl_formula": "8 live logical transfers times (2 MiB receiver samples plus 4 MiB H2 events)",
+    "control_jsonl_bytes_upper_bound": 79691776,
+    "control_jsonl_formula": "2 runners times (8 `curl` controls times a conservative 4 MiB trace limit plus 3 receiver controls times a 2 MiB receiver limit). Several controls produce no trace events.",
+    "all_jsonl_bytes_upper_bound": 130023424,
+    "stdout_json_memory_bytes_per_curl": 65536,
+    "response_header_events_per_curl": 32,
+    "trace_queue_event_capacity": 8192,
+    "sampler_queue_sample_capacity": 64,
+    "body_files_uploaded": false,
+    "raw_diagnostics_uploaded": false
+  }
+}

@@ -4,18 +4,11 @@ on:
 permissions:
   contents: read
 
-env:
-  CARGO_INCREMENTAL: 0
-  CARGO_NET_RETRY: 10
-  CARGO_TERM_COLOR: always
-  RUSTC_BOOTSTRAP: 1
-  RUSTUP_MAX_RETRIES: 10
-
 jobs:
-  python-reference-capture:
-    timeout-minutes: 25
+  python-transport-capture:
+    timeout-minutes: 15
     runs-on: namespace-profile-windows-2022-x86-64-16x32
-    name: "Python reference capture on Windows ${{ matrix.runner }} of 2"
+    name: "Python transport capture on Windows ${{ matrix.runner }} of 2"
     strategy:
       fail-fast: false
       matrix:
@@ -38,7 +31,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Prepare the pinned checkout before building
+      - name: Prepare the pinned checkout
         working-directory: ${{ env.UV_WORKSPACE }}
         shell: bash
         run: |
@@ -48,7 +41,7 @@ jobs:
           import subprocess
           from pathlib import Path
 
-          output = Path("reference-diagnostics")
+          output = Path("transport-diagnostics")
           output.mkdir()
           path = output / "checkout.json"
           expected = os.environ["GITHUB_SHA"]
@@ -76,49 +69,25 @@ jobs:
       - name: Verify the pinned curl distribution
         working-directory: ${{ env.UV_WORKSPACE }}
         run: >-
-          python scripts/python-reference-capture.py prepare-curl
-          --directory reference-tooling
-          --evidence reference-diagnostics/curl-provenance.json
+          python scripts/python-transport-capture.py prepare-curl
+          --directory transport-tooling
+          --evidence transport-diagnostics/curl-provenance.json
 
-      - name: Install Rust toolchain
-        working-directory: ${{ env.UV_WORKSPACE }}
-        run: rustup toolchain install --profile minimal
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          prefix-key: v1-rust-workspace
-          key: ${{ hashFiles('Cargo.toml') }}
-          workspaces: ${{ env.UV_WORKSPACE }}
-          cache-workspace-crates: "true"
-          add-job-id-key: false
-          save-if: "false"
-
-      - name: Build diagnostic uv once
-        working-directory: ${{ env.UV_WORKSPACE }}
-        env:
-          UV_INTERNAL__BUILD_GIT_INFO: 1
-        run: >-
-          cargo build --locked --profile fast-build-nightly
-          --no-default-features
-          --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native
-          --workspace --bin uv -Z checksum-freshness
-
-      - name: Run four paired client trials
+      - name: Run two paired protocol trials
         working-directory: ${{ env.UV_WORKSPACE }}
         run: >-
-          python scripts/python-reference-capture.py capture
-          --curl reference-tooling/curl.exe
-          --uv target/fast-build-nightly/uv.exe
-          --output reference-diagnostics
-          --workspace reference-work
+          python scripts/python-transport-capture.py capture
+          --curl transport-tooling/curl.exe
+          --output transport-diagnostics
+          --workspace transport-work
           --runner-index ${{ matrix.runner }}
           --expected-revision "$env:GITHUB_SHA"
 
-      - name: Upload reference evidence
+      - name: Upload transport evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: reference-capture-windows-${{ matrix.runner }}
-          path: ${{ env.UV_WORKSPACE }}/reference-diagnostics/
+          name: transport-capture-windows-${{ matrix.runner }}
+          path: ${{ env.UV_WORKSPACE }}/transport-diagnostics/
           if-no-files-found: warn
           retention-days: 7
