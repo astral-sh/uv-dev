@@ -40,7 +40,7 @@ jobs:
       - name: Install pinned build tools
         working-directory: ${{ env.UV_WORKSPACE }}
         run: |
-          rustup toolchain install --profile minimal --component rustfmt
+          rustup toolchain install --profile minimal
           uv sync --only-dev --locked --python (Get-Command python).Source
 
       - name: Build the two pinned sources

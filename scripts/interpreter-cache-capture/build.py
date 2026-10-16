@@ -141,7 +141,36 @@ def main():
         source = sources / arm
         environment = build_environment(source)
         commands = build_commands(arguments.nextest)
+        active_toolchain = subprocess.check_output(
+            ["rustup", "show", "active-toolchain"],
+            cwd=source,
+            text=True,
+            env=environment,
+            timeout=30,
+        ).strip()
+        toolchain_commands = {
+            "rustup-version": ["rustup", "--version"],
+            "rustfmt-install": [
+                "rustup",
+                "component",
+                "add",
+                "rustfmt",
+                "--toolchain",
+                active_toolchain.split()[0],
+            ],
+            "rustfmt-version": ["rustfmt", "--version"],
+        }
+        toolchain_setup = {
+            "active_toolchain": active_toolchain,
+            "commands": toolchain_commands,
+        }
+        (output / f"{arm}-toolchain.json").write_text(
+            json.dumps(toolchain_setup, indent=2) + "\n", encoding="utf-8"
+        )
+        for name, command in toolchain_commands.items():
+            execute(command, source, output / f"{arm}-{name}.log", environment)
         record = prepare(source, revision, root)
+        record["toolchain_setup"] = toolchain_setup
         record["commands"] = commands
         record["profile"] = PROFILE
         record["uv_and_tests_features"] = FEATURES.split(",")
