@@ -1,10 +1,14 @@
+#[cfg(feature = "test-python")]
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileTouch, FileWriteStr, PathChild};
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
+#[cfg(feature = "test-python")]
+use uv_test::venv_bin_path;
 use wiremock::matchers::{basic_auth, body_json, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -555,9 +559,6 @@ async fn publish_wheels_before_sdist_in_filename_order() {
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 #[test]
 fn check_keyring_behaviours() {
-    use assert_cmd::assert::OutputAssertExt;
-    use uv_test::venv_bin_path;
-
     let context = uv_test::test_context!("3.12")
         .with_filtered_sizes()
         .with_filtered_http_retries();
@@ -742,9 +743,7 @@ fn invalid_index() {
 async fn read_index_credential_env_vars_for_check_url() {
     use std::io::Write;
 
-    use assert_cmd::assert::OutputAssertExt;
     use fs_err::OpenOptions;
-    use indoc::formatdoc;
 
     let context = uv_test::test_context!("3.12")
         .with_filtered_sizes()
