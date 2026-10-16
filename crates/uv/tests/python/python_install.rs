@@ -278,30 +278,31 @@ fn python_install_missing_executable() -> anyhow::Result<()> {
     let executable = installation.child("bin/python3.12");
     fs_err::remove_file(executable.path())?;
 
-    // This should repair the installation, but matching its directory and version key is enough
-    // to report success even though the interpreter is missing (astral-sh/uv#22649).
+    // A matching version key is insufficient when the interpreter is missing.
     uv_snapshot!(context.filters(), context.python_install().arg("3.12"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Installed Python 3.12.15 in [TIME]
-     + cpython-3.12.15-[PLATFORM] (python3.12)
+     + cpython-3.12.15-[PLATFORM]
     ");
-    assert_path_missing(&executable);
+    executable.assert(predicate::path::exists());
 
-    // With downloads enabled, `uv run` still fails instead of repairing the installation.
+    // The repaired installation can be used without another download.
     uv_snapshot!(context.filters(), context.run()
         .env_remove(EnvVars::VIRTUAL_ENV)
         .arg("--no-project")
+        .arg("--no-python-downloads")
         .arg("--managed-python")
         .arg("--python").arg("3.12")
         .arg("python").arg("-c").arg("print('ok')"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Python interpreter not found at `[TEMP_DIR]/managed/cpython-3.12.15-[PLATFORM]/bin/python3.12`
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
     ");
-    assert_path_missing(&executable);
+    executable.assert(predicate::path::exists());
 
-    // An explicit reinstall restores the executable and makes the same run command work.
+    // Explicit reinstall also repairs an installation with a missing interpreter.
+    fs_err::remove_file(executable.path())?;
     uv_snapshot!(context.filters(), context.python_install().arg("--reinstall").arg("3.12"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -320,6 +321,38 @@ fn python_install_missing_executable() -> anyhow::Result<()> {
     ----- stdout -----
     ok
     ");
+
+    Ok(())
+}
+
+/// Automatic installation must replace the retained directory when its interpreter is absent.
+#[cfg(unix)]
+#[test]
+fn python_install_automatic_missing_executable() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs();
+
+    context.python_install().arg("3.12.15").assert().success();
+
+    let installation = context
+        .temp_dir
+        .child("managed")
+        .child(format!("cpython-3.12.15-{}", platform_key_from_env()?));
+    let executable = installation.child("bin/python3.12");
+    fs_err::remove_file(executable.path())?;
+
+    uv_snapshot!(context.filters(), context.run()
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--no-project")
+        .arg("--managed-python")
+        .arg("--python").arg("3.12")
+        .arg("python").arg("-c").arg("print('ok')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+    ");
+    executable.assert(predicate::path::exists());
 
     Ok(())
 }

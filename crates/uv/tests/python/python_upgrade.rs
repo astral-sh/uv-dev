@@ -554,7 +554,7 @@ fn python_upgrade_implementation() {
 }
 
 #[test]
-fn python_upgrade_build_version() {
+fn python_upgrade_build_version() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -621,6 +621,29 @@ fn python_upgrade_build_version() {
     ----- stderr -----
     Python 3.12 is already on the latest supported patch release
     ");
+
+    // Matching version and build metadata do not make an installation usable without Python.
+    fs_err::remove_file(&python_executable)?;
+    uv_snapshot!(context.filters(), context.python_upgrade().arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.12.[LATEST] in [TIME]
+     ~ cpython-3.12.[LATEST]-[PLATFORM]
+    ");
+
+    uv_snapshot!(context.filters(), context.run()
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--no-project")
+        .arg("--no-python-downloads")
+        .arg("--managed-python")
+        .arg("--python").arg("3.12")
+        .arg("python").arg("-c").arg("print('ok')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+    ");
+
+    Ok(())
 }
 
 // A project environment should survive a transparent Python patch upgrade.
