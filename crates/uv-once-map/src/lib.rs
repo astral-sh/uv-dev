@@ -1,13 +1,13 @@
 mod registered;
 
-pub use registered::{RegisteredEntry, RegisteredOnceMap, Registration};
+pub use registered::{ProducerRegistration, RegisteredEntry, RegisteredOnceMap, Registration};
 
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::hash::{BuildHasher, Hash, RandomState};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use papaya::{HashMap, ResizeMode};
+use papaya::{Compute, HashMap, Operation, ResizeMode};
 use tokio::sync::Notify;
 
 /// Run tasks only once and store the results in a parallel hash map.
@@ -20,7 +20,7 @@ use tokio::sync::Notify;
 /// Note that this always clones the value out of the underlying map. Because
 /// of this, it's common to wrap the `V` in an `Arc<V>` to make cloning cheap.
 pub struct OnceMap<K, V, S = RandomState> {
-    items: HashMap<K, Value<V>, S>,
+    items: Arc<HashMap<K, Value<V>, S>>,
 }
 
 impl<K: Eq + Hash + Debug, V: Debug, S: BuildHasher + Clone> Debug for OnceMap<K, V, S> {
@@ -42,6 +42,21 @@ impl<K: Eq + Hash + Clone, V: Clone, H: BuildHasher + Clone> OnceMap<K, V, H> {
             .is_ok()
     }
 
+    /// Register a job and return its producer, or return `None` if the key is already present.
+    pub fn register_with_producer(&self, key: K) -> Option<Producer<K, V, H>> {
+        let notify = Arc::new(Notify::new());
+        self.items
+            .pin()
+            .try_insert(key.clone(), Value::Waiting(notify.clone()))
+            .ok()
+            .map(|_| Producer {
+                items: self.items.clone(),
+                key,
+                notify,
+                completed: false,
+            })
+    }
+
     /// Register that you want to start a job, unless it was already started, then wait for its
     /// result.
     ///
@@ -61,18 +76,23 @@ impl<K: Eq + Hash + Clone, V: Clone, H: BuildHasher + Clone> OnceMap<K, V, H> {
     /// }
     /// ```
     pub async fn register_or_wait(&self, key: &K) -> Option<V> {
-        let notify = {
-            let items = self.items.pin();
-            match items.try_insert_with(key.clone(), || Value::Waiting(Arc::new(Notify::new()))) {
-                Ok(_) => return None,
-                Err(value) => match value {
-                    Value::Filled(_) => return value.get(),
-                    Value::Waiting(notify) => notify.clone(),
-                },
-            }
-        };
+        loop {
+            let notify = {
+                let items = self.items.pin();
+                match items.try_insert_with(key.clone(), || Value::Waiting(Arc::new(Notify::new())))
+                {
+                    Ok(_) => return None,
+                    Err(value) => match value {
+                        Value::Filled(_) => return value.get(),
+                        Value::Waiting(notify) => notify.clone(),
+                    },
+                }
+            };
 
-        self.wait_pending(key, notify).await
+            if let Some(value) = self.wait_pending(key, notify).await {
+                return Some(value);
+            }
+        }
     }
 
     /// Wait for an existing entry without registering a missing key.
@@ -91,19 +111,23 @@ impl<K: Eq + Hash + Clone, V: Clone, H: BuildHasher + Clone> OnceMap<K, V, H> {
         // Register the waiter for calls to `notify_waiters`.
         let notification = notify.notified();
 
-        // Make sure the value wasn't inserted in-between us checking the map and registering the waiter.
-        if let Some(value) = self.items.pin().get(key).expect("map is append-only").get() {
-            return Some(value);
+        // Make sure the value wasn't inserted or abandoned in-between us checking the map and
+        // registering the waiter.
+        {
+            let items = self.items.pin();
+            match items.get(key) {
+                Some(Value::Filled(value)) => return Value::lock(value).clone(),
+                Some(Value::Waiting(current)) if Arc::ptr_eq(current, &notify) => {}
+                Some(Value::Waiting(_)) | None => return None,
+            }
         }
 
-        // Wait until the value is inserted.
+        // Wait until the registration completes or is abandoned.
         notification.await;
 
-        let items = self.items.pin();
-        let value = items.get(key).expect("map is append-only");
-        match value {
-            Value::Filled(_) => value.get(),
-            Value::Waiting(_) => unreachable!("notify was called"),
+        match self.items.pin().get(key) {
+            Some(Value::Filled(value)) => Value::lock(value).clone(),
+            Some(Value::Waiting(_)) | None => None,
         }
     }
 
@@ -129,17 +153,23 @@ impl<K: Eq + Hash + Clone, V: Clone, H: BuildHasher + Clone> OnceMap<K, V, H> {
         K: Borrow<Q>,
     {
         let items = self.items.pin();
-        items.remove(key)?.take()
+        let value = items.remove(key)?;
+        if let Value::Waiting(notify) = &value {
+            notify.notify_waiters();
+        }
+        value.take()
     }
 }
 
 impl<K: Eq + Hash + Clone, V, H: Default + BuildHasher + Clone> Default for OnceMap<K, V, H> {
     fn default() -> Self {
         Self {
-            items: HashMap::builder()
-                .hasher(H::default())
-                .resize_mode(ResizeMode::Blocking)
-                .build(),
+            items: Arc::new(
+                HashMap::builder()
+                    .hasher(H::default())
+                    .resize_mode(ResizeMode::Blocking)
+                    .build(),
+            ),
         }
     }
 }
@@ -151,10 +181,67 @@ where
 {
     fn from_iter<T: IntoIterator<Item = (K, V)>>(iter: T) -> Self {
         Self {
-            items: iter
-                .into_iter()
-                .map(|(k, v)| (k, Value::filled(v)))
-                .collect(),
+            items: Arc::new(
+                iter.into_iter()
+                    .map(|(k, v)| (k, Value::filled(v)))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+/// Ownership of a registered job.
+///
+/// Dropping the producer while it still owns a pending registration abandons that registration
+/// and wakes its waiters. A later request can then register the same key again.
+#[must_use = "dropping the producer abandons this job"]
+pub struct Producer<K: Eq + Hash, V, S: BuildHasher = RandomState> {
+    items: Arc<HashMap<K, Value<V>, S>>,
+    key: K,
+    notify: Arc<Notify>,
+    completed: bool,
+}
+
+impl<K: Eq + Hash, V, S: BuildHasher> Debug for Producer<K, V, S> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Producer").finish_non_exhaustive()
+    }
+}
+
+impl<K: Eq + Hash + Clone, V: Clone, S: BuildHasher + Clone> Producer<K, V, S> {
+    /// Publish the result if this producer still owns the pending registration.
+    pub fn done(mut self, value: V) {
+        let notify = self.notify.clone();
+        let items = self.items.pin();
+        let result = items.compute(self.key.clone(), |entry| {
+            if let Some((_, Value::Waiting(current))) = entry
+                && Arc::ptr_eq(current, &notify)
+            {
+                Operation::Insert(Value::filled(value.clone()))
+            } else {
+                Operation::Abort(())
+            }
+        });
+        self.completed = true;
+        if matches!(result, Compute::Updated { .. }) {
+            self.notify.notify_waiters();
+        }
+    }
+}
+
+impl<K: Eq + Hash, V, S: BuildHasher> Drop for Producer<K, V, S> {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        let notify = &self.notify;
+        if matches!(
+            self.items.pin().remove_if(&self.key, |_, value| {
+                matches!(value, Value::Waiting(current) if Arc::ptr_eq(current, notify))
+            }),
+            Ok(Some(_))
+        ) {
+            self.notify.notify_waiters();
         }
     }
 }
