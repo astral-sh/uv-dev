@@ -789,6 +789,11 @@ impl EnvVars {
     pub const UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY: &'static str =
         "UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY";
 
+    /// Restrict clients to HTTP/1 when this diagnostic variable is present.
+    #[attr_hidden]
+    #[attr_added_in("0.13.1")]
+    pub const UV_INTERNAL__TEST_HTTP1_ONLY: &'static str = "UV_INTERNAL__TEST_HTTP1_ONLY";
+
     /// Hide progress messages with non-deterministic order in tests.
     #[attr_hidden]
     #[attr_added_in("0.12.18")]

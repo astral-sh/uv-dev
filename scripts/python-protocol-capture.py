@@ -1,4 +1,4 @@
-"""Capture eight sequential, balanced managed-Python download route trials."""
+"""Capture eight sequential managed-Python downloads under two HTTP client modes."""
 
 import argparse
 import datetime
@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from windows_process_job import run_process_tree
 
-BASE_REVISION = "8ebc08a577779a73c96816d5af1a5658c2aad1ee"
+BASE_REVISION = "2a4aea8c15acb11f4bc654f3b83a72b34f295b3d"
 DOWNLOAD_KEY = "cpython-3.15.0-windows-x86_64-none"
 BUILD = "20261013"
 EXPECTED_ARCHIVE_SHA256 = (
@@ -24,9 +24,11 @@ EXPECTED_ARCHIVE_SHA256 = (
 )
 DEADLINE_SECONDS = 120
 OFFLINE_CHECK_DEADLINE_SECONDS = 30
-ROUTES = {
-    "A": "https://releases.astral.sh/github/python-build-standalone/releases/download",
-    "B": "https://github.com/astral-sh/python-build-standalone/releases/download",
+MIRROR = "https://releases.astral.sh/github/python-build-standalone/releases/download"
+EXPECTED_RESPONSE_HOST = "releases.astral.sh"
+ARMS = {
+    "A": {"client_mode": "default_negotiation", "expected_protocol": "HTTP/2.0"},
+    "B": {"client_mode": "http1_only", "expected_protocol": "HTTP/1.1"},
 }
 SEQUENCES = {1: "ABBABAAB", 2: "BAABABBA"}
 HTTP_SCHEME = "".join(
@@ -44,8 +46,10 @@ SOURCE_FILES = [
     "rust-toolchain.toml",
     ".github/workflows/ci.yml",
     ".github/workflows/test.yml",
-    "scripts/python-route-capture.py",
+    "scripts/python-protocol-capture.py",
     "scripts/windows_process_job.py",
+    "crates/uv-client/src/base_client.rs",
+    "crates/uv-static/src/env_vars.rs",
     "crates/uv-python-managed/download-metadata.json",
     "crates/uv-python-managed/src/downloads.rs",
     "crates/uv-python-managed/src/downloads/copy_diagnostics.rs",
@@ -203,7 +207,7 @@ def supervisor_check(output, workspace):
     return result
 
 
-def trial_environment(workspace, traces, route):
+def trial_environment(workspace, traces, arm):
     environment = dict(os.environ)
     for name in [
         "UV_PYTHON_DOWNLOADS_JSON_URL",
@@ -214,6 +218,7 @@ def trial_environment(workspace, traces, route):
         "UV_NO_PROGRESS",
         "UV_COMPILE_BYTECODE",
         "UV_CONFIG_FILE",
+        "UV_INTERNAL__TEST_HTTP1_ONLY",
     ]:
         environment.pop(name, None)
     overrides = {
@@ -224,7 +229,7 @@ def trial_environment(workspace, traces, route):
         "UV_HTTP_CONNECT_TIMEOUT": "10",
         "UV_PYTHON_CPYTHON_BUILD": BUILD,
         "UV_PYTHON_DOWNLOADS": "automatic",
-        "UV_PYTHON_INSTALL_MIRROR": ROUTES[route],
+        "UV_PYTHON_INSTALL_MIRROR": MIRROR,
         "UV_PYTHON_CACHE_DIR": str(workspace / "archives"),
         "UV_PYTHON_INSTALL_DIR": str(workspace / "install"),
         "UV_CACHE_DIR": str(workspace / "cache"),
@@ -238,6 +243,8 @@ def trial_environment(workspace, traces, route):
         "RUST_LOG": "error",
         "RUST_BACKTRACE": "1",
     }
+    if arm == "B":
+        overrides["UV_INTERNAL__TEST_HTTP1_ONLY"] = "1"
     environment.update(overrides)
     return environment, overrides
 
@@ -257,8 +264,8 @@ def install_arguments(binary):
     ]
 
 
-def offline_check(binary, output, workspace, route):
-    name = f"offline-check-{route}"
+def offline_check(binary, output, workspace, arm):
+    name = f"offline-check-{arm}"
     evidence = output / name
     evidence.mkdir()
     work = workspace / name
@@ -269,14 +276,16 @@ def offline_check(binary, output, workspace, route):
     raw_logs.mkdir()
     traces = raw_logs / "child-traces"
     traces.mkdir()
-    environment, overrides = trial_environment(work, traces, route)
+    environment, overrides = trial_environment(work, traces, arm)
     environment["UV_OFFLINE"] = overrides["UV_OFFLINE"] = "1"
     arguments = install_arguments(binary)
     result = {
         "schema_version": 1,
         "kind": "offline_cli_preflight",
-        "included_in_route_observations": False,
-        "route": route,
+        "included_in_protocol_observations": False,
+        "arm": arm,
+        "client_mode": ARMS[arm]["client_mode"],
+        "expected_protocol": ARMS[arm]["expected_protocol"],
         "started_at": timestamp(),
         "outcome": "running",
         "command": arguments,
@@ -346,8 +355,20 @@ def offline_check(binary, output, workspace, route):
     return result
 
 
-def run_trial(binary, output, workspace, index, route, archive_name):
-    name = f"trial-{index:02d}-{route}"
+def response_control_errors(identities, arm):
+    if len(identities) != 1:
+        return ["Expected exactly one final response identity"]
+    identity = identities[0]
+    errors = []
+    if identity["final_host"] != EXPECTED_RESPONSE_HOST:
+        errors.append("Final response host differs from the pinned Astral host")
+    if identity["protocol"] != ARMS[arm]["expected_protocol"]:
+        errors.append("Observed response protocol differs from the assigned arm")
+    return errors
+
+
+def run_trial(binary, output, workspace, index, arm, archive_name):
+    name = f"trial-{index:02d}-{arm}"
     evidence = output / name
     evidence.mkdir()
     work = workspace / name
@@ -358,13 +379,15 @@ def run_trial(binary, output, workspace, index, route, archive_name):
     raw_logs.mkdir()
     traces = raw_logs / "child-traces"
     traces.mkdir()
-    environment, overrides = trial_environment(work, traces, route)
+    environment, overrides = trial_environment(work, traces, arm)
     arguments = install_arguments(binary)
     result = {
         "schema_version": 1,
         "trial": index,
-        "route": route,
-        "requested_mirror": ROUTES[route],
+        "arm": arm,
+        "client_mode": ARMS[arm]["client_mode"],
+        "expected_protocol": ARMS[arm]["expected_protocol"],
+        "requested_mirror": MIRROR,
         "started_at": timestamp(),
         "outcome": "running",
         "command": arguments,
@@ -424,8 +447,13 @@ def run_trial(binary, output, workspace, index, route, archive_name):
     if result["tree_exit_confirmed"]:
         result["sanitized_logs"] = copy_sanitized_logs(raw_logs, evidence)
     result["traces"] = trace_observations(evidence / "child-traces")
+    result["response_control_errors"] = response_control_errors(
+        result["traces"]["response_identities"], arm
+    )
+    result["response_controls_verified"] = not result["response_control_errors"]
     if result["outcome"] == "success" and (
         not result["archive_digest_verified"]
+        or not result["response_controls_verified"]
         or result["traces"]["managed_download_send_events"] != 1
         or len(result["traces"]["response_identities"]) != 1
         or result["traces"]["parse_errors"]
@@ -481,6 +509,9 @@ def main():
         "platform": platform.platform(),
         "python_version": sys.version,
         "sequence": list(args.sequence),
+        "arms": ARMS,
+        "requested_mirror": MIRROR,
+        "expected_response_host": EXPECTED_RESPONSE_HOST,
         "trial_count": 8,
         "offline_check_count": 2,
         "binary": str(binary),
@@ -556,16 +587,16 @@ def main():
             }
         )
         write_json(output / "manifest.json", manifest)
-        for route in ROUTES:
-            result = offline_check(binary, output, workspace, route)
+        for arm in ARMS:
+            result = offline_check(binary, output, workspace, arm)
             manifest["offline_checks"].append(result)
             write_json(output / "manifest.json", manifest)
             if result["outcome"] != "passed":
                 raise RuntimeError(
-                    "Offline CLI check failed; route trials were not started"
+                    "Offline CLI check failed; protocol trials were not started"
                 )
-        for index, route in enumerate(args.sequence, 1):
-            result = run_trial(binary, output, workspace, index, route, archive_name)
+        for index, arm in enumerate(args.sequence, 1):
+            result = run_trial(binary, output, workspace, index, arm, archive_name)
             manifest["trials"].append(result)
             write_json(output / "manifest.json", manifest)
             if not result["tree_exit_confirmed"]:

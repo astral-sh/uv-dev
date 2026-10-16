@@ -1283,22 +1283,28 @@ fn response_identity(
     version: reqwest::Version,
     headers: &reqwest::header::HeaderMap,
 ) -> serde_json::Value {
-    let cache_headers: HashMap<_, _> = ["age", "cf-cache-status", "x-cache", "x-cache-hits"]
-        .into_iter()
-        .filter_map(|name| {
-            let value = headers.get(name)?.to_str().ok()?;
-            // Retain only short cache-header values with a restricted ASCII character set.
-            if value.is_empty()
-                || value.len() > 128
-                || !value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b" ,-_".contains(&byte))
-            {
-                return None;
-            }
-            Some((name, value))
-        })
-        .collect();
+    let cache_headers: HashMap<_, _> = [
+        "age",
+        "cf-cache-status",
+        "cf-ray",
+        "x-cache",
+        "x-cache-hits",
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        let value = headers.get(name)?.to_str().ok()?;
+        // Retain only short allowlisted values with a restricted ASCII character set.
+        if value.is_empty()
+            || value.len() > 128
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b" ,-_".contains(&byte))
+        {
+            return None;
+        }
+        Some((name, value))
+    })
+    .collect();
     serde_json::json!({
         "final_host": url.host_str(),
         "final_path": url.path(),
@@ -1354,6 +1360,10 @@ mod tests {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("age", "42".parse().expect("valid header"));
         headers.insert("cf-cache-status", "HIT".parse().expect("valid header"));
+        headers.insert(
+            "cf-ray",
+            "9abcdef012345678-IAD".parse().expect("valid header"),
+        );
         headers.insert("x-cache", "HIT, MISS".parse().expect("valid header"));
         headers.insert(
             "x-cache-hits",
@@ -1372,7 +1382,27 @@ mod tests {
         );
         assert_eq!(
             response_identity(&url, None, reqwest::Version::HTTP_2, &headers)["cdn_cache_headers"],
-            serde_json::json!({"age": "42", "cf-cache-status": "HIT", "x-cache": "HIT, MISS"})
+            serde_json::json!({
+                "age": "42", "cf-cache-status": "HIT", "cf-ray": "9abcdef012345678-IAD",
+                "x-cache": "HIT, MISS"
+            })
+        );
+    }
+
+    #[test]
+    fn response_identity_rejects_unbounded_or_url_header_values() {
+        let url = Url::parse("https://example.com/archive.tar.gz").expect("valid URL");
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("cf-ray", "a".repeat(129).parse().expect("valid header"));
+        headers.insert(
+            "x-cache",
+            "https://example.com/?signature=secret"
+                .parse()
+                .expect("valid header"),
+        );
+        assert_eq!(
+            response_identity(&url, None, reqwest::Version::HTTP_11, &headers)["cdn_cache_headers"],
+            serde_json::json!({})
         );
     }
 

@@ -12,10 +12,10 @@ env:
   RUSTUP_MAX_RETRIES: 10
 
 jobs:
-  python-route-capture:
+  python-protocol-capture:
     timeout-minutes: 25
     runs-on: namespace-profile-windows-2022-x86-64-16x32
-    name: "Python route capture on Windows ${{ matrix.runner }} of 2"
+    name: "Python protocol capture on Windows ${{ matrix.runner }} of 2"
     strategy:
       fail-fast: false
       matrix:
@@ -50,7 +50,7 @@ jobs:
           import subprocess
           from pathlib import Path
 
-          output = Path("route-diagnostics")
+          output = Path("protocol-diagnostics")
           output.mkdir()
           path = output / "checkout.json"
           expected = os.environ["GITHUB_SHA"]
@@ -98,22 +98,22 @@ jobs:
           --features test-python,test-pypi,test-python-managed,test-windows-registry,native-auth,windows-native
           --workspace --bin uv -Z checksum-freshness
 
-      - name: Run eight sequential route trials
+      - name: Run eight sequential protocol trials
         working-directory: ${{ env.UV_WORKSPACE }}
         run: >-
-          python scripts/python-route-capture.py
+          python scripts/python-protocol-capture.py
           --uv target/fast-build-nightly/uv.exe
-          --output route-diagnostics
-          --workspace route-work
+          --output protocol-diagnostics
+          --workspace protocol-work
           --runner-index ${{ matrix.runner }}
           --sequence ${{ matrix.sequence }}
           --expected-revision "$env:GITHUB_SHA"
 
-      - name: Upload route evidence
+      - name: Upload protocol evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: route-capture-windows-${{ matrix.runner }}
-          path: ${{ env.UV_WORKSPACE }}/route-diagnostics/
+          name: protocol-capture-windows-${{ matrix.runner }}
+          path: ${{ env.UV_WORKSPACE }}/protocol-diagnostics/
           if-no-files-found: warn
           retention-days: 7

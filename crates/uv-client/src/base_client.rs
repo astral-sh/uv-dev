@@ -611,6 +611,12 @@ impl<'a> BaseClientBuilder<'a> {
             .connect_timeout(connect_timeout)
             .redirect(redirect_policy.reqwest_policy());
 
+        let client_builder = if env::var_os(EnvVars::UV_INTERNAL__TEST_HTTP1_ONLY).is_some() {
+            client_builder.http1_only()
+        } else {
+            client_builder
+        };
+
         // If necessary, accept invalid certificates.
         let client_builder = match security {
             Security::Secure => client_builder,
