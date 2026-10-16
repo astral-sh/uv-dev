@@ -8,15 +8,17 @@ Classification: duplicate
 
 On Windows 11 with uv 0.12.9, a quoted requirements-file path containing a space is split when passed to `uv pip install --overrides`. The reproduction creates `D:\uv test\override.txt`, but uv reports `File not found: D:\uv`; moving the override file to a space-free path succeeds. A space-free `--python` path does not change the failure, which isolates the trigger to the override-file argument.
 
-This is a more specific reproduction of the open cross-platform problem in astral-sh/uv#12639. That issue demonstrates the same truncation for a quoted `--constraint` path, and the two options use the same space-delimited CLI/environment parsing pattern. A repository member has also identified astral-sh/uv#21477 as a duplicate of astral-sh/uv#12639. A pre-existing draft fix covering constraint, override, and exclude paths is available in astral-sh/uv-dev#158.
+This is a more specific reproduction of the cross-platform problem tracked in astral-sh/uv#12639. That issue demonstrates the same truncation for a quoted `--constraint` path; the CLI definitions inspected during triage used the same space-delimited CLI/environment parsing pattern for both options. A repository member also identified astral-sh/uv#21477 as a duplicate of astral-sh/uv#12639. Maintainer zanieb reports that astral-sh/uv#22290 should fix this behavior and was released in uv 0.13.0.
 
-## Draft response
+## Fix status and verification
 
-Thanks for the clear reproduction. This is the same underlying file-path parsing problem tracked in astral-sh/uv#12639: `--constraint` and `--overrides` currently use the same space-delimited parsing as their environment-variable forms, so quoting a CLI path does not prevent it from being split. A draft fix covering constraint, override, and exclude paths is in astral-sh/uv-dev#158. Let’s centralize the discussion in astral-sh/uv#12639.
+In the October 16, 2026 comment on astral-sh/uv#21477, maintainer zanieb identifies astral-sh/uv#22290 as the expected fix, released in uv 0.13.0. According to the comment, the argument parser now keeps a quoted path passed to `--overrides` intact instead of splitting it on whitespace. This supersedes the earlier status of a proposed fix in astral-sh/uv-dev#158.
+
+The supplied discussion contains no reporter confirmation of a successful retest on uv 0.13.0. The next verification step is to rerun the original Windows PowerShell reproduction on uv 0.13.0 or later and confirm that uv reads `D:\uv test\override.txt` without the truncated-path error. The release and behavior claims above are maintainer-reported; no new reproduction was performed for this handoff update.
 
 ## Classification
 
-Duplicate of astral-sh/uv#12639. The observable behavior matches: a file path supplied as one quoted CLI argument is split at its first space and uv attempts to open only the prefix. Although the existing report uses `--constraint` and astral-sh/uv#21477 uses `--overrides`, source evidence shows both arguments are declared as lists with a space value delimiter and the same environment-variable integration. Maintainer comments on astral-sh/uv#12639 identify that shared parsing as the reason the command line cannot currently distinguish a path space from the environment variable's multi-file separator.
+Duplicate of astral-sh/uv#12639. The reported behavior matches: a file path supplied as one quoted CLI argument is split at its first space and uv attempts to open only the prefix. Although the existing report uses `--constraint` and astral-sh/uv#21477 uses `--overrides`, source inspected during triage declared both arguments as lists with a space value delimiter and the same environment-variable integration. Maintainer comments on astral-sh/uv#12639 identify that shared parsing as the reason the affected command-line parser could not distinguish a path space from the environment variable's multi-file separator.
 
 This classification is now additionally supported by a repository member's comment on astral-sh/uv#21477 identifying it as a duplicate of astral-sh/uv#12639.
 
@@ -24,8 +26,9 @@ The draft astral-sh/uv-dev#158 predates astral-sh/uv#21477 and explicitly addres
 
 ## Related
 
-- astral-sh/uv#12639 — Open issue with the same failure on `--constraint`: `constraints file.txt` is truncated to `constraints`. Maintainer comments confirm the shared command-line/environment-variable space-delimited parsing limitation.
-- astral-sh/uv-dev#158 — Open draft pull request that explicitly covers constraint, override, and exclude paths. It proposes preserving explicit CLI paths and splitting only environment-provided lists, directly addressing the shared problem in astral-sh/uv#12639.
+- astral-sh/uv#12639 — Canonical duplicate discussion with the same failure on `--constraint`: `constraints file.txt` is truncated to `constraints`. Maintainer comments confirm the shared command-line/environment-variable space-delimited parsing limitation.
+- astral-sh/uv#22290 — Fix identified by maintainer zanieb as released in uv 0.13.0. The maintainer states that quoted `--overrides` paths are now kept intact instead of split on whitespace; the supplied discussion does not yet include a reporter retest.
+- astral-sh/uv-dev#158 — Earlier draft pull request, open at initial triage, that explicitly covers constraint, override, and exclude paths. It proposes keeping explicit CLI paths intact and splitting only environment-provided lists, directly addressing the shared problem in astral-sh/uv#12639. Retained as historical implementation context; the maintainer points to astral-sh/uv#22290 for the released fix.
 
 ## Supporting evidence
 
