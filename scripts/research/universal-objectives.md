@@ -15,8 +15,20 @@ Pareto frontier for three explicitly defined costs, all minimized:
 
 The JSON includes the fixture fingerprint, raw universal output, projected choices, objective
 vectors, and distance from each independent minimum. Independent minima need not be jointly
-attainable. Churn is a counterfactual metric; this experiment does not feed an existing lockfile to
-uv. A nonzero gap is not a correctness failure or a claim that uv promises global optimality.
+attainable. A nonzero gap is not a correctness failure or a claim that uv promises global
+optimality.
+
+The experiment first generates the reference assignment using `uv pip compile --resolution lowest`.
+For each fork strategy it then measures three modes: a cold resolution, a rerun whose
+`--output-file` contains that previous output, and the same seeded rerun with `--upgrade`. The
+`measurements` object contains cold results; `preference_measurements` contains the two seeded
+modes. Their churn metric is relative to the actual previous output supplied to uv. The cold run
+only uses that output as a counterfactual reference. This exercises requirements-file preferences
+rather than `uv.lock` reuse.
+
+Projection uses `--no-deps` so uv cannot repair a missing transitive pin. Negative controls delete a
+transitive pin and replace one with a dependency-inconsistent version; the finite closure and
+dependency checks must reject both. Their outcomes appear in `projection_controls`.
 
 This is a deliberately finite objective-quality experiment, following the separation between
 validity and optimization in [PacSolve](https://arxiv.org/html/2203.13737v4). The two Python cells

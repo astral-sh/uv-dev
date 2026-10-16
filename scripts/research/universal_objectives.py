@@ -123,6 +123,7 @@ def main() -> None:
     ]
     minima = tuple(min(vector[index] for vector in vectors) for index in range(3))
     measurements = {}
+    preference_measurements = {}
     with tempfile.TemporaryDirectory(
         prefix="universal-objectives-", dir=args.work_dir
     ) as temporary:
@@ -148,7 +149,11 @@ def main() -> None:
             "never",
         ]
 
-        def compile_requirements(source: Path, options: list[str]) -> str:
+        def compile_requirements(
+            source: Path, options: list[str], destination: Path | None = None
+        ) -> str:
+            if destination is not None:
+                options = [*options, "--output-file", str(destination)]
             result = subprocess.run(
                 [str(uv), "pip", "compile", str(source), *common_args, *options],
                 cwd=directory,
@@ -160,27 +165,22 @@ def main() -> None:
             )
             if result.returncode:
                 raise RuntimeError(result.stderr)
-            return result.stdout
+            return result.stdout if destination is None else destination.read_text()
 
-        for strategy in ("requires-python", "fewest"):
-            output = compile_requirements(
-                project,
-                [
-                    "--universal",
-                    "--python-version",
-                    "3.11",
-                    "--no-strip-markers",
-                    "--fork-strategy",
-                    strategy,
-                ],
-            )
-            universal = directory / f"{strategy}.txt"
+        def project_output(label: str, output: str) -> tuple[tuple[int, ...], ...]:
+            universal = directory / f"{label}.txt"
             universal.write_text(output)
             projected = []
             for minor in PYTHON_MINORS:
                 concrete = compile_requirements(
                     universal,
-                    ["--python-version", f"3.{minor}", "--python-platform", "linux"],
+                    [
+                        "--python-version",
+                        f"3.{minor}",
+                        "--python-platform",
+                        "linux",
+                        "--no-deps",
+                    ],
                 )
                 pins = {}
                 for line in concrete.splitlines():
@@ -198,18 +198,81 @@ def main() -> None:
                         f"uv projection violates the finite oracle: {assignment}"
                     )
                 projected.append(assignment)
-            solution = tuple(projected)
-            vector = objectives(solution)
-            measurements[strategy] = {
-                "requirements": output,
-                "projected_assignments": solution,
-                "objectives": vector,
-                "pareto_optimal": vector in frontier,
-                "independent_objective_gaps": tuple(
-                    value - minimum
-                    for value, minimum in zip(vector, minima, strict=True)
+            return tuple(projected)
+
+        universal_options = [
+            "--universal",
+            "--python-version",
+            "3.11",
+            "--no-strip-markers",
+        ]
+        reference_output = compile_requirements(
+            project, [*universal_options, "--resolution", "lowest"]
+        )
+        reference_solution = project_output("reference", reference_output)
+        if reference_solution != ((1, 1, 1), (1, 1, 1)):
+            raise RuntimeError(
+                f"unexpected lowest-resolution reference: {reference_solution}"
+            )
+        projection_controls = {}
+        for label, output, expected_error in [
+            (
+                "missing-transitive-pin",
+                "\n".join(
+                    line
+                    for line in reference_output.splitlines()
+                    if not line.startswith("common==")
                 ),
-            }
+                "incomplete projection",
+            ),
+            (
+                "inconsistent-transitive-pin",
+                reference_output.replace(
+                    "common==1",
+                    "common==1 ; python_full_version < '3.12'\ncommon==2 ; python_full_version >= '3.12'",
+                ),
+                "violates the finite oracle",
+            ),
+        ]:
+            try:
+                project_output(label, output)
+            except RuntimeError as error:
+                if expected_error not in str(error):
+                    raise
+                projection_controls[label] = "rejected"
+            else:
+                raise RuntimeError(
+                    f"projection control {label} was unexpectedly accepted"
+                )
+        for strategy in ("requires-python", "fewest"):
+            preference_measurements[strategy] = {}
+            for mode in ("cold", "prefer-reference", "upgrade-reference"):
+                options = [*universal_options, "--fork-strategy", strategy]
+                destination = None
+                if mode != "cold":
+                    destination = directory / f"{strategy}-{mode}-previous.txt"
+                    destination.write_text(reference_output)
+                if mode == "upgrade-reference":
+                    options.append("--upgrade")
+                output = compile_requirements(project, options, destination)
+                solution = project_output(f"{strategy}-{mode}", output)
+                vector = objectives(solution)
+                measurement = {
+                    "requirements": output,
+                    "projected_assignments": solution,
+                    "objectives": vector,
+                    "pareto_optimal": vector in frontier,
+                    "independent_objective_gaps": tuple(
+                        value - minimum
+                        for value, minimum in zip(vector, minima, strict=True)
+                    ),
+                    "previous_output_supplied": destination is not None,
+                    "upgrade": mode == "upgrade-reference",
+                }
+                if mode == "cold":
+                    measurements[strategy] = measurement
+                else:
+                    preference_measurements[strategy][mode] = measurement
         version = subprocess.check_output(
             [str(uv), "--version"], text=True, env=environment
         ).strip()
@@ -229,12 +292,16 @@ def main() -> None:
                     ],
                     "churn_reference": {
                         "assignments": [[1, 1, 1], [1, 1, 1]],
-                        "provided_to_uv": False,
+                        "source": "uv pip compile --universal --resolution lowest",
+                        "requirements": reference_output,
+                        "provided_to_uv_in": ["prefer-reference", "upgrade-reference"],
                     },
                     "feasible_solution_count": len(feasible),
                     "pareto_frontier": frontier,
                     "independent_minima": minima,
                     "measurements": measurements,
+                    "preference_measurements": preference_measurements,
+                    "projection_controls": projection_controls,
                 },
                 indent=2,
             )
