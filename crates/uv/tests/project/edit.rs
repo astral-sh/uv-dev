@@ -16602,6 +16602,73 @@ fn add_pylock_index_binding() -> Result<()> {
     Ok(())
 }
 
+/// An imported local index remains declared while its directory is empty.
+#[test]
+fn add_pylock_empty_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let index = context.temp_dir.child("index");
+    index.create_dir_all()?;
+    let index_url =
+        Url::from_directory_path(index.path()).expect("absolute temporary directory path");
+    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        [[packages]]
+        name = "ok"
+        version = "1.0.0"
+        index = "{index_url}"
+        wheels = [{{ url = "https://example.com/ok-1.0.0-py3-none-any.whl", hashes = {{ sha256 = "0000000000000000000000000000000000000000000000000000000000000000" }} }}]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["--offline", "--frozen", "-r", "pylock.toml"]), @"exit_code: 0 (success)");
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "ok",
+    ]
+
+    [tool.uv.sources]
+    ok = { index = "pylock-1" }
+
+    [[tool.uv.index]]
+    name = "pylock-1"
+    url = "index"
+    explicit = true
+    "#);
+
+    index.child("ok/index.html").write_str(indoc! {r#"
+        <!DOCTYPE html>
+        <a href="ok-1.0.0-py3-none-any.whl">ok-1.0.0-py3-none-any.whl</a>
+    "#})?;
+    fs_err::copy(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+        index.child("ok/ok-1.0.0-py3-none-any.whl"),
+    )?;
+    uv_snapshot!(context.filters(), context.lock().arg("--offline")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    Ok(())
+}
+
 /// Reuse a configured index with imported credentials and resolve to an available version when
 /// the preferred version is absent.
 #[tokio::test]

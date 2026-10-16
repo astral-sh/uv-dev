@@ -883,8 +883,8 @@ pub async fn add(
     // Validate any indexes that were provided on the command-line to ensure
     // they point to existing non-empty directories when using path URLs.
     let command_line_indexes = indexes;
-    let mut valid_indexes = Vec::with_capacity(command_line_indexes.len());
-    for index in command_line_indexes.iter().cloned().chain(imported_indexes) {
+    let mut valid_indexes = Vec::with_capacity(command_line_indexes.len() + imported_indexes.len());
+    for index in command_line_indexes.iter().cloned() {
         if let IndexUrl::Path(url) = &index.url {
             let path = url
                 .to_file_path()
@@ -899,6 +899,7 @@ pub async fn add(
         }
         valid_indexes.push(index);
     }
+    valid_indexes.extend(imported_indexes);
     let indexes = valid_indexes;
 
     // Prioritize command-line indexes and retain the priority of reused imported indexes.
