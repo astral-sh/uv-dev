@@ -522,13 +522,15 @@ async fn perform_install(
                     .iter()
                     .find(|inst| request.download.key() == inst.key())
                 {
-                    if matches_build(request.download.build(), installation.build()) {
+                    if matches_build(request.download.build(), installation.build())
+                        && installation.executable(false).exists()
+                    {
                         debug!("Found `{}` for request `{}`", installation.key(), request);
                         satisfied.push(installation);
                     } else {
-                        // Key matches but build version differs - track as existing for reinstall
+                        // Reinstall if the build differs or the interpreter is missing.
                         debug!(
-                            "Build version mismatch for `{}`, will upgrade",
+                            "Installation `{}` needs to be reinstalled",
                             installation.key()
                         );
                         changelog.existing.insert(installation.key().clone());
@@ -540,7 +542,7 @@ async fn perform_install(
                 }
             } else if let Some(installation) = existing_installations
                 .iter()
-                .find(|inst| request.matches_installation(inst))
+                .find(|inst| request.matches_installation(inst) && inst.executable(false).exists())
             {
                 debug!("Found `{}` for request `{}`", installation.key(), request);
                 satisfied.push(installation);

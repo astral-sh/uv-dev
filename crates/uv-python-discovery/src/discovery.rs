@@ -234,6 +234,10 @@ fn python_executables_from_installed<'a>(
                             debug!("Skipping managed installation `{installation}`: does not satisfy requested platform `{platform}`");
                             return false;
                         }
+                        if !installation.executable(false).exists() {
+                            debug!("Skipping managed installation `{installation}`: interpreter is missing");
+                            return false;
+                        }
 
                         if let Some(requested_build) = build_versions.get(&installation.implementation()) {
                             let Some(installation_build) = installation.build() else {

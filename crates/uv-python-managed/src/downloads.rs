@@ -51,6 +51,8 @@ use uv_python_types::{
     PythonVariant, PythonVersion,
 };
 
+use crate::ManagedPythonInstallation;
+
 #[derive(Error, DebugNoInline)]
 pub enum Error {
     #[error(transparent)]
@@ -498,8 +500,12 @@ impl ManagedPythonDownload {
     ) -> Result<DownloadResult, Error> {
         let path = installation_dir.join(self.key().to_string());
 
-        // If it is not a reinstall and the dir already exists, return it.
-        if !reinstall && path.is_dir() {
+        // Only reuse an existing installation if its interpreter is still present.
+        if !reinstall
+            && path.is_dir()
+            && ManagedPythonInstallation::new(path.clone(), self)
+                .is_ok_and(|installation| installation.executable(false).exists())
+        {
             return Ok(DownloadResult::AlreadyAvailable(path));
         }
 
@@ -1180,8 +1186,6 @@ async fn read_url(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use crate::ManagedPythonInstallation;
     #[cfg(target_arch = "aarch64")]
     use uv_python_types::ArchRequest;
     use uv_python_types::VersionRequest;
