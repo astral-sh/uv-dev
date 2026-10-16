@@ -1,8 +1,11 @@
 use std::error::Error;
+use std::future::pending;
 use std::pin::pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::poll;
+use tokio::time::timeout;
 use uv_once_map::{RegisteredOnceMap, Registration};
 
 #[tokio::test]
@@ -59,4 +62,74 @@ async fn register_or_wait() {
     map.done("package", 42);
     assert_eq!(wait.await, Some(42));
     assert_eq!(map.register_or_wait(&"package").await, Some(42));
+}
+
+/// Completion can precede the first poll of an already-created wait future.
+#[tokio::test]
+async fn completion_before_first_poll() -> Result<(), Box<dyn Error>> {
+    let map = RegisteredOnceMap::<_, _>::default();
+    assert!(map.register("package"));
+    let entry = map
+        .get_registered("package")
+        .ok_or("missing registered entry")?;
+    let wait = entry.wait();
+
+    map.done("package", 42);
+
+    assert_eq!(timeout(Duration::from_secs(2), wait).await?, 42);
+    assert_eq!(map.register_or_wait(&"package").await, Some(42));
+    Ok(())
+}
+
+/// Cancelling one consumer must not consume the notification for another consumer.
+#[tokio::test]
+async fn cancelled_waiter_does_not_block_other_waiters() -> Result<(), Box<dyn Error>> {
+    let map = RegisteredOnceMap::<_, _>::default();
+    assert!(map.register("package"));
+    let mut cancelled = Box::pin(map.register_or_wait(&"package"));
+    let mut retained = pin!(map.register_or_wait(&"package"));
+    assert!(poll!(&mut cancelled).is_pending());
+    assert!(poll!(&mut retained).is_pending());
+
+    drop(cancelled);
+    map.done("package", 42);
+
+    assert_eq!(timeout(Duration::from_secs(2), retained).await?, Some(42));
+    assert_eq!(map.register_or_wait(&"package").await, Some(42));
+    Ok(())
+}
+
+/// The owner of cancelled work must still publish a result for its registered consumers.
+#[tokio::test]
+async fn aborted_producer_can_publish_an_error() -> Result<(), Box<dyn Error>> {
+    let map = Arc::new(RegisteredOnceMap::<_, Result<u32, &str>>::default());
+    assert!(map.register("package"));
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let producer = tokio::spawn({
+        let map = Arc::clone(&map);
+        async move {
+            started.send(()).expect("consumer is waiting for producer");
+            pending::<()>().await;
+            map.done("package", Ok(42));
+        }
+    });
+    ready.await?;
+    let mut waiter = pin!(map.register_or_wait(&"package"));
+    assert!(poll!(&mut waiter).is_pending());
+
+    producer.abort();
+    let error = producer.await.expect_err("producer must be aborted");
+    assert!(error.is_cancelled());
+    assert!(poll!(&mut waiter).is_pending());
+    map.done("package", Err("producer cancelled"));
+
+    assert_eq!(
+        timeout(Duration::from_secs(2), waiter).await?,
+        Some(Err("producer cancelled"))
+    );
+    assert_eq!(
+        map.register_or_wait(&"package").await,
+        Some(Err("producer cancelled"))
+    );
+    Ok(())
 }
