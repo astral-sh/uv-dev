@@ -166,7 +166,9 @@ def observe(uv: str, workspace: Path, mode: str, port: int, bwrap: str | None) -
         ],
     ]
     runs = []
+    probes = []
     for number, command in enumerate(commands):
+        probe_start = len(probes)
         entered = writable / f"entered-{number}"
         launcher = [
             sys.executable,
@@ -186,26 +188,28 @@ def observe(uv: str, workspace: Path, mode: str, port: int, bwrap: str | None) -
             check=False,
             timeout=60,
         )
+        probes = (
+            [json.loads(line) for line in log.read_text().splitlines()]
+            if log.exists()
+            else []
+        )
         runs.append(
             {
                 "command": command[2],
                 "returncode": process.returncode,
                 "entered": entered.exists(),
+                "probe_start": probe_start,
+                "probe_count": len(probes) - probe_start,
                 "seconds": time.perf_counter() - started,
                 "stderr": process.stderr,
             }
         )
         if process.returncode:
-            probes = (
-                [json.loads(line) for line in log.read_text().splitlines()]
-                if log.exists()
-                else []
-            )
             status = (
                 "setup-failed"
                 if not entered.exists()
                 else "build-failed"
-                if probes
+                if len(probes) > probe_start
                 else "command-failed-before-hooks"
             )
             return {
@@ -215,11 +219,6 @@ def observe(uv: str, workspace: Path, mode: str, port: int, bwrap: str | None) -
                 "completed": False,
                 "status": status,
             }
-    probes = (
-        [json.loads(line) for line in log.read_text().splitlines()]
-        if log.exists()
-        else []
-    )
     errors = []
     expected_hooks = {
         "get_requires_for_build_wheel",
