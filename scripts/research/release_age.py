@@ -24,8 +24,13 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 NAME = r"[a-z0-9]+(?:-[a-z0-9]+)*"
-VERSION = r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))*"
-BOUND = rf"(?:===|==|!=|<=|>=|~=|<|>) *{VERSION}(?:\.\*)?"
+VERSION_COMPONENT = r"(?:0|[1-9][0-9]*)"
+VERSION = rf"{VERSION_COMPONENT}(?:\.{VERSION_COMPONENT})*"
+BOUND = (
+    rf"(?:(?:==|!=) *{VERSION}(?:\.\*)?"
+    rf"|~= *{VERSION}\.{VERSION_COMPONENT}"
+    rf"|(?:===|<=|>=|<|>) *{VERSION})"
+)
 REQUIREMENT = re.compile(rf"(?P<name>{NAME})(?: *{BOUND}(?: *, *{BOUND})*)?")
 
 
@@ -258,7 +263,7 @@ def replay(
                     "returncode": process.returncode,
                     "selected": selected,
                     "selected_files": selected_files,
-                    "changed_from_baseline": selected != baseline,
+                    "versions_changed_from_baseline": selected != baseline,
                     "selected_labels": selected_labels,
                     "seconds": time.perf_counter() - started,
                     "stderr": process.stderr,

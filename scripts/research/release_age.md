@@ -20,8 +20,9 @@ versions and labels, root/transitive scope, failures, and elapsed time.
 For historical research, supply `--corpus` with the same schema and provenance for
 timestamps/labels. `expected` is needed only with `--check`. Requirements must use normalized names
 and optional comma-separated numeric version bounds, such as `age-library>=1,<3`. Release versions
-must be dotted integers. Equivalent release declarations such as `1` and `1.0` are rejected; list
-their artifacts under one release instead. Extras, markers, direct references, options, and
+must be dotted integers. `~=` requires at least two numeric components, such as `~=1.0`, and `.*` is
+allowed only with `==` or `!=`. Equivalent release declarations such as `1` and `1.0` are rejected;
+list their artifacts under one release instead. Extras, markers, direct references, options, and
 newline-bearing requirements are rejected before starting the index. Each release may supply
 `files`, with a wheel `tag` and optional `upload_time` for each file; without it, a single universal
 wheel uses the release upload time. The synthetic corpus does not reproduce real wheel contents,
@@ -38,4 +39,6 @@ Two file-level scenarios distinguish a release's earliest upload from eligible a
 back to version 1.0 under an age cutoff. `age-split` instead has an older wheel compatible with both
 Python 2 and 3, so version 2.0 remains available. JSON output includes filenames retained in the
 generated `pylock.toml` and separate release/file counts. These are candidate artifacts in the lock
-output, not a claim that each was installed.
+output, not a claim that each was installed. `versions_changed_from_baseline` compares `selected`
+with the no-cutoff baseline, including a change to or from `null` when resolution has no solution;
+compare `selected_files` for changes to candidate artifacts.
