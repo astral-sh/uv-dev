@@ -11,6 +11,21 @@ import sys
 from pathlib import Path
 
 
+def consumer_report(process: subprocess.CompletedProcess[str]) -> dict:
+    lines = process.stderr.splitlines()
+    payload = process.stdout if process.returncode == 0 else lines[-1] if lines else ""
+    try:
+        report = json.loads(payload)
+    except json.JSONDecodeError:
+        report = None
+    if isinstance(report, dict):
+        return report
+    raise RuntimeError(
+        f"Consumer exited with status {process.returncode}; the expected report was not a JSON object.\n"
+        f"stdout:\n{process.stdout}\nstderr:\n{process.stderr}"
+    )
+
+
 def run_concurrently(
     command: list[str], timeout: float = 120
 ) -> list[subprocess.CompletedProcess[str]]:
@@ -92,11 +107,7 @@ def main() -> None:
         process = subprocess.run(
             command, text=True, capture_output=True, check=False, timeout=120
         )
-        report = json.loads(
-            process.stdout
-            if process.returncode == 0
-            else process.stderr.splitlines()[-1]
-        )
+        report = consumer_report(process)
         if (process.returncode == 0) != success or target.exists() != success:
             raise AssertionError(f"Unexpected {name}: {report}")
         if success:
@@ -159,13 +170,9 @@ def main() -> None:
         "--target",
         str(target),
     ]
-    concurrent = []
+    concurrent: list[dict] = []
     for process in run_concurrently(command):
-        report = json.loads(
-            process.stdout
-            if process.returncode == 0
-            else process.stderr.splitlines()[-1]
-        )
+        report = consumer_report(process)
         if process.returncode and report["error_type"] not in {
             "ValueError",
             "FileExistsError",
