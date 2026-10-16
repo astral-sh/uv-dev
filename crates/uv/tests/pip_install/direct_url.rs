@@ -6,12 +6,12 @@ use anyhow::Result;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use serde_json::{Value, json};
-use url::Url;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{basic_auth, path, query_param},
 };
 
+use uv_redacted::SafeUrl;
 use uv_test::archive::generate_source_archive;
 use uv_test::packse::{generate_wheel, generate_wheel_with_files};
 use uv_test::{TestContext, uv_snapshot};
@@ -61,7 +61,7 @@ fn path_changes_with_same_name() -> Result<()> {
     assert_archive_provenance(
         &context,
         "ok-1.0.0.dist-info",
-        Url::from_file_path(one.path())
+        SafeUrl::from_file_path(one.path())
             .expect("absolute wheel path")
             .as_str(),
     )?;
@@ -80,7 +80,7 @@ fn path_changes_with_same_name() -> Result<()> {
     assert_archive_provenance(
         &context,
         "ok-1.0.0.dist-info",
-        Url::from_file_path(two.path())
+        SafeUrl::from_file_path(two.path())
             .expect("absolute wheel path")
             .as_str(),
     )?;
@@ -147,7 +147,7 @@ async fn direct_url_json_query() -> Result<()> {
         .mount(&server)
         .await;
 
-    let mut url = Url::parse(&format!(
+    let mut url = SafeUrl::parse(&format!(
         "{}/{filename}?st=2026-09-15T16:34:14Z&sig=abc%2Bdef%3D",
         server.uri()
     ))?;

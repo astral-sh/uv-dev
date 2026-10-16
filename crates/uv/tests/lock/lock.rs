@@ -8159,7 +8159,7 @@ fn lock_git_sha() -> Result<()> {
         .with_filter((latest.clone(), "[LATEST_COMMIT]"))
         .with_filter((initial[..8].to_owned(), "[INITIAL_COMMIT]"))
         .with_filter((latest[..8].to_owned(), "[LATEST_COMMIT]"));
-    let repository_url = Url::from_directory_path(repository.path())
+    let repository_url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
     context
         .temp_dir
@@ -17980,7 +17980,7 @@ fn lock_sources_source_tree() -> Result<()> {
     fs_err::write(&workspace_archive, crate::workspace_sources::archive()?)?;
     let file = fs_err::File::open(&*workspace_archive)?;
     uv_extract::unzip(file, &context.temp_dir)?;
-    let workspace_url = Url::from_file_path(context.temp_dir.join("workspace"))
+    let workspace_url = SafeUrl::from_file_path(context.temp_dir.join("workspace"))
         .map_err(|()| anyhow!("invalid workspace file URL"))?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -19015,7 +19015,7 @@ fn lock_no_sources_package_multiple() -> Result<()> {
 fn lock_no_sources_with_no_sources_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let missing_repository_url =
-        Url::from_directory_path(context.temp_dir.child("missing-repository").path())
+        SafeUrl::from_directory_path(context.temp_dir.child("missing-repository").path())
             .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -19121,7 +19121,7 @@ fn lock_no_sources_with_no_sources_package() -> Result<()> {
 fn lock_no_sources_package_env_var() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let missing_repository_url =
-        Url::from_directory_path(context.temp_dir.child("missing-repository").path())
+        SafeUrl::from_directory_path(context.temp_dir.child("missing-repository").path())
             .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");

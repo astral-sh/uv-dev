@@ -1067,7 +1067,7 @@ fn workspace_metadata_sync_centralized_environment() -> Result<()> {
 #[test]
 fn workspace_metadata_sync_active_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
-    let wheel_url = Url::from_file_path(
+    let wheel_url = SafeUrl::from_file_path(
         context
             .workspace_root
             .join("test/links/ok-1.0.0-py3-none-any.whl"),
@@ -1888,7 +1888,7 @@ fn workspace_metadata_module_owners_include_stale_virtual_package() -> Result<()
         "selected-owner",
         &[("selected.py", "")],
     )?;
-    let selected_owner_url = Url::from_file_path(selected_owner.path())
+    let selected_owner_url = SafeUrl::from_file_path(selected_owner.path())
         .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
 
     context
