@@ -56,7 +56,9 @@ def fingerprint(directory: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(directory.iterdir()):
         digest.update(path.name.encode())
-        digest.update(path.read_bytes())
+        with path.open("rb") as file:
+            while chunk := file.read(64 * 1024):
+                digest.update(chunk)
     return digest.hexdigest()
 
 
