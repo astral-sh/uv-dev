@@ -5746,7 +5746,7 @@ fn exit_status_signal() -> Result<()> {
     Ok(())
 }
 
-/// Replacing the interpreter at the same canonical path invalidates its cached dependencies.
+/// Replacing the interpreter at the same canonical path selects a new cached environment.
 #[cfg(target_os = "linux")]
 #[test]
 fn run_with_replaced_interpreter() -> Result<()> {
