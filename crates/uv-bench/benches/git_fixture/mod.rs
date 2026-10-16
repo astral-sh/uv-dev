@@ -108,3 +108,51 @@ pub(super) const GIT_FIXTURES: &[GitFixture] = &[
         ],
     },
 ];
+
+pub(super) const POPULAR_GIT_FIXTURES: &[GitFixture] = &[
+    GitFixture {
+        revisions: &[
+            "147c8511ddbfa5e8f71bbf5c18ede0c4ceb3bba4", // 2.31.0
+            "d6ebc4a2f1f68b7e355fb7e4dd5ffc0845547f9f", // 2.32.0
+            "0e322af87745eff34caffe4df68456ebc20d9068", // 2.32.3
+            "b25c87d7cb8d6a18a37fa12442b5f883f9e41741", // 2.32.5
+        ],
+        name: "requests",
+        repository: "https://github.com/psf/requests",
+        commit: "b25c87d7cb8d6a18a37fa12442b5f883f9e41741",
+        reference: "refs/tags/v2.32.5",
+    },
+    GitFixture {
+        revisions: &[
+            "ea2eee0bc8920a880db73a12c87ad39b41d3e834", // 4.55.1
+            "acf295aec3383b2e68ff8e4b6891c3c18fd078fa", // 4.55.2
+            "170b2708cb1977690a87753bbe55280974388513", // 4.55.3
+            "d79b2d981f28b2730d402244ac3c2e9a8c054eee", // 4.55.4
+        ],
+        name: "transformers",
+        repository: "https://github.com/huggingface/transformers",
+        commit: "d79b2d981f28b2730d402244ac3c2e9a8c054eee",
+        reference: "refs/tags/v4.55.4",
+    },
+];
+
+pub(super) const AIRFLOW: GitFixture = GitFixture {
+    name: "airflow",
+    repository: "https://github.com/apache/airflow",
+    commit: "7fa400745ac7aebc7cc4ec21d3a047e9fb258310",
+    reference: "refs/heads/main",
+    revisions: &[],
+};
+
+pub(super) const LARGE_GIT_FIXTURES: &[GitFixture] = &[GitFixture {
+    revisions: &[
+        "ec0cd75328f614e2202a2e463f03e9c97929339f", // 2023-11-01
+        "b23cb16487e2bc054c81ee07ede5460de8409493", // 2023-12-07
+        "8d66636a76fe0dd091cbe8bc97a7aa80d22e3fb3", // 2023-12-15
+        "561cb2da8452175ec701fa1202ce9b978d5212cd", // 2024-01-29
+    ],
+    name: "odoo",
+    repository: "https://github.com/odoo/odoo",
+    commit: "561cb2da8452175ec701fa1202ce9b978d5212cd",
+    reference: "refs/heads/17.0",
+}];
