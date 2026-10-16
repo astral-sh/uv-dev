@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import time
 import zipfile
+from email import message_from_bytes
 from pathlib import Path
 
 BACKEND = """import json
@@ -28,6 +29,8 @@ def record(hook):
 
 record("import")
 METADATA = "Metadata-Version: 2.2\\nName: metadata-fixture\\nVersion: 1.0\\nRequires-Dist: metadata-dep==1.0\\n"
+
+WHEEL_METADATA = METADATA
 
 def get_requires_for_build_wheel(config_settings=None):
     record("get_requires_for_build_wheel")
@@ -45,7 +48,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     filename = "metadata_fixture-1.0-py3-none-any.whl"
     prefix = "metadata_fixture-1.0.dist-info/"
     with zipfile.ZipFile(Path(wheel_directory) / filename, "w") as wheel:
-        wheel.writestr(prefix + "METADATA", METADATA)
+        wheel.writestr(prefix + "METADATA", WHEEL_METADATA)
         wheel.writestr(prefix + "WHEEL", "Wheel-Version: 1.0\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n")
         wheel.writestr(prefix + "RECORD", "")
     return filename
@@ -62,11 +65,11 @@ def create_case(directory: Path, case: str) -> Path:
     directory.mkdir()
     backend = BACKEND
     if case == "wheel-fallback":
-        start = backend.index("def prepare_metadata_for_build_wheel")
-        end = backend.index("def build_wheel")
-        backend = backend[:start] + backend[end:]
+        backend += "\ndel prepare_metadata_for_build_wheel\n"
+    if case.endswith("disagreement"):
+        backend += '\nWHEEL_METADATA = METADATA.replace("metadata-dep==1.0", "metadata-dep==2.0")\n'
     project = BUILD_SYSTEM
-    if case == "static-project":
+    if case in {"static-project", "static-disagreement"}:
         project += '\n[project]\nname = "metadata-fixture"\nversion = "1.0"\ndependencies = ["metadata-dep==1.0"]\n'
     elif case != "static-sdist":
         project += '\n[project]\nname = "metadata-fixture"\nversion = "1.0"\ndynamic = ["dependencies"]\n'
@@ -89,7 +92,9 @@ def create_case(directory: Path, case: str) -> Path:
     return directory
 
 
-def run(uv: str, workspace: Path, check: bool) -> dict:
+def collect(
+    uv: str, workspace: Path, check: bool, observations: list, builds: list
+) -> None:
     wheelhouse = workspace / "wheels"
     wheelhouse.mkdir()
     with zipfile.ZipFile(
@@ -105,8 +110,14 @@ def run(uv: str, workspace: Path, check: bool) -> dict:
             "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
         )
         wheel.writestr(prefix + "RECORD", "")
-    observations = []
-    for case in ("static-project", "static-sdist", "metadata-hook", "wheel-fallback"):
+    for case in (
+        "static-project",
+        "static-sdist",
+        "metadata-hook",
+        "wheel-fallback",
+        "static-disagreement",
+        "hook-disagreement",
+    ):
         source = create_case(workspace / case, case)
         requirements = workspace / f"{case}.in"
         requirements.write_text(f"metadata-fixture @ {source.as_uri()}\n")
@@ -171,7 +182,7 @@ def run(uv: str, workspace: Path, check: bool) -> dict:
                     )
                 if (
                     cache_state == "cold"
-                    and case == "metadata-hook"
+                    and case in {"metadata-hook", "hook-disagreement"}
                     and (
                         "prepare_metadata_for_build_wheel" not in hooks
                         or "build_wheel" in hooks
@@ -184,15 +195,87 @@ def run(uv: str, workspace: Path, check: bool) -> dict:
                     and "build_wheel" not in hooks
                 ):
                     raise AssertionError(f"Expected wheel fallback: {observation}")
+        log.write_text("")
+        output = workspace / f"wheel-{case}"
+        started = time.perf_counter()
+        build = subprocess.run(
+            [
+                uv,
+                "--no-config",
+                "build",
+                str(source),
+                "--wheel",
+                "--no-index",
+                "--python",
+                sys.executable,
+                "--cache-dir",
+                str(workspace / f"build-cache-{case}"),
+                "--out-dir",
+                str(output),
+            ],
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+        seconds = time.perf_counter() - started
+        build_observation = {
+            "case": case,
+            "seconds": seconds,
+            "returncode": build.returncode,
+            "stderr": build.stderr,
+            "hooks": [
+                json.loads(line)["hook"] for line in log.read_text().splitlines()
+            ],
+        }
+        builds.append(build_observation)
+        if build.returncode:
+            raise RuntimeError(build.stderr)
+        wheels = list(output.glob("*.whl"))
+        if len(wheels) != 1:
+            raise AssertionError(f"Expected exactly one built wheel: {wheels}")
+        with zipfile.ZipFile(wheels[0]) as wheel:
+            metadata = message_from_bytes(
+                wheel.read("metadata_fixture-1.0.dist-info/METADATA")
+            )
+        wheel_dependencies = metadata.get_all("Requires-Dist", [])
+        resolution_dependencies = observations[-1]["dependencies"]
+        agreement = wheel_dependencies == resolution_dependencies
+        build_observation.update(
+            {
+                "wheel_dependencies": wheel_dependencies,
+                "resolution_dependencies": resolution_dependencies,
+                "agreement": agreement,
+            }
+        )
+        if check and agreement == case.endswith("disagreement"):
+            raise AssertionError(f"Unexpected resolver/wheel comparison: {builds[-1]}")
+
+
+def run(uv: str, workspace: Path, check: bool) -> dict:
     with open(uv, "rb") as binary:
         uv_sha256 = hashlib.file_digest(binary, "sha256").hexdigest()
-    return {
+    report = {
         "uv_sha256": uv_sha256,
         "uv_executable": str(Path(uv).resolve()),
         "uv": subprocess.check_output([uv, "--version"], text=True).strip(),
         "python": sys.version,
-        "observations": observations,
+        "observations": [],
+        "builds": [],
     }
+    try:
+        collect(uv, workspace, check, report["observations"], report["builds"])
+    except (
+        AssertionError,
+        OSError,
+        RuntimeError,
+        subprocess.SubprocessError,
+        ValueError,
+        zipfile.BadZipFile,
+    ) as error:
+        report["error"] = {"type": type(error).__name__, "message": str(error)}
+    return report
 
 
 def main() -> None:
@@ -217,12 +300,10 @@ def main() -> None:
     with tempfile.TemporaryDirectory(
         prefix="metadata-hooks-", dir=args.work_dir
     ) as directory:
-        print(
-            json.dumps(
-                run(str(Path(uv).resolve()), Path(directory).resolve(), args.check),
-                indent=2,
-            )
-        )
+        report = run(str(Path(uv).resolve()), Path(directory).resolve(), args.check)
+        print(json.dumps(report, indent=2))
+        if "error" in report:
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":
