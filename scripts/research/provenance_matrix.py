@@ -11,6 +11,33 @@ import sys
 from pathlib import Path
 
 
+def run_concurrently(
+    command: list[str], timeout: float = 120
+) -> list[subprocess.CompletedProcess[str]]:
+    processes: list[subprocess.Popen[str]] = []
+    try:
+        for _ in range(2):
+            processes.append(
+                subprocess.Popen(
+                    command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+            )
+        results = []
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=timeout)
+            results.append(
+                subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+            )
+        return results
+    except BaseException:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+        for process in processes:
+            process.communicate()
+        raise
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path)
@@ -75,10 +102,10 @@ def main() -> None:
         if success:
             if not report["cryptographic_verification_ran"]:
                 raise AssertionError(f"Verification skipped: {report}")
-            if report["evidence_cache_status"] != cache_status:
-                raise AssertionError(f"Unexpected cache state: {report}")
         elif report["error_type"] not in {"VerificationError", "ValueError"}:
             raise AssertionError(f"Infrastructure failure in {name}: {report}")
+        if cache_status is not None and report["evidence_cache_status"] != cache_status:
+            raise AssertionError(f"Unexpected cache state: {report}")
         observations.append(
             {
                 "case": name,
@@ -96,7 +123,10 @@ def main() -> None:
         raise AssertionError(f"Expected one evidence cache entry: {cached}")
     cached[0].write_bytes(b"invalid cached evidence")
     run("repaired-cache", success=True, cache_status="repaired")
-    run("wrong-identity", identity="untrusted-fixture-identity")
+    run("wrong-identity", identity="untrusted-fixture-identity", cache_status="miss")
+    run(
+        "wrong-identity-warm", identity="untrusted-fixture-identity", cache_status="hit"
+    )
     run("wrong-issuer", issuer="https://invalid.example/issuer")
 
     artifact = args.work_dir / args.artifact.name
@@ -129,20 +159,12 @@ def main() -> None:
         "--target",
         str(target),
     ]
-    with (
-        subprocess.Popen(
-            command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        ) as first,
-        subprocess.Popen(
-            command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        ) as second,
-    ):
-        first_output = first.communicate(timeout=120)
-        second_output = second.communicate(timeout=120)
     concurrent = []
-    for process, (stdout, stderr) in ((first, first_output), (second, second_output)):
+    for process in run_concurrently(command):
         report = json.loads(
-            stdout if process.returncode == 0 else stderr.splitlines()[-1]
+            process.stdout
+            if process.returncode == 0
+            else process.stderr.splitlines()[-1]
         )
         if process.returncode and report["error_type"] not in {
             "ValueError",

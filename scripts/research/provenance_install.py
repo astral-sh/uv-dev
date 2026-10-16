@@ -92,6 +92,7 @@ def verify_and_install(args: argparse.Namespace) -> dict:
             Attestation.model_validate(value) for value in evidence_objects(evidence)
         ]
         cache_status = cache_evidence(args.evidence_cache, key, evidence)
+        args.evidence_cache_status = cache_status
         distribution = Distribution(name=args.artifact.name, digest=digest)
         identity = policy.Identity(identity=args.identity, issuer=args.issuer)
         started = time.perf_counter()
@@ -194,7 +195,15 @@ def main() -> None:
         report = verify_and_install(args)
     except Exception as error:
         print(
-            json.dumps({"error": str(error), "error_type": type(error).__name__}),
+            json.dumps(
+                {
+                    "error": str(error),
+                    "error_type": type(error).__name__,
+                    "evidence_cache_status": getattr(
+                        args, "evidence_cache_status", None
+                    ),
+                }
+            ),
             file=sys.stderr,
         )
         raise SystemExit(1) from error
