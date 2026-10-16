@@ -7,6 +7,8 @@ import json
 import os
 import re
 import subprocess
+import sys
+import sysconfig
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -56,6 +58,11 @@ def main() -> None:
     parser.add_argument("--uv", required=True, type=Path)
     parser.add_argument("--work-dir", required=True, type=Path)
     args = parser.parse_args()
+    if sys.implementation.name != "cpython" or sysconfig.get_config_var(
+        "Py_GIL_DISABLED"
+    ):
+        parser.error("Run this experiment with a GIL-enabled CPython interpreter")
+    interpreter = Path(sys.executable).resolve(strict=True)
     uv = args.uv.resolve(strict=True)
     with uv.open("rb") as executable:
         binary_sha256 = hashlib.file_digest(executable, "sha256").hexdigest()
@@ -133,6 +140,8 @@ def main() -> None:
                     "--dry-run",
                     "--target",
                     str(target),
+                    "--python",
+                    str(interpreter),
                     "--python-version",
                     python,
                     "--python-platform",
@@ -193,6 +202,12 @@ def main() -> None:
                     "version": subprocess.check_output(
                         [str(uv), "--version"], text=True, env=environment
                     ).strip(),
+                    "interpreter": {
+                        "executable": str(interpreter),
+                        "version": sys.version,
+                        "implementation": sys.implementation.name,
+                        "gil_disabled": False,
+                    },
                     "scenarios": results,
                     "scope": "Metadata-only wheels; actual resolver selection in dry-run mode; no artifact execution or runtime ABI proof.",
                 },
