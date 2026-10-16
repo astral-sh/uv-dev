@@ -28,3 +28,17 @@ permissions.
 enforcement and compatibility measurements. [PyFEX](https://arxiv.org/abs/2606.02196) motivates
 observing dormant execution paths and descendants. Neither supplies evidence that this small harness
 confines every Python build or that a confined package is benign.
+
+The read canary is deliberately outside the writable bind and must remain readable in both modes. A
+read-only host bind restricts writes, not disclosure of host files. Descendant observations retain
+the parent hook name so all three hook families have explicit child-process coverage.
+
+An entry marker written inside the wrapper distinguishes sandbox setup failure from an entered
+command that fails before hooks and a failure after hook execution. Partial hook observations
+survive failures. A namespace denial is reported as `setup-failed` and exits unsuccessfully; it is
+never interpreted as successful confinement.
+
+`TMPDIR` points inside the writable workspace. The wrapper does not hide host `/tmp`, so placing the
+executable or workspace there does not erase its own inputs. The parent of the writable workspace
+remains read-only. Failed canary expectations retain all observations with `validation-failed`
+before exiting nonzero.

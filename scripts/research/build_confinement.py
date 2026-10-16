@@ -26,6 +26,10 @@ import zipfile
 def probe(label):
     settings = json.loads(os.environ["RESEARCH_PROBES"])
     result = {"hook": label, "secret_visible": "RESEARCH_FAKE_SECRET" in os.environ}
+    try:
+        result["outside_read"] = Path(settings["read"]).read_text() == "synthetic readable canary"
+    except OSError:
+        result["outside_read"] = False
     for name in ("allowed", "outside"):
         try:
             Path(settings[name]).write_text("synthetic canary\\n")
@@ -42,7 +46,7 @@ def probe(label):
 
 def record(hook):
     probe(hook)
-    subprocess.run([sys.executable, "-c", "import backend; backend.probe('descendant')"], check=True)
+    subprocess.run([sys.executable, "-c", "import backend, sys; backend.probe('descendant:' + sys.argv[1])", hook], check=True)
 
 METADATA = "Metadata-Version: 2.2\\nName: confined-fixture\\nVersion: 1.0\\n"
 
@@ -88,8 +92,6 @@ def sandbox_command(
         "/proc",
         "--dev",
         "/dev",
-        "--tmpfs",
-        "/tmp",
         "--clearenv",
     ]
     for name, value in environment.items():
@@ -110,13 +112,19 @@ def observe(uv: str, workspace: Path, mode: str, port: int, bwrap: str | None) -
     requirements = writable / "requirements.in"
     requirements.write_text(f"confined-fixture @ {source.as_uri()}\n")
     log = writable / "probes.jsonl"
+    readable = workspace / f"readable-{mode}.txt"
+    readable.write_text("synthetic readable canary")
     settings = {
+        "read": str(readable),
         "allowed": str(writable / "allowed.txt"),
         "outside": str(workspace / f"outside-{mode}.txt"),
         "log": str(log),
         "port": port,
     }
+    temporary = writable / "tmp"
+    temporary.mkdir()
     environment = {
+        "TMPDIR": str(temporary),
         "PATH": os.defpath,
         "HOME": str(writable),
         "LC_ALL": "C.UTF-8",
@@ -158,10 +166,20 @@ def observe(uv: str, workspace: Path, mode: str, port: int, bwrap: str | None) -
         ],
     ]
     runs = []
-    for command in commands:
+    for number, command in enumerate(commands):
+        entered = writable / f"entered-{number}"
+        launcher = [
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; import os, sys; "
+                "Path(sys.argv[1]).write_text('started'); os.execv(sys.argv[2], sys.argv[2:])"
+            ),
+            str(entered),
+        ]
         started = time.perf_counter()
         process = subprocess.run(
-            prefix + command,
+            prefix + launcher + command,
             env=environment,
             text=True,
             capture_output=True,
@@ -172,29 +190,66 @@ def observe(uv: str, workspace: Path, mode: str, port: int, bwrap: str | None) -
             {
                 "command": command[2],
                 "returncode": process.returncode,
+                "entered": entered.exists(),
                 "seconds": time.perf_counter() - started,
                 "stderr": process.stderr,
             }
         )
         if process.returncode:
-            return {"mode": mode, "runs": runs, "probes": [], "completed": False}
-    probes = [json.loads(line) for line in log.read_text().splitlines()]
+            probes = (
+                [json.loads(line) for line in log.read_text().splitlines()]
+                if log.exists()
+                else []
+            )
+            status = (
+                "setup-failed"
+                if not entered.exists()
+                else "build-failed"
+                if probes
+                else "command-failed-before-hooks"
+            )
+            return {
+                "mode": mode,
+                "runs": runs,
+                "probes": probes,
+                "completed": False,
+                "status": status,
+            }
+    probes = (
+        [json.loads(line) for line in log.read_text().splitlines()]
+        if log.exists()
+        else []
+    )
+    errors = []
     expected_hooks = {
         "get_requires_for_build_wheel",
         "prepare_metadata_for_build_wheel",
         "build_wheel",
-        "descendant",
+        "descendant:get_requires_for_build_wheel",
+        "descendant:prepare_metadata_for_build_wheel",
+        "descendant:build_wheel",
     }
     if {probe["hook"] for probe in probes} != expected_hooks:
-        raise AssertionError(f"Missing hook observations: {probes}")
+        errors.append("Missing hook observations")
     for probe in probes:
         expected = mode == "baseline"
-        if not probe["allowed_write"] or any(
-            probe[key] != expected
-            for key in ("outside_write", "host_network", "secret_visible")
+        if (
+            not probe["allowed_write"]
+            or not probe["outside_read"]
+            or any(
+                probe[key] != expected
+                for key in ("outside_write", "host_network", "secret_visible")
+            )
         ):
-            raise AssertionError(f"Unexpected {mode} canary result: {probe}")
-    return {"mode": mode, "runs": runs, "probes": probes, "completed": True}
+            errors.append(f"Unexpected {mode} canary result: {probe}")
+    return {
+        "mode": mode,
+        "runs": runs,
+        "probes": probes,
+        "completed": not errors,
+        "status": "validation-failed" if errors else "complete",
+        "errors": errors,
+    }
 
 
 def main() -> None:
