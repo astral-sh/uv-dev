@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "gdb_sha256": "3832cc070ae1716e322105d3b39fb398695e5f031c9d39224cf227a8c2b889f6",
+  "packages": [
+    {
+      "package": "gdb",
+      "version": "15.1-1ubuntu1~24.04.1",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gdb/gdb_15.1-1ubuntu1~24.04.1_amd64.deb",
+      "sha256": "7069c23ce3bc350646498e6607749c568f5c403b0db2204310a94baff3d85745",
+      "bytes": 4082912
+    },
+    {
+      "package": "libbabeltrace1",
+      "version": "1.5.11-3build3",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/b/babeltrace/libbabeltrace1_1.5.11-3build3_amd64.deb",
+      "sha256": "30f0b9fbe68115d7b50d478458e4d830695bce579529b52c7827720da9c0c2df",
+      "bytes": 163626
+    },
+    {
+      "package": "libdebuginfod1t64",
+      "version": "0.190-1.1ubuntu0.1",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/e/elfutils/libdebuginfod1t64_0.190-1.1ubuntu0.1_amd64.deb",
+      "sha256": "7ff18c57198200f4af7e50e0dce29366dc832c10d8c475ca7e0403083e042ea7",
+      "bytes": 17082
+    },
+    {
+      "package": "libipt2",
+      "version": "2.0.6-1build1",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/i/intel-processor-trace/libipt2_2.0.6-1build1_amd64.deb",
+      "sha256": "c14702719d594c1ca099e2cd9ff0e9bbd0215c9bb6bebb4a0d7651f984600995",
+      "bytes": 45716
+    },
+    {
+      "package": "libsource-highlight4t64",
+      "version": "3.1.9-4.3build1",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/s/source-highlight/libsource-highlight4t64_3.1.9-4.3build1_amd64.deb",
+      "sha256": "e0ef35d9b76669f22c2ad4ab3b9141ac46d3662823c5bbea248c21db53879470",
+      "bytes": 257514
+    },
+    {
+      "package": "libdebuginfod-common",
+      "version": "0.190-1.1ubuntu0.1",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/e/elfutils/libdebuginfod-common_0.190-1.1ubuntu0.1_all.deb",
+      "sha256": "aa25e83c64fdb547d923ea1aaaa8fb8c1cdca2db69a5f0b560f90c5b832e4a85",
+      "bytes": 14560
+    },
+    {
+      "package": "libsource-highlight-common",
+      "version": "3.1.9-4.3build1",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/s/source-highlight/libsource-highlight-common_3.1.9-4.3build1_all.deb",
+      "sha256": "3f331e390caadcff33f42f56acad1a8c7e8a1f282eb31316f489c38f6c2460a5",
+      "bytes": 64154
+    }
+  ]
+}
