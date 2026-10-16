@@ -927,7 +927,8 @@ async fn uninstall_pyproject_build_index() -> Result<()> {
     Ok(())
 }
 
-/// Reading metadata must not resolve unrelated unnamed requirements before matching installed URLs.
+/// Reading dynamic metadata must not resolve unrelated unnamed requirements before matching
+/// installed URLs.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn uninstall_pyproject_with_unnamed_requirement() -> Result<()> {
@@ -944,7 +945,24 @@ fn uninstall_pyproject_with_unnamed_requirement() -> Result<()> {
         [project]
         name = "metadata-project"
         version = "1.0"
-        dependencies = ["iniconfig"]
+        dynamic = ["dependencies"]
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        from pathlib import Path
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = Path(metadata_directory) / "metadata_project-1.0.dist-info"
+            dist_info.mkdir()
+            (dist_info / "METADATA").write_text(
+                "Metadata-Version: 2.3\nName: metadata-project\nVersion: 1.0\n"
+                "Requires-Dist: iniconfig\n"
+            )
+            return dist_info.name
     "#})?;
     uv_snapshot!(context.filters(), context.pip_uninstall()
         .args(["--offline", "-r", "pyproject.toml", "https://example.com/missing.tar.gz"]), @"
