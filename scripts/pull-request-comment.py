@@ -1,4 +1,4 @@
-"""Reserve and find the first automation comment on uv-dev pull requests."""
+"""Reserve and find an automation comment near the start of uv-dev pull requests."""
 
 import argparse
 import json
@@ -8,6 +8,7 @@ import sys
 
 REPOSITORY = "astral-sh/uv-dev"
 AUTOMATIONS_BOT_ID = 305554984
+COMMENT_LIMIT = 3
 COMMENT_MARKER = "<!-- uv-automation-comment -->"
 COMMENT_BODY = f"{COMMENT_MARKER}\nReserved for automation updates."
 
@@ -35,14 +36,14 @@ def is_reserved(comment: dict) -> bool:
     )
 
 
-def first_comment(pull_request: int) -> dict | None:
-    comments = api(f"repos/{REPOSITORY}/issues/{pull_request}/comments?per_page=1")
-    return comments[0] if comments else None
+def first_comments(pull_request: int) -> list[dict]:
+    return api(
+        f"repos/{REPOSITORY}/issues/{pull_request}/comments?per_page={COMMENT_LIMIT}"
+    )
 
 
-def find_comment(pull_request: int) -> dict | None:
-    comment = first_comment(pull_request)
-    return comment if comment is not None and is_reserved(comment) else None
+def find_comment(comments: list[dict]) -> dict | None:
+    return next((comment for comment in comments if is_reserved(comment)), None)
 
 
 def reserve_comment(pull_request: int) -> dict | None:
@@ -55,19 +56,22 @@ def reserve_comment(pull_request: int) -> dict | None:
         print("The pull request is not eligible for a reservation.", file=sys.stderr)
         return None
 
-    comment = first_comment(pull_request)
+    comments = first_comments(pull_request)
+    comment = find_comment(comments)
     if comment is not None:
-        if is_reserved(comment):
-            return comment
-        print("The first comment is already occupied.", file=sys.stderr)
+        return comment
+    if len(comments) >= COMMENT_LIMIT:
+        print(
+            "The first three comment positions are already occupied.", file=sys.stderr
+        )
         return None
 
     api(f"repos/{REPOSITORY}/issues/{pull_request}/comments", body=COMMENT_BODY)
 
     # Other commenters do not share the workflow's concurrency group.
-    comment = find_comment(pull_request)
+    comment = find_comment(first_comments(pull_request))
     if comment is None:
-        print("The first comment is not a recognized reservation.", file=sys.stderr)
+        print("No recognized reservation in the first three comments.", file=sys.stderr)
     return comment
 
 
@@ -84,7 +88,7 @@ def main() -> None:
     if args.command == "reserve":
         comment = reserve_comment(args.pull_request)
     else:
-        comment = find_comment(args.pull_request)
+        comment = find_comment(first_comments(args.pull_request))
     if comment is not None:
         print(comment["id"])
 

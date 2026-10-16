@@ -52,7 +52,7 @@ jobs:
           permissions: |
             pull_requests: write
 
-      - name: "Reserve the first pull request comment"
+      - name: "Reserve a pull request automation comment"
         run: python3 scripts/pull-request-comment.py reserve --pull-request "$PULL_REQUEST_NUMBER"
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
