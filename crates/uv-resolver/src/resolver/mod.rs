@@ -948,7 +948,10 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         incompatibility_arena: IncompatibilityArena<UvDependencyProvider>,
         requests: &MetadataRequests,
     ) -> Result<ForkState<'index>, ResolveError> {
-        let mut state = Rc::unwrap_or_clone(pending.state);
+        let mut state = match Rc::try_unwrap(pending.state) {
+            Ok(state) => state,
+            Err(state) => state.clone_for_fork(),
+        };
         state
             .pubgrub
             .restore_incompatibility_arena(incompatibility_arena);
@@ -967,7 +970,6 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             ForkAction::Dependencies { fork, version } => {
                 let mut state = state.with_env(fork.env);
                 let package = state.next;
-
                 // Enrich the state with any URLs, etc.
                 state
                     .visit_package_version_dependencies(
@@ -2910,6 +2912,26 @@ pub(crate) struct ForkState<'index> {
 }
 
 impl<'index> ForkState<'index> {
+    /// Clone a branch, recording its cost when resolver debug logging is enabled.
+    fn clone_for_fork(&self) -> Self {
+        let start = tracing::enabled!(Level::DEBUG).then(Instant::now);
+        let cloned = self.clone();
+        if let Some(start) = start {
+            debug!(
+                clone_us = %start.elapsed().as_micros(),
+                tracked_packages = self.pubgrub.incompatibilities.len(),
+                incompatibility_references = self
+                    .pubgrub
+                    .incompatibilities
+                    .values()
+                    .map(Vec::len)
+                    .sum::<usize>(),
+                "Cloned resolver fork state"
+            );
+        }
+        cloned
+    }
+
     fn new(
         pubgrub: State<UvDependencyProvider>,
         env: ResolverEnvironment,
