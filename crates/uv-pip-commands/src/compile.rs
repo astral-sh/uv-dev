@@ -63,7 +63,7 @@ use uv_resolve_operations::locked_requirements::{
     LockedRequirements, read_pylock_toml_requirements, read_requirements_txt,
 };
 use uv_resolve_operations::loggers::DefaultResolveLogger;
-use uv_resolve_operations::{resolution_markers, resolution_tags};
+use uv_resolve_operations::{is_direct_wheel, resolution_markers, resolution_tags};
 
 /// Resolve a set of requirements into a set of pinned versions.
 #[expect(clippy::fn_params_excessive_bools)]
@@ -246,7 +246,7 @@ pub async fn pip_compile(
         ));
     }
 
-    let constraints = constraints
+    let constraints: Vec<NameRequirementSpecification> = constraints
         .iter()
         .cloned()
         .chain(
@@ -489,8 +489,23 @@ pub async fn pip_compile(
     // Combine the `--no-binary` and `--no-build` flags from the requirements files.
     let build_options = build_options.combine(no_binary, no_build);
 
-    // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;
+    // Direct wheels with no dependencies need neither registry candidates nor build dependencies.
+    // Additional inputs can change their sources, so those still load the configured indexes.
+    let flat_index = if dependency_mode.is_direct()
+        && source_trees.is_empty()
+        && groups.is_empty()
+        && constraints.is_empty()
+        && upgrade.constraints().next().is_none()
+        && overrides.is_empty()
+        && override_dependencies.is_empty()
+        && requirements
+            .iter()
+            .all(|spec| is_direct_wheel(&spec.requirement))
+    {
+        FlatIndex::default()
+    } else {
+        FlatIndex::load(&client, &cache, &index_locations).await?
+    };
 
     // Determine whether to enable build isolation.
     let environment;
