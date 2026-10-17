@@ -147,7 +147,7 @@ fn resolve_lockfile_groups(
         [name] => Some(name),
         _ => project,
     };
-    workspace.resolve_groups(groups, project)
+    Ok(workspace.resolve_groups(groups, project)?)
 }
 
 /// Export the project's `uv.lock` in an alternate format.
