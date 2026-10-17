@@ -8,7 +8,7 @@ use tracing::info_span;
 
 use uv_client::BaseClientBuilder;
 use uv_configuration::{BuildOptions, HashCheckingMode, RequirementsInput, TargetTriple};
-use uv_distribution_types::{RequiresPython, Resolution};
+use uv_distribution_types::{Dist, RequiresPython, Resolution, ResolvedDist};
 use uv_lock::{PylockToml, PylockTomlError};
 use uv_normalize::{ExtraName, GroupName};
 use uv_pep440::Version;
@@ -46,6 +46,19 @@ impl uv_errors::Hinted for PylockResolutionError {
             }
         }
     }
+}
+
+/// Return whether installing the locked selection can resolve build dependencies.
+pub(crate) fn requires_source_build(resolution: &Resolution) -> bool {
+    resolution
+        .distributions()
+        .any(|distribution| match distribution {
+            ResolvedDist::Installed { .. } => false,
+            ResolvedDist::Installable { dist, .. } => match dist.as_ref() {
+                Dist::Built(_) => false,
+                Dist::Source(_) => true,
+            },
+        })
 }
 
 /// Read a `pylock.toml` from a local path or remote URL and parse it.
