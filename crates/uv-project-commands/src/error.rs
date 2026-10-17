@@ -72,6 +72,11 @@ impl Hinted for ProjectError {
                 "If you meant to view uv's version, use `{}` instead",
                 "uv self version".green()
             )),
+            Self::PyprojectMut(uv_project_edit::Error::AmbiguousSource(name)) => {
+                Hints::from(format!(
+                    "Edit or remove the existing `{name}` entry in `tool.uv.sources` before retrying."
+                ))
+            }
             Self::PyprojectTomlParse(_)
             | Self::PyprojectTomlUpdate
             | Self::Pep723ScriptTomlParse(_)
