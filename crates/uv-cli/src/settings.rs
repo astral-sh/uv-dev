@@ -238,40 +238,34 @@ pub fn resolve_preview(
     workspace: Option<&FilesystemOptions>,
     environment: &EnvironmentOptions,
 ) -> anyhow::Result<Preview> {
-    // Explicit `--preview` and `--no-preview` flags take priority.
-    if let Some(enabled) = flag(args.preview, args.no_preview, "preview")? {
-        return Ok(if enabled {
-            Preview::all()
-        } else {
-            Preview::default()
-        });
-    }
-
-    // `UV_PREVIEW=true` enables all preview features.
-    if environment.preview.value == Some(true) {
-        return Ok(Preview::all());
+    // Explicit `--no-preview` overrides all configured feature selections.
+    let enabled = flag(args.preview, args.no_preview, "preview")?;
+    if enabled == Some(false) {
+        return Ok(Preview::default());
     }
 
     let configured = workspace.and_then(|workspace| workspace.globals.preview.as_ref());
-
-    // Boolean enable-all configuration takes priority.
-    if matches!(
-        configured,
+    let configured_all = match configured {
         Some(
-            PreviewOption::Preview(true)
-                | PreviewOption::PreviewFeatures(PreviewFeaturesOption::Toggle(true))
-        )
-    ) {
-        return Ok(Preview::all());
-    }
+            PreviewOption::Preview(enabled)
+            | PreviewOption::PreviewFeatures(PreviewFeaturesOption::Toggle(enabled)),
+        ) => *enabled,
+        Some(PreviewOption::PreviewFeatures(PreviewFeaturesOption::Features(_))) | None => false,
+    };
 
-    // Explicit preview feature names take priority over configured feature names.
-    if !args.preview_features.is_empty() {
-        return Ok(Preview::from_feature_names(&args.preview_features));
-    }
-
-    // Fall back to workspace configuration.
-    Ok(configured.map(PreviewOption::resolve).unwrap_or_default())
+    // Named features retain their provenance even when another setting enables all previews.
+    let preview = if !args.preview_features.is_empty() {
+        Preview::from_feature_names(&args.preview_features)
+    } else {
+        configured.map(PreviewOption::resolve).unwrap_or_default()
+    };
+    Ok(
+        if enabled == Some(true) || environment.preview.value == Some(true) || configured_all {
+            preview.with_all_features()
+        } else {
+            preview
+        },
+    )
 }
 
 /// The resolved network settings to use for any invocation of the CLI.
