@@ -16,8 +16,8 @@ use toml_edit::{Array, ArrayOfTables, Item, Table, Value, value};
 
 use uv_client::{FileHashError, RegistryClient};
 use uv_configuration::{
-    BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExtrasSpecificationWithDefaults,
-    InstallOptions,
+    BuildOptions, DependencyGroupsWithDefaults, EditableMode, ExportFormat,
+    ExtrasSpecificationWithDefaults, InstallOptions,
 };
 use uv_distribution_filename::{
     BuildTag, DistExtension, ExtensionError, SourceDistExtension, SourceDistFilename,
@@ -213,6 +213,8 @@ impl uv_errors::Hinted for PylockTomlError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         if let Some(hint) = &self.hint {
             uv_errors::Hints::from(hint.to_string())
+        } else if let PylockTomlErrorKind::LockError(error) = &*self.kind {
+            error.hints()
         } else {
             uv_errors::Hints::none()
         }
@@ -788,6 +790,7 @@ impl<'lock> PylockToml {
         // Extract the packages from the lock file.
         let ExportableRequirements(mut nodes) = ExportableRequirements::from_lock(
             target,
+            ExportFormat::PylockToml,
             prune,
             extras,
             dev,

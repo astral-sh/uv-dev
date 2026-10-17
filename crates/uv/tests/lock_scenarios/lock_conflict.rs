@@ -101,6 +101,127 @@ fn extra_conflict_discovery_respects_parent_reachability() -> Result<()> {
     Checked in [TIME]
     ");
 
+    uv_snapshot!(context.filters(), context.export()
+        .args(["--extra", "feature", "--frozen", "--no-header"]), @"exit_code: 0 (success)");
+
+    Ok(())
+}
+
+/// Unreachable legacy registry extras do not require declaration metadata.
+#[test]
+fn unreachable_legacy_registry_extra_does_not_require_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        feature = ["x[foo]"]
+
+        [tool.uv]
+        conflicts = [[
+            { package = "x", extra = "foo" },
+            { package = "q", extra = "bar" },
+        ]]
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.12"
+        conflicts = [[
+            { package = "q", extra = "bar" },
+            { package = "x", extra = "foo" },
+        ]]
+
+        [[package]]
+        name = "parent"
+        source = { virtual = "parent" }
+        dependencies = [{ name = "q", extra = ["bar"] }]
+
+        [[package]]
+        name = "project"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "parent", marker = "extra != 'extra-1-x-foo'" },
+        ]
+        [package.optional-dependencies]
+        feature = [{ name = "x", extra = ["foo"] }]
+        [package.metadata]
+        provides-extras = ["feature"]
+
+        [[package]]
+        name = "q"
+        version = "1.0.0"
+        source = { registry = "https://example.com/simple" }
+        [package.optional-dependencies]
+        bar = []
+
+        [[package]]
+        name = "x"
+        source = { virtual = "x" }
+        [package.optional-dependencies]
+        foo = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen", "--extra", "feature",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
+    // Conflict validation follows guarded requests. The flattened export graph can
+    // still include `q` even though its request is unreachable during validation.
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "feature", "--no-header",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    q==1.0.0
+        # via parent
+    ");
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--extra", "feature", "--format", "pylock.toml", "--no-header",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    lock-version = "1.0"
+    created-by = "uv"
+    requires-python = ">=3.12"
+
+    [[packages]]
+    name = "q"
+    version = "1.0.0"
+    index = "https://example.com/simple"
+    "#);
+    // The legacy request needs a refresh when its parent is selected.
+    uv_snapshot!(context.filters(), context.export().args([
+        "--frozen", "--no-header",
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: The lockfile does not record the extras declared by `q`
+
+    hint: Run `uv lock` to refresh the lockfile before using `--frozen`.
+    ");
+
+    let inactive_platform = if cfg!(windows) { "darwin" } else { "win32" };
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&context.read("uv.lock").replace(
+            "extra != 'extra-1-x-foo'",
+            &format!("sys_platform == '{inactive_platform}'"),
+        ))?;
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
     Ok(())
 }
 
@@ -194,6 +315,7 @@ fn extra_basic() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["extra1", "extra2"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -365,6 +487,7 @@ fn extra_basic_three_extras() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["extra1", "extra2", "project3"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -832,6 +955,7 @@ fn extra_multiple_independent() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["extra1", "extra2", "project3", "project4"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -941,6 +1065,7 @@ fn extra_config_change_ignore_lockfile() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["extra1", "extra2"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -1761,6 +1886,7 @@ fn extra_depends_on_conflicting_extra_transitive() -> Result<()> {
         name = "example"
         version = "0.1.0"
         source = { editable = "." }
+        declared-extras = ["foo", "bar"]
 
         [package.optional-dependencies]
         bar = [
@@ -2323,7 +2449,9 @@ fn groups_respect_supported_environments_when_filtering_wheels() -> Result<()> {
 /// universe for all dependency edges, even when conflicts are involved.
 #[test]
 fn extra_conflict_environments_omit_redundant_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-09-28T00:00:00Z");
+    let context = uv_test::test_context!("3.12")
+        .with_exclude_newer("2025-09-28T00:00:00Z")
+        .with_cyclonedx_filters();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -2406,6 +2534,7 @@ fn extra_conflict_environments_omit_redundant_markers() -> Result<()> {
         name = "bar"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["a", "b"]
         dependencies = [
             { name = "anyio" },
             { name = "tqdm", version = "1.0", source = { registry = "https://pypi.org/simple" }, marker = "extra == 'extra-3-bar-a'" },
@@ -2501,6 +2630,177 @@ fn extra_conflict_environments_omit_redundant_markers() -> Result<()> {
     Resolved 8 packages in [TIME]
     ");
 
+    // The SBOM retains transitive dependencies when both conflicting extras are selected.
+    uv_snapshot!(context.filters(), context.export().args([
+        "--format", "cyclonedx1.5", "--all-extras", "--frozen", "--no-hashes",
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "bomFormat": "CycloneDX",
+      "specVersion": "1.5",
+      "version": 1,
+      "serialNumber": "[SERIAL_NUMBER]",
+      "metadata": {
+        "timestamp": "[TIMESTAMP]",
+        "tools": [
+          {
+            "vendor": "Astral Software Inc.",
+            "name": "uv",
+            "version": "[VERSION]"
+          }
+        ],
+        "component": {
+          "type": "library",
+          "bom-ref": "bar-1@0.1.0",
+          "name": "bar",
+          "version": "0.1.0",
+          "properties": [
+            {
+              "name": "uv:package:is_project_root",
+              "value": "true"
+            }
+          ]
+        }
+      },
+      "components": [
+        {
+          "type": "library",
+          "bom-ref": "anyio-2@4.11.0",
+          "name": "anyio",
+          "version": "4.11.0",
+          "purl": "pkg:pypi/anyio@4.11.0",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "exceptiongroup-3@1.3.0",
+          "name": "exceptiongroup",
+          "version": "1.3.0",
+          "purl": "pkg:pypi/exceptiongroup@1.3.0",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "idna-4@3.10",
+          "name": "idna",
+          "version": "3.10",
+          "purl": "pkg:pypi/idna@3.10",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "sniffio-5@1.3.1",
+          "name": "sniffio",
+          "version": "1.3.1",
+          "purl": "pkg:pypi/sniffio@1.3.1",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "tqdm-6@1.0",
+          "name": "tqdm",
+          "version": "1.0",
+          "purl": "pkg:pypi/tqdm@1.0",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "tqdm-7@4.67.1",
+          "name": "tqdm",
+          "version": "4.67.1",
+          "purl": "pkg:pypi/tqdm@4.67.1",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        },
+        {
+          "type": "library",
+          "bom-ref": "typing-extensions-8@4.15.0",
+          "name": "typing-extensions",
+          "version": "4.15.0",
+          "purl": "pkg:pypi/typing-extensions@4.15.0",
+          "properties": [
+            {
+              "name": "uv:package:marker",
+              "value": "(platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')"
+            }
+          ]
+        }
+      ],
+      "dependencies": [
+        {
+          "ref": "anyio-2@4.11.0",
+          "dependsOn": [
+            "exceptiongroup-3@1.3.0",
+            "idna-4@3.10",
+            "sniffio-5@1.3.1",
+            "typing-extensions-8@4.15.0"
+          ]
+        },
+        {
+          "ref": "bar-1@0.1.0",
+          "dependsOn": [
+            "anyio-2@4.11.0",
+            "tqdm-6@1.0",
+            "tqdm-7@4.67.1"
+          ]
+        },
+        {
+          "ref": "exceptiongroup-3@1.3.0",
+          "dependsOn": [
+            "typing-extensions-8@4.15.0"
+          ]
+        },
+        {
+          "ref": "idna-4@3.10"
+        },
+        {
+          "ref": "sniffio-5@1.3.1"
+        },
+        {
+          "ref": "tqdm-6@1.0"
+        },
+        {
+          "ref": "tqdm-7@4.67.1"
+        },
+        {
+          "ref": "typing-extensions-8@4.15.0"
+        }
+      ]
+    }
+    ----- stderr -----
+    warning: `uv export --format=cyclonedx1.5` is experimental and may change without warning. Pass `--preview-features sbom-export` to disable this warning.
+    "#);
+
     Ok(())
 }
 
@@ -2592,6 +2892,7 @@ fn mixed() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["extra1"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -2765,6 +3066,7 @@ fn group_activates_self_extra() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["dev", "summarize", "foo"]
 
         [package.optional-dependencies]
         dev = [
@@ -3024,6 +3326,7 @@ fn multiple_sources_index_disjoint_extras() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cu118", "cu124"]
 
         [package.optional-dependencies]
         cu118 = [
@@ -3330,6 +3633,7 @@ fn multiple_sources_index_disjoint_extras_with_extra() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cu118", "cu124"]
 
         [package.optional-dependencies]
         cu118 = [
@@ -3498,6 +3802,7 @@ fn multiple_sources_index_disjoint_extras_with_marker() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cu118", "cu124"]
 
         [package.optional-dependencies]
         cu118 = [
@@ -3774,6 +4079,7 @@ fn shared_optional_dependency_extra1() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo", "bar", "baz"]
 
         [package.optional-dependencies]
         bar = [
@@ -4049,6 +4355,7 @@ fn shared_optional_dependency_mixed1() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo"]
 
         [package.optional-dependencies]
         foo = [
@@ -4191,6 +4498,7 @@ fn shared_optional_dependency_extra2() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo", "bar"]
 
         [package.optional-dependencies]
         bar = [
@@ -4472,6 +4780,7 @@ fn shared_optional_dependency_mixed2() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo"]
 
         [package.optional-dependencies]
         foo = [
@@ -4613,6 +4922,7 @@ fn shared_dependency_extra() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo", "bar"]
         dependencies = [
             { name = "anyio" },
         ]
@@ -4940,6 +5250,7 @@ fn shared_dependency_mixed() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo"]
         dependencies = [
             { name = "anyio" },
         ]
@@ -5160,6 +5471,7 @@ conflicts = [
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["x1"]
         dependencies = [
             { name = "anyio" },
             { name = "proxy1" },
@@ -5182,6 +5494,7 @@ conflicts = [
         name = "proxy1"
         version = "0.1.0"
         source = { editable = "proxy1" }
+        declared-extras = ["x2", "x3"]
 
         [package.optional-dependencies]
         x2 = [
@@ -5356,6 +5669,7 @@ fn jinja_no_conflict_markers1() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cu118", "cu124"]
 
         [package.optional-dependencies]
         cu118 = [
@@ -5520,6 +5834,7 @@ fn jinja_no_conflict_markers2() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cu118", "cu124"]
 
         [package.optional-dependencies]
         cu118 = [
@@ -5643,6 +5958,7 @@ fn collision_extra() -> Result<()> {
         name = "pkg"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["foo", "bar", "extra-3-pkg-foo"]
         dependencies = [
             { name = "anyio" },
         ]
@@ -7167,6 +7483,7 @@ fn extra_inferences() -> Result<()> {
         name = "pkg"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["x1", "x2"]
         dependencies = [
             { name = "quickpath-airflow-operator" },
         ]
@@ -7905,6 +8222,7 @@ fn deduplicate_resolution_markers() -> Result<()> {
         name = "pkg"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["x1", "x2"]
 
         [package.optional-dependencies]
         x1 = [
@@ -8059,6 +8377,7 @@ fn incorrect_extra_simplification_leads_to_multiple_torch_packages() -> Result<(
         name = "test"
         version = "0.0.1"
         source = { virtual = "." }
+        declared-extras = ["chgnet", "m3gnet"]
         dependencies = [
             { name = "core" },
         ]
@@ -8357,6 +8676,7 @@ fn duplicate_torch_and_sympy_because_of_wrong_inferences() -> Result<()> {
         name = "test"
         version = "0.0.1"
         source = { virtual = "." }
+        declared-extras = ["chgnet", "sevennet", "all", "alignn", "m3gnet"]
         dependencies = [
             { name = "core" },
         ]
@@ -8530,6 +8850,7 @@ fn overlapping_resolution_markers() -> Result<()> {
         name = "ads-mega-model"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu118"]
         dependencies = [
             { name = "wandb" },
         ]
@@ -9413,6 +9734,7 @@ fn conditional_sources_keep_default_platform_specific_transitive_dependencies() 
         name = "test-torch"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu124"]
         dependencies = [
             { name = "torch", version = "2.6.0", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-10-test-torch-cpu') or (extra == 'extra-10-test-torch-cpu' and extra == 'extra-10-test-torch-cu124')" },
             { name = "torch", version = "2.6.0+cpu", source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-10-test-torch-cpu') or (extra == 'extra-10-test-torch-cpu' and extra == 'extra-10-test-torch-cu124')" },
@@ -9884,6 +10206,7 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
         name = "resolution-markers-for-days"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu124"]
 
         [package.optional-dependencies]
         cpu = [
@@ -10296,6 +10619,7 @@ fn avoids_exponential_lock_file_growth() -> Result<()> {
         name = "resolution-markers-for-days"
         version = "0.1.1"
         source = { virtual = "." }
+        declared-extras = ["cpu", "cu124"]
 
         [package.optional-dependencies]
         cpu = [
@@ -10515,6 +10839,7 @@ fn do_not_simplify_if_not_all_conflict_extras_satisfy_the_marker_by_themselves()
         name = "debug"
         version = "0.0.1"
         source = { virtual = "." }
+        declared-extras = ["a", "b"]
 
         [package.optional-dependencies]
         a = [
@@ -10738,6 +11063,7 @@ fn many_pairwise_conflicts_shared_extra() -> Result<()> {
         name = "project"
         version = "0.1.0"
         source = { virtual = "." }
+        declared-extras = ["pinned", "a", "b", "c", "d", "e"]
 
         [package.optional-dependencies]
         a = [
@@ -11188,6 +11514,7 @@ fn project_level_conflict_with_extra() -> Result<()> {
         name = "pkg-b"
         version = "0.1.0"
         source = { editable = "pkg-b" }
+        declared-extras = ["extra1"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -11396,6 +11723,7 @@ fn project_level_conflict_with_extras_and_cross_dependency() -> Result<()> {
         name = "pkg-b"
         version = "0.1.0"
         source = { editable = "pkg-b" }
+        declared-extras = ["safe", "extra1"]
 
         [package.optional-dependencies]
         extra1 = [
@@ -11586,6 +11914,7 @@ fn project_level_conflict_with_group() -> Result<()> {
         name = "pkg-b"
         version = "0.1.0"
         source = { editable = "pkg-b" }
+        declared-extras = ["extra1"]
 
         [package.optional-dependencies]
         extra1 = [
