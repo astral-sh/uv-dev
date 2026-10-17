@@ -225,6 +225,18 @@ mod tests {
         identify the endpoint; authentication uses `GOOGLE_APPLICATION_CREDENTIALS` or Application
         Default Credentials.
 
+        ### `git-partial-fetches` {#git-partial-fetches}
+
+        Fetches commits first, then downloads the trees and blobs needed to check out the requested
+        revision. This can reduce transfer sizes for repositories with long histories. Build tools
+        that inspect other revisions may fetch additional objects. When offline, Git cannot fetch
+        missing objects from network remotes.
+
+        Partial Git fetches use a separate cache from full fetches. Switching modes can require
+        downloading a repository again, even when its revision is cached in the other mode.
+
+        Repositories using URL credentials or `--allow-insecure-host` use full fetches.
+
         ### `index-by-name` {#index-by-name}
 
         The `--index` and `--default-index` options accept the names of configured package indexes

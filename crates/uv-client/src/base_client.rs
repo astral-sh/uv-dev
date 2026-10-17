@@ -25,10 +25,10 @@ use uv_auth::{
 use uv_configuration::ProxyUrlKind;
 use uv_configuration::{Concurrency, KeyringProviderType, ProxyUrl, TrustedHost};
 use uv_distribution_types::IndexCredentialsError;
-use uv_git::GitHttpSettings;
+use uv_git::GitFetchSettings;
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::SafeUrl;
 use uv_redacted::SafeUrlError;
 use uv_redacted::policy::SerializationPolicy;
@@ -505,6 +505,7 @@ impl<'a> BaseClientBuilder<'a> {
         };
 
         Ok(BaseClient {
+            preview: self.preview,
             connectivity: self.connectivity,
             allow_insecure_host: self.allow_insecure_host.clone(),
             retries: self.retries,
@@ -536,6 +537,7 @@ impl<'a> BaseClientBuilder<'a> {
         };
 
         BaseClient {
+            preview: self.preview,
             connectivity: self.connectivity,
             allow_insecure_host: self.allow_insecure_host.clone(),
             retries: self.retries,
@@ -743,6 +745,8 @@ impl<'a> BaseClientBuilder<'a> {
 /// A base client for HTTP requests
 #[derive(Debug, Clone)]
 pub struct BaseClient {
+    /// The enabled preview features.
+    preview: Preview,
     /// The underlying HTTP client that enforces valid certificates.
     client: RedirectClientWithMiddleware,
     /// The underlying HTTP client that accepts invalid certificates.
@@ -819,11 +823,12 @@ impl BaseClient {
             .any(|allow_insecure_host| allow_insecure_host.matches(url))
     }
 
-    /// Return the [`GitHttpSettings`] for fetching from the given URL.
-    pub fn git_http_settings(&self, url: &SafeUrl) -> GitHttpSettings {
-        GitHttpSettings::default()
+    /// Return the [`GitFetchSettings`] for fetching from the given URL.
+    pub fn git_fetch_settings(&self, url: &SafeUrl) -> GitFetchSettings {
+        GitFetchSettings::default()
             .with_disabled_ssl(self.disable_ssl(url))
             .with_offline(self.connectivity().is_offline())
+            .with_partial_fetches(self.preview.is_enabled(PreviewFeature::GitPartialFetches))
     }
 
     /// The configured client read timeout.
