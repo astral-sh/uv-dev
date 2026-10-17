@@ -1,0 +1,25 @@
+name: Rust cache artifacts
+description: Transfer trusted public-main Rust caches through workflow artifacts
+inputs:
+  mode:
+    required: true
+    description: One of plan-export, export, find, plan-import, or import
+  source-run:
+    description: Public uv CI run
+  source-sha:
+    description: Public uv commit
+  entry:
+    description: Cache entry from the verified index
+  directory:
+    required: true
+    description: Directory containing the cache artifact or index
+outputs:
+  run-id:
+    description: Public uv CI run containing cache artifacts
+  matrix:
+    description: Cache entries to transfer
+  has-entries:
+    description: Whether the matrix contains any entries
+runs:
+  using: node24
+  main: index.mjs
