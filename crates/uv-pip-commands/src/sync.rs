@@ -38,7 +38,7 @@ use uv_resolver::{
     DependencyMode, ExcludeNewer, FlatIndex, OptionsBuilder, Prerelease, PythonRequirement,
     ResolutionMode, ResolverEnvironment,
 };
-use uv_settings::PythonInstallMirrors;
+use uv_settings::{PythonInstallMirrors, warn_build_policy_preview};
 use uv_torch::{AmdGpuArchitecture, TorchMode, TorchStrategy};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::warn_user;
@@ -137,6 +137,8 @@ pub async fn pip_sync(
         find_links,
         no_binary,
         no_build,
+        build_policy,
+        build_policy_package,
         extras: _,
     } = uv_resolve_operations::read_requirements(
         requirements,
@@ -339,7 +341,10 @@ pub async fn pip_sync(
         .build()?;
 
     // Combine the `--no-binary` and `--no-build` flags from the requirements files.
-    let build_options = build_options.combine(no_binary, no_build);
+    let build_options = build_options
+        .combine(no_binary, no_build)
+        .with_fallback_build_policy(build_policy, build_policy_package);
+    warn_build_policy_preview(&build_options);
 
     // Resolve the flat indexes from `--find-links`.
     let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;

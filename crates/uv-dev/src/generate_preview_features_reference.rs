@@ -160,6 +160,10 @@ mod tests {
         reduce the work performed by imports during a build, but can also change import-time side
         effects in third-party build backends.
 
+        ### `build-policy` {#build-policy}
+
+        Controls source builds and the artifacts retained in lockfiles and compiled requirements.
+
         ### `cache-physical-space` {#cache-physical-space}
 
         Cache cleanup reports the physical disk space reclaimed, accounting for hardlinks and

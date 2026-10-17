@@ -17,14 +17,15 @@ use uv_auth::Service;
 use uv_cache::{CacheArgs, Refresh};
 use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
 use uv_configuration::{
-    ActiveEnvironment, AddBoundsKind, AnnotationStyle, BuildIsolation, BuildOptions, Concurrency,
-    DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
-    ExcludeNewer, ExcludeNewerPackage, ExportFormat, ExtrasSpecification, ForkStrategy,
-    GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
-    KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
-    PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
-    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
-    TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
+    ActiveEnvironment, AddBoundsKind, AnnotationStyle, BuildIsolation, BuildOptions,
+    BuildPolicyPackage, Concurrency, DependencyGroups, DependencyMode, DevMode, DryRun,
+    EditableMode, EnvFile, ExcludeDependency, ExcludeNewer, ExcludeNewerPackage, ExportFormat,
+    ExtrasSpecification, ForkStrategy, GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind,
+    InitProjectKind, InstallOptions, KeyringProviderType, Modifications, NoBinary, NoBuild,
+    NoSources, Override, PackageOverride, PipCompileFormat, Prerelease, ProjectBuildBackend,
+    ProxyUrl, PythonUpgrade, PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput,
+    ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade,
+    VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
@@ -46,7 +47,7 @@ use uv_settings::{
     IndexOptions, LockCheck, LockedFlag, LockedSource, MalwareCheckSettings, Options, PipOptions,
     PreviewFeaturesOption, PreviewOption, PublishOptions, PythonInstallMirrors, PythonListKinds,
     ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
-    ResolverSettings, resolve_build_hash_checking, resolve_prerelease,
+    ResolverSettings, resolve_build_hash_checking, resolve_prerelease, warn_build_policy_preview,
 };
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
@@ -66,9 +67,9 @@ use crate::{
     VersionArgs, VersionBumpSpec, VersionFormat,
 };
 use crate::{
-    AuthorFrom, BuildArgs, BuildOptionsArgs, CheckArgs, ExcludeNewerArgs, ExportArgs, FormatArgs,
-    HashCheckingArgs, PackageExcludeNewerArgs, PublishArgs, PythonDirArgs, RegistryClientArgs,
-    ResolverArgs, ResolverInstallerArgs, ToolUpgradeArgs,
+    AuthorFrom, BuildArgs, BuildOptionsArgs, BuildPolicyArgs, CheckArgs, ExcludeNewerArgs,
+    ExportArgs, FormatArgs, HashCheckingArgs, PackageExcludeNewerArgs, PublishArgs, PythonDirArgs,
+    RegistryClientArgs, ResolverArgs, ResolverInstallerArgs, ToolUpgradeArgs,
     options::{
         Flag, FlagSource, IntoPipOptions, check_conflicts, flag, resolve_flag, resolve_flag_pair,
         resolver_installer_options, resolver_options, upgrade_options,
@@ -3365,6 +3366,11 @@ impl PipCompileSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipCompileArgs {
+            build_policy:
+                BuildPolicyArgs {
+                    build_policy,
+                    build_policy_package,
+                },
             src_file,
             constraints:
                 DependencyConstraintsArgs {
@@ -3516,6 +3522,8 @@ impl PipCompileSettings {
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {
+                    build_policy,
+                    build_policy_package: build_policy_package.map(BuildPolicyPackage::from_iter),
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     no_build: flag(no_build, build, "build")?,
@@ -3559,7 +3567,8 @@ impl PipCompileSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )
+            .warn_build_policy_preview(),
         })
     }
 }
@@ -3585,6 +3594,11 @@ impl PipSyncSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipSyncArgs {
+            build_policy:
+                BuildPolicyArgs {
+                    build_policy,
+                    build_policy_package,
+                },
             src_file,
             constraints,
             build_constraints,
@@ -3652,6 +3666,8 @@ impl PipSyncSettings {
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {
+                    build_policy,
+                    build_policy_package: build_policy_package.map(BuildPolicyPackage::from_iter),
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     break_system_packages: flag(
@@ -3682,7 +3698,8 @@ impl PipSyncSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )
+            .warn_build_policy_preview(),
         })
     }
 }
@@ -3718,6 +3735,11 @@ impl PipInstallSettings {
         environment: EnvironmentOptions,
     ) -> anyhow::Result<Self> {
         let PipInstallArgs {
+            build_policy:
+                BuildPolicyArgs {
+                    build_policy,
+                    build_policy_package,
+                },
             package,
             requirements,
             editable,
@@ -3862,6 +3884,8 @@ impl PipInstallSettings {
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {
+                    build_policy,
+                    build_policy_package: build_policy_package.map(BuildPolicyPackage::from_iter),
                     python: python.and_then(Maybe::into_option),
                     system: flag(system, no_system, "system")?,
                     break_system_packages: flag(
@@ -3888,7 +3912,8 @@ impl PipInstallSettings {
                 },
                 filesystem,
                 environment,
-            ),
+            )
+            .warn_build_policy_preview(),
         })
     }
 }
@@ -4611,6 +4636,11 @@ pub struct PipSettings {
 }
 
 impl PipSettings {
+    fn warn_build_policy_preview(self) -> Self {
+        warn_build_policy_preview(&self.build_options);
+        self
+    }
+
     /// Resolve the [`PipSettings`] from the CLI and filesystem configuration.
     fn combine(
         args: PipOptions,
@@ -4627,6 +4657,8 @@ impl PipSettings {
             .unwrap_or_default();
 
         let PipOptions {
+            build_policy,
+            build_policy_package,
             python,
             system,
             break_system_packages,
@@ -4694,6 +4726,8 @@ impl PipSettings {
         } = pip.unwrap_or_default();
 
         let ResolverInstallerSchema {
+            build_policy: top_level_build_policy,
+            build_policy_package: top_level_build_policy_package,
             index: top_level_index,
             index_url: top_level_index_url,
             extra_index_url: top_level_extra_index_url,
@@ -4986,6 +5020,15 @@ impl PipSettings {
                     top_level_no_build,
                     top_level_no_build_package.unwrap_or_default(),
                 )),
+            )
+            .with_build_policy(
+                args.build_policy
+                    .combine(build_policy)
+                    .combine(top_level_build_policy),
+                args.build_policy_package
+                    .combine(build_policy_package)
+                    .combine(top_level_build_policy_package)
+                    .unwrap_or_default(),
             ),
             install_mirrors: environment
                 .install_mirrors

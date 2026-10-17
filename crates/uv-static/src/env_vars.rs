@@ -87,6 +87,10 @@ impl EnvVars {
     #[attr_added_in("0.1.16")]
     pub const UV_PRERELEASE: &'static str = "UV_PRERELEASE";
 
+    /// Equivalent to the `--build-policy` command-line argument.
+    #[attr_added_in("next release")]
+    pub const UV_BUILD_POLICY: &'static str = "UV_BUILD_POLICY";
+
     /// Equivalent to the `--fork-strategy` argument. Controls version selection during universal
     /// resolution.
     #[attr_added_in("0.5.9")]
