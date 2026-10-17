@@ -137,6 +137,15 @@ execute properly.
 
 These tests can be disabled by turning off either `git` or `git-lfs` uv features.
 
+### Windows trampolines
+
+Set `UV_TEST_TRAMPOLINE_PYTHON` to the Python executable to use for
+`cargo test -p uv-trampoline-builder`. Without it, the executable is discovered from `PATH`. The
+launcher fixtures query the selected interpreter, report its identity, and use its reported
+executable directly. Python startup environment variables are cleared for launcher execution. The
+interpreter architecture can differ from the launcher architecture; the Windows matrix also covers a
+32-bit launcher invoking 64-bit Python. The interactive GUI case remains opt-in.
+
 ### Local testing
 
 You can invoke your development version of uv with `cargo run -- <args>`. For example:

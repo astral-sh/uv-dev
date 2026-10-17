@@ -131,13 +131,33 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: windows-latest, target-arch: "x86_64" }
-          - { runner: windows-latest, target-arch: "i686" }
-          - { runner: windows-11-arm, target-arch: "aarch64" }
+          - runner: windows-latest
+            target-arch: "x86_64"
+            python-arch: "x64"
+          - runner: windows-latest
+            target-arch: "i686"
+            python-arch: "x64"
+          - runner: windows-11-arm
+            target-arch: "aarch64"
+            python-arch: "arm64"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A 32-bit launcher can launch the selected 64-bit interpreter.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        id: python
+        with:
+          python-version: "3.13"
+          architecture: ${{ matrix.python-arch }}
+          allow-prereleases: ${{ matrix.python-arch == 'arm64' }}
+      - name: "Select trampoline interpreter"
+        shell: pwsh
+        env:
+          TEST_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: |
+          "UV_TEST_TRAMPOLINE_PYTHON=$env:TEST_PYTHON" >> $env:GITHUB_ENV
+          & $env:TEST_PYTHON -I -c "import platform, struct, sys; print(sys.executable); print(sys.version); print(platform.machine(), struct.calcsize('P') * 8)"
       - name: Setup Dev Drive
         run: ${{ github.workspace }}/.github/workflows/setup-dev-drive.ps1
       # actions/checkout does not let us clone into anywhere outside ${{ github.workspace }}, so we have to copy the clone...
