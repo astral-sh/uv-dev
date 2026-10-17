@@ -524,7 +524,7 @@ fn root_dependencies<'lock>(
             let marker = marker.try_to_string();
             let mut has_extra_node = false;
             for extra in requirement
-                .extras
+                .extras()
                 .iter()
                 .filter(|extra| package.optional_dependencies.contains_key(*extra))
             {
@@ -617,7 +617,7 @@ fn metadata_reachability<'lock>(
             };
             let mut has_extra_node = false;
             for extra in requirement
-                .extras
+                .extras()
                 .iter()
                 .filter(|extra| package.optional_dependencies.contains_key(*extra))
             {

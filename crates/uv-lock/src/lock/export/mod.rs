@@ -238,7 +238,7 @@ impl<'lock> ExportableRequirements<'lock> {
                         dep_index,
                         Edge::Prod {
                             marker,
-                            dep_extras: requirement.extras.iter().collect(),
+                            dep_extras: requirement.extras().iter().collect(),
                         },
                     );
 
@@ -246,7 +246,7 @@ impl<'lock> ExportableRequirements<'lock> {
                     if seen.insert((package_index, None)) {
                         queue.push_back((package_index, None));
                     }
-                    for extra in &requirement.extras {
+                    for extra in requirement.extras() {
                         if seen.insert((package_index, Some(extra))) {
                             queue.push_back((package_index, Some(extra)));
                         }

@@ -11,7 +11,7 @@ use uv_cache::Cache;
 use uv_distribution_filename::DistExtension;
 use uv_distribution_types::{
     Index, IndexCredentialsError, IndexLocations, IndexMetadata, IndexName, Origin, Requirement,
-    RequirementScope, RequirementSource,
+    RequirementScope, RequirementSelection, RequirementSource,
 };
 use uv_fs::{Simplified, normalize_absolute_path, normalize_path};
 use uv_git_types::{GitLfs, GitReference, GitUrl, GitUrlParseError};
@@ -306,8 +306,7 @@ impl LoweredRequirement {
 
                     Ok(Self(Requirement {
                         name: requirement.name.clone(),
-                        extras: requirement.extras.clone(),
-                        groups: Box::new([]),
+                        selection: RequirementSelection::Extras(requirement.extras.clone()),
                         marker,
                         source,
                         scope: RequirementScope::Global,
@@ -487,8 +486,7 @@ impl LoweredRequirement {
 
                     Ok(Self(Requirement {
                         name: requirement.name.clone(),
-                        extras: requirement.extras.clone(),
-                        groups: Box::new([]),
+                        selection: RequirementSelection::Extras(requirement.extras.clone()),
                         marker,
                         source,
                         scope: RequirementScope::Global,
@@ -534,8 +532,7 @@ impl LoweredRequirement {
 
         Ok(Self(Requirement {
             name: requirement.name,
-            groups: Box::new([]),
-            extras: requirement.extras,
+            selection: RequirementSelection::Extras(requirement.extras),
             marker: requirement.marker,
             source: if is_archive {
                 git_archive_source_from_path(&install_path, git_member)?
