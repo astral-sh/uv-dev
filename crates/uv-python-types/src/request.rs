@@ -170,6 +170,19 @@ pub enum VersionRequest {
     Range(VersionSpecifiers, PythonVariant),
 }
 
+/// A version request that cannot be used for interpreter discovery.
+#[derive(Debug, thiserror::Error)]
+pub enum UnsupportedVersionRequest {
+    #[error("Invalid version request: Python <3 is not supported but {0} was requested.")]
+    Major(u8),
+    #[error("Invalid version request: Python <3.6 is not supported but {0} was requested.")]
+    Version(Version),
+    #[error(
+        "Invalid version request: Python <3.13 does not support free-threading but {0} was requested."
+    )]
+    FreeThreaded(VersionRequest),
+}
+
 /// A location for discovery of a Python installation or interpreter.
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash, PartialOrd, Ord)]
 pub enum PythonSource {
@@ -1169,42 +1182,45 @@ impl VersionRequest {
 
     /// Check if the request is for a version supported by uv.
     ///
-    /// If not, an `Err` is returned with an explanatory message.
-    pub fn check_supported(&self) -> Result<(), String> {
+    /// Version parsing remains independent of interpreter support.
+    pub fn check_supported(&self) -> Result<(), UnsupportedVersionRequest> {
         match self {
             Self::Any | Self::Default => (),
             Self::Major(major, _) => {
                 if *major < 3 {
-                    return Err(format!(
-                        "Python <3 is not supported but {major} was requested."
-                    ));
+                    return Err(UnsupportedVersionRequest::Major(*major));
                 }
             }
             Self::MajorMinor(major, minor, _) => {
                 if (*major, *minor) < (3, 6) {
-                    return Err(format!(
-                        "Python <3.6 is not supported but {major}.{minor} was requested."
-                    ));
+                    return Err(UnsupportedVersionRequest::Version(Version::new([
+                        u64::from(*major),
+                        u64::from(*minor),
+                    ])));
                 }
             }
             Self::MajorMinorPatch(major, minor, patch, _) => {
                 if (*major, *minor) < (3, 6) {
-                    return Err(format!(
-                        "Python <3.6 is not supported but {major}.{minor}.{patch} was requested."
-                    ));
+                    return Err(UnsupportedVersionRequest::Version(Version::new([
+                        u64::from(*major),
+                        u64::from(*minor),
+                        u64::from(*patch),
+                    ])));
                 }
             }
             Self::MajorMinorPrerelease(major, minor, prerelease, _) => {
                 if (*major, *minor) < (3, 6) {
-                    return Err(format!(
-                        "Python <3.6 is not supported but {major}.{minor}{prerelease} was requested."
+                    return Err(UnsupportedVersionRequest::Version(
+                        Version::new([u64::from(*major), u64::from(*minor)])
+                            .with_pre(Some(*prerelease)),
                     ));
                 }
             }
             Self::MajorMinorPatchPrerelease(major, minor, patch, prerelease, _) => {
                 if (*major, *minor) < (3, 6) {
-                    return Err(format!(
-                        "Python <3.6 is not supported but {major}.{minor}.{patch}{prerelease} was requested."
+                    return Err(UnsupportedVersionRequest::Version(
+                        Version::new([u64::from(*major), u64::from(*minor), u64::from(*patch)])
+                            .with_pre(Some(*prerelease)),
                     ));
                 }
             }
@@ -1216,9 +1232,7 @@ impl VersionRequest {
             && let Self::MajorMinor(major, minor, _) = self.clone().without_patch()
             && (major, minor) < (3, 13)
         {
-            return Err(format!(
-                "Python <3.13 does not support free-threading but {self} was requested."
-            ));
+            return Err(UnsupportedVersionRequest::FreeThreaded(self.clone()));
         }
 
         Ok(())
@@ -1857,6 +1871,56 @@ mod tests {
     use target_lexicon::{Aarch64Architecture, Architecture};
     use uv_pep440::PrereleaseKind;
     use uv_platform::{Arch, Libc, Os};
+    #[test]
+    fn unsupported_version_requests() -> Result<(), PythonRequestError> {
+        for (request, message) in [
+            (
+                "2",
+                "Invalid version request: Python <3 is not supported but 2 was requested.",
+            ),
+            (
+                "3.5",
+                "Invalid version request: Python <3.6 is not supported but 3.5 was requested.",
+            ),
+            (
+                "3.5.9",
+                "Invalid version request: Python <3.6 is not supported but 3.5.9 was requested.",
+            ),
+            (
+                "3.5a1",
+                "Invalid version request: Python <3.6 is not supported but 3.5a1 was requested.",
+            ),
+            (
+                "3.5.9rc1",
+                "Invalid version request: Python <3.6 is not supported but 3.5.9rc1 was requested.",
+            ),
+            (
+                "3.5t",
+                "Invalid version request: Python <3.6 is not supported but 3.5 was requested.",
+            ),
+            (
+                "3.12t",
+                "Invalid version request: Python <3.13 does not support free-threading but 3.12+freethreaded was requested.",
+            ),
+        ] {
+            let request = VersionRequest::from_str(request)?;
+            let error = request
+                .check_supported()
+                .expect_err("request is unsupported");
+            assert_eq!(error.to_string(), message);
+        }
+        for request in ["3.6", "4.2", "<3.0", "3.13t"] {
+            assert!(VersionRequest::from_str(request)?.check_supported().is_ok());
+        }
+        assert_matches!(
+            VersionRequest::from_str("3.12t")?.check_supported(),
+            Err(UnsupportedVersionRequest::FreeThreaded(
+                VersionRequest::MajorMinor(3, 12, PythonVariant::Freethreaded)
+            ))
+        );
+        Ok(())
+    }
+
     #[test]
     fn interpreter_request_from_str() {
         assert_eq!(PythonRequest::parse("any"), PythonRequest::Any);
