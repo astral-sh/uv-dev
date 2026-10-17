@@ -17,7 +17,7 @@ use uv_configuration::ListFormat;
 use uv_configuration::{Concurrency, IndexStrategy, KeyringProviderType};
 use uv_distribution_filename::DistFilename;
 use uv_distribution_types::{
-    DependencyMetadata, Diagnostic, IndexCapabilities, IndexLocations, Name, RequiresPython,
+    DependencyMetadata, IndexCapabilities, IndexLocations, Name, RequiresPython,
 };
 use uv_fs::Simplified;
 use uv_installer::SitePackages;
