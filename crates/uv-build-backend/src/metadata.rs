@@ -1,6 +1,6 @@
 use indexmap::IndexMap;
 use itertools::Itertools;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, Bound};
 use std::ffi::OsStr;
@@ -413,7 +413,7 @@ impl PyProjectToml {
         let pyproject_toml =
             tracing::info_span!("toml::from_str uv build backend", path = %path.display())
                 .in_scope(|| toml::from_str(&contents))
-                .map_err(|err| Error::Toml(path.to_path_buf(), err))?;
+                .map_err(|err| Error::Toml(path.to_path_buf(), Box::new(err)))?;
         Ok(pyproject_toml)
     }
 
@@ -543,66 +543,10 @@ impl PyProjectToml {
             }
         }
 
-        let author = self
-            .project
-            .authors
-            .as_ref()
-            .map(|authors| {
-                authors
-                    .iter()
-                    .filter_map(|author| match author {
-                        Contact::Name { name } => Some(name),
-                        Contact::Email { .. } => None,
-                        Contact::NameEmail { name, .. } => Some(name),
-                    })
-                    .join(", ")
-            })
-            .filter(|author| !author.is_empty());
-        let author_email = self
-            .project
-            .authors
-            .as_ref()
-            .map(|authors| {
-                authors
-                    .iter()
-                    .filter_map(|author| match author {
-                        Contact::Name { .. } => None,
-                        Contact::Email { email } => Some(email.clone()),
-                        Contact::NameEmail { name, email } => Some(format!("{name} <{email}>")),
-                    })
-                    .join(", ")
-            })
-            .filter(|author_email| !author_email.is_empty());
-        let maintainer = self
-            .project
-            .maintainers
-            .as_ref()
-            .map(|maintainers| {
-                maintainers
-                    .iter()
-                    .filter_map(|maintainer| match maintainer {
-                        Contact::Name { name } => Some(name),
-                        Contact::Email { .. } => None,
-                        Contact::NameEmail { name, .. } => Some(name),
-                    })
-                    .join(", ")
-            })
-            .filter(|maintainer| !maintainer.is_empty());
-        let maintainer_email = self
-            .project
-            .maintainers
-            .as_ref()
-            .map(|maintainers| {
-                maintainers
-                    .iter()
-                    .filter_map(|maintainer| match maintainer {
-                        Contact::Name { .. } => None,
-                        Contact::Email { email } => Some(email.clone()),
-                        Contact::NameEmail { name, email } => Some(format!("{name} <{email}>")),
-                    })
-                    .join(", ")
-            })
-            .filter(|maintainer_email| !maintainer_email.is_empty());
+        let (author, author_email) =
+            format_contacts(self.project.authors.as_deref().unwrap_or_default());
+        let (maintainer, maintainer_email) =
+            format_contacts(self.project.maintainers.as_deref().unwrap_or_default());
 
         // Using PEP 639 bumps the METADATA version
         let uses_pep639 = self.project.license_files.is_some()
@@ -623,37 +567,28 @@ impl PyProjectToml {
         // TODO(konsti): https://peps.python.org/pep-0753/#label-normalization (Draft)
         let project_urls = ProjectUrls::new(self.project.urls.clone().unwrap_or_default());
 
-        let extras = self
+        let mut requires_dist = self
             .project
-            .optional_dependencies
+            .dependencies
             .iter()
-            .flat_map(|optional_dependencies| optional_dependencies.keys())
+            .flatten()
+            .map(ToString::to_string)
             .collect::<Vec<_>>();
-
-        let requires_dist =
-            self.project
-                .dependencies
-                .iter()
-                .flatten()
-                .cloned()
-                .chain(self.project.optional_dependencies.iter().flat_map(
-                    |optional_dependencies| {
-                        optional_dependencies
-                            .iter()
-                            .flat_map(|(extra, requirements)| {
-                                requirements.iter().cloned().map(|mut requirement| {
-                                    requirement.marker = requirement.marker.and(
-                                        MarkerTree::expression(MarkerExpression::Extra {
-                                            operator: ExtraOperator::Equal,
-                                            name: MarkerValueExtra::Extra(extra.clone()),
-                                        }),
-                                    );
-                                    requirement
-                                })
-                            })
-                    },
-                ))
-                .collect::<Vec<_>>();
+        let mut provides_extra = Vec::new();
+        for (extra, requirements) in self.project.optional_dependencies.iter().flatten() {
+            provides_extra.push(extra.to_string());
+            for requirement in requirements {
+                let mut requirement = requirement.clone();
+                requirement.marker =
+                    requirement
+                        .marker
+                        .and(MarkerTree::expression(MarkerExpression::Extra {
+                            operator: ExtraOperator::Equal,
+                            name: MarkerValueExtra::Extra(extra.clone()),
+                        }));
+                requires_dist.push(requirement.to_string());
+            }
+        }
 
         let import_names = import_names
             .map(|import_names| {
@@ -701,8 +636,8 @@ impl PyProjectToml {
                 .cloned()
                 .map(Into::into)
                 .collect(),
-            requires_dist: requires_dist.iter().map(ToString::to_string).collect(),
-            provides_extra: extras.iter().map(ToString::to_string).collect(),
+            requires_dist,
+            provides_extra,
             // Not commonly set.
             provides_dist: vec![],
             // Not supported.
@@ -1026,10 +961,35 @@ struct Project {
     dynamic: Option<Vec<String>>,
 }
 
+/// The value forms used by project metadata fields.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StringOrTable {
+    String(String),
+    Table(BTreeMap<String, StringOrIgnored>),
+    Ignored(de::IgnoredAny),
+}
+
+/// A non-string field can be ignored when another table form matches.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StringOrIgnored {
+    String(String),
+    Ignored(de::IgnoredAny),
+}
+
+impl StringOrIgnored {
+    fn into_string<E: de::Error>(self, expected: &str) -> Result<String, E> {
+        match self {
+            Self::String(value) => Ok(value),
+            Self::Ignored(_) => Err(de::Error::custom(expected)),
+        }
+    }
+}
+
 /// The optional `project.readme` key in a pyproject.toml as specified in
 /// <https://packaging.python.org/en/latest/specifications/pyproject-toml/#readme>.
-#[derive(Deserialize, Debug, Clone)]
-#[serde(untagged, rename_all_fields = "kebab-case")]
+#[derive(Debug, Clone)]
 pub(crate) enum Readme {
     /// Relative path to the README.
     String(PathBuf),
@@ -1047,6 +1007,43 @@ pub(crate) enum Readme {
     },
 }
 
+impl<'de> Deserialize<'de> for Readme {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        const EXPECTED: &str = "data did not match any variant of untagged enum Readme";
+        let value = StringOrTable::deserialize(deserializer)?;
+        if let StringOrTable::String(path) = value {
+            return Ok(Self::String(PathBuf::from(path)));
+        }
+        if let StringOrTable::Table(mut fields) = value {
+            let Some(StringOrIgnored::String(content_type)) = fields.remove("content-type") else {
+                return Err(de::Error::custom(EXPECTED));
+            };
+            let charset = fields
+                .remove("charset")
+                .map(|value| value.into_string(EXPECTED))
+                .transpose()?;
+            if let Some(StringOrIgnored::String(file)) = fields.remove("file") {
+                return Ok(Self::File {
+                    file: PathBuf::from(file),
+                    content_type,
+                    charset,
+                });
+            }
+            if let Some(StringOrIgnored::String(text)) = fields.remove("text") {
+                return Ok(Self::Text {
+                    text,
+                    content_type,
+                    charset,
+                });
+            }
+        }
+        Err(de::Error::custom(EXPECTED))
+    }
+}
+
 impl Readme {
     /// If the readme is a file, return the path to the file.
     pub(crate) fn path(&self) -> Option<&Path> {
@@ -1060,8 +1057,7 @@ impl Readme {
 
 /// The optional `project.license` key in a pyproject.toml as specified in
 /// <https://packaging.python.org/en/latest/specifications/pyproject-toml/#license>.
-#[derive(Deserialize, Debug, Clone)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub(crate) enum License {
     /// An SPDX Expression.
     ///
@@ -1075,6 +1071,28 @@ pub(crate) enum License {
         /// The file containing the license text.
         file: String,
     },
+}
+
+impl<'de> Deserialize<'de> for License {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        const EXPECTED: &str = "data did not match any variant of untagged enum License";
+        let value = StringOrTable::deserialize(deserializer)?;
+        if let StringOrTable::String(expression) = value {
+            return Ok(Self::Spdx(expression));
+        }
+        if let StringOrTable::Table(mut fields) = value {
+            if let Some(StringOrIgnored::String(text)) = fields.remove("text") {
+                return Ok(Self::Text { text });
+            }
+            if let Some(StringOrIgnored::String(file)) = fields.remove("file") {
+                return Ok(Self::File { file });
+            }
+        }
+        Err(de::Error::custom(EXPECTED))
+    }
 }
 
 impl License {
@@ -1092,13 +1110,7 @@ impl License {
 ///
 /// The entry is derived from the email format of `John Doe <john.doe@example.net>`. You need to
 /// provide at least name or email.
-#[derive(Deserialize, Debug, Clone)]
-// deny_unknown_fields prevents using the name field when the email is not a string.
-#[serde(
-    untagged,
-    deny_unknown_fields,
-    expecting = "a table with 'name' and/or 'email' keys"
-)]
+#[derive(Debug, Clone)]
 pub(crate) enum Contact {
     /// TODO(konsti): RFC 822 validation.
     NameEmail { name: String, email: String },
@@ -1106,6 +1118,59 @@ pub(crate) enum Contact {
     Name { name: String },
     /// TODO(konsti): RFC 822 validation.
     Email { email: String },
+}
+
+/// Format the name and email fields for authors or maintainers.
+fn format_contacts(contacts: &[Contact]) -> (Option<String>, Option<String>) {
+    let names = contacts
+        .iter()
+        .filter_map(|contact| match contact {
+            Contact::Name { name } => Some(name),
+            Contact::Email { .. } => None,
+            Contact::NameEmail { name, .. } => Some(name),
+        })
+        .join(", ");
+    let emails = contacts
+        .iter()
+        .filter_map(|contact| match contact {
+            Contact::Name { .. } => None,
+            Contact::Email { email } => Some(email.clone()),
+            Contact::NameEmail { name, email } => Some(format!("{name} <{email}>")),
+        })
+        .join(", ");
+    (
+        (!names.is_empty()).then_some(names),
+        (!emails.is_empty()).then_some(emails),
+    )
+}
+
+impl<'de> Deserialize<'de> for Contact {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        const EXPECTED: &str = "a table with 'name' and/or 'email' keys";
+        let StringOrTable::Table(mut fields) = StringOrTable::deserialize(deserializer)? else {
+            return Err(de::Error::custom(EXPECTED));
+        };
+        let name = fields
+            .remove("name")
+            .map(|value| value.into_string(EXPECTED))
+            .transpose()?;
+        let email = fields
+            .remove("email")
+            .map(|value| value.into_string(EXPECTED))
+            .transpose()?;
+        if !fields.is_empty() {
+            return Err(de::Error::custom(EXPECTED));
+        }
+        match (name, email) {
+            (Some(name), Some(email)) => Ok(Self::NameEmail { name, email }),
+            (Some(name), None) => Ok(Self::Name { name }),
+            (None, Some(email)) => Ok(Self::Email { email }),
+            (None, None) => Err(de::Error::custom(EXPECTED)),
+        }
+    }
 }
 
 /// A trove classifier as originally specified in PEP 301.
@@ -1438,6 +1503,52 @@ mod tests {
         ");
     }
 
+    /// Contacts must be tables, even when an array has the same number of values as the fields.
+    #[test]
+    fn contact_rejects_array() {
+        let contents = extend_project(indoc! {r#"
+            authors = [["Alice", "alice@example.com"]]
+        "#});
+        let error = toml::from_str::<PyProjectToml>(&contents).unwrap_err();
+        assert_snapshot!(format_err(error), @r#"
+        TOML parse error at line 4, column 11
+          |
+        4 | authors = [["Alice", "alice@example.com"]]
+          |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        a table with 'name' and/or 'email' keys
+        "#);
+    }
+
+    #[test]
+    fn contact_rejects_unknown_field() {
+        let contents = extend_project(indoc! {r#"
+            authors = [{ name = "Alice", address = "alice@example.com" }]
+        "#});
+        let error = toml::from_str::<PyProjectToml>(&contents).unwrap_err();
+        assert_snapshot!(format_err(error), @r#"
+        TOML parse error at line 4, column 11
+          |
+        4 | authors = [{ name = "Alice", address = "alice@example.com" }]
+          |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        a table with 'name' and/or 'email' keys
+        "#);
+    }
+
+    #[test]
+    fn contact_out_of_range_integer() {
+        let contents = extend_project(indoc! {r"
+            authors = [{ name = 18446744073709551616 }]
+        "});
+        let error = toml::from_str::<PyProjectToml>(&contents).unwrap_err();
+        assert_snapshot!(format_err(error), @r#"
+        TOML parse error at line 4, column 21
+          |
+        4 | authors = [{ name = 18446744073709551616 }]
+          |                     ^^^^^^^^^^^^^^^^^^^^
+        invalid type: integer `18446744073709551616` as i128, expected any value
+        "#);
+    }
+
     #[test]
     fn import_names_metadata() {
         let temp_dir = TempDir::new().unwrap();
@@ -1602,6 +1713,73 @@ mod tests {
         # Foo
 
         This is the foo library.
+        ");
+    }
+
+    #[test]
+    fn metadata_table_precedence() {
+        let temp_dir = TempDir::new().unwrap();
+        fs_err::write(temp_dir.path().join("Readme.md"), "File readme").unwrap();
+        let contents = extend_project(indoc! {r#"
+            readme = { file = "Readme.md", text = "Inline readme", content-type = "text/markdown" }
+            license = { text = "Inline license", file = "missing.txt" }
+        "#});
+        let metadata = toml::from_str::<PyProjectToml>(&contents)
+            .unwrap()
+            .to_metadata(temp_dir.path())
+            .unwrap();
+        assert_snapshot!(metadata.core_metadata_format(), @"
+        Metadata-Version: 2.3
+        Name: hello-world
+        Version: 0.1.0
+        License: Inline license
+        Description-Content-Type: text/markdown
+
+        File readme
+        ");
+    }
+
+    #[test]
+    fn metadata_table_fallback() {
+        let temp_dir = TempDir::new().unwrap();
+        fs_err::write(temp_dir.path().join("License.txt"), "File license").unwrap();
+        let contents = extend_project(indoc! {r#"
+            readme = { file = 42, text = "Inline readme", content-type = "text/markdown" }
+            license = { text = 42, file = "License.txt" }
+        "#});
+        let metadata = toml::from_str::<PyProjectToml>(&contents)
+            .unwrap()
+            .to_metadata(temp_dir.path())
+            .unwrap();
+        assert_snapshot!(metadata.core_metadata_format(), @"
+        Metadata-Version: 2.3
+        Name: hello-world
+        Version: 0.1.0
+        License: File license
+        Description-Content-Type: text/markdown
+
+        Inline readme
+        ");
+    }
+
+    #[test]
+    fn metadata_table_ignored_unsigned_integer() {
+        let contents = extend_project(indoc! {r#"
+            readme = { text = "Readme", content-type = "text/markdown", ignored = 9223372036854775808 }
+            license = { text = "License", ignored = 18446744073709551615 }
+        "#});
+        let metadata = toml::from_str::<PyProjectToml>(&contents)
+            .unwrap()
+            .to_metadata(Path::new("/do/not/read"))
+            .unwrap();
+        assert_snapshot!(metadata.core_metadata_format(), @"
+        Metadata-Version: 2.3
+        Name: hello-world
+        Version: 0.1.0
+        License: License
+        Description-Content-Type: text/markdown
+
+        Readme
         ");
     }
 
