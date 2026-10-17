@@ -540,6 +540,9 @@ fn format_version_option() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.11"
         dependencies = []
+
+        [tool.ruff]
+        required-version = "==0.8.2"
     "#})?;
 
     let main_py = context.temp_dir.child("main.py");
@@ -547,17 +550,15 @@ fn format_version_option() -> Result<()> {
         x    = 1
     "})?;
 
-    // Run format with specific Ruff version
-    // TODO(zanieb): It'd be nice to assert on the version used here somehow? Maybe we should emit
-    // the version we're using to stderr? Alas there's not a way to get the Ruff version from the
-    // format command :)
-    uv_snapshot!(context.filters(), context.format().arg("--version").arg("0.8.2"), @"
+    // Require Ruff itself to verify the requested version.
+    uv_snapshot!(context.filters(), context.format().arg("--version").arg("0.8.2").arg("--show-version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
     ----- stderr -----
     warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
+    ruff 0.8.2
     ");
 
     Ok(())
