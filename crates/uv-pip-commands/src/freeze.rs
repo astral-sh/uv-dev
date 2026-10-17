@@ -51,13 +51,13 @@ pub fn pip_freeze(
             "Using `--target` directory at `{}`",
             target.root().user_display()
         );
-        environment.with_target(target)?
+        environment.with_target(target)
     } else if let Some(prefix) = prefix {
         debug!(
             "Using `--prefix` directory at `{}`",
             prefix.root().user_display()
         );
-        environment.with_prefix(prefix)?
+        environment.with_prefix(prefix)
     } else {
         environment
     };
@@ -69,13 +69,9 @@ pub fn pip_freeze(
         Some(paths) => {
             paths
                 .into_iter()
-                .filter_map(|path| {
-                    environment
-                        .clone()
-                        .with_target(uv_python_types::Target::from(path))
-                        // Drop invalid paths as per `pip freeze`.
-                        .ok()
-                })
+                // Drop invalid paths as per `pip freeze`.
+                .filter(|path| path.is_dir())
+                .map(|path| environment.clone().with_target(Target::from(path)))
                 .map(|environment| SitePackages::from_environment(&environment))
                 .collect::<Result<Vec<_>>>()?
         }
