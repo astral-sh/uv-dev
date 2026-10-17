@@ -1,15 +1,17 @@
 //! Resolve command settings from CLI arguments, environment variables, and configuration files.
 
 use std::env::VarError;
+use std::error::Error as StdError;
 use std::ffi::OsString;
 use std::fmt;
+use std::io;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use rustc_hash::FxHashSet;
 
 use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
@@ -28,13 +30,13 @@ use uv_configuration::{
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
-    IndexLocations, IndexUrl, MinimumLibcVersion, NameRequirementSpecification,
+    IndexLocations, IndexUrl, IndexUrlError, MinimumLibcVersion, NameRequirementSpecification,
     PackageConfigSettings, Requirement,
 };
 use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
 use uv_pep440::Version;
-use uv_pep508::{MarkerTree, RequirementOrigin};
+use uv_pep508::{MarkerTree, RequirementOrigin, VerbatimUrlError};
 use uv_preview::Preview;
 use uv_pypi_types::SupportedEnvironments;
 use uv_python_types::{
@@ -5033,8 +5035,77 @@ impl fmt::Debug for PublishSettings {
     }
 }
 
+impl PublishArgs {
+    /// Apply environment defaults for the selected credential and endpoint modes.
+    ///
+    /// Resolve relative paths before changing the process working directory.
+    pub fn resolve_environment(&mut self) -> Result<()> {
+        // An explicit credential flag selects which environment defaults can complete the mode.
+        let token_mode = self.token.is_some();
+        let password_mode = self.username.is_some() || self.password.is_some();
+        if !password_mode {
+            self.token = publish_env(self.token.take(), EnvVars::UV_PUBLISH_TOKEN, "a string")?;
+        }
+        if !token_mode {
+            self.username = publish_env(
+                self.username.take(),
+                EnvVars::UV_PUBLISH_USERNAME,
+                "a string",
+            )?;
+            self.password = publish_env(
+                self.password.take(),
+                EnvVars::UV_PUBLISH_PASSWORD,
+                "a string",
+            )?;
+        }
+        if self.token.is_some() && (self.username.is_some() || self.password.is_some()) {
+            bail!(
+                "`UV_PUBLISH_TOKEN` cannot be combined with `UV_PUBLISH_USERNAME` or `UV_PUBLISH_PASSWORD`"
+            );
+        }
+
+        // Named indexes and explicit URLs are alternative endpoint modes.
+        let index_mode = self.index.is_some();
+        let url_mode = self.publish_url.is_some() || self.check_url.is_some();
+        if !url_mode {
+            self.index = publish_env(
+                self.index.take(),
+                EnvVars::UV_PUBLISH_INDEX,
+                "an index name",
+            )?;
+        }
+        if !index_mode {
+            self.publish_url =
+                publish_env(self.publish_url.take(), EnvVars::UV_PUBLISH_URL, "a URL")?;
+            if self.check_url.is_none() {
+                self.check_url =
+                    publish_env::<String>(None, EnvVars::UV_PUBLISH_CHECK_URL, "a string")?
+                        .map(|value| {
+                            value
+                                .parse::<IndexUrl>()
+                                .map_err(publish_index_error)
+                                .with_context(|| {
+                                    format!(
+                                        "Invalid value for `{}`: expected an index URL",
+                                        EnvVars::UV_PUBLISH_CHECK_URL
+                                    )
+                                })
+                        })
+                        .transpose()?;
+            }
+        }
+        if self.index.is_some() && (self.publish_url.is_some() || self.check_url.is_some()) {
+            bail!(
+                "`UV_PUBLISH_INDEX` cannot be combined with `UV_PUBLISH_URL` or `UV_PUBLISH_CHECK_URL`"
+            );
+        }
+
+        Ok(())
+    }
+}
+
 impl PublishSettings {
-    /// Resolve the [`PublishSettings`] from the CLI and filesystem configuration.
+    /// Resolve publish settings from arguments with environment defaults and filesystem configuration.
     pub fn resolve(args: PublishArgs, filesystem: Option<FilesystemOptions>) -> Self {
         let Options {
             publish, top_level, ..
@@ -5092,6 +5163,50 @@ impl PublishSettings {
                 Vec::new(),
                 false,
             ),
+        }
+    }
+}
+
+/// Read a publish environment value only when its command-line value is absent.
+fn publish_env<T>(value: Option<T>, name: &str, expected: &str) -> Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: StdError + Send + Sync + 'static,
+{
+    if value.is_some() {
+        return Ok(value);
+    }
+    let value = match std::env::var(name) {
+        Ok(value) => value,
+        Err(VarError::NotPresent) => return Ok(None),
+        Err(VarError::NotUnicode(_)) => bail!("Invalid value for `{name}`: expected {expected}"),
+    };
+    value
+        .parse()
+        .map(Some)
+        .with_context(|| format!("Invalid value for `{name}`: expected {expected}"))
+}
+
+/// Keep typed URL causes while excluding unparsed path text from environment diagnostics.
+fn publish_index_error(error: IndexUrlError) -> anyhow::Error {
+    match error {
+        IndexUrlError::Io(error) => io::Error::from(error.kind()).into(),
+        error @ (IndexUrlError::Url(_)
+        | IndexUrlError::VerbatimUrl(
+            VerbatimUrlError::Url(_) | VerbatimUrlError::PathConversion(_),
+        )) => error.into(),
+        IndexUrlError::VerbatimUrl(VerbatimUrlError::WorkingDirectory(_)) => {
+            anyhow!("relative path without a working directory")
+        }
+        IndexUrlError::VerbatimUrl(VerbatimUrlError::UrlConversion(_)) => {
+            anyhow!("path could not be converted to a URL")
+        }
+        IndexUrlError::VerbatimUrl(VerbatimUrlError::Normalization(_, error)) => {
+            anyhow!(io::Error::from(error.kind())).context("path could not be normalized")
+        }
+        IndexUrlError::VerbatimUrl(VerbatimUrlError::Absolute(_, error)) => {
+            anyhow!(io::Error::from(error.kind()))
+                .context("path could not be converted to an absolute path")
         }
     }
 }
