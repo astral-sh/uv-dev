@@ -22,6 +22,7 @@ uv-warnings = { workspace = true }
 clap = { workspace = true, optional = true }
 dunce = { workspace = true }
 either = { workspace = true }
+encoding_rs = { workspace = true }
 encoding_rs_io = { workspace = true }
 fs-err = { workspace = true }
 path-slash = { workspace = true }
