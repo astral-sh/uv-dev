@@ -141,23 +141,18 @@ pub async fn project_version(
         DependencyTarget::PyProjectToml,
     )?;
 
-    let old_version = toml.version().map_err(|err| match err {
+    let old_version = toml.version().map_err(|source| match source {
         Error::MalformedWorkspace => {
             if toml.has_dynamic_version() {
-                anyhow!(
-                    "We cannot get or set dynamic project versions in: {}",
-                    pyproject_path.user_display()
-                )
+                ProjectError::DynamicProjectVersion(pyproject_path.clone())
             } else {
-                anyhow!(
-                    "There is no 'project.version' field in: {}",
-                    pyproject_path.user_display()
-                )
+                ProjectError::MissingProjectVersionField(pyproject_path.clone())
             }
         }
-        err => {
-            anyhow!("{err}: {}", pyproject_path.user_display())
-        }
+        source => ProjectError::ReadProjectVersion {
+            path: pyproject_path.clone(),
+            source,
+        },
     })?;
 
     // Figure out new metadata
