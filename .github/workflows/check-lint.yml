@@ -121,6 +121,12 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ inputs.save-rust-cache == 'true' }}
+      - name: "Install cargo-deny"
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
+        with:
+          tool: cargo-deny@0.20.2
+      - name: "Check uv_build dependencies"
+        run: cargo deny --log-level warn --manifest-path crates/uv-build/Cargo.toml --all-features check bans
       - name: "Install Rust toolchain"
         run: rustup component add clippy
       - name: "Clippy"
