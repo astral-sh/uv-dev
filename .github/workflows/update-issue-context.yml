@@ -195,6 +195,8 @@ jobs:
             exit 1
           fi
 
+          printf '\n[features]\nnetwork_proxy = true\n' >> agents/codex/config.toml
+
           echo "session-id=$root_session_id" >> "$GITHUB_OUTPUT"
 
       - name: "Update issue context"
