@@ -40,7 +40,7 @@ use uv_cli::{
 };
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_configuration::{PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
+use uv_configuration::{DryRun, PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
@@ -59,7 +59,7 @@ use uv_threads::{RAYON_PARALLELISM, min_stack_size};
 use uv_warnings::{warn_user, warn_user_once};
 use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
 
-use crate::commands::{ParsedRunCommand, RunCommand, ScriptPath};
+use crate::commands::{ParsedRunCommand, ResolutionDisplay, RunCommand, ScriptPath, SyncMode};
 
 mod commands;
 #[cfg(not(feature = "self-update"))]
@@ -2363,11 +2363,13 @@ async fn run_project(
                 script,
                 command,
                 requirements,
-                args.show_resolution || globals.verbose > 0,
+                ResolutionDisplay::from_show_resolution(
+                    args.show_resolution || globals.verbose > 0,
+                ),
                 args.lock_check,
                 args.frozen,
                 args.active,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.isolated,
                 args.all_packages,
                 args.package,
@@ -2634,7 +2636,7 @@ async fn run_project(
                 args.lock_check,
                 args.frozen,
                 args.active,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.no_install_project,
                 args.only_install_project,
                 args.no_install_workspace,
@@ -2757,11 +2759,11 @@ async fn run_project(
                 project_dir,
                 args.package,
                 explicit_project,
-                args.dry_run,
+                DryRun::from_args(args.dry_run),
                 args.lock_check,
                 args.frozen,
                 args.active,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.python,
                 args.install_mirrors,
                 args.settings,
@@ -2935,7 +2937,7 @@ async fn run_project(
                 args.fix,
                 args.lock_check,
                 args.frozen,
-                args.no_sync,
+                SyncMode::from_no_sync(args.no_sync),
                 args.no_install_project,
                 args.isolated,
                 args.all_packages,

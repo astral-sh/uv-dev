@@ -76,6 +76,8 @@ use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
+use crate::SyncMode;
+
 /// GitHub Gist API response structure
 #[derive(serde::Deserialize)]
 struct GistResponse {
@@ -94,11 +96,11 @@ pub async fn run(
     script: Option<Pep723Item>,
     command: Option<RunCommand>,
     requirements: Vec<RequirementsSource>,
-    show_resolution: bool,
+    resolution_display: ResolutionDisplay,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
     active: ActiveEnvironment,
-    no_sync: bool,
+    sync: SyncMode,
     isolated: bool,
     all_packages: bool,
     package: Option<PackageName>,
@@ -127,6 +129,9 @@ pub async fn run(
     malware_settings: MalwareCheckSettings,
     #[cfg(unix)] run_rlimit_nofile: Option<u32>,
 ) -> anyhow::Result<ExitStatus> {
+    let no_sync = sync.no_sync();
+    let show_resolution = resolution_display.enabled();
+
     // Check if max recursion depth was exceeded. This most commonly happens
     // for scripts with a shebang line like `#!/usr/bin/env -S uv run`, so try
     // to provide guidance for that case.
@@ -1320,6 +1325,32 @@ fn set_parent_environment(
     )?;
     environment.set_pyvenv_cfg("extends-environment", parent_environment_sys_prefix)?;
     Ok(())
+}
+
+/// Whether to display the resolved requirements.
+#[derive(Debug, Clone, Copy)]
+pub enum ResolutionDisplay {
+    /// Display the resolved requirements.
+    Enabled,
+    /// Avoid displaying the resolved requirements.
+    Disabled,
+}
+
+impl ResolutionDisplay {
+    pub const fn from_show_resolution(show_resolution: bool) -> Self {
+        if show_resolution {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+
+    const fn enabled(self) -> bool {
+        match self {
+            Self::Enabled => true,
+            Self::Disabled => false,
+        }
+    }
 }
 
 /// Returns `true` if we can skip creating an additional ephemeral environment in `uv run`.

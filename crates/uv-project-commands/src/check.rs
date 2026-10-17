@@ -42,7 +42,7 @@ use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache, WorkspaceErrorKind};
 
-use crate::toolchain;
+use crate::{SyncMode, toolchain};
 
 mod ty;
 
@@ -54,7 +54,7 @@ pub async fn check(
     fix: bool,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
-    no_sync: bool,
+    sync: SyncMode,
     no_install_project: bool,
     isolated: bool,
     all_packages: bool,
@@ -83,6 +83,8 @@ pub async fn check(
     config_discovery: ConfigDiscovery,
     malware_settings: MalwareCheckSettings,
 ) -> Result<ExitStatus> {
+    let no_sync = sync.no_sync();
+
     if !preview.is_enabled(PreviewFeature::CheckCommand) {
         warn_user!(
             "`uv check` is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
