@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io;
+use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -100,9 +100,9 @@ impl InstallState {
     /// the directory in each unpacked wheel only once. Effectively, we perform a parallel directory
     /// walk with early exit.
     ///
-    /// We avoid reading the actual file contents and assume they are the same when their file
-    /// length matches. This also excludes the same empty `__init__.py` files being reported as
-    /// conflicting.
+    /// Files with different lengths conflict immediately. For shared nonempty files with matching
+    /// lengths, compare their contents with bounded buffers. Empty namespace `__init__.py` files
+    /// need no content reads.
     pub fn warn_package_conflicts(self) -> Result<(), io::Error> {
         // This warning is currently in preview.
         if !self
@@ -128,11 +128,13 @@ impl InstallState {
             if file_type.is_file() {
                 // Handle conflicts between files directly in site-packages without a module
                 // directory enclosing them.
-                let files: BTreeSet<(&WheelFilename, u64)> = wheels
+                let files: BTreeSet<(&WheelFilename, PathBuf, u64)> = wheels
                     .iter()
-                    .map(|(wheel, absolute)| Ok((wheel, absolute.metadata()?.len())))
+                    .map(|(wheel, absolute)| {
+                        Ok((wheel, absolute.clone(), absolute.metadata()?.len()))
+                    })
                     .collect::<Result<_, io::Error>>()?;
-                Self::warn_file_conflict(relative, &files);
+                Self::warn_file_conflict(relative, &files)?;
             } else if file_type.is_dir() {
                 // Don't early return if the method returns true, so we show warnings for each
                 // top-level module.
@@ -148,7 +150,7 @@ impl InstallState {
 
     /// Analyze a directory for conflicts.
     ///
-    /// If there are any non-identical files (checked by size) included in more than one wheel,
+    /// If there are any non-identical files included in more than one wheel,
     /// report this file and return.
     ///
     /// If there are any directories included in more than one wheel, recurse to analyze whether
@@ -160,8 +162,9 @@ impl InstallState {
         wheels: &BTreeSet<(WheelFilename, PathBuf)>,
     ) -> Result<bool, io::Error> {
         // The files in the directory, as paths relative to the site-packages, with their origin and
-        // size.
-        let mut files: BTreeMap<PathBuf, BTreeSet<(&WheelFilename, u64)>> = BTreeMap::default();
+        // absolute path and size.
+        let mut files: BTreeMap<PathBuf, BTreeSet<(&WheelFilename, PathBuf, u64)>> =
+            BTreeMap::default();
         // The directories in the directory, as paths relative to the site-packages, with their
         // origin and absolute path.
         let mut subdirectories: BTreeMap<PathBuf, BTreeSet<(WheelFilename, PathBuf)>> =
@@ -174,10 +177,11 @@ impl InstallState {
                 let relative = directory.join(dir_entry.file_name());
                 let file_type = dir_entry.file_type()?;
                 if file_type.is_file() {
-                    files
-                        .entry(relative)
-                        .or_default()
-                        .insert((wheel, dir_entry.metadata()?.len()));
+                    files.entry(relative).or_default().insert((
+                        wheel,
+                        dir_entry.path(),
+                        dir_entry.metadata()?.len(),
+                    ));
                 } else if file_type.is_dir() {
                     subdirectories
                         .entry(relative)
@@ -191,7 +195,7 @@ impl InstallState {
         }
 
         for (file, file_wheels) in files {
-            if Self::warn_file_conflict(&file, &file_wheels) {
+            if Self::warn_file_conflict(&file, &file_wheels)? {
                 return Ok(true);
             }
         }
@@ -210,28 +214,37 @@ impl InstallState {
         Ok(false)
     }
 
-    /// Check if all files are the same size, if so assume they are identical.
-    ///
-    /// It's unlikely that two modules overlap with different contents but their files all have
-    /// the same length, so we use this heuristic in this performance critical path to avoid
-    /// reading potentially large files.
-    fn warn_file_conflict(file: &Path, file_wheels: &BTreeSet<(&WheelFilename, u64)>) -> bool {
-        let Some((_, file_len)) = file_wheels.first() else {
+    /// Warn if shared files have different contents, reading only when sizes cannot decide.
+    fn warn_file_conflict(
+        file: &Path,
+        file_wheels: &BTreeSet<(&WheelFilename, PathBuf, u64)>,
+    ) -> Result<bool, io::Error> {
+        let Some((_, first_path, file_len)) = file_wheels.first() else {
             debug_assert!(false, "Always at least one element");
-            return false;
+            return Ok(false);
         };
-        if !file_wheels
+        if file_wheels.len() == 1 {
+            return Ok(false);
+        }
+
+        let mut conflict = file_wheels
             .iter()
-            .any(|(_, file_len_other)| file_len_other != file_len)
-        {
-            return false;
+            .any(|(_, _, other_len)| other_len != file_len);
+        if !conflict && *file_len != 0 {
+            for (_, other_path, _) in file_wheels.iter().skip(1) {
+                if !files_equal(first_path, other_path)? {
+                    conflict = true;
+                    break;
+                }
+            }
+        }
+        if !conflict {
+            return Ok(false);
         }
 
         let packages = file_wheels
             .iter()
-            .map(|(wheel_filename, _file_len)| {
-                format!("* {} ({})", wheel_filename.name, wheel_filename)
-            })
+            .map(|(wheel_filename, _, _)| format!("* {} ({})", wheel_filename.name, wheel_filename))
             .join("\n");
         warn_user!(
             "The file `{}` is provided by more than one package, \
@@ -244,7 +257,26 @@ impl InstallState {
         // Assumption: There is generally two packages that have a conflict. The output is
         // more helpful with a single message that calls out the packages
         // rather than being comprehensive about the conflicting files.
-        true
+        Ok(true)
+    }
+}
+
+/// Compare shared wheel files without allocating their entire contents.
+fn files_equal(left: &Path, right: &Path) -> Result<bool, io::Error> {
+    let mut left = BufReader::new(fs::File::open(left)?);
+    let mut right = BufReader::new(fs::File::open(right)?);
+    loop {
+        let left_bytes = left.fill_buf()?;
+        let right_bytes = right.fill_buf()?;
+        if left_bytes.is_empty() || right_bytes.is_empty() {
+            return Ok(left_bytes.is_empty() && right_bytes.is_empty());
+        }
+        let length = left_bytes.len().min(right_bytes.len());
+        if left_bytes[..length] != right_bytes[..length] {
+            return Ok(false);
+        }
+        left.consume(length);
+        right.consume(length);
     }
 }
 
