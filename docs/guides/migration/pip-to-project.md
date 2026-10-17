@@ -143,7 +143,16 @@ Then, when someone wants to use the project, they install from the requirements 
 $ pip install -r requirements.txt
 ```
 
-<!--- TODO: Discuss equivalent commands for `uv pip compile` and `pip compile` -->
+uv also supports this requirements-file workflow through its pip interface. The corresponding
+commands are:
+
+```console
+$ uv pip compile requirements.in -o requirements.txt
+$ uv pip install -r requirements.txt
+```
+
+See the [compatibility guide](../../pip/compatibility.md) for differences from `pip` and
+`pip-tools`.
 
 ### Development dependencies
 
