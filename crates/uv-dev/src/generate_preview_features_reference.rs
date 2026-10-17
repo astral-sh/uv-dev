@@ -374,6 +374,10 @@ mod tests {
         CycloneDX 1.5 JSON format. This describes the locked dependencies in a format that can be
         consumed by software inventory and security tools.
 
+        ### `self-management` {#self-management}
+
+        Enables native installation and management of standalone uv distributions.
+
         ### `special-conda-env-names` {#special-conda-env-names}
 
         Conda environments named `base` or `root` are classified using their paths, like other named

@@ -229,6 +229,8 @@ pub mod test {
 #[repr(u64)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PreviewMetadata)]
 pub enum PreviewFeature {
+    /// Enables native installation and management of standalone uv distributions.
+    SelfManagement,
     /// The `uv python install --default` option installs `python` and `python3` executables
     /// alongside the versioned executable, making a uv-managed Python available without specifying
     /// its minor version. When no version is requested and no `.python-version` file is found,
