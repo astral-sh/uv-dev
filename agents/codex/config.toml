@@ -90,6 +90,17 @@ enabled = true
 "api.github.com" = "allow"
 "github.com" = "allow"
 
+[permissions.benchmark-flake]
+description = "Read-only benchmark diagnosis with GitHub API access."
+extends = ":read-only"
+
+[permissions.benchmark-flake.network]
+enabled = true
+
+[permissions.benchmark-flake.network.domains]
+"api.github.com" = "allow"
+"github.com" = "allow"
+
 [permissions.pull-request-rebase]
 description = "Pull request rebase with workspace and Git metadata access."
 extends = ":workspace"
