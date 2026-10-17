@@ -1,0 +1,510 @@
+# Collect pull request comments and resume the per-PR Codex thread.
+name: "pull-request-comments"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "The pull request number"
+        required: true
+        type: string
+      head_sha:
+        description: "The expected pull request head SHA"
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  collect:
+    # The trusted dispatcher only forwards same-repository collaborator activity and excludes
+    # astral-automations-bot so publisher replies cannot create a feedback loop.
+    if: github.repository == 'astral-sh/uv-dev'
+    runs-on: ubuntu-latest
+    environment: automations
+    timeout-minutes: 20
+    outputs:
+      eligible: ${{ steps.context.outputs.eligible }}
+      base-ref: ${{ steps.context.outputs.base-ref }}
+      head-ref: ${{ steps.context.outputs.head-ref }}
+      head-sha: ${{ steps.context.outputs.head-sha }}
+      has-changes: ${{ steps.verify.outputs.has-changes }}
+      result: ${{ steps.comments.outputs.final-message }}
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    concurrency:
+      group: pull-request-comments-${{ inputs.pull_request }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+      EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: "Collect pull request comments"
+        id: context
+        run: |
+          if ! [[ "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Invalid pull request number: $PULL_REQUEST_NUMBER" >&2
+            exit 1
+          fi
+          if ! [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid expected pull request head SHA: $EXPECTED_HEAD_SHA" >&2
+            exit 1
+          fi
+
+          repository="repos/$GITHUB_REPOSITORY"
+
+          gh api "$repository/pulls/$PULL_REQUEST_NUMBER" > "$RUNNER_TEMP/pull-request-live.json"
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson repository_id "$GITHUB_REPOSITORY_ID" \
+            --arg head_sha "$EXPECTED_HEAD_SHA" '
+              .state == "open" and
+              (.draft | not) and
+              .base.repo.full_name == $repository and
+              .base.repo.id == $repository_id and
+              .head.repo.full_name == $repository and
+              .head.repo.id == $repository_id and
+              .head.sha == $head_sha
+            ' "$RUNNER_TEMP/pull-request-live.json" > /dev/null; then
+            echo "Skipping Codex because the pull request is no longer eligible or its head changed."
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          gh pr view "$PULL_REQUEST_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json number,title,body,author,baseRefName,baseRefOid,headRefName,headRefOid,isCrossRepository,isDraft,labels,files,additions,deletions,changedFiles \
+            > "$RUNNER_TEMP/pull-request-comments-event.json"
+
+          gh pr diff "$PULL_REQUEST_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            > "$RUNNER_TEMP/pull-request-comments.diff"
+
+          gh api --paginate --slurp \
+            "$repository/issues/$PULL_REQUEST_NUMBER/comments?per_page=100" |
+            jq '[.[][] | select(.user.login != "astral-automations-bot" and .user.login != "astral-automations-bot[bot]")]' \
+            > "$RUNNER_TEMP/conversation-comments.json"
+
+          gh api --paginate --slurp \
+            "$repository/pulls/$PULL_REQUEST_NUMBER/comments?per_page=100" |
+            jq '[.[][] | select(.user.login != "astral-automations-bot" and .user.login != "astral-automations-bot[bot]")]' \
+            > "$RUNNER_TEMP/inline-comments.json"
+
+          gh api --paginate --slurp \
+            "$repository/pulls/$PULL_REQUEST_NUMBER/reviews?per_page=100" |
+            jq '[.[][] | select(.user.login != "astral-automations-bot" and .user.login != "astral-automations-bot[bot]")]' \
+            > "$RUNNER_TEMP/reviews.json"
+
+          repository_owner="${GITHUB_REPOSITORY%/*}"
+          repository_name="${GITHUB_REPOSITORY#*/}"
+          gh api graphql --paginate --slurp \
+            -F owner="$repository_owner" \
+            -F name="$repository_name" \
+            -F number="$PULL_REQUEST_NUMBER" \
+            -f query="
+              query(\$owner: String!, \$name: String!, \$number: Int!, \$endCursor: String) {
+                repository(owner: \$owner, name: \$name) {
+                  pullRequest(number: \$number) {
+                    reviewThreads(first: 100, after: \$endCursor) {
+                      pageInfo { hasNextPage endCursor }
+                      nodes {
+                        id
+                        isResolved
+                        isOutdated
+                        path
+                        line
+                        startLine
+                        comments(first: 100) {
+                          nodes { databaseId author { login } body createdAt updatedAt }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            " |
+            jq '[.[].data.repository.pullRequest.reviewThreads.nodes[] | .comments.nodes |= map(select(.author.login != "astral-automations-bot" and .author.login != "astral-automations-bot[bot]")) | select(.comments.nodes | length > 0)]' \
+            > "$RUNNER_TEMP/review-threads.json"
+
+          jq --null-input \
+            --slurpfile conversation "$RUNNER_TEMP/conversation-comments.json" \
+            --slurpfile inline "$RUNNER_TEMP/inline-comments.json" \
+            --slurpfile reviews "$RUNNER_TEMP/reviews.json" \
+            --slurpfile threads "$RUNNER_TEMP/review-threads.json" \
+            '{conversation_comments: $conversation[0], inline_comments: $inline[0], reviews: $reviews[0], review_threads: $threads[0]}' \
+            > "$RUNNER_TEMP/pull-request-comments.json"
+
+          {
+            printf 'Collected comments for pull request #%s.\n\n' "$PULL_REQUEST_NUMBER"
+            jq --raw-output '
+              "- Conversation comments: \(.conversation_comments | length)\n" +
+              "- Inline comments: \(.inline_comments | length)\n" +
+              "- Reviews: \(.reviews | length)\n" +
+              "- Review threads: \(.review_threads | length)"
+            ' "$RUNNER_TEMP/pull-request-comments.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+          jq --raw-output '"base-ref=\(.base.ref)\nhead-ref=\(.head.ref)\nhead-sha=\(.head.sha)"' \
+            "$RUNNER_TEMP/pull-request-live.json" >> "$GITHUB_OUTPUT"
+
+      - name: "Prepare pull request branch"
+        if: steps.context.outputs.eligible == 'true'
+        env:
+          HEAD_REF: ${{ steps.context.outputs.head-ref }}
+          HEAD_SHA: ${{ steps.context.outputs.head-sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/codex-home"
+          cp agents/codex/config.toml "$RUNNER_TEMP/codex-home/config.toml"
+          cp agents/prompts/pull-request-comments.md "$RUNNER_TEMP/pull-request-comments.md"
+          cp agents/schemas/pull-request-comments.json "$RUNNER_TEMP/pull-request-comments-schema.json"
+
+          git fetch --no-tags origin "refs/heads/$HEAD_REF"
+          current_head="$(git rev-parse 'FETCH_HEAD^{commit}')"
+          if [ "$current_head" != "$HEAD_SHA" ]; then
+            echo "The pull request head changed; refusing to handle stale feedback." >&2
+            exit 1
+          fi
+
+          git checkout --detach "$HEAD_SHA"
+          git config user.name "astral-automations-bot[bot]"
+          git config user.email "305554984+astral-automations-bot[bot]@users.noreply.github.com"
+
+      - name: "Restore Codex thread"
+        id: restore
+        if: steps.context.outputs.eligible == 'true'
+        run: |
+          thread_artifact="codex-thread-pull-request-comments-$PULL_REQUEST_NUMBER"
+          artifact="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$thread_artifact&per_page=100" |
+              jq --raw-output '
+                [.artifacts[] | select(.expired | not)] |
+                sort_by(.created_at, .id) |
+                last // empty |
+                [.workflow_run.id, .name] |
+                @tsv
+              '
+          )"
+
+          if [ -z "$artifact" ]; then
+            echo "No prior Codex thread found for pull request #$PULL_REQUEST_NUMBER."
+            echo "codex-args=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          run_id="${artifact%%$'\t'*}"
+          artifact_name="${artifact#*$'\t'}"
+          mkdir -p "$RUNNER_TEMP/codex-home/sessions"
+          gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$artifact_name" \
+            --dir "$RUNNER_TEMP/codex-home/sessions"
+
+          find "$RUNNER_TEMP/codex-home/sessions" -type f -name 'rollout-*.jsonl' \
+            -exec jq --raw-output 'select(.type == "session_meta" and .payload.source == "exec" and .payload.originator == "codex_github_action") | .payload.id' {} + |
+            sort -u > "$RUNNER_TEMP/codex-session-ids"
+
+          if [ "$(wc -l < "$RUNNER_TEMP/codex-session-ids")" -ne 1 ]; then
+            echo "Expected one root Codex session in $artifact_name; starting a new thread."
+            echo "codex-args=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          session_id="$(sed -n '1p' "$RUNNER_TEMP/codex-session-ids")"
+          echo "Resuming Codex thread $session_id from $artifact_name."
+          printf 'codex-args=%s\n' "$(jq --compact-output --null-input --arg session_id "$session_id" '["resume", $session_id, "-"]')" >> "$GITHUB_OUTPUT"
+
+      - name: "Prepare Codex prompt"
+        if: steps.context.outputs.eligible == 'true'
+        run: |
+          {
+            printf 'Pull request comment automation for #%s\n\n' "$PULL_REQUEST_NUMBER"
+            cat "$RUNNER_TEMP/pull-request-comments.md"
+          } > "$RUNNER_TEMP/pull-request-comments-prompt.md"
+
+      - name: "Handle pull request comments"
+        id: comments
+        if: steps.context.outputs.eligible == 'true'
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-version: "0.144.4"
+          codex-home: "${{ runner.temp }}/codex-home"
+          codex-args: ${{ steps.restore.outputs.codex-args }}
+          permission-profile: "pull-request-comments"
+          safety-strategy: drop-sudo
+          prompt-file: "${{ runner.temp }}/pull-request-comments-prompt.md"
+          output-schema-file: "${{ runner.temp }}/pull-request-comments-schema.json"
+
+      - name: "Verify pull request changes"
+        id: verify
+        if: steps.context.outputs.eligible == 'true'
+        env:
+          HEAD_SHA: ${{ steps.context.outputs.head-sha }}
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Codex left uncommitted changes; refusing to publish." >&2
+            git status --short >&2
+            exit 1
+          fi
+
+          current_head="$(git rev-parse HEAD)"
+          if [ "$current_head" = "$HEAD_SHA" ]; then
+            echo "has-changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git merge-base --is-ancestor "$HEAD_SHA" "$current_head"; then
+            echo "Codex rewrote the pull request history; refusing to publish." >&2
+            exit 1
+          fi
+
+          git diff --check "$HEAD_SHA..$current_head"
+          git bundle create "$RUNNER_TEMP/pull-request-comments.bundle" "$HEAD_SHA..$current_head"
+          echo "has-changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: "Write Codex summary"
+        if: steps.comments.outputs.final-message != ''
+        run: printf '\n\n%s\n' "$CODEX_RESULT" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          CODEX_RESULT: ${{ steps.comments.outputs.final-message }}
+
+      - name: "Upload Codex thread"
+        if: always() && steps.context.outputs.eligible == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-thread-pull-request-comments-${{ inputs.pull_request }}
+          path: ${{ runner.temp }}/codex-home/sessions
+          if-no-files-found: warn
+          overwrite: true
+
+      - name: "Upload pull request changes"
+        if: steps.verify.outputs.has-changes == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pull-request-comments-changes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pull-request-comments.bundle
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: "Upload pull request comments"
+        if: steps.context.outputs.eligible == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pull-request-comments-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pull-request-comments.json
+          if-no-files-found: error
+
+  publish:
+    needs: collect
+    if: >-
+      needs.collect.outputs.eligible == 'true' &&
+      (needs.collect.outputs.has-changes == 'true' ||
+      (needs.collect.outputs.result != '' && fromJSON(needs.collect.outputs.result).actions[0] != null))
+    runs-on: ubuntu-slim
+    environment: automations
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: "Download pull request changes"
+        if: needs.collect.outputs.has-changes == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pull-request-comments-changes-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pull-request-comments-changes
+
+      - name: "Import pull request changes"
+        id: import
+        if: needs.collect.outputs.has-changes == 'true'
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          HEAD_SHA: ${{ needs.collect.outputs.head-sha }}
+        run: |
+          bundle="$RUNNER_TEMP/pull-request-comments-changes/pull-request-comments.bundle"
+          git bundle verify "$bundle"
+          git -c core.hooksPath=/dev/null fetch --no-tags "$bundle" HEAD
+          updated_head="$(git rev-parse 'FETCH_HEAD^{commit}')"
+
+          if ! git merge-base --is-ancestor "$HEAD_SHA" "$updated_head"; then
+            echo "The updated pull request does not contain its original head; refusing to push." >&2
+            exit 1
+          fi
+
+          echo "head-sha=$updated_head" >> "$GITHUB_OUTPUT"
+
+      - name: "Revalidate pull request"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+          HEAD_REF: ${{ needs.collect.outputs.head-ref }}
+          HEAD_SHA: ${{ needs.collect.outputs.head-sha }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER" > "$RUNNER_TEMP/pull-request-live.json"
+          if ! jq --exit-status \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson repository_id "$GITHUB_REPOSITORY_ID" \
+            --arg head_ref "$HEAD_REF" \
+            --arg head_sha "$HEAD_SHA" '
+              .state == "open" and
+              (.draft | not) and
+              .base.repo.full_name == $repository and
+              .base.repo.id == $repository_id and
+              .head.repo.full_name == $repository and
+              .head.repo.id == $repository_id and
+              .head.ref == $head_ref and
+              .head.sha == $head_sha
+            ' "$RUNNER_TEMP/pull-request-live.json" > /dev/null; then
+            echo "The pull request is no longer eligible or its head changed; refusing to publish." >&2
+            exit 1
+          fi
+
+      - name: "Get uv-dev token"
+        id: token
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/uv-dev
+          permissions: |
+            contents: write
+            workflows: write
+            issues: write
+            pull_requests: write
+
+      - name: "Push pull request changes"
+        if: needs.collect.outputs.has-changes == 'true'
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          HEAD_REF: ${{ needs.collect.outputs.head-ref }}
+          HEAD_SHA: ${{ needs.collect.outputs.head-sha }}
+          UPDATED_HEAD: ${{ steps.import.outputs.head-sha }}
+        run: |
+          git -c core.hooksPath=/dev/null push \
+            --force-with-lease="refs/heads/$HEAD_REF:$HEAD_SHA" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "${UPDATED_HEAD}:refs/heads/$HEAD_REF"
+
+      - name: "Publish pull request comment actions"
+        if: needs.collect.outputs.result != '' && fromJSON(needs.collect.outputs.result).actions[0] != null
+        env:
+          CODEX_RESULT: ${{ needs.collect.outputs.result }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          HAS_CHANGES: ${{ needs.collect.outputs.has-changes }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request }}
+        run: |
+          repository_owner="${GITHUB_REPOSITORY%/*}"
+          repository_name="${GITHUB_REPOSITORY#*/}"
+          review_thread_ids="$(
+            gh api graphql --paginate --slurp \
+              -F owner="$repository_owner" \
+              -F name="$repository_name" \
+              -F number="$PULL_REQUEST_NUMBER" \
+              -f query="
+                query(\$owner: String!, \$name: String!, \$number: Int!, \$endCursor: String) {
+                  repository(owner: \$owner, name: \$name) {
+                    pullRequest(number: \$number) {
+                      reviewThreads(first: 100, after: \$endCursor) {
+                        pageInfo { hasNextPage endCursor }
+                        nodes { id }
+                      }
+                    }
+                  }
+                }
+              " |
+              jq --raw-output '.[].data.repository.pullRequest.reviewThreads.nodes[].id'
+          )"
+
+          printf '%s\n' "$CODEX_RESULT" |
+            jq --compact-output '.actions[]' |
+            while IFS= read -r action; do
+              target="$(jq --raw-output '.target' <<< "$action")"
+              target_id="$(jq --raw-output '.id' <<< "$action")"
+              outcome="$(jq --raw-output '.outcome' <<< "$action")"
+              body="$(jq --raw-output '.body' <<< "$action")"
+
+              case "$target" in
+                REVIEW_THREAD)
+                  if ! grep --fixed-strings --line-regexp --quiet -- "$target_id" <<< "$review_thread_ids"; then
+                    echo "Review thread $target_id does not belong to pull request #$PULL_REQUEST_NUMBER." >&2
+                    exit 1
+                  fi
+
+                  case "$outcome" in
+                    COMMIT_AND_RESOLVE)
+                      if [ "$HAS_CHANGES" != "true" ]; then
+                        echo "Cannot resolve $target_id without an addressing commit." >&2
+                        exit 1
+                      fi
+                      gh api graphql \
+                        -f threadId="$target_id" \
+                        -f query="mutation(\$threadId: ID!) { resolveReviewThread(input: {threadId: \$threadId}) { thread { id isResolved } } }" \
+                        --silent
+                      ;;
+                    RESPOND|CLARIFY)
+                      if [ -z "$body" ]; then
+                        echo "Cannot reply to $target_id with an empty body." >&2
+                        exit 1
+                      fi
+                      gh api graphql \
+                        -f threadId="$target_id" \
+                        -f body="$body" \
+                        -f query="mutation(\$threadId: ID!, \$body: String!) { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: \$threadId, body: \$body}) { comment { id } } }" \
+                        --silent
+                      ;;
+                    *)
+                      echo "Unsupported review-thread outcome: $outcome" >&2
+                      exit 1
+                      ;;
+                  esac
+                  ;;
+                CONVERSATION_COMMENT)
+                  if ! [[ "$target_id" =~ ^[0-9]+$ ]]; then
+                    echo "Invalid conversation comment ID: $target_id" >&2
+                    exit 1
+                  fi
+                  issue_url="$(gh api "repos/$GITHUB_REPOSITORY/issues/comments/$target_id" --jq '.issue_url')"
+                  if [ "$issue_url" != "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER" ]; then
+                    echo "Conversation comment $target_id does not belong to pull request #$PULL_REQUEST_NUMBER." >&2
+                    exit 1
+                  fi
+                  if [ -z "$body" ]; then
+                    echo "Cannot respond to conversation comment $target_id with an empty body." >&2
+                    exit 1
+                  fi
+                  gh api \
+                    --method POST \
+                    "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/comments" \
+                    --raw-field body="$body" \
+                    --silent
+                  ;;
+                *)
+                  echo "Unsupported comment target: $target" >&2
+                  exit 1
+                  ;;
+              esac
+            done

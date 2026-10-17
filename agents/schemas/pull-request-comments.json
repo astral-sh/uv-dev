@@ -1,0 +1,28 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": { "type": "string" },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "type": "string",
+            "enum": ["REVIEW_THREAD", "CONVERSATION_COMMENT"]
+          },
+          "id": { "type": "string" },
+          "outcome": {
+            "type": "string",
+            "enum": ["COMMIT_AND_RESOLVE", "RESPOND", "CLARIFY"]
+          },
+          "body": { "type": "string" }
+        },
+        "required": ["target", "id", "outcome", "body"]
+      }
+    }
+  },
+  "required": ["summary", "actions"]
+}
