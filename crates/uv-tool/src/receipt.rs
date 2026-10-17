@@ -5,27 +5,21 @@ use serde::Deserialize;
 use crate::Tool;
 
 /// A `uv-receipt.toml` file tracking the installation of a tool.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ToolReceipt {
     pub(crate) tool: Tool,
-
-    /// The raw unserialized document.
-    #[serde(skip)]
-    pub(crate) raw: String,
 }
 
 impl ToolReceipt {
     /// Parse a [`ToolReceipt`] from a raw TOML string.
-    pub(crate) fn from_string(raw: String) -> Result<Self, toml::de::Error> {
-        let tool = toml::from_str(&raw)?;
-        Ok(Self { raw, ..tool })
+    pub(crate) fn from_string(raw: &str) -> Result<Self, toml::de::Error> {
+        toml::from_str(raw)
     }
 
     ///  Read a [`ToolReceipt`] from the given path.
     pub(crate) fn from_path(path: &Path) -> Result<Self, crate::Error> {
         match fs_err::read_to_string(path) {
-            Ok(contents) => Ok(Self::from_string(contents)
+            Ok(contents) => Ok(Self::from_string(&contents)
                 .map_err(|err| crate::Error::ReceiptRead(path.to_owned(), Box::new(err)))?),
             Err(err) => Err(err.into()),
         }
@@ -44,9 +38,6 @@ impl ToolReceipt {
 
 impl From<Tool> for ToolReceipt {
     fn from(tool: Tool) -> Self {
-        Self {
-            tool,
-            raw: String::new(),
-        }
+        Self { tool }
     }
 }
