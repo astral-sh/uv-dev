@@ -49,23 +49,23 @@ impl Display for DistInfoStem<'_> {
 /// Unlike [`PackageName`], this does not restrict the allowed characters.
 fn normalize(stem: &str) -> Cow<'_, str> {
     let mut last_was_separator = false;
-    let normalized = stem.bytes().filter_map(move |byte| {
-        let byte = match byte {
-            b'-' | b'_' | b'.' => b'-',
-            byte => byte.to_ascii_lowercase(),
+    let normalized = stem.chars().filter_map(move |char| {
+        let char = match char {
+            '-' | '_' | '.' => '-',
+            char => char.to_ascii_lowercase(),
         };
-        let is_separator = byte == b'-';
+        let is_separator = char == '-';
         let repeated_separator = last_was_separator && is_separator;
         last_was_separator = is_separator;
-        (!repeated_separator).then_some(byte)
+        (!repeated_separator).then_some(char)
     });
 
-    if normalized.clone().eq(stem.bytes()) {
+    if normalized.clone().eq(stem.chars()) {
         return Cow::Borrowed(stem);
     }
 
     let mut output = String::with_capacity(stem.len());
-    output.extend(normalized.map(char::from));
+    output.extend(normalized);
     Cow::Owned(output)
 }
 
@@ -100,6 +100,21 @@ mod tests {
                 },
                 Some(input)
             );
+        }
+    }
+
+    #[test]
+    fn normalize_unicode() {
+        for (input, expected) in [
+            ("Café_Name", "café-name"),
+            ("Å._B", "Å-b"),
+            ("包_NAME", "包-name"),
+            ("🦀.A", "🦀-a"),
+            ("e\u{301}_X", "e\u{301}-x"),
+            ("İ._X", "İ-x"),
+            ("a\0_B", "a\0-b"),
+        ] {
+            assert_eq!(super::normalize(input), expected, "{input}");
         }
     }
 }
