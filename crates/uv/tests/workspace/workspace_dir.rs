@@ -1,6 +1,7 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{FileWriteStr, PathChild};
+use indoc::indoc;
 
 use uv_test::{copy_dir_ignore, uv_snapshot};
 
@@ -132,6 +133,92 @@ fn workspace_dir_nested_recursive_member() -> Result<()> {
     ----- stdout -----
     [TEMP_DIR]/workspace
     "#);
+
+    Ok(())
+}
+
+/// Test workspace discovery from a member nested inside another workspace member.
+#[test]
+fn workspace_dir_nested_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let workspace = context.temp_dir.child("workspace");
+    let member = workspace.child("a");
+    let nested = member.child("b");
+    let standalone = member.child("standalone");
+    let excluded = member.child("excluded");
+
+    for project in [&nested, &standalone, &excluded] {
+        fs_err::create_dir_all(project)?;
+    }
+
+    workspace.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv.workspace]
+        members = ["a", "a/b", "a/excluded"]
+        exclude = ["a/excluded"]
+    "#})?;
+    member.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    nested.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "nested"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    standalone.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "standalone"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    excluded.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "excluded"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.workspace_dir().current_dir(&member), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/workspace
+    ");
+
+    uv_snapshot!(context.filters(), context.workspace_dir().current_dir(&nested), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/workspace/a/b
+    ");
+
+    uv_snapshot!(context.filters(), context.workspace_dir().current_dir(&standalone), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/workspace/a/standalone
+    ");
+
+    uv_snapshot!(context.filters(), context.workspace_dir().current_dir(&excluded), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [TEMP_DIR]/workspace/a/excluded
+    ");
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&nested), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 1 package in [TIME]
+    ");
+
+    assert!(nested.child("uv.lock").exists());
+    assert!(!workspace.child("uv.lock").exists());
 
     Ok(())
 }
