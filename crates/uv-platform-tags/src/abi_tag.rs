@@ -224,75 +224,68 @@ impl std::fmt::Display for AbiTag {
     }
 }
 
-impl FromStr for AbiTag {
-    type Err = ParseAbiTagError;
+/// The context-independent reason that a compact ABI version could not be parsed.
+enum ParseVersionError {
+    MissingMajor,
+    InvalidMajor,
+    MissingMinor,
+    InvalidMinor,
+}
 
-    /// Parse an [`AbiTag`] from a string.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+/// Parse a compact version from a string (e.g., convert `39` into `(3, 9)`).
+fn parse_version(version: &str) -> Result<(u8, u8), ParseVersionError> {
+    let major = version
+        .as_bytes()
+        .first()
+        .ok_or(ParseVersionError::MissingMajor)?
+        .checked_sub(b'0')
+        .filter(|digit| *digit < 10)
+        .ok_or(ParseVersionError::InvalidMajor)?;
+    let minor = version
+        .get(1..)
+        .ok_or(ParseVersionError::MissingMinor)?
+        .parse::<u8>()
+        .map_err(|_| ParseVersionError::InvalidMinor)?;
+    Ok((major, minor))
+}
+
+impl AbiTag {
+    /// Parse an [`AbiTag`] without attaching the input to errors.
+    fn parse(s: &str) -> Result<Self, ParseAbiTagErrorKind> {
+        use ParseAbiTagErrorKind as ErrorKind;
+
         /// Parse a Python version from a string (e.g., convert `39` into `(3, 9)`).
         fn parse_python_version(
             version_str: &str,
             implementation: &'static str,
-            full_tag: &str,
-        ) -> Result<(u8, u8), ParseAbiTagError> {
-            let major = version_str
-                .as_bytes()
-                .first()
-                .ok_or_else(|| ParseAbiTagError::MissingMajorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?
-                .checked_sub(b'0')
-                .filter(|digit| *digit < 10)
-                .ok_or_else(|| ParseAbiTagError::InvalidMajorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?;
-            let minor = version_str
-                .get(1..)
-                .ok_or_else(|| ParseAbiTagError::MissingMinorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?
-                .parse::<u8>()
-                .map_err(|_| ParseAbiTagError::InvalidMinorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?;
-            Ok((major, minor))
+        ) -> Result<(u8, u8), ErrorKind> {
+            parse_version(version_str).map_err(|err| match err {
+                ParseVersionError::MissingMajor => ErrorKind::MissingMajorVersion(implementation),
+                ParseVersionError::InvalidMajor => ErrorKind::InvalidMajorVersion(implementation),
+                ParseVersionError::MissingMinor => ErrorKind::MissingMinorVersion(implementation),
+                ParseVersionError::InvalidMinor => ErrorKind::InvalidMinorVersion(implementation),
+            })
         }
 
         /// Parse an implementation version from a string (e.g., convert `37` into `(3, 7)`).
         fn parse_impl_version(
             version_str: &str,
             implementation: &'static str,
-            full_tag: &str,
-        ) -> Result<(u8, u8), ParseAbiTagError> {
-            let major = version_str
-                .as_bytes()
-                .first()
-                .ok_or_else(|| ParseAbiTagError::MissingImplMajorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?
-                .checked_sub(b'0')
-                .filter(|digit| *digit < 10)
-                .ok_or_else(|| ParseAbiTagError::InvalidImplMajorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?;
-            let minor = version_str
-                .get(1..)
-                .ok_or_else(|| ParseAbiTagError::MissingImplMinorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?
-                .parse::<u8>()
-                .map_err(|_| ParseAbiTagError::InvalidImplMinorVersion {
-                    implementation,
-                    tag: full_tag.to_string(),
-                })?;
-            Ok((major, minor))
+        ) -> Result<(u8, u8), ErrorKind> {
+            parse_version(version_str).map_err(|err| match err {
+                ParseVersionError::MissingMajor => {
+                    ErrorKind::MissingImplMajorVersion(implementation)
+                }
+                ParseVersionError::InvalidMajor => {
+                    ErrorKind::InvalidImplMajorVersion(implementation)
+                }
+                ParseVersionError::MissingMinor => {
+                    ErrorKind::MissingImplMinorVersion(implementation)
+                }
+                ParseVersionError::InvalidMinor => {
+                    ErrorKind::InvalidImplMinorVersion(implementation)
+                }
+            })
         }
 
         if s == "none" {
@@ -305,22 +298,16 @@ impl FromStr for AbiTag {
             // Ex) `cp39m`, `cp310t`
             let version_end = cp.find(|c: char| !c.is_ascii_digit()).unwrap_or(cp.len());
             let version_str = &cp[..version_end];
-            let (major, minor) = parse_python_version(version_str, "CPython", s)?;
+            let (major, minor) = parse_python_version(version_str, "CPython")?;
             let abi_suffixes = &cp[version_end..];
             let mut variant = CPythonAbiVariants::default();
             for suffix_char in abi_suffixes.chars() {
                 let Some(suffix) = CPythonAbiVariants::from_char(suffix_char) else {
-                    return Err(ParseAbiTagError::UnknownAbiTagSuffix {
-                        suffix: suffix_char,
-                        tag: s.to_string(),
-                    });
+                    return Err(ParseAbiTagErrorKind::UnknownAbiTagSuffix(suffix_char));
                 };
 
                 if variant.contains(suffix) {
-                    return Err(ParseAbiTagError::DuplicateAbiTagSuffix {
-                        suffix: suffix_char,
-                        tag: s.to_string(),
-                    });
+                    return Err(ParseAbiTagErrorKind::DuplicateAbiTagSuffix(suffix_char));
                 }
 
                 variant.insert(suffix);
@@ -332,27 +319,21 @@ impl FromStr for AbiTag {
         } else if let Some(rest) = s.strip_prefix("pypy") {
             if let Some(rest) = rest.strip_prefix('_') {
                 // Ex) `pypy_73`
-                let (impl_major, impl_minor) = parse_impl_version(rest, "PyPy", s)?;
+                let (impl_major, impl_minor) = parse_impl_version(rest, "PyPy")?;
                 Ok(Self::PyPy {
                     python_version: None,
                     implementation_version: (impl_major, impl_minor),
                 })
             } else {
                 // Ex) `pypy39_pp73`
-                let (version_str, rest) =
-                    rest.split_once('_')
-                        .ok_or_else(|| ParseAbiTagError::InvalidFormat {
-                            implementation: "PyPy",
-                            tag: s.to_string(),
-                        })?;
-                let (major, minor) = parse_python_version(version_str, "PyPy", s)?;
-                let rest =
-                    rest.strip_prefix("pp")
-                        .ok_or_else(|| ParseAbiTagError::InvalidFormat {
-                            implementation: "PyPy",
-                            tag: s.to_string(),
-                        })?;
-                let (impl_major, impl_minor) = parse_impl_version(rest, "PyPy", s)?;
+                let (version_str, rest) = rest
+                    .split_once('_')
+                    .ok_or(ParseAbiTagErrorKind::InvalidFormat("PyPy"))?;
+                let (major, minor) = parse_python_version(version_str, "PyPy")?;
+                let rest = rest
+                    .strip_prefix("pp")
+                    .ok_or(ParseAbiTagErrorKind::InvalidFormat("PyPy"))?;
+                let (impl_major, impl_minor) = parse_impl_version(rest, "PyPy")?;
                 Ok(Self::PyPy {
                     python_version: Some((major, minor)),
                     implementation_version: (impl_major, impl_minor),
@@ -360,26 +341,17 @@ impl FromStr for AbiTag {
             }
         } else if let Some(rest) = s.strip_prefix("graalpy") {
             // Ex) `graalpy240_310_native`
-            let (impl_ver_str, rest) =
-                rest.split_once('_')
-                    .ok_or_else(|| ParseAbiTagError::InvalidFormat {
-                        implementation: "GraalPy",
-                        tag: s.to_string(),
-                    })?;
-            let (impl_major, impl_minor) = parse_impl_version(impl_ver_str, "GraalPy", s)?;
-            let (py_ver_str, suffix) =
-                rest.split_once('_')
-                    .ok_or_else(|| ParseAbiTagError::InvalidFormat {
-                        implementation: "GraalPy",
-                        tag: s.to_string(),
-                    })?;
+            let (impl_ver_str, rest) = rest
+                .split_once('_')
+                .ok_or(ParseAbiTagErrorKind::InvalidFormat("GraalPy"))?;
+            let (impl_major, impl_minor) = parse_impl_version(impl_ver_str, "GraalPy")?;
+            let (py_ver_str, suffix) = rest
+                .split_once('_')
+                .ok_or(ParseAbiTagErrorKind::InvalidFormat("GraalPy"))?;
             if suffix != "native" {
-                return Err(ParseAbiTagError::InvalidFormat {
-                    implementation: "GraalPy",
-                    tag: s.to_string(),
-                });
+                return Err(ParseAbiTagErrorKind::InvalidFormat("GraalPy"));
             }
-            let (major, minor) = parse_python_version(py_ver_str, "GraalPy", s)?;
+            let (major, minor) = parse_python_version(py_ver_str, "GraalPy")?;
             Ok(Self::GraalPy {
                 python_version: (major, minor),
                 implementation_version: (impl_major, impl_minor),
@@ -388,79 +360,64 @@ impl FromStr for AbiTag {
             // Ex) `pyston_23_x86_64_linux_gnu`
             let rest = rest
                 .strip_prefix("_")
-                .ok_or_else(|| ParseAbiTagError::InvalidFormat {
-                    implementation: "Pyston",
-                    tag: s.to_string(),
-                })?;
-            let rest = rest.strip_suffix("_x86_64_linux_gnu").ok_or_else(|| {
-                ParseAbiTagError::InvalidFormat {
-                    implementation: "Pyston",
-                    tag: s.to_string(),
-                }
-            })?;
-            let (impl_major, impl_minor) = parse_impl_version(rest, "Pyston", s)?;
+                .ok_or(ParseAbiTagErrorKind::InvalidFormat("Pyston"))?;
+            let rest = rest
+                .strip_suffix("_x86_64_linux_gnu")
+                .ok_or(ParseAbiTagErrorKind::InvalidFormat("Pyston"))?;
+            let (impl_major, impl_minor) = parse_impl_version(rest, "Pyston")?;
             Ok(Self::Pyston {
                 implementation_version: (impl_major, impl_minor),
             })
         } else {
-            Err(ParseAbiTagError::UnknownFormat(s.to_string()))
+            Err(ParseAbiTagErrorKind::UnknownFormat)
         }
     }
 }
 
+impl FromStr for AbiTag {
+    type Err = ParseAbiTagError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).map_err(|kind| ParseAbiTagError {
+            kind,
+            tag: s.to_string(),
+        })
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum ParseAbiTagError {
-    #[error("Unknown ABI tag format: {0}")]
-    UnknownFormat(String),
-    #[error("Missing major version in {implementation} ABI tag: {tag}")]
-    MissingMajorVersion {
-        implementation: &'static str,
-        tag: String,
-    },
-    #[error("Invalid major version in {implementation} ABI tag: {tag}")]
-    InvalidMajorVersion {
-        implementation: &'static str,
-        tag: String,
-    },
-    #[error("Missing minor version in {implementation} ABI tag: {tag}")]
-    MissingMinorVersion {
-        implementation: &'static str,
-        tag: String,
-    },
-    #[error("Invalid minor version in {implementation} ABI tag: {tag}")]
-    InvalidMinorVersion {
-        implementation: &'static str,
-        tag: String,
-    },
-    #[error("Invalid {implementation} ABI tag format: {tag}")]
-    InvalidFormat {
-        implementation: &'static str,
-        tag: String,
-    },
-    #[error("Missing implementation major version in {implementation} ABI tag: {tag}")]
-    MissingImplMajorVersion {
-        implementation: &'static str,
-        tag: String,
-    },
-    #[error("Invalid implementation major version in {implementation} ABI tag: {tag}")]
-    InvalidImplMajorVersion {
-        implementation: &'static str,
-        tag: String,
-    },
-    #[error("Missing implementation minor version in {implementation} ABI tag: {tag}")]
-    MissingImplMinorVersion {
-        implementation: &'static str,
-        tag: String,
-    },
-    #[error("Invalid implementation minor version in {implementation} ABI tag: {tag}")]
-    InvalidImplMinorVersion {
-        implementation: &'static str,
-        tag: String,
-    },
-    #[error("Unknown suffix `{suffix}` in CPython ABI tag: {tag}")]
-    UnknownAbiTagSuffix { suffix: char, tag: String },
-    #[error("Duplicate suffix `{suffix}` in CPython ABI tag: {tag}")]
-    DuplicateAbiTagSuffix { suffix: char, tag: String },
+#[error("{kind}: {tag}")]
+pub struct ParseAbiTagError {
+    kind: ParseAbiTagErrorKind,
+    tag: String,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+enum ParseAbiTagErrorKind {
+    #[error("Unknown ABI tag format")]
+    UnknownFormat,
+    #[error("Missing major version in {0} ABI tag")]
+    MissingMajorVersion(&'static str),
+    #[error("Invalid major version in {0} ABI tag")]
+    InvalidMajorVersion(&'static str),
+    #[error("Missing minor version in {0} ABI tag")]
+    MissingMinorVersion(&'static str),
+    #[error("Invalid minor version in {0} ABI tag")]
+    InvalidMinorVersion(&'static str),
+    #[error("Invalid {0} ABI tag format")]
+    InvalidFormat(&'static str),
+    #[error("Missing implementation major version in {0} ABI tag")]
+    MissingImplMajorVersion(&'static str),
+    #[error("Invalid implementation major version in {0} ABI tag")]
+    InvalidImplMajorVersion(&'static str),
+    #[error("Missing implementation minor version in {0} ABI tag")]
+    MissingImplMinorVersion(&'static str),
+    #[error("Invalid implementation minor version in {0} ABI tag")]
+    InvalidImplMinorVersion(&'static str),
+    #[error("Unknown suffix `{0}` in CPython ABI tag")]
+    UnknownAbiTagSuffix(char),
+    #[error("Duplicate suffix `{0}` in CPython ABI tag")]
+    DuplicateAbiTagSuffix(char),
 }
 
 #[cfg(test)]
@@ -469,7 +426,7 @@ mod tests {
 
     use insta::assert_snapshot;
 
-    use crate::abi_tag::{AbiTag, ParseAbiTagError};
+    use crate::abi_tag::{AbiTag, ParseAbiTagError, ParseAbiTagErrorKind};
 
     #[test]
     fn none_abi() {
@@ -511,8 +468,8 @@ mod tests {
 
         assert_eq!(
             AbiTag::from_str("cpXY"),
-            Err(ParseAbiTagError::MissingMajorVersion {
-                implementation: "CPython",
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::MissingMajorVersion("CPython"),
                 tag: "cpXY".to_string()
             })
         );
@@ -525,6 +482,71 @@ mod tests {
 
         let err = AbiTag::from_str("cp39dd").unwrap_err();
         assert_snapshot!(err, @"Duplicate suffix `d` in CPython ABI tag: cp39dd");
+    }
+
+    #[test]
+    fn version_errors() {
+        let errors = [
+            "cp",
+            "cp3",
+            "cp3999",
+            "cpXY",
+            "pypy_",
+            "pypy_XY",
+            "pypy_3",
+            "pypy_3999",
+            "pypyX_pp",
+            "pypy3_pp73",
+            "pypy3999_pp73",
+            "pypy39_pp",
+            "pypy39_ppX",
+            "pypy39_pp3",
+            "pypy39_pp3999",
+            "graalpy_39_native",
+            "graalpyX_39_native",
+            "graalpy3_39_native",
+            "graalpy3999_39_native",
+            "graalpy39__native",
+            "graalpy39_X_native",
+            "graalpy39_3_native",
+            "graalpy39_3999_native",
+            "graalpy39__wrong",
+            "pyston__x86_64_linux_gnu",
+            "pyston_X_x86_64_linux_gnu",
+            "pyston_3_x86_64_linux_gnu",
+            "pyston_3999_x86_64_linux_gnu",
+        ]
+        .map(|tag| AbiTag::from_str(tag).unwrap_err().to_string());
+        assert_snapshot!(errors.join("\n"), @"
+        Missing major version in CPython ABI tag: cp
+        Invalid minor version in CPython ABI tag: cp3
+        Invalid minor version in CPython ABI tag: cp3999
+        Missing major version in CPython ABI tag: cpXY
+        Missing implementation major version in PyPy ABI tag: pypy_
+        Invalid implementation major version in PyPy ABI tag: pypy_XY
+        Invalid implementation minor version in PyPy ABI tag: pypy_3
+        Invalid implementation minor version in PyPy ABI tag: pypy_3999
+        Invalid major version in PyPy ABI tag: pypyX_pp
+        Invalid minor version in PyPy ABI tag: pypy3_pp73
+        Invalid minor version in PyPy ABI tag: pypy3999_pp73
+        Missing implementation major version in PyPy ABI tag: pypy39_pp
+        Invalid implementation major version in PyPy ABI tag: pypy39_ppX
+        Invalid implementation minor version in PyPy ABI tag: pypy39_pp3
+        Invalid implementation minor version in PyPy ABI tag: pypy39_pp3999
+        Missing implementation major version in GraalPy ABI tag: graalpy_39_native
+        Invalid implementation major version in GraalPy ABI tag: graalpyX_39_native
+        Invalid implementation minor version in GraalPy ABI tag: graalpy3_39_native
+        Invalid implementation minor version in GraalPy ABI tag: graalpy3999_39_native
+        Missing major version in GraalPy ABI tag: graalpy39__native
+        Invalid major version in GraalPy ABI tag: graalpy39_X_native
+        Invalid minor version in GraalPy ABI tag: graalpy39_3_native
+        Invalid minor version in GraalPy ABI tag: graalpy39_3999_native
+        Invalid GraalPy ABI tag format: graalpy39__wrong
+        Missing implementation major version in Pyston ABI tag: pyston__x86_64_linux_gnu
+        Invalid implementation major version in Pyston ABI tag: pyston_X_x86_64_linux_gnu
+        Invalid implementation minor version in Pyston ABI tag: pyston_3_x86_64_linux_gnu
+        Invalid implementation minor version in Pyston ABI tag: pyston_3999_x86_64_linux_gnu
+        ");
     }
 
     #[test]
@@ -545,22 +567,22 @@ mod tests {
 
         assert_eq!(
             AbiTag::from_str("pypy39"),
-            Err(ParseAbiTagError::InvalidFormat {
-                implementation: "PyPy",
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::InvalidFormat("PyPy"),
                 tag: "pypy39".to_string()
             })
         );
         assert_eq!(
             AbiTag::from_str("pypy39_73"),
-            Err(ParseAbiTagError::InvalidFormat {
-                implementation: "PyPy",
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::InvalidFormat("PyPy"),
                 tag: "pypy39_73".to_string()
             })
         );
         assert_eq!(
             AbiTag::from_str("pypy39_ppXY"),
-            Err(ParseAbiTagError::InvalidImplMajorVersion {
-                implementation: "PyPy",
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::InvalidImplMajorVersion("PyPy"),
                 tag: "pypy39_ppXY".to_string()
             })
         );
@@ -577,36 +599,36 @@ mod tests {
 
         assert_eq!(
             AbiTag::from_str("graalpy310"),
-            Err(ParseAbiTagError::InvalidFormat {
-                implementation: "GraalPy",
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::InvalidFormat("GraalPy"),
                 tag: "graalpy310".to_string()
             })
         );
         assert_eq!(
             AbiTag::from_str("graalpy310_240"),
-            Err(ParseAbiTagError::InvalidFormat {
-                implementation: "GraalPy",
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::InvalidFormat("GraalPy"),
                 tag: "graalpy310_240".to_string()
             })
         );
         assert_eq!(
             AbiTag::from_str("graalpy310_graalpyXY"),
-            Err(ParseAbiTagError::InvalidFormat {
-                implementation: "GraalPy",
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::InvalidFormat("GraalPy"),
                 tag: "graalpy310_graalpyXY".to_string()
             })
         );
         assert_eq!(
             AbiTag::from_str("graalpy240_310_wrong"),
-            Err(ParseAbiTagError::InvalidFormat {
-                implementation: "GraalPy",
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::InvalidFormat("GraalPy"),
                 tag: "graalpy240_310_wrong".to_string()
             })
         );
         assert_eq!(
             AbiTag::from_str("graalpy240_310_native_extra"),
-            Err(ParseAbiTagError::InvalidFormat {
-                implementation: "GraalPy",
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::InvalidFormat("GraalPy"),
                 tag: "graalpy240_310_native_extra".to_string()
             })
         );
@@ -622,15 +644,15 @@ mod tests {
 
         assert_eq!(
             AbiTag::from_str("pyston23_x86_64_linux_gnu"),
-            Err(ParseAbiTagError::InvalidFormat {
-                implementation: "Pyston",
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::InvalidFormat("Pyston"),
                 tag: "pyston23_x86_64_linux_gnu".to_string()
             })
         );
         assert_eq!(
             AbiTag::from_str("pyston_XY_x86_64_linux_gnu"),
-            Err(ParseAbiTagError::InvalidImplMajorVersion {
-                implementation: "Pyston",
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::InvalidImplMajorVersion("Pyston"),
                 tag: "pyston_XY_x86_64_linux_gnu".to_string()
             })
         );
@@ -640,11 +662,17 @@ mod tests {
     fn unknown_abi() {
         assert_eq!(
             AbiTag::from_str("unknown"),
-            Err(ParseAbiTagError::UnknownFormat("unknown".to_string()))
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::UnknownFormat,
+                tag: "unknown".to_string(),
+            })
         );
         assert_eq!(
             AbiTag::from_str(""),
-            Err(ParseAbiTagError::UnknownFormat(String::new()))
+            Err(ParseAbiTagError {
+                kind: ParseAbiTagErrorKind::UnknownFormat,
+                tag: String::new(),
+            })
         );
     }
 }
