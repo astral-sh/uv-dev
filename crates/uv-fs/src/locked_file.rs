@@ -143,40 +143,6 @@ impl LockedFileMode {
             }
         })
     }
-
-    /// Lock the file, blocking until the lock becomes available if necessary.
-    ///
-    /// On Android, [`std::fs::File::lock`] is not supported
-    /// (see [rust-lang/rust#148325]), so we use [`rustix::fs::flock`] directly.
-    ///
-    /// [rust-lang/rust#148325]: https://github.com/rust-lang/rust/issues/148325
-    #[cfg(not(target_os = "android"))]
-    fn lock(self, file: &fs_err::File) -> Result<(), io::Error> {
-        match self {
-            Self::Exclusive => file.lock()?,
-            Self::Shared => file.lock_shared()?,
-        }
-        Ok(())
-    }
-
-    /// Lock the file, blocking until the lock becomes available if necessary.
-    ///
-    /// Android-specific implementation using [`rustix::fs::flock`] because
-    /// [`std::fs::File::lock`] always returns `Unsupported` on Android
-    /// (see [rust-lang/rust#148325]).
-    ///
-    /// [rust-lang/rust#148325]: https://github.com/rust-lang/rust/issues/148325
-    #[cfg(target_os = "android")]
-    fn lock(self, file: &fs_err::File) -> Result<(), io::Error> {
-        use std::os::fd::AsFd;
-
-        let operation = match self {
-            Self::Exclusive => rustix::fs::FlockOperation::LockExclusive,
-            Self::Shared => rustix::fs::FlockOperation::LockShared,
-        };
-        rustix::fs::flock(file.as_fd(), operation)
-            .map_err(|errno| io::Error::from_raw_os_error(errno.raw_os_error()))
-    }
 }
 
 impl Display for LockedFileMode {
@@ -228,20 +194,34 @@ impl LockedFile {
             file.path().user_display(),
         );
         let path = file.path().to_path_buf();
-        let lock_exclusive = tokio::task::spawn_blocking(move || (mode.lock(&file), file));
-        let (result, file) = tokio::time::timeout(*LOCK_TIMEOUT, lock_exclusive)
-            .await
-            .map_err(|_| LockedFileError::Timeout {
-                timeout: *LOCK_TIMEOUT,
-                resource: resource.to_string(),
-                path: path.clone(),
-            })??;
-        // Not an fs_err method, we need to build our own path context
-        result.map_err(|err| LockedFileError::Lock {
+        let file = tokio::time::timeout(*LOCK_TIMEOUT, async {
+            let mut file = file;
+            loop {
+                let try_lock = tokio::task::spawn_blocking(move || (mode.try_lock(&file), file));
+                file = match try_lock.await? {
+                    (Ok(()), file) => return Ok::<_, LockedFileError>(file),
+                    (Err(error), file) => {
+                        if is_known_already_locked_error(&error) {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            file
+                        } else {
+                            // Not an fs_err method, we need to build our own path context.
+                            return Err(LockedFileError::Lock {
+                                resource: resource.to_string(),
+                                path: path.clone(),
+                                source: error.into(),
+                            });
+                        }
+                    }
+                };
+            }
+        })
+        .await
+        .map_err(|_| LockedFileError::Timeout {
+            timeout: *LOCK_TIMEOUT,
             resource: resource.to_string(),
             path,
-            source: err,
-        })?;
+        })??;
 
         trace!("Acquired {mode} lock for `{resource}`");
         Ok(Self(file))
@@ -448,5 +428,50 @@ impl Drop for LockedFile {
                 );
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "tokio"))]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::runtime::Builder;
+
+    use super::{LockedFile, LockedFileError, LockedFileMode};
+
+    #[test]
+    fn cancelled_waiter_releases_blocking_worker() -> Result<(), LockedFileError> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("resource.lock");
+        let holder = LockedFile::acquire_no_wait(&path, LockedFileMode::Exclusive, "holder")
+            .expect("the uncontended lock must be available");
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()?;
+
+        let (timed_out, worker_available) = runtime.block_on(async {
+            let timed_out = tokio::time::timeout(
+                Duration::from_millis(100),
+                LockedFile::acquire(&path, LockedFileMode::Exclusive, "waiter"),
+            )
+            .await
+            .is_err();
+            let worker_available =
+                tokio::time::timeout(Duration::from_secs(1), tokio::task::spawn_blocking(|| ()))
+                    .await
+                    .is_ok_and(|result| result.is_ok());
+            (timed_out, worker_available)
+        });
+
+        // Release the holder before shutdown so a failing blocking waiter cannot hang the test.
+        drop(holder);
+        runtime.shutdown_timeout(Duration::from_secs(1));
+        assert!(timed_out, "the conflicting acquisition must time out");
+        assert!(
+            worker_available,
+            "a cancelled waiter must release the worker"
+        );
+        Ok(())
     }
 }
