@@ -114,6 +114,8 @@ pub enum Error {
     InvalidBuiltWheelFilename(#[source] uv_distribution_filename::WheelFilenameError),
     #[error("The source distribution declares name {0}, but the wheel declares name {1}")]
     NameMismatch(PackageName, PackageName),
+    #[error("Failed to validate the built wheel")]
+    InvalidBuiltWheelMetadata(#[source] uv_distribution::Error),
     #[error("The source distribution declares version {0}, but the wheel declares version {1}")]
     VersionMismatch(Version, Version),
     #[error(
@@ -1328,6 +1330,16 @@ async fn build_wheel(
                 actual.version().clone(),
             ));
         }
+    }
+    if let BuildMessage::Build {
+        normalized_filename: DistFilename::WheelFilename(filename),
+        raw_filename,
+        output_dir,
+    } = &build_message
+        && !uv_flags::contains(uv_flags::EnvironmentFlags::SKIP_WHEEL_FILENAME_CHECK)
+    {
+        uv_distribution::validate_wheel_metadata(filename, &output_dir.join(raw_filename))
+            .map_err(Error::InvalidBuiltWheelMetadata)?;
     }
     Ok(build_message)
 }
