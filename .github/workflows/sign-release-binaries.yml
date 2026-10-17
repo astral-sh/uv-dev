@@ -42,8 +42,8 @@ jobs:
     outputs:
       targets: ${{ steps.targets.outputs.targets }}
       artifacts: ${{ steps.targets.outputs.artifacts }}
-      macos: ${{ steps.targets.outputs.macos }}
-      windows: ${{ steps.targets.outputs.windows }}
+      macos: ${{ steps.verification-runners.outputs.macos }}
+      windows: ${{ steps.verification-runners.outputs.windows }}
       unsigned-macos: ${{ steps.macos.outputs.artifact-id }}
       unsigned-windows: ${{ steps.windows.outputs.artifact-id }}
       assembly: ${{ steps.assembly.outputs.artifact-id }}
@@ -65,6 +65,16 @@ jobs:
                 "uv_build": ["uv-build.exe"]
               }
             }
+
+      - name: "Use smaller native verification runners"
+        id: verification-runners
+        shell: bash
+        env:
+          MACOS_TARGETS: ${{ steps.targets.outputs.macos }}
+          WINDOWS_TARGETS: ${{ steps.targets.outputs.windows }}
+        run: |
+          echo "macos=$(jq -c 'map(.runner = "namespace-profile-macos-15-4x7")' <<< "$MACOS_TARGETS")" >> "$GITHUB_OUTPUT"
+          echo "windows=$(jq -c 'map(if .target == "i686-pc-windows-msvc" or .target == "x86_64-pc-windows-msvc" then .runner = "namespace-profile-windows-2022-x86-64-4x8" else . end)' <<< "$WINDOWS_TARGETS")" >> "$GITHUB_OUTPUT"
 
       - name: "Download built wheels"
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
