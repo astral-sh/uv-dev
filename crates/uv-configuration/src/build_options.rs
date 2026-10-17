@@ -129,21 +129,9 @@ impl NoBinary {
 
     /// Combine a set of [`NoBinary`] values.
     #[must_use]
-    pub fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            // If both are `None`, the result is `None`.
-            (Self::None, Self::None) => Self::None,
-            // If either is `All`, the result is `All`.
-            (Self::All, _) | (_, Self::All) => Self::All,
-            // If one is `None`, the result is the other.
-            (Self::Packages(a), Self::None) => Self::Packages(a),
-            (Self::None, Self::Packages(b)) => Self::Packages(b),
-            // If both are `Packages`, the result is the union of the two.
-            (Self::Packages(mut a), Self::Packages(b)) => {
-                a.extend(b);
-                Self::Packages(a)
-            }
-        }
+    pub fn combine(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
     }
 
     /// Extend a [`NoBinary`] value with another.
@@ -229,21 +217,9 @@ impl NoBuild {
 
     /// Combine a set of [`NoBuild`] values.
     #[must_use]
-    pub fn combine(self, other: Self) -> Self {
-        match (self, other) {
-            // If both are `None`, the result is `None`.
-            (Self::None, Self::None) => Self::None,
-            // If either is `All`, the result is `All`.
-            (Self::All, _) | (_, Self::All) => Self::All,
-            // If one is `None`, the result is the other.
-            (Self::Packages(a), Self::None) => Self::Packages(a),
-            (Self::None, Self::Packages(b)) => Self::Packages(b),
-            // If both are `Packages`, the result is the union of the two.
-            (Self::Packages(mut a), Self::Packages(b)) => {
-                a.extend(b);
-                Self::Packages(a)
-            }
-        }
+    pub fn combine(mut self, other: Self) -> Self {
+        self.extend(other);
+        self
     }
 
     /// Extend a [`NoBuild`] value with another.
@@ -381,6 +357,58 @@ mod tests {
             NoBuild::Packages(vec![PackageName::from_str("bar")?]),
         );
 
+        Ok(())
+    }
+
+    fn policies() -> Result<[NoBinary; 5], Error> {
+        let alpha = PackageName::from_str("alpha-pkg")?;
+        let beta = PackageName::from_str("beta-pkg")?;
+        Ok([
+            NoBinary::None,
+            NoBinary::All,
+            NoBinary::Packages(vec![]),
+            NoBinary::Packages(vec![alpha.clone()]),
+            NoBinary::Packages(vec![beta, alpha.clone(), alpha]),
+        ])
+    }
+
+    fn build_policy(policy: &NoBinary) -> NoBuild {
+        match policy {
+            NoBinary::None => NoBuild::None,
+            NoBinary::All => NoBuild::All,
+            NoBinary::Packages(packages) => NoBuild::Packages(packages.clone()),
+        }
+    }
+
+    fn expected_policy(left: &NoBinary, right: &NoBinary) -> NoBinary {
+        match (left, right) {
+            (NoBinary::All, _) | (_, NoBinary::All) => NoBinary::All,
+            (NoBinary::None, other) | (other, NoBinary::None) => other.clone(),
+            (NoBinary::Packages(left), NoBinary::Packages(right)) => {
+                NoBinary::Packages(left.iter().chain(right).cloned().collect())
+            }
+        }
+    }
+
+    #[test]
+    fn combine_and_extend_preserve_policy_values() -> Result<(), Error> {
+        let policies = policies()?;
+        for left in &policies {
+            for right in &policies {
+                let expected = expected_policy(left, right);
+                let binary = left.clone().combine(right.clone());
+                let build = build_policy(left).combine(build_policy(right));
+                assert_eq!(binary, expected, "{left:?} + {right:?}");
+                assert_eq!(build, build_policy(&expected), "{left:?} + {right:?}");
+
+                let mut extended_binary = left.clone();
+                extended_binary.extend(right.clone());
+                let mut extended_build = build_policy(left);
+                extended_build.extend(build_policy(right));
+                assert_eq!(extended_binary, expected);
+                assert_eq!(extended_build, build_policy(&expected));
+            }
+        }
         Ok(())
     }
 }
