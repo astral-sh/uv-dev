@@ -16,6 +16,7 @@ pub mod format;
 pub mod init;
 pub mod lock;
 pub mod remove;
+mod report;
 pub mod run;
 pub mod sync;
 mod toolchain;
