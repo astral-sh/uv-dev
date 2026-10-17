@@ -12,6 +12,9 @@ mod build;
 #[cfg(feature = "test-python")]
 mod build_backend;
 
+#[cfg(feature = "test-python")]
+mod build_frontend;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod cache;
 
