@@ -2,7 +2,7 @@ use std::fmt::Write;
 use std::str::FromStr;
 use uv_dispatch::PlatformState;
 use uv_distribution_types::RequirementScope;
-use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::{PythonDownloadReporter, PythonInstallation};
 
 use anyhow::{Result, bail};
 use owo_colors::OwoColorize;
@@ -26,7 +26,6 @@ use uv_pep440::{VersionSpecifier, VersionSpecifiers};
 use uv_pep508::MarkerTree;
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
-use uv_python_discovery::PythonInstallation;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
@@ -124,12 +123,24 @@ pub async fn install(
         _ => None,
     };
 
+    // Read the `--with` requirements.
+    let spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        excludes,
+        None,
+        &client_builder,
+    )
+    .await?;
+
     let tool_python = ToolPython::from_request(
         python.as_deref().map(PythonRequest::parse),
         unresolved_target_requirements
             .as_ref()
             .and_then(|requirements| requirements.first())
             .map(|requirement| &requirement.requirement),
+        spec.requires_python.as_ref(),
         config_discovery,
         lfs,
         state.git(),
@@ -138,12 +149,11 @@ pub async fn install(
     )
     .await?;
     let explicit_python_request = tool_python.is_explicit();
-    let python_request = tool_python.python_request;
 
     // Pre-emptively identify a Python interpreter. We need an interpreter to resolve any unnamed
     // requirements, even if we end up using a different interpreter for the tool install itself.
     let interpreter = PythonInstallation::find_or_download(
-        python_request.as_ref(),
+        tool_python.python_request.as_ref(),
         EnvironmentPreference::OnlySystem,
         python_preference,
         python_arch,
@@ -156,6 +166,9 @@ pub async fn install(
     )
     .await?
     .into_interpreter();
+    tool_python.check_interpreter_compatibility(&interpreter)?;
+    let requires_python = &tool_python.requires_python;
+    let python_request = &tool_python.python_request;
 
     let receipt_build_constraints =
         operations::read_constraints(build_constraints, &client_builder).await?;
@@ -372,17 +385,6 @@ pub async fn install(
         settings
     };
 
-    // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        excludes,
-        None,
-        &client_builder,
-    )
-    .await?;
-
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
         let mut requirements = Vec::with_capacity(1 + with.len());
@@ -518,7 +520,10 @@ pub async fn install(
         installed_tools
             .get_environment(package_name, &cache)?
             .filter(|environment| {
-                existing_environment_usable(
+                requires_python.as_ref().is_none_or(|requires_python| {
+                    requires_python
+                        .contains(environment.environment().interpreter().python_version())
+                }) && existing_environment_usable(
                     environment.environment(),
                     &interpreter,
                     package_name,
@@ -545,6 +550,7 @@ pub async fn install(
                 &build_constraints,
                 &refresh,
                 validation_interpreter,
+                requires_python.as_ref(),
                 &settings.resolver,
                 &client_builder,
                 &state,
@@ -652,10 +658,15 @@ pub async fn install(
                 );
                 if already_installed {
                     // Then we're done! Though we might need to update the receipt.
-                    if *tool_receipt.options() != options {
+                    if *tool_receipt.options() != options
+                        || tool_receipt.requires_python() != requires_python.as_ref()
+                    {
                         installed_tools.add_tool_receipt(
                             package_name,
-                            tool_receipt.clone().with_options(options),
+                            tool_receipt
+                                .clone()
+                                .with_options(options)
+                                .with_requires_python(requires_python.clone()),
                         )?;
                     }
 
@@ -822,6 +833,7 @@ pub async fn install(
                         receipt_excludes.clone(),
                         receipt_build_constraints.clone(),
                         python,
+                        requires_python.clone(),
                         existing_tool_receipt.entrypoints().iter().cloned(),
                         options.clone(),
                     ),
@@ -957,6 +969,7 @@ pub async fn install(
                         let Some(interpreter) = refine_interpreter(
                             &interpreter,
                             python_request.as_ref(),
+                            requires_python.as_ref(),
                             &err,
                             &client_builder,
                             &reporter,
@@ -1073,10 +1086,11 @@ pub async fn install(
         force || invalid_tool_receipt,
         // Only persist the Python request if it was explicitly provided
         if explicit_python_request {
-            python_request
+            python_request.clone()
         } else {
             None
         },
+        requires_python.as_ref(),
         requirements,
         receipt_constraints,
         receipt_overrides,

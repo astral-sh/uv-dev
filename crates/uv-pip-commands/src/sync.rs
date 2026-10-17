@@ -121,6 +121,7 @@ pub async fn pip_sync(
     // Read all requirements from the provided sources.
     let RequirementsSpecification {
         project,
+        requires_python,
         requirements,
         constraints,
         overrides,
@@ -261,6 +262,16 @@ pub async fn pip_sync(
         .ok();
 
     let interpreter = environment.interpreter();
+    let target_version = python_version
+        .as_ref()
+        .map_or(interpreter.python_version(), PythonVersion::version);
+    if let Some(requires_python) = requires_python.as_ref()
+        && !requires_python.contains(target_version)
+    {
+        return Err(anyhow::anyhow!(
+            "Python {target_version} is incompatible with the PEP 723 `requires-python` value: `{requires_python}`"
+        ));
+    }
 
     // Determine the Python requirement, if the user requested a specific version.
     let python_requirement = if let Some(python_version) = python_version.as_ref() {

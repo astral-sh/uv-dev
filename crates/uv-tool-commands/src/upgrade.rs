@@ -371,18 +371,29 @@ async fn upgrade_tool(
     let build_constraints = Constraints::from_specifications(build_constraints);
 
     // Resolve the requirements.
-    let spec = RequirementsSpecification::from_excludes(
+    let mut spec = RequirementsSpecification::from_excludes(
         existing_tool_receipt.requirements().to_vec(),
         manifest_constraints,
         manifest_overrides,
         manifest_excludes,
     );
+    spec.requires_python = existing_tool_receipt.requires_python().cloned();
     // Initialize any shared state.
     let state = PlatformState::default();
     // Check if we need to create a new environment — if so, resolve it first, then install the
     // requested tool.
     let requested_interpreter =
         interpreter.filter(|interpreter| !environment.environment().uses(interpreter));
+    let target_interpreter =
+        requested_interpreter.unwrap_or_else(|| environment.environment().interpreter());
+    if let Some(bound) = existing_tool_receipt.requires_python()
+        && !bound.contains(target_interpreter.python_version())
+    {
+        return Err(anyhow::anyhow!(
+            "Python {} is incompatible with the tool's `requires-python` value: `{bound}`",
+            target_interpreter.python_version()
+        ));
+    }
     let tool_dir = installed_tools.tool_dir(name);
     // TODO(zanieb): When updating an existing environment, build it in the cache directory then
     // copy it into the tool directory.
@@ -618,6 +629,7 @@ async fn upgrade_tool(
             &ToolOptions::from(options),
             true,
             existing_tool_receipt.python().to_owned(),
+            existing_tool_receipt.requires_python(),
             existing_tool_receipt.requirements().to_vec(),
             existing_tool_receipt.constraints().to_vec(),
             existing_tool_receipt.overrides().to_vec(),
