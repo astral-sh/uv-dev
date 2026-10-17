@@ -14,6 +14,7 @@ pub mod sync;
 pub mod tree;
 pub mod uninstall;
 
+mod environment;
 mod install_report;
 mod pylock;
 mod reporters;
