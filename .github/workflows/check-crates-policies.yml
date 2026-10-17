@@ -13,6 +13,7 @@ jobs:
     environment: automations
     timeout-minutes: 10
     permissions:
+      actions: read # to link to this job's logs
       contents: read
       id-token: write # for the pull request comment credential broker
     steps:
@@ -49,13 +50,15 @@ jobs:
       - name: "Comment on the release pull request"
         if: failure() && steps.token.outcome == 'success'
         env:
+          ACTIONS_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ steps.token.outputs.token }}
           PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          job_url="$(GH_TOKEN="$ACTIONS_TOKEN" bash scripts/github-job-url.sh 'check-crates-policies / crates policies')"
           assignees="$(gh pr view "$PULL_REQUEST_NUMBER" --repo "$GITHUB_REPOSITORY" \
             --json assignees --jq '[.assignees[].login | "@" + .] | join(" ")')"
           body="$(cat <<EOF
-          The [crates.io publishing policy check]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT) failed.
+          The [crates.io publishing policy check]($job_url) failed.
 
           Register any newly publishable crates in [astral-sh/crates-policies](https://github.com/astral-sh/crates-policies).
           Re-run the check after the policy is updated.
