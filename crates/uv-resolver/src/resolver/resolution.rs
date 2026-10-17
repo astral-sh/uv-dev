@@ -37,7 +37,7 @@ pub(crate) struct ResolvedFork {
     pub(crate) env: ResolverEnvironment,
 }
 
-/// A selected package version, retaining both its installation artifact and metadata provenance.
+/// A selected package version with its installation artifact and recovered metadata.
 #[derive(Debug)]
 pub(crate) struct SelectedDistribution {
     version: Version,
@@ -53,7 +53,6 @@ enum SelectedSource {
     },
     Registry {
         dist: ResolvedDist,
-        metadata_id: DistributionId,
         /// Direct-only resolution need not fetch registry metadata.
         metadata: Option<Arc<MetadataResponse>>,
     },
@@ -100,7 +99,6 @@ impl SelectedDistribution {
                 });
             SelectedSource::Registry {
                 dist: dist.clone(),
-                metadata_id: metadata_id.clone(),
                 metadata,
             }
         };
@@ -115,22 +113,14 @@ impl SelectedDistribution {
     pub(crate) fn into_parts(self) -> (Version, ResolvedDist, Option<Arc<MetadataResponse>>) {
         match self.source {
             SelectedSource::Url { dist, metadata, .. } => (self.version, dist, Some(metadata)),
-            SelectedSource::Registry { dist, metadata, .. } => (self.version, dist, metadata),
-        }
-    }
-
-    /// The metadata cache uses the requested URL, even when the installation URL is made precise.
-    fn metadata_id(&self) -> &DistributionId {
-        match &self.source {
-            SelectedSource::Url { metadata_id, .. }
-            | SelectedSource::Registry { metadata_id, .. } => metadata_id,
+            SelectedSource::Registry { dist, metadata } => (self.version, dist, metadata),
         }
     }
 
     /// Registry hashes belong to the installation artifact; URL hashes use the requested URL.
     pub(crate) fn hashes_id(&self) -> DistributionId {
         match &self.source {
-            SelectedSource::Url { .. } => self.metadata_id().clone(),
+            SelectedSource::Url { metadata_id, .. } => metadata_id.clone(),
             SelectedSource::Registry { dist, .. } => dist.distribution_id(),
         }
     }
