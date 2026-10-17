@@ -40,11 +40,25 @@ hint will not be available for all build failures.
 
 Build failures are usually related to your system and the build backend. It is rare that a build
 failure is specific to uv. You can confirm that the build failure is not related to uv by attempting
-to reproduce it with pip:
+to reproduce it with pip. First, create and activate a virtual environment:
+
+=== "macOS and Linux"
+
+    ```console
+    $ uv venv -p 3.13 --seed
+    $ source .venv/bin/activate
+    ```
+
+=== "Windows"
+
+    ```pwsh-session
+    PS> uv venv -p 3.13 --seed
+    PS> .venv\Scripts\activate
+    ```
+
+Then retry the installation:
 
 ```console
-$ uv venv -p 3.13 --seed
-$ source .venv/bin/activate
 $ pip install --use-pep517 --no-cache --force-reinstall 'numpy==1.19.5'
 Collecting numpy==1.19.5
   Using cached numpy-1.19.5.zip (7.3 MB)
