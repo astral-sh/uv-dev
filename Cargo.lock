@@ -5946,9 +5946,13 @@ version = "0.13.1"
 dependencies = [
  "anstream",
  "anyhow",
+ "fs-err",
+ "insta",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "uv-build-backend",
+ "uv-errors",
  "uv-logging",
  "uv-preview",
  "uv-static",
