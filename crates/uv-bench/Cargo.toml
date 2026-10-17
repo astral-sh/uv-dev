@@ -87,6 +87,7 @@ uv-resolver = { workspace = true }
 uv-static = { workspace = true }
 uv-types = { workspace = true }
 uv-workspace = { workspace = true }
+version-ranges = { workspace = true }
 
 anyhow = { workspace = true }
 async_zip = { workspace = true, features = ["zstd"] }
