@@ -16,6 +16,10 @@ use uv_static::EnvVars;
 use uv_test::package_server::PackageServer;
 use uv_test::packse::generate_wheel;
 use uv_test::{DEFAULT_PYTHON_VERSION, apply_filters, get_bin, uv_snapshot};
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 fn zip_file_names(path: &Path) -> Result<Vec<String>> {
     block_on(async {
@@ -794,6 +798,159 @@ fn build_fail() -> Result<()> {
     hint: Build failures usually indicate a problem with the package or the build environment
     "#);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn build_workspace_reads_shared_constraints_once() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["a", "b"]
+    "#})?;
+    let a = context.temp_dir.child("a");
+    a.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "1.0.0"
+        requires-python = ">=3.11"
+
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#})?;
+    a.child(".python-version").write_str("3.11")?;
+    a.child("src/a/__init__.py").touch()?;
+
+    let b = context.temp_dir.child("b");
+    b.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "1.0.0"
+        requires-python = ">=3.11"
+
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#})?;
+    b.child(".python-version").write_str("3.12")?;
+    b.child("src/b/__init__.py").touch()?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/constraints.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("-c nested.txt\n"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/nested.txt"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("uv_build==0.5.15 ; python_version == '3.11'\n"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .build()
+        .arg("--quiet")
+        .arg("--all-packages")
+        .arg("--wheel")
+        .arg("--no-index")
+        .arg("--build-constraint")
+        .arg(format!("{}/constraints.txt", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `a @ [TEMP_DIR]/a`
+      cause: Failed to resolve requirements from `build-system.requires`
+      cause: No solution found when resolving: `uv-build`
+      cause: Because uv-build was not found in the provided package locations and you require uv-build{python_full_version < '3.12'}==0.5.15, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+    context
+        .temp_dir
+        .child("dist/a-1.0.0-py3-none-any.whl")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child("dist/b-1.0.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn build_workspace_reads_shared_invalid_constraints_once() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [tool.uv.workspace]
+        members = ["a", "b"]
+    "#})?;
+    let a = context.temp_dir.child("a");
+    a.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "a"
+        version = "1.0.0"
+        requires-python = ">=3.11"
+
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#})?;
+    a.child(".python-version").write_str("3.11")?;
+    a.child("src/a/__init__.py").touch()?;
+
+    let b = context.temp_dir.child("b");
+    b.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "b"
+        version = "1.0.0"
+        requires-python = ">=3.11"
+
+        [build-system]
+        requires = ["uv_build"]
+        build-backend = "uv_build"
+    "#})?;
+    b.child(".python-version").write_str("3.12")?;
+    b.child("src/b/__init__.py").touch()?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/invalid.txt"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("invalid requirement ???\n"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context
+        .build()
+        .arg("--quiet")
+        .arg("--all-packages")
+        .arg("--wheel")
+        .arg("--build-constraint")
+        .arg(format!("{}/invalid.txt", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `a @ [TEMP_DIR]/a`
+      cause: Couldn't parse requirement in `http://[LOCALHOST]/invalid.txt` at position 0
+      cause: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `r`
+             invalid requirement ???
+                     ^
+    error: Failed to build `b @ [TEMP_DIR]/b`
+      cause: Couldn't parse requirement in `http://[LOCALHOST]/invalid.txt` at position 0
+      cause: Expected one of `@`, `(`, `<`, `=`, `>`, `~`, `!`, `;`, found `r`
+             invalid requirement ???
+                     ^
+    ");
+    server.verify().await;
     Ok(())
 }
 
