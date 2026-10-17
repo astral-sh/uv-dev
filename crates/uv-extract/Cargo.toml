@@ -30,7 +30,6 @@ blake3 = { workspace = true, features = ["mmap", "rayon"] }
 flate2 = { workspace = true }
 fs-err = { workspace = true, features = ["tokio"] }
 futures = { workspace = true }
-md-5 = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true, features = ["perf", "unicode"] }
 reqwest = { workspace = true }
