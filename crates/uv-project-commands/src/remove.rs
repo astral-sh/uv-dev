@@ -241,14 +241,17 @@ pub async fn remove(
     // Discover the interpreter or environment used to lock and sync the target.
     let python_target = match &target {
         EditTarget::Project(project) => {
+            let python_roots = PackageSelection::from_args(false, &[], project.project_name())
+                .python_roots(project.workspace());
             if no_sync {
                 // Discover the interpreter.
-                let project_python = ProjectPythonRequest::from_request(
+                let project_python = ProjectPythonRequest::from_request_for_roots(
                     python.as_deref().map(PythonRequest::parse),
                     Some(project.workspace()),
                     &groups,
                     project_dir,
                     config_discovery,
+                    python_roots.as_deref(),
                 )
                 .await?;
                 let interpreter = ProjectInterpreter::discover(
@@ -274,6 +277,7 @@ pub async fn remove(
                 let environment = ProjectEnvironment::get_or_init(
                     ProjectEnvironmentTarget::from(project.workspace()),
                     None,
+                    python_roots.as_deref(),
                     &groups,
                     python.as_deref().map(PythonRequest::parse),
                     &install_mirrors,

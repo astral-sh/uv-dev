@@ -215,6 +215,7 @@ fn write_manifest(writer: &mut LockWriter, manifest: &ResolverManifest) -> Resul
     let has_dependency_groups = !manifest.dependency_groups.is_empty();
     let has_manifest = manifest.default_groups.is_some()
         || !manifest.members.is_empty()
+        || manifest.workspace_members.is_some()
         || !manifest.requirements.is_empty()
         || !manifest.constraints.is_empty()
         || !manifest.overrides.is_empty()
@@ -227,6 +228,11 @@ fn write_manifest(writer: &mut LockWriter, manifest: &ResolverManifest) -> Resul
 
     if !manifest.members.is_empty() {
         writer.key_multiline_array("members", &manifest.members, |writer, member| {
+            writer.value(member.as_ref())
+        })?;
+    }
+    if let Some(members) = &manifest.workspace_members {
+        writer.key_multiline_array("workspace-members", members, |writer, member| {
             writer.value(member.as_ref())
         })?;
     }
@@ -372,11 +378,15 @@ fn write_package(
     }
 
     let metadata = &package.metadata;
-    let has_metadata = !metadata.requires_dist.is_empty()
+    let has_metadata = metadata.requires_python.is_some()
+        || !metadata.requires_dist.is_empty()
         || !metadata.dependency_groups.is_empty()
         || !metadata.provides_extra.is_empty();
     if has_metadata {
         writer.table(&["package", "metadata"])?;
+        if let Some(requires_python) = &metadata.requires_python {
+            writer.key_value("requires-python", serialize_value(requires_python)?)?;
+        }
         write_serialized_non_empty_array(writer, "requires-dist", &metadata.requires_dist)?;
         if !metadata.provides_extra.is_empty() {
             writer.key_start("provides-extras")?;
