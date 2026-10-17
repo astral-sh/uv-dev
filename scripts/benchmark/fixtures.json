@@ -1,0 +1,42 @@
+[
+  {
+    "filename": "flask-3.1.2-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/ec/f9/7f9263c5695f4bd0023734af91bedb2ff8209e8de6ead162f35d8dc762fd/flask-3.1.2-py3-none-any.whl",
+    "sha256": "ca1d8112ec8a6158cc29ea4858963350011b5c846a414cdb7a954aa9e967d03c"
+  },
+  {
+    "filename": "jupyterlab-4.4.7-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/7e/01/44f35124896dd5c73b26705c25bb8af2089895b32f057a1e4a3488847333/jupyterlab-4.4.7-py3-none-any.whl",
+    "sha256": "808bae6136b507a4d18f04254218bfe71ed8ba399a36ef3280d5f259e69abf80"
+  },
+  {
+    "filename": "numpy-2.2.6-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "url": "https://files.pythonhosted.org/packages/52/b8/7f0554d49b565d0171eab6e99001846882000883998e7b7d9f0d98b1f934/numpy-2.2.6-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+    "sha256": "b64d8d4d17135e00c8e346e0a738deb17e754230d7e0810ac5012750bbd85a5a"
+  },
+  {
+    "filename": "sympy-1.14.0-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl",
+    "sha256": "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5"
+  },
+  {
+    "filename": "django-5.2.6.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/4c/8c/2a21594337250a171d45dda926caa96309d5136becd1f48017247f9cdea0/django-5.2.6.tar.gz",
+    "sha256": "da5e00372763193d73cecbf71084a3848458cecf4cee36b9a1e8d318d114a87b"
+  },
+  {
+    "filename": "packse.lock",
+    "url": "https://raw.githubusercontent.com/astral-sh/packse/18be7766b14aa3e03db37bc575959b3f4c6fbacb/uv.lock",
+    "sha256": "1a52ca1f4c0a66acb04663c2995a6a03858db801661565270415910074630cae"
+  },
+  {
+    "filename": "uv.lock",
+    "url": "https://raw.githubusercontent.com/astral-sh/uv/c7db143b6a64b9ef73ab5cd39a3241a24c8807bc/uv.lock",
+    "sha256": "6dd539a1717aa9c63b7d2289ad584134d5fdf13da36804044ca0e382555dccb2"
+  },
+  {
+    "filename": "prefect.lock",
+    "url": "https://raw.githubusercontent.com/PrefectHQ/prefect/c85deeb5f305c307181bd0001972f291ea3fd465/uv.lock",
+    "sha256": "840eac7e35e1d3da5a18256bd552e8c3df33d56e906f7cc8b5de93b4f68599c2"
+  }
+]

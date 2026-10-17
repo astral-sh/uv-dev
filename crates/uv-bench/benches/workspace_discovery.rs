@@ -1,6 +1,8 @@
 //! Benchmarks over a large synthetic workspace with many non-trivial to parse `pyproject.toml`
 //! files.
 
+mod common;
+
 // Don't optimize the alloc crate away due to it being otherwise unused.
 // https://github.com/rust-lang/rust/issues/64402
 extern crate uv_performance_memory_allocator;
@@ -385,10 +387,11 @@ fn run_cli(
     );
 }
 
-criterion_group!(
-    workspace_discovery,
-    discover_workspace_from_all_members,
+criterion_group! {
+    name = workspace_discovery;
+    config = common::walltime_criterion();
+    targets = discover_workspace_from_all_members,
     discover_workspace_from_all_members_with_excludes,
     run_python_version_synthetic_workspace
-);
+}
 criterion_main!(workspace_discovery);
