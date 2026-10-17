@@ -24,6 +24,8 @@ jobs:
 
   check-fmt:
     needs: plan
+    # Formatting does not warm the mirror's Rust caches.
+    if: ${{ github.repository != 'astral-sh/uv-dev' || github.event_name != 'push' || github.ref != 'refs/heads/main' }}
     uses: $/.github/workflows/check-fmt.yml
 
   review:
