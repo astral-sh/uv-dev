@@ -915,7 +915,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 let is_last = i == forks_len - 1;
                 let forked_state = cur_state.take().unwrap();
                 if !is_last {
-                    cur_state = Some(forked_state.clone());
+                    cur_state = Some(forked_state.clone_for_fork("dependencies"));
                 }
 
                 let env = fork.env.clone();
@@ -975,7 +975,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
             let is_last = i == forks_len - 1;
             let forked_state = cur_state.take().unwrap();
             if !is_last {
-                cur_state = Some(forked_state.clone());
+                cur_state = Some(forked_state.clone_for_fork("versions"));
             }
             let continuation = match fork.version {
                 Some(version) => ForkContinuation::UseVersion {
@@ -2700,6 +2700,52 @@ pub(crate) struct ForkState<'index> {
 }
 
 impl<'index> ForkState<'index> {
+    /// Clone a branch, attributing its cost when resolver debug logging is enabled.
+    fn clone_for_fork(&self, split_kind: &'static str) -> Self {
+        if !tracing::enabled!(Level::DEBUG) {
+            return self.clone();
+        }
+        let start = Instant::now();
+        let pubgrub = self.pubgrub.clone();
+        let pubgrub_elapsed = start.elapsed();
+        let application_start = Instant::now();
+        // Enumerating fields makes newly added fork state part of the measured clone.
+        let cloned = Self {
+            pubgrub,
+            continuation: self.continuation.clone(),
+            next: self.next,
+            pins: self.pins.clone(),
+            fork_urls: self.fork_urls.clone(),
+            fork_indexes: self.fork_indexes.clone(),
+            priorities: self.priorities.clone(),
+            added_dependencies: self.added_dependencies.clone(),
+            pre_visited: self.pre_visited.clone(),
+            selected_versions: self.selected_versions.clone(),
+            known_versions: self.known_versions.clone(),
+            env: self.env.clone(),
+            python_requirement: self.python_requirement.clone(),
+            conflict_tracker: self.conflict_tracker.clone(),
+            prefetcher: self.prefetcher.clone(),
+        };
+        let application_elapsed = application_start.elapsed();
+        let clone_elapsed = start.elapsed();
+        debug!(
+            split_kind,
+            clone_us = %clone_elapsed.as_micros(),
+            pubgrub_us = %pubgrub_elapsed.as_micros(),
+            application_us = %application_elapsed.as_micros(),
+            tracked_packages = self.pubgrub.incompatibilities.len(),
+            incompatibility_references = self
+                .pubgrub
+                .incompatibilities
+                .values()
+                .map(Vec::len)
+                .sum::<usize>(),
+            "Cloned resolver fork state"
+        );
+        cloned
+    }
+
     fn new(
         pubgrub: State<UvDependencyProvider>,
         env: ResolverEnvironment,
