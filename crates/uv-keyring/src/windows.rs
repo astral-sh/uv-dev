@@ -38,7 +38,7 @@ different threads produces different results on different runs.
 
 #![allow(unsafe_code)]
 
-use crate::credential::{Credential, CredentialApi, CredentialBuilder, CredentialBuilderApi};
+use crate::credential::{Credential, CredentialApi};
 use crate::error::{Error as ErrorCode, Result};
 use byteorder::{ByteOrder, LittleEndian};
 use std::collections::HashMap;
@@ -379,30 +379,15 @@ impl WinCredential {
     }
 }
 
-/// The builder for Windows Generic credentials.
-struct WinCredentialBuilder;
-
-/// Returns an instance of the Windows credential builder.
-///
-/// On Windows, with the default feature set,
-/// this is called once when an entry is first created.
-pub(crate) fn default_credential_builder() -> Box<CredentialBuilder> {
-    Box::new(WinCredentialBuilder {})
-}
-
-impl CredentialBuilderApi for WinCredentialBuilder {
-    /// Build a [`WinCredential`] for the given target, service, and user.
-    fn build(&self, target: Option<&str>, service: &str, user: &str) -> Result<Box<Credential>> {
-        Ok(Box::new(WinCredential::new_with_target(
-            target, service, user,
-        )?))
-    }
-
-    /// Return the underlying builder object with an `Any` type so that it can
-    /// be downgraded to a [`WinCredentialBuilder`] for platform-specific processing.
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
+/// Build a [`WinCredential`] for the given target, service, and user.
+pub(crate) fn build_credential(
+    target: Option<&str>,
+    service: &str,
+    user: &str,
+) -> Result<Box<Credential>> {
+    Ok(Box::new(WinCredential::new_with_target(
+        target, service, user,
+    )?))
 }
 
 fn extract_password(credential: &CREDENTIALW) -> Result<String> {
