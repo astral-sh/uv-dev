@@ -1,0 +1,216 @@
+{
+  "description": "Synthetic smoke corpus; labels are fixture roles, not real security findings.",
+  "as_of": "2026-10-16T12:00:00Z",
+  "releases": [
+    {
+      "name": "age-app",
+      "version": "1.0",
+      "upload_time": "2026-09-01T00:00:00Z",
+      "requires_dist": ["age-library>=1"]
+    },
+    {
+      "name": "age-library",
+      "version": "1.0",
+      "upload_time": "2026-09-01T00:00:00Z",
+      "labels": ["synthetic-vulnerable"]
+    },
+    {
+      "name": "age-library",
+      "version": "2.0",
+      "upload_time": "2026-10-10T00:00:00Z",
+      "labels": ["synthetic-fix"]
+    },
+    {
+      "name": "age-library",
+      "version": "3.0",
+      "upload_time": "2026-10-16T06:00:00Z",
+      "labels": ["synthetic-malicious"]
+    },
+    {
+      "name": "age-new-only",
+      "version": "1.0",
+      "upload_time": "2026-10-16T06:00:00Z"
+    },
+    {
+      "name": "age-undated",
+      "version": "1.0",
+      "upload_time": null
+    },
+    {
+      "name": "age-files",
+      "version": "1.0",
+      "upload_time": "2026-09-01T00:00:00Z"
+    },
+    {
+      "name": "age-files",
+      "version": "2.0",
+      "files": [
+        {
+          "tag": "py2-none-any",
+          "upload_time": "2026-09-01T00:00:00Z"
+        },
+        {
+          "tag": "py3-none-any",
+          "upload_time": "2026-10-16T06:00:00Z"
+        }
+      ]
+    },
+    {
+      "name": "age-split",
+      "version": "1.0",
+      "upload_time": "2026-09-01T00:00:00Z"
+    },
+    {
+      "name": "age-split",
+      "version": "2.0",
+      "files": [
+        {
+          "tag": "py2.py3-none-any",
+          "upload_time": "2026-09-01T00:00:00Z"
+        },
+        {
+          "tag": "py3-none-any",
+          "upload_time": "2026-10-16T06:00:00Z"
+        }
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "transitive-tradeoff",
+      "requirements": ["age-app"],
+      "roots": ["age-app"],
+      "expected": {
+        "0": {
+          "age-app": "1.0",
+          "age-library": "3.0"
+        },
+        "1": {
+          "age-app": "1.0",
+          "age-library": "2.0"
+        },
+        "2": {
+          "age-app": "1.0",
+          "age-library": "2.0"
+        },
+        "7": {
+          "age-app": "1.0",
+          "age-library": "1.0"
+        },
+        "14": {
+          "age-app": "1.0",
+          "age-library": "1.0"
+        }
+      }
+    },
+    {
+      "name": "new-only",
+      "requirements": ["age-new-only"],
+      "roots": ["age-new-only"],
+      "expected": {
+        "0": {
+          "age-new-only": "1.0"
+        },
+        "1": null,
+        "2": null,
+        "7": null,
+        "14": null
+      }
+    },
+    {
+      "name": "missing-upload-time",
+      "requirements": ["age-undated"],
+      "roots": ["age-undated"],
+      "expected": {
+        "0": {
+          "age-undated": "1.0"
+        },
+        "1": null,
+        "2": null,
+        "7": null,
+        "14": null
+      }
+    },
+    {
+      "name": "age-files",
+      "requirements": ["age-files"],
+      "roots": ["age-files"],
+      "expected": {
+        "0": {
+          "age-files": "2.0"
+        },
+        "1": {
+          "age-files": "1.0"
+        },
+        "2": {
+          "age-files": "1.0"
+        },
+        "7": {
+          "age-files": "1.0"
+        },
+        "14": {
+          "age-files": "1.0"
+        }
+      },
+      "expected_files": {
+        "0": {
+          "age-files": ["age_files-2.0-py3-none-any.whl"]
+        },
+        "1": {
+          "age-files": ["age_files-1.0-py3-none-any.whl"]
+        },
+        "2": {
+          "age-files": ["age_files-1.0-py3-none-any.whl"]
+        },
+        "7": {
+          "age-files": ["age_files-1.0-py3-none-any.whl"]
+        },
+        "14": {
+          "age-files": ["age_files-1.0-py3-none-any.whl"]
+        }
+      }
+    },
+    {
+      "name": "age-split",
+      "requirements": ["age-split"],
+      "roots": ["age-split"],
+      "expected": {
+        "0": {
+          "age-split": "2.0"
+        },
+        "1": {
+          "age-split": "2.0"
+        },
+        "2": {
+          "age-split": "2.0"
+        },
+        "7": {
+          "age-split": "2.0"
+        },
+        "14": {
+          "age-split": "2.0"
+        }
+      },
+      "expected_files": {
+        "0": {
+          "age-split": [
+            "age_split-2.0-py2.py3-none-any.whl",
+            "age_split-2.0-py3-none-any.whl"
+          ]
+        },
+        "1": {
+          "age-split": ["age_split-2.0-py2.py3-none-any.whl"]
+        },
+        "2": {
+          "age-split": ["age_split-2.0-py2.py3-none-any.whl"]
+        },
+        "7": {
+          "age-split": ["age_split-2.0-py2.py3-none-any.whl"]
+        },
+        "14": {
+          "age-split": ["age_split-2.0-py2.py3-none-any.whl"]
+        }
+      }
+    }
+  ]
+}
