@@ -6076,6 +6076,7 @@ dependencies = [
  "uv-cache-key",
  "uv-configuration",
  "uv-distribution",
+ "uv-distribution-filename",
  "uv-distribution-types",
  "uv-errors",
  "uv-fs",
