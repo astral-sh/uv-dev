@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -793,6 +794,7 @@ pub struct EnvironmentOptions {
     pub only_install_project: EnvFlag,
     pub only_install_workspace: EnvFlag,
     pub only_install_local: EnvFlag,
+    pub env_file: Option<OsString>,
     pub no_env_file: EnvFlag,
     pub no_group: Option<Vec<GroupName>>,
     pub constraints: Option<Vec<RequirementsInput>>,
@@ -946,6 +948,7 @@ impl EnvironmentOptions {
             only_install_project: EnvFlag::new(EnvVars::UV_ONLY_INSTALL_PROJECT)?,
             only_install_workspace: EnvFlag::new(EnvVars::UV_ONLY_INSTALL_WORKSPACE)?,
             only_install_local: EnvFlag::new(EnvVars::UV_ONLY_INSTALL_LOCAL)?,
+            env_file: std::env::var_os(EnvVars::UV_ENV_FILE).filter(|value| !value.is_empty()),
             no_env_file: EnvFlag::new(EnvVars::UV_NO_ENV_FILE)?,
             no_group: parse_name_list_environment_variable(EnvVars::UV_NO_GROUP)?,
             constraints: parse_path_list_environment_variable(EnvVars::UV_CONSTRAINT)?,
