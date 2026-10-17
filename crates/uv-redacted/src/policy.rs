@@ -137,6 +137,25 @@ mod tests {
     }
 
     #[test]
+    fn redaction_retains_policy() -> Result<(), Box<dyn Error>> {
+        let input = "https://user:password@example.com/file.whl?sig=signature&other=a+b";
+        let url = SafeUrl::parse(input)?;
+        let redacted: SafeUrl = url.to_redacted_url();
+        assert_eq!(
+            redacted.as_str(),
+            "https://user:****@example.com/file.whl?sig=****&other=a+b"
+        );
+        assert_eq!(url.as_str(), input);
+
+        let stripped: SafeUrl<Stripped> = url.clone().with_policy(Stripped).to_redacted_url();
+        assert_snapshot!(serde_json::to_string(&stripped)?, @r#""https://example.com/file.whl?sig=****&other=a+b""#);
+
+        let raw: SafeUrl<Raw> = url.with_policy(Raw).to_redacted_url();
+        assert_snapshot!(serde_json::to_string(&raw)?, @r#""https://user:****@example.com/file.whl?sig=****&other=a+b""#);
+        Ok(())
+    }
+
+    #[test]
     fn mutation_guards_retain_policy_and_url_components() -> Result<(), Box<dyn Error>> {
         let mut url = SafeUrl::parse(
             "https://user:password@example.com/packages/?download=1#subdirectory=src",
