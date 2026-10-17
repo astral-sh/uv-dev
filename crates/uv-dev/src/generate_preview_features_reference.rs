@@ -199,6 +199,12 @@ mod tests {
         environment. These conflicts can cause imports to depend on installation order, even when
         the packages have different distribution names.
 
+        ### `download-command` {#download-command}
+
+        The `uv download` command downloads all distribution archives recorded in the project's
+        existing lockfile for offline installation; enabling this feature silences the preview
+        warning.
+
         ### `extra-build-dependencies` {#extra-build-dependencies}
 
         The [`extra-build-dependencies`](./projects/config.md#augmenting-build-dependencies) setting

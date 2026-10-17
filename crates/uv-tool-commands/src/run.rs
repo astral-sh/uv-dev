@@ -1137,6 +1137,7 @@ async fn get_or_create_environment(
                     let site_packages = SitePackages::from_environment(environment.environment())?;
                     if matches!(
                         site_packages.satisfies_requirements(
+                            cache,
                             requirements.iter(),
                             constraints.iter().chain(latest.iter()),
                             &DependencyModifiers::new(

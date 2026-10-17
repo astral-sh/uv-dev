@@ -1831,6 +1831,7 @@ pub async fn update_environment(
         && matches!(modifications, Modifications::Sufficient)
     {
         match site_packages.satisfies_spec(
+            cache,
             &requirements,
             &constraints,
             &overrides,

@@ -56,10 +56,10 @@ use uv_workspace::pyproject::{DependencyType, ExtraBuildDependencies, OverrideDe
 use crate::comma::CommaSeparatedRequirements;
 use crate::{
     AddArgs, AuditArgs, AuditCommonArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs,
-    AuthTokenArgs, ColorChoice, DependencyConstraintsArgs, ExternalCommand, GlobalArgs, InitArgs,
-    ListFormat, LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs, PipFreezeArgs,
-    PipInstallArgs, PipInstallFormat, PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs,
-    PipUninstallArgs, ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs,
+    AuthTokenArgs, ColorChoice, DependencyConstraintsArgs, DownloadArgs, ExternalCommand,
+    GlobalArgs, InitArgs, ListFormat, LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs,
+    PipFreezeArgs, PipInstallArgs, PipInstallFormat, PipListArgs, PipShowArgs, PipSyncArgs,
+    PipTreeArgs, PipUninstallArgs, ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs,
     PythonListArgs, PythonListFormat, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs,
     RemoveArgs, RunArgs, SyncArgs, SyncFormat, ToolAuditArgs, ToolDirArgs, ToolInstallArgs,
     ToolListArgs, ToolRunArgs, ToolUninstallArgs, TreeArgs, TreeFormat, UpgradeArgs, VenvArgs,
@@ -4434,6 +4434,48 @@ fn resolve_pip_build_hash_checking(
             .or(environment.require_build_hashes)
             .or(configured),
     )
+}
+
+#[derive(Debug)]
+pub struct DownloadSettings {
+    pub refresh: Refresh,
+    pub index_locations: IndexLocations,
+    pub index_strategy: IndexStrategy,
+    pub keyring_provider: KeyringProviderType,
+}
+
+impl DownloadSettings {
+    pub fn resolve(args: DownloadArgs, filesystem: Option<FilesystemOptions>) -> Result<Self> {
+        let indexes = args
+            .index
+            .resolve(configured_indexes(filesystem.as_ref()))?;
+        let filesystem = filesystem
+            .map(FilesystemOptions::into_options)
+            .map(|options| options.top_level)
+            .unwrap_or_default();
+        Ok(Self {
+            refresh: Refresh::try_from(args.refresh)?,
+            index_locations: indexes
+                .combine(IndexOptions {
+                    index: filesystem.index,
+                    index_url: filesystem.index_url,
+                    extra_index_url: filesystem.extra_index_url,
+                    no_index: filesystem.no_index,
+                    find_links: filesystem.find_links,
+                })
+                .into(),
+            index_strategy: args
+                .registry
+                .index_strategy
+                .combine(filesystem.index_strategy)
+                .unwrap_or_default(),
+            keyring_provider: args
+                .registry
+                .keyring_provider
+                .combine(filesystem.keyring_provider)
+                .unwrap_or_default(),
+        })
+    }
 }
 
 /// Return the indexes from the effective filesystem configuration.

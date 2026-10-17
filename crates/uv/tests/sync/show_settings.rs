@@ -3988,6 +3988,7 @@ fn preview_features() {
     +            PackageConflicts,
     +            ExtraBuildDependencies,
     +            DetectModuleConflicts,
+    +            DownloadCommand,
     +            FormatCommand,
     +            NativeAuth,
     +            S3Endpoint,

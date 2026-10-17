@@ -63,7 +63,7 @@ async fn main() -> ExitCode {
         .init();
 
     let start = Instant::now();
-    let result = run().await;
+    let result = Box::pin(run()).await;
     debug!("Took {}ms", start.elapsed().as_millis());
     if let Err(err) = result {
         trace!("Error trace: {err:?}");

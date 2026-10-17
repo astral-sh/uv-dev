@@ -2457,6 +2457,27 @@ async fn run_project(
             ))
             .await
         }
+        ProjectCommand::Download(args) => {
+            let args = settings::DownloadSettings::resolve(args, filesystem)?;
+            show_settings!(args);
+            globals
+                .network_settings
+                .check_refresh_conflict(&args.refresh)?;
+            let cache = cache.init().await?.with_refresh(args.refresh);
+            Box::pin(commands::download(
+                project_dir,
+                args.index_locations,
+                args.index_strategy,
+                args.keyring_provider,
+                client_builder.subcommand(vec!["download".to_owned()]),
+                globals.concurrency,
+                &cache,
+                workspace_cache,
+                printer,
+                globals.preview,
+            ))
+            .await
+        }
         ProjectCommand::Lock(args) => {
             // Resolve the settings from the command-line arguments and workspace configuration.
             let args = settings::LockSettings::resolve(args, filesystem, environment)?;

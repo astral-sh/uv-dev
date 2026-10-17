@@ -343,6 +343,7 @@ pub async fn pip_install(
         && let Some(site_packages) = &site_packages
     {
         match site_packages.satisfies_spec(
+            &cache,
             &requirements,
             &constraints,
             &overrides,

@@ -169,7 +169,7 @@ impl<'a, Context: BuildContext> LookaheadResolver<'a, Context> {
 
         // Determine whether the requirement represents a local distribution and convert to a
         // buildable distribution.
-        let Some(dist) = required_dist(&requirement)? else {
+        let Some(dist) = required_dist(&requirement, self.database.cache())? else {
             return Ok(None);
         };
 
