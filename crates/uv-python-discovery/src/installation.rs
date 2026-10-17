@@ -528,6 +528,12 @@ impl PythonInstallation {
         true
     }
 
+    fn outdated_prerelease_download_request(&self) -> Option<PythonDownloadRequest> {
+        PythonDownloadRequest::try_from(&self.interpreter().key())
+            .ok()
+            .map(|request| request.with_prereleases(false))
+    }
+
     /// Emit a warning when the interpreter is a managed prerelease and a matching stable
     /// build can be installed via `uv python upgrade`.
     fn warn_if_outdated_prerelease(
@@ -544,11 +550,9 @@ impl PythonInstallation {
 
         let release = version.only_release();
 
-        let Ok(download_request) = PythonDownloadRequest::try_from(&interpreter.key()) else {
+        let Some(download_request) = self.outdated_prerelease_download_request() else {
             return;
         };
-
-        let download_request = download_request.with_prereleases(false);
 
         let has_stable_download = {
             let mut downloads = download_list.iter_matching(&download_request);
@@ -597,9 +601,16 @@ impl PythonInstallation {
             return Ok(());
         }
 
-        let download_list =
-            ManagedPythonDownloadList::new(client_builder, cache, python_downloads_json_url)
-                .await?;
+        let Some(download_request) = self.outdated_prerelease_download_request() else {
+            return Ok(());
+        };
+        let download_list = ManagedPythonDownloadList::new_filtered(
+            client_builder,
+            cache,
+            python_downloads_json_url,
+            Some(&download_request),
+        )
+        .await?;
         self.warn_if_outdated_prerelease(request, &download_list);
 
         Ok(())
