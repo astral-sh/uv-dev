@@ -82,6 +82,22 @@ impl DependencyModifiers {
             })
     }
 
+    /// Return the scoped override requirements for a dependency of this package version.
+    pub fn scoped_overrides_for_dependency(
+        &self,
+        package: &PackageName,
+        version: &Version,
+        dependency: &PackageName,
+    ) -> impl Iterator<Item = &Requirement> {
+        self.overrides
+            .scoped_requirements_for_dependency(package, version, dependency)
+            .filter(|requirement| {
+                !self
+                    .excludes
+                    .contains_for(package, version, &requirement.name)
+            })
+    }
+
     /// Return whether a dependency is globally excluded.
     pub fn is_excluded(&self, dependency: &PackageName) -> bool {
         self.excludes.contains(dependency)
