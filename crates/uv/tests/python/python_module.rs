@@ -4,6 +4,7 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::{FileTouch, FileWriteStr, PathChild, PathCreateDir};
 use fs_err as fs;
 use indoc::{formatdoc, indoc};
+use walkdir::WalkDir;
 
 use uv_fs::Simplified;
 use uv_static::EnvVars;
@@ -48,6 +49,41 @@ fn fake_uv(context: &TestContext) -> anyhow::Result<PathBuf> {
         destination.join("src"),
     )?;
     Ok(destination)
+}
+
+#[test]
+fn fake_uv_without_symlink_support() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let source = context.workspace_root.join("test/packages/fake-uv");
+    let package = context.temp_dir.child("fake-uv");
+
+    for entry in WalkDir::new(&source) {
+        let entry = entry?;
+        let relative = entry.path().strip_prefix(&source)?;
+        let destination = package.path().join(relative);
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(destination)?;
+        } else if entry.file_type().is_symlink() {
+            fs::write(
+                destination,
+                fs::read_link(entry.path())?.to_string_lossy().as_bytes(),
+            )?;
+        } else {
+            fs::copy(entry.path(), destination)?;
+        }
+    }
+
+    // Git materializes the source symlink as a regular file when symlink support is disabled. This
+    // makes the package unbuildable for affected Windows contributors; see astral-sh/uv#21850.
+    uv_snapshot!(context.filters(), context.pip_install().arg(package.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `uv @ file://[TEMP_DIR]/fake-uv`
+      cause: Expected a Python module at: fake-uv/src/uv/__init__.py
+    ");
+
+    Ok(())
 }
 
 #[test]
