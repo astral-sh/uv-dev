@@ -16,8 +16,7 @@ pub fn apply_editable_mode(resolution: Resolution, editable: Option<EditableMode
         let Dist::Source(SourceDist::Directory(DirectorySourceDist {
             name,
             install_path,
-            editable: current_editable,
-            r#virtual,
+            mode: current_mode,
             first_party,
             url,
         })) = dist.as_ref()
@@ -26,7 +25,8 @@ pub fn apply_editable_mode(resolution: Resolution, editable: Option<EditableMode
         };
 
         let editable = editable.for_package(name)?;
-        if *current_editable == Some(editable) {
+        let mode = current_mode.with_editable(editable);
+        if *current_mode == mode {
             return None;
         }
 
@@ -34,8 +34,7 @@ pub fn apply_editable_mode(resolution: Resolution, editable: Option<EditableMode
             dist: Arc::new(Dist::Source(SourceDist::Directory(DirectorySourceDist {
                 name: name.clone(),
                 install_path: install_path.clone(),
-                editable: Some(editable),
-                r#virtual: *r#virtual,
+                mode,
                 first_party: *first_party,
                 url: url.clone(),
             }))),
