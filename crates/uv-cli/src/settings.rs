@@ -23,8 +23,9 @@ use uv_configuration::{
     GitLfsSetting, HashCheckingMode, IndexStrategy, InitKind, InitProjectKind, InstallOptions,
     KeyringProviderType, Modifications, NoBinary, NoBuild, NoSources, Override, PackageOverride,
     PipCompileFormat, Prerelease, ProjectBuildBackend, ProxyUrl, PythonUpgrade,
-    PythonUpgradeSource, Reinstall, RequiredVersion, RequirementsInput, ResolutionMode,
-    TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade, VersionControlSystem,
+    PythonUpgradeSource, Reinstall, RequiredEnvironmentsMode, RequiredVersion, RequirementsInput,
+    ResolutionMode, TargetTriple, ToolRunCommand, TrustedHost, TrustedPublishing, Upgrade,
+    VersionControlSystem,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
@@ -3353,6 +3354,7 @@ pub struct PipCompileSettings {
     pub environments: SupportedEnvironments,
     pub required_environments: SupportedEnvironments,
     pub minimum_libc_version: Option<MinimumLibcVersion>,
+    pub required_environments_mode: Option<RequiredEnvironmentsMode>,
     pub refresh: Refresh,
     pub settings: PipSettings,
 }
@@ -3482,6 +3484,9 @@ impl PipCompileSettings {
         } else {
             SupportedEnvironments::default()
         };
+        let required_environments_mode = filesystem
+            .as_ref()
+            .and_then(|configuration| configuration.required_environments_mode);
 
         let minimum_libc_version = filesystem
             .as_ref()
@@ -3513,6 +3518,7 @@ impl PipCompileSettings {
             environments,
             required_environments,
             minimum_libc_version,
+            required_environments_mode,
             refresh: Refresh::try_from(refresh)?,
             settings: PipSettings::combine(
                 PipOptions {

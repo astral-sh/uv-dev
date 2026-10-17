@@ -4,8 +4,8 @@ use std::{collections::BTreeMap, num::NonZeroUsize};
 use uv_configuration::{
     AddBoundsKind, AnnotationStyle, BuildIsolation, ExcludeNewer, ExcludeNewerPackage,
     ExportFormat, ForkStrategy, IndexStrategy, KeyringProviderType, NoSources, PrereleaseMode,
-    PrereleasePackage, ProxyUrl, Reinstall, RequiredVersion, ResolutionMode, TargetTriple,
-    TrustedPublishing, Upgrade,
+    PrereleasePackage, ProxyUrl, Reinstall, RequiredEnvironmentsMode, RequiredVersion,
+    ResolutionMode, TargetTriple, TrustedPublishing, Upgrade,
 };
 use uv_distribution_types::{
     ConfigSettings, ExcludeNewerOverride, ExcludeNewerValue, ExtraBuildVariables, Index, IndexUrl,
@@ -111,6 +111,7 @@ impl_combine_or!(ProxyUrl);
 impl_combine_or!(PythonDownloads);
 impl_combine_or!(PythonPreference);
 impl_combine_or!(PythonVersion);
+impl_combine_or!(RequiredEnvironmentsMode);
 impl_combine_or!(RequiredVersion);
 impl_combine_or!(ResolutionMode);
 impl_combine_or!(SchemaConflicts);
