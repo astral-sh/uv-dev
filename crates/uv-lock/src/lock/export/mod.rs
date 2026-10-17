@@ -97,7 +97,9 @@ impl<'lock> ExportableRequirements<'lock> {
                 activated_items.insert(ConflictItem::from(dist.id.name.clone()), MarkerTree::TRUE);
             }
 
-            if root_kind == InstallableRootKind::Production && groups.prod() {
+            if root_kind == InstallableRootKind::Production
+                && groups.includes_non_group_dependencies()
+            {
                 let package_index = target.lock().by_id[&dist.id];
 
                 // Add the workspace package to the graph.
