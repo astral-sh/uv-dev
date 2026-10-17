@@ -193,7 +193,7 @@ jobs:
             [[ "$file" == "Cargo.toml" || "$file" == "Cargo.lock" || "$file" =~ ^crates/.*/Cargo\.toml$ ]] && rust_deps_changed=1
             [[ "$file" == "rust-toolchain.toml" || "$file" == "crates/uv-build/rust-toolchain.toml" || "$file" =~ ^\.cargo/ ]] && rust_config_changed=1
             [[ "$file" == "pyproject.toml" || "$file" =~ ^crates/.*/pyproject\.toml$ ]] && python_config_changed=1
-            [[ "$file" =~ ^\.github/workflows/.*\.yml$ ]] && workflow_changed=1
+            [[ "$file" =~ ^\.github/workflows/.*\.yml$ || "$file" =~ ^\.github/actions/nextest(-linux|-macos|-windows)?/ ]] && workflow_changed=1
             [[ "$file" == ".github/workflows/build-release-binaries.yml" || "$file" == ".github/workflows/sign-release-binaries.yml" || "$file" == ".github/workflows/release.yml" ]] && release_workflow_changed=1
             [[ "$file" == "scripts/check_uv_wheel_contents.py" || "$file" == "scripts/patch-dist-manifest-checksums.py" || "$file" == "scripts/repair-sdist-cargo-lock.py" ]] && release_build_changed=1
             [[ "$file" == scripts/test-release-wheels-* ]] && release_build_changed=1
