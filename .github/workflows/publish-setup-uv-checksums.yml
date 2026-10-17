@@ -1,0 +1,135 @@
+# Update setup-uv's known checksums after publishing a uv release.
+#
+# Assumed to run as a subworkflow of .github/workflows/release.yml after publish-versions so the
+# released version is available in the versions manifest consumed by setup-uv's update script.
+name: publish-setup-uv-checksums
+
+on:
+  workflow_call:
+
+permissions: {}
+
+env:
+  ACTIONS_CACHE_MODE: none
+
+jobs:
+  update:
+    if: github.repository == 'astral-sh/uv'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      base-sha: ${{ steps.base.outputs.sha }}
+      changes-exist: ${{ steps.changes.outputs.changes-exist }}
+      latest-version: ${{ steps.update.outputs.latest-version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: astral-sh/setup-uv
+          persist-credentials: false
+
+      - name: Record setup-uv revision
+        id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Update known checksums
+        id: update
+        run: |
+          node dist/update-known-checksums/index.cjs \
+            src/download/checksum/known-checksums.json
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "changes-exist=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changes-exist=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compile changes
+        if: steps.changes.outputs.changes-exist == 'true'
+        run: npm ci --ignore-scripts && npm run all
+
+      - name: Validate changed files
+        if: steps.changes.outputs.changes-exist == 'true'
+        run: |
+          unexpected="$({
+            git diff --name-only
+            git ls-files --others --exclude-standard
+          } | grep -vE '^(dist/setup/index\.cjs|dist/update-known-checksums/index\.cjs|src/download/checksum/known-checksums\.json)$' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "::error::Unexpected files changed by the setup-uv checksum update:"
+            echo "$unexpected"
+            exit 1
+          fi
+          git diff --check
+
+      - name: Upload checksum update
+        if: steps.changes.outputs.changes-exist == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: setup-uv-known-checksums-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/setup/index.cjs
+            dist/update-known-checksums/index.cjs
+            src/download/checksum/known-checksums.json
+          if-no-files-found: error
+
+  publish:
+    needs: update
+    if: needs.update.outputs.changes-exist == 'true'
+    runs-on: ubuntu-latest
+    environment: automations
+    permissions:
+      contents: read
+      id-token: write # for the credential broker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: astral-sh/setup-uv
+          ref: ${{ needs.update.outputs.base-sha }}
+          persist-credentials: false
+
+      - name: Download checksum update
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: setup-uv-known-checksums-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .
+
+      - name: Validate checksum update
+        run: |
+          git diff --check
+          git diff --quiet && {
+            echo "::error::Checksum update artifact did not change setup-uv"
+            exit 1
+          }
+
+      - name: Get setup-uv token
+        id: token
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: astral-sh/setup-uv
+          permissions: |
+            contents: write
+            pull_requests: write
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.token.outputs.token }}
+          commit-message: "chore: update known checksums"
+          committer: "astral-automations-bot[bot] <305554984+astral-automations-bot[bot]@users.noreply.github.com>"
+          author: "astral-automations-bot[bot] <305554984+astral-automations-bot[bot]@users.noreply.github.com>"
+          title: "chore: update known checksums for ${{ needs.update.outputs.latest-version }}"
+          body: "Update `setup-uv`'s bundled checksums for `uv ${{ needs.update.outputs.latest-version }}`."
+          base: main
+          labels: "automated-pr,update-known-checksums"
+          branch: update-known-checksums-pr
+          delete-branch: true
