@@ -12,6 +12,8 @@ The reporter sees unchanged output after editing a local Python package and rest
 
 The same local-source behavior and proposed default changes are already under discussion. Current source and documentation do not support the broader claims that local paths receive no checks or that Git/PyPI sources are uncached.
 
+A contributor reports reproducing stale output for a flat-layout `probe.py` on a local build of `main`, and reports that explicitly including `probe.py` in `tool.uv.cache-keys` makes edits take effect. This adds a concrete local-source case and workaround consistent with the selective cache checks in the source; it does not establish the broader Git claims.
+
 ## Draft response
 
 The local-source behavior you describe is already tracked in astral-sh/uv#12136, which remains open with needs-decision and considers editable installs by default or avoiding local-path caching. Please keep the proposed default change and Git comparison in that discussion. For pure-Python development, you can use `uvx --from <path> --with-editable <path> <cmd>` so source edits are visible without rebuilding.
@@ -24,7 +26,7 @@ Open astral-sh/uv#12136 already tracks the same command, local-source edits bein
 
 astral-sh/uv#12136 was opened on March 12, 2025 and remains open. Its description explicitly says that the environment is cached, suggests `--with-editable <path>`, and asks whether local paths should be editable by default or uncached. This is a closer canonical discussion than the reporter-cited closed question.
 
-astral-sh/uv#16196 was opened on October 9, 2025 and closed on November 1, 2025 after guidance about existing controls. astral-sh/uv#16974 was opened on December 3, 2025 and closed on December 16, 2025; the maintainer comments include both a concern about `--refresh` and advice to use editable installs. Neither inspected thread establishes a released fix for the default local-source behavior. The new report supplies no uv version or last-known-good version, so a regression cannot be inferred from those closures.
+astral-sh/uv#16196 was opened on October 9, 2025 and closed on November 1, 2025 after guidance about existing controls. astral-sh/uv#16974 was opened on December 3, 2025 and closed on December 16, 2025; the maintainer comments include both a concern about `--refresh` and advice to use editable installs. Neither inspected thread establishes a released fix for the default local-source behavior. The original report supplies no uv version or last-known-good version. A contributor reports reproducing the local-source symptom on a local build of `main`, but provides no commit hash or last-known-good version, so a regression cannot be inferred from those closures.
 
 The classification does not dismiss the source-freshness or documentation concerns. It centralizes the same underlying request in the existing open issue.
 
@@ -45,6 +47,20 @@ In this checkout, `crates/uv-tool-commands/src/run.rs:1189` routes tool executio
 
 `docs/concepts/cache.md:15` and its “Dynamic metadata” section at line 41 describe these selective checks and configurable cache keys. This supports the narrower distinction between source edits not covered by the defaults and an absence of all freshness checks.
 
+### Reported flat-layout reproduction and cache-key workaround
+
+In the October 17, 2026 comment on astral-sh/uv#22587 (comment ID 6234316773), contributor `0xamlab` reports the following on a local build of `main`:
+
+1. Run `uv tool run --from . probe` with a flat-layout `probe.py` that prints `VERSION-1`.
+2. Edit `probe.py` to print `VERSION-2` and rerun the command; the output remains `VERSION-1`.
+3. With `tool.uv.cache-keys = ["probe.py"]` configured, the contributor reports that the second run rebuilds and prints `VERSION-2`.
+
+These are contributor-reported runtime results, not an independently executed reproduction. The comment does not supply the exact commit, platform, Python version, full package configuration, or a complete command transcript.
+
+Source inspection supports the proposed mechanism: `CachedEnvironment::from_resolution` incorporates `Self::cache_info(dist)` into the environment hash, and its cache-hit path returns the existing environment. Local directory cache information comes from `CacheInfo::from_path`. An edit confined to a flat-layout `probe.py` is outside the default keys, so it does not change that cache information. This explains how an otherwise unchanged resolution can reuse the environment despite the source edit; it is not evidence that local paths have no freshness checks.
+
+The reported configuration is a focused workaround for this fixture. As documented in `docs/concepts/cache.md:49`, custom cache keys replace the defaults. Any practical configuration should retain necessary metadata inputs such as `pyproject.toml`, as well as the relevant source files; a key containing only `probe.py` omits those metadata checks. The comment does not independently test Git ref behavior or establish a maintainer decision about changing defaults.
+
 ### Git ref resolution and build reuse are separate
 
 `docs/concepts/cache.md:12` documents Git caching by fully resolved commit hash. In `crates/uv-distribution/src/source/mod.rs:1880`, `git_archive` obtains the precise commit, selects a commit-specific cache shard, and returns a compatible cached wheel before building when one exists.
@@ -61,7 +77,7 @@ In astral-sh/uv#13431, a maintainer explains that “ephemeral” means callers 
 
 Maintainer replies in astral-sh/uv#16196 recommend editable installs, `--reinstall-package`, `tool.uv.cache-keys`, and `--no-cache`. The concrete editable invocation in the draft includes both `--from` and `--with-editable`, consistent with the local-tool usage discussed in astral-sh/uv#16974.
 
-This handoff is based on repository source, documentation, and GitHub discussions. No runtime reproduction or build was performed. The report omits its uv version and a complete package fixture; its Git example contains an abbreviated `pyproject.toml`. Those limits do not prevent identifying the existing discussion, but they prevent treating every reported ref variant or any regression as independently confirmed.
+This handoff is based on repository source, documentation, and GitHub discussions, including the contributor-reported local reproduction above. No runtime reproduction or build was performed as part of this investigation. The original report omits its uv version and a complete package fixture; its Git example contains an abbreviated `pyproject.toml`. The contributor identifies a local build of `main` but supplies no exact revision or full fixture. Those limits do not prevent identifying the existing discussion, but they prevent treating the runtime observations, every reported Git ref variant, or any regression as independently confirmed.
 
 ## Search scope and excluded candidates
 
