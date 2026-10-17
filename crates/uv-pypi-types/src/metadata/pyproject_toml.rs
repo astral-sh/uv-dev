@@ -2,14 +2,16 @@ use std::fmt::{Debug, Display};
 use std::str::FromStr;
 
 use indexmap::IndexMap;
+use itertools::Itertools;
 use serde::Deserialize;
 use serde::de::IntoDeserializer;
 use tracing::instrument;
 
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
+use uv_pep508::Requirement;
 
-use crate::{LenientVersionSpecifiers, MetadataError};
+use crate::{LenientRequirement, LenientVersionSpecifiers, MetadataError, VerbatimParsedUrl};
 
 /// A `pyproject.toml` as specified in PEP 517.
 #[derive(Deserialize, Debug, Clone)]
@@ -118,6 +120,45 @@ pub struct Tool {
 #[serde(rename_all = "kebab-case")]
 pub struct ToolPoetry {
     pub name: Option<PackageName>,
+}
+
+/// The dependency fields derived from a static project declaration.
+pub(super) struct PyProjectDependencies {
+    pub(super) requires_dist: Box<[Requirement<VerbatimParsedUrl>]>,
+    pub(super) provides_extra: Box<[ExtraName]>,
+}
+
+/// Lower static dependencies and optional dependencies into core metadata fields.
+pub(super) fn parse_dependencies(
+    dependencies: Option<Vec<String>>,
+    optional_dependencies: Option<IndexMap<ExtraName, Vec<String>>>,
+) -> Result<PyProjectDependencies, MetadataError> {
+    // Extract the requirements.
+    let requires_dist = dependencies
+        .unwrap_or_default()
+        .into_iter()
+        .map(|requires_dist| LenientRequirement::from_str(&requires_dist))
+        .map_ok(Requirement::from)
+        .chain(optional_dependencies.as_ref().iter().flat_map(|index| {
+            index.iter().flat_map(|(extras, requirements)| {
+                requirements
+                    .iter()
+                    .map(|requires_dist| LenientRequirement::from_str(requires_dist))
+                    .map_ok(Requirement::from)
+                    .map_ok(move |requirement| requirement.with_extra_marker(extras.clone()))
+            })
+        }))
+        .collect::<Result<Box<_>, _>>()?;
+
+    // Extract the optional dependencies.
+    let provides_extra = optional_dependencies
+        .unwrap_or_default()
+        .into_keys()
+        .collect::<Box<_>>();
+    Ok(PyProjectDependencies {
+        requires_dist,
+        provides_extra,
+    })
 }
 
 #[cfg(test)]
