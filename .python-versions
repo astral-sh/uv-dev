@@ -3,8 +3,9 @@
 # installed through any means you like, e.g. `uv python install` if you already have a build of uv,
 # `cargo run python install`, or through some other installer.
 #
-# We recommend setting `UV_PYTHON_DOWNLOADS_JSON_URL=crates/uv-python-managed/download-metadata.json`
-# to use the versions of Python embedded in the local checkout of `uv`.
+# To use this checkout's bundled catalogs with a released uv, first export a compatible manifest:
+# `uv run --no-project --python 3.12 scripts/python_download_metadata.py python-downloads.json`
+# Then set `UV_PYTHON_DOWNLOADS_JSON_URL=python-downloads.json` when running `uv python install`.
 
 # Keep Python 3.14 first for development tools with dependencies that lack Python 3.15 wheels.
 3.14.8

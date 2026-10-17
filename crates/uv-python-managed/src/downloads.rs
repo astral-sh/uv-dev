@@ -281,8 +281,49 @@ impl ArtifactVariants {
     }
 }
 
-const BUILTIN_PYTHON_DOWNLOADS_ZSTD: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/download-metadata.json.zst"));
+#[derive(Clone, Copy)]
+enum DownloadProvider {
+    PythonBuildStandalone,
+    PyPy,
+    GraalPy,
+    Pyodide,
+}
+
+impl DownloadProvider {
+    fn implementation(self) -> ImplementationName {
+        match self {
+            Self::PythonBuildStandalone | Self::Pyodide => ImplementationName::CPython,
+            Self::PyPy => ImplementationName::PyPy,
+            Self::GraalPy => ImplementationName::GraalPy,
+        }
+    }
+}
+
+const BUILTIN_PYTHON_DOWNLOADS: &[(DownloadProvider, &str, &[u8])] = &[
+    (
+        DownloadProvider::PythonBuildStandalone,
+        "python-build-standalone.ndjson",
+        include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/python-build-standalone.ndjson.zst"
+        )),
+    ),
+    (
+        DownloadProvider::PyPy,
+        "pypy.ndjson",
+        include_bytes!(concat!(env!("OUT_DIR"), "/pypy.ndjson.zst")),
+    ),
+    (
+        DownloadProvider::GraalPy,
+        "graalpy.ndjson",
+        include_bytes!(concat!(env!("OUT_DIR"), "/graalpy.ndjson.zst")),
+    ),
+    (
+        DownloadProvider::Pyodide,
+        "pyodide.ndjson",
+        include_bytes!(concat!(env!("OUT_DIR"), "/pyodide.ndjson.zst")),
+    ),
+];
 
 /// Path within the `astral-sh/versions` repository for runtime Python download metadata.
 const REMOTE_PYTHON_DOWNLOAD_METADATA_PATH: &str = "v1/python-build-standalone.ndjson";
@@ -1262,13 +1303,6 @@ impl ManagedPythonDownloadList {
     }
 }
 
-/// Decompress and parse the embedded Python download catalog.
-fn parse_builtin_downloads() -> Result<HashMap<String, JsonPythonDownload>, Error> {
-    let mut json = Vec::new();
-    Decoder::with_buffer(BUILTIN_PYTHON_DOWNLOADS_ZSTD)?.read_to_end(&mut json)?;
-    parse_downloads_json(&json, "EMBEDDED IN THE BINARY".to_owned())
-}
-
 /// Parse the downloads JSON.
 ///
 /// `source` is where the JSON came from for error reporting.
@@ -1347,15 +1381,9 @@ async fn fetch_downloads_from_url(
 }
 
 fn embedded_non_cpython_downloads() -> Result<Vec<ManagedPythonDownload>, Error> {
-    Ok(embedded_downloads()?
-        .into_iter()
-        .filter(|download| {
-            !matches!(
-                download.key().implementation().as_ref(),
-                LenientImplementationName::Known(ImplementationName::CPython)
-            )
-        })
-        .collect())
+    embedded_downloads_filtered(|provider| {
+        !matches!(provider, DownloadProvider::PythonBuildStandalone)
+    })
 }
 
 fn merge_with_embedded_non_cpython(
@@ -2050,7 +2078,29 @@ fn parse_json_downloads(
 }
 
 fn embedded_downloads() -> Result<Vec<ManagedPythonDownload>, Error> {
-    Ok(parse_json_downloads(parse_builtin_downloads()?))
+    embedded_downloads_filtered(|_| true)
+}
+
+fn embedded_downloads_filtered(
+    include: impl Fn(DownloadProvider) -> bool,
+) -> Result<Vec<ManagedPythonDownload>, Error> {
+    let mut downloads = Vec::new();
+    for &(provider, source, compressed) in BUILTIN_PYTHON_DOWNLOADS {
+        if !include(provider) {
+            continue;
+        }
+        let mut ndjson = Vec::new();
+        Decoder::with_buffer(compressed)?.read_to_end(&mut ndjson)?;
+        for (line_number, line) in ndjson.split(|byte| *byte == b'\n').enumerate() {
+            if line.iter().all(u8::is_ascii_whitespace) {
+                continue;
+            }
+            let version_info = parse_ndjson_line(source, line_number + 1, line)?;
+            downloads.extend(parse_ndjson_version_info(provider, version_info));
+        }
+    }
+    downloads.sort_by(|a, b| Ord::cmp(&b.key, &a.key));
+    Ok(downloads)
 }
 
 fn parse_json_download_bytes(
@@ -2083,7 +2133,10 @@ fn parse_version_with_build(s: &str) -> Result<(PythonVersion, Option<&str>), Er
 
 /// Parse one NDJSON version record into managed downloads, selecting the best
 /// artifact for each platform and [`PythonVariant`].
-fn parse_ndjson_version_info(version_info: NdjsonPythonVersionInfo) -> Vec<ManagedPythonDownload> {
+fn parse_ndjson_version_info(
+    provider: DownloadProvider,
+    version_info: NdjsonPythonVersionInfo,
+) -> Vec<ManagedPythonDownload> {
     let (version, build) = match parse_version_with_build(&version_info.version) {
         Ok((version, build)) => (version, build),
         Err(err) => {
@@ -2095,12 +2148,18 @@ fn parse_ndjson_version_info(version_info: NdjsonPythonVersionInfo) -> Vec<Manag
         }
     };
 
-    let pbs_release = build.and_then(|value| value.parse::<u64>().ok());
+    let pbs_release = match provider {
+        DownloadProvider::PythonBuildStandalone => {
+            build.and_then(|value| value.parse::<u64>().ok())
+        }
+        DownloadProvider::PyPy | DownloadProvider::GraalPy | DownloadProvider::Pyodide => None,
+    };
     let build: Option<Arc<str>> = build.map(Arc::from);
 
     let mut selected = BTreeMap::new();
     for artifact in version_info.artifacts {
-        let Some(download) = parse_ndjson_artifact(&version, build.clone(), artifact) else {
+        let Some(download) = parse_ndjson_artifact(provider, &version, build.clone(), artifact)
+        else {
             continue;
         };
         if !artifact_is_compatible(&download, pbs_release) {
@@ -2131,6 +2190,7 @@ fn parse_ndjson_version_info(version_info: NdjsonPythonVersionInfo) -> Vec<Manag
 }
 
 fn parse_ndjson_artifact(
+    provider: DownloadProvider,
     version: &PythonVersion,
     build: Option<Arc<str>>,
     artifact: NdjsonPythonArtifact,
@@ -2140,7 +2200,7 @@ fn parse_ndjson_artifact(
 
     Some(ManagedPythonDownload {
         key: PythonInstallationKey::new_from_version(
-            LenientImplementationName::Known(ImplementationName::CPython),
+            LenientImplementationName::Known(provider.implementation()),
             version,
             platform,
             variants.python_variant(),
@@ -2277,7 +2337,8 @@ fn visit_ndjson_line<T>(
     }
 
     let version_info = parse_ndjson_line(source, line_number, line)?;
-    for download in parse_ndjson_version_info(version_info) {
+    for download in parse_ndjson_version_info(DownloadProvider::PythonBuildStandalone, version_info)
+    {
         if let ControlFlow::Break(value) = visitor(download) {
             return Ok(Some(value));
         }
@@ -2785,6 +2846,57 @@ mod tests {
         assert_eq!(downloads.len(), 1);
         assert_eq!(downloads[0].key().version().to_string(), "3.14.1");
         assert_eq!(downloads[0].build(), Some("20260420"));
+    }
+
+    #[test]
+    fn bundled_ndjson_provider_identity() -> anyhow::Result<()> {
+        let record = br#"{"version":"3.12.14+8.0.0","artifacts":[{"url":"https://example.com/a-unoptimized.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"custom-build+install_only"},{"url":"https://example.com/z-optimized.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"pgo+lto+custom-build+install_only"}]}"#;
+        let pypy = parse_ndjson_version_info(
+            DownloadProvider::PyPy,
+            parse_ndjson_line("pypy.ndjson", 1, record)?,
+        );
+        let graalpy = parse_ndjson_version_info(
+            DownloadProvider::GraalPy,
+            parse_ndjson_line("graalpy.ndjson", 1, record)?,
+        );
+        assert_eq!(pypy[0].key().to_string(), "pypy-3.12.14-linux-x86_64-gnu");
+        assert_eq!(
+            graalpy[0].key().to_string(),
+            "graalpy-3.12.14-linux-x86_64-gnu"
+        );
+        assert_eq!(pypy[0].build(), Some("8.0.0"));
+        assert_eq!(graalpy[0].build(), Some("8.0.0"));
+        assert_eq!(
+            pypy[0].url().as_ref(),
+            "https://example.com/z-optimized.tar.gz"
+        );
+        assert_eq!(graalpy[0].url(), pypy[0].url());
+        assert_eq!(
+            pypy[0].variants.names,
+            [
+                LenientArtifactVariantName::Unknown("custom-build".to_owned()),
+                LenientArtifactVariantName::Known(ArtifactVariantName::Lto),
+                LenientArtifactVariantName::Known(ArtifactVariantName::Pgo),
+            ]
+        );
+        assert_eq!(graalpy[0].variants, pypy[0].variants);
+        Ok(())
+    }
+
+    #[test]
+    fn bundled_pyodide_ndjson_retains_cpython_platform() -> anyhow::Result<()> {
+        let record = br#"{"version":"3.14.2+314.0.7","artifacts":[{"url":"https://example.com/xbuildenv.tar.gz","platform":"wasm32-unknown-emscripten-musl","sha256":null,"variant":"install_only"}]}"#;
+        let downloads = parse_ndjson_version_info(
+            DownloadProvider::Pyodide,
+            parse_ndjson_line("pyodide.ndjson", 1, record)?,
+        );
+        assert_eq!(
+            downloads[0].key().to_string(),
+            "pyodide-3.14.2-emscripten-wasm32-musl"
+        );
+        assert_eq!(downloads[0].build(), Some("314.0.7"));
+        assert_eq!(downloads[0].sha256(), None);
+        Ok(())
     }
 
     #[tokio::test]

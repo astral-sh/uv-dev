@@ -1,6 +1,6 @@
 #[expect(clippy::disallowed_types)]
 use std::fs::{File, FileTimes};
-use std::io::Write;
+use std::io;
 use std::path::PathBuf;
 use std::{env, fs};
 
@@ -8,28 +8,19 @@ use zstd::stream::write::Encoder;
 
 use uv_static::EnvVars;
 
-fn process_json(data: &serde_json::Value) -> serde_json::Value {
-    let mut out_data = serde_json::Map::new();
-
-    if let Some(obj) = data.as_object() {
-        for (key, value) in obj {
-            out_data.insert(key.clone(), value.clone());
-        }
+fn main() {
+    for provider in ["python-build-standalone", "pypy", "graalpy", "pyodide"] {
+        compress_metadata(provider);
     }
-
-    serde_json::Value::Object(out_data)
 }
 
-fn main() {
-    let version_metadata = PathBuf::from_iter([
-        env::var(EnvVars::CARGO_MANIFEST_DIR).unwrap(),
-        "download-metadata.json".into(),
-    ]);
+fn compress_metadata(provider: &str) {
+    let version_metadata = PathBuf::from(env::var(EnvVars::CARGO_MANIFEST_DIR).unwrap())
+        .join("download-metadata")
+        .join(format!("{provider}.ndjson"));
 
-    let version_metadata_compressed = PathBuf::from_iter([
-        env::var(EnvVars::OUT_DIR).unwrap(),
-        "download-metadata.json.zst".into(),
-    ]);
+    let version_metadata_compressed =
+        PathBuf::from(env::var(EnvVars::OUT_DIR).unwrap()).join(format!("{provider}.ndjson.zst"));
 
     println!(
         "cargo::rerun-if-changed={}",
@@ -41,28 +32,16 @@ fn main() {
         version_metadata_compressed.to_str().unwrap()
     );
 
-    let json_data: serde_json::Value = serde_json::from_str(
-        #[expect(clippy::disallowed_methods)]
-        &fs::read_to_string(&version_metadata).expect("Failed to read download-metadata.json"),
-    )
-    .expect("Failed to parse JSON");
-
-    let filtered_data = process_json(&json_data);
-
     #[expect(clippy::disallowed_types)]
-    let out_file = File::create(version_metadata_compressed)
-        .expect("failed to open download-metadata.json.zst");
+    let mut in_file = File::open(&version_metadata).expect("Failed to open download metadata");
+    #[expect(clippy::disallowed_types)]
+    let out_file =
+        File::create(version_metadata_compressed).expect("Failed to create compressed metadata");
 
     // Compress the embedded catalog to reduce the binary size.
     let mut encoder =
         Encoder::new(out_file, 19).expect("Failed to create download metadata encoder");
-    encoder
-        .write_all(
-            serde_json::to_string(&filtered_data)
-                .expect("Failed to serialize JSON")
-                .as_bytes(),
-        )
-        .expect("Failed to compress download metadata");
+    io::copy(&mut in_file, &mut encoder).expect("Failed to compress download metadata");
     let out_file = encoder
         .finish()
         .expect("Failed to finish compressing download metadata");
@@ -71,8 +50,7 @@ fn main() {
     // `rerun-if-changed`, so fetch the current file times and set them the same
     // on the output file.
     #[expect(clippy::disallowed_methods)]
-    let meta =
-        fs::metadata(version_metadata).expect("failed to read metadata for download-metadata.json");
+    let meta = fs::metadata(version_metadata).expect("Failed to read download metadata file times");
 
     out_file
         .set_times(
@@ -80,5 +58,5 @@ fn main() {
                 .set_accessed(meta.accessed().unwrap())
                 .set_modified(meta.modified().unwrap()),
         )
-        .expect("failed to write file times to download-metadata.json.zst");
+        .expect("Failed to write compressed download metadata file times");
 }

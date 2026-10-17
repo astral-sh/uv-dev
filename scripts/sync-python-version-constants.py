@@ -1,6 +1,6 @@
 """Update the Python version constants in the test common module.
 
-This script reads the download-metadata.json file and extracts the latest
+This script reads the bundled CPython catalog and extracts the latest
 patch version for each minor version (3.16, 3.15, 3.14, 3.13, 3.12, 3.11, 3.10).
 It then updates the LATEST_PYTHON_X_Y constants in crates/uv-test/src/lib.rs.
 
@@ -21,11 +21,11 @@ in sync with the latest available Python versions.
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
 from packaging.version import Version
+from python_download_metadata import iter_downloads
 
 SELF_DIR = Path(__file__).parent
 ROOT = SELF_DIR.parent
@@ -34,15 +34,19 @@ PYTHON_MINOR_VERSIONS = ("3.16", "3.15", "3.14", "3.13", "3.12", "3.11", "3.10")
 
 def main() -> None:
     # Read the download metadata
-    metadata_path = ROOT / "crates" / "uv-python-managed" / "download-metadata.json"
-    with open(metadata_path) as f:
-        metadata = json.load(f)
+    metadata_path = (
+        ROOT
+        / "crates"
+        / "uv-python-managed"
+        / "download-metadata"
+        / "python-build-standalone.ndjson"
+    )
 
     # Collect all versions per minor, separating stable and prerelease
     stable_versions: dict[str, str] = {}
     prerelease_versions: dict[str, str] = {}
 
-    for info in metadata.values():
+    for info in iter_downloads("python-build-standalone", metadata_path.read_text()):
         if info["name"] != "cpython":
             continue
         if info.get("variant"):

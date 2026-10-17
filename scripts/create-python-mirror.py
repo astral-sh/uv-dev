@@ -29,11 +29,13 @@ from urllib.parse import unquote
 
 import httpx
 from git import GitCommandError, Repo
+from python_download_metadata import PROVIDERS, iter_downloads
 from tqdm import tqdm
 
 SELF_DIR = Path(__file__).parent
 REPO_ROOT = SELF_DIR.parent
-VERSIONS_FILE = REPO_ROOT / "crates" / "uv-python-managed" / "download-metadata.json"
+VERSIONS_DIR = REPO_ROOT / "crates" / "uv-python-managed" / "download-metadata"
+LEGACY_VERSIONS_FILE = VERSIONS_DIR.with_suffix(".json")
 PREFIXES = [
     "https://github.com/astral-sh/python-build-standalone/releases/download/",
     "https://downloads.python.org/pypy/",
@@ -69,24 +71,30 @@ def sha256_checksum(file_path: Path) -> str:
 
 
 def collect_metadata_from_git_history() -> list[dict]:
-    """Collect all metadata entries from the history of the VERSIONS_FILE."""
+    """Collect selected artifacts from bundled catalogs and historical JSON manifests."""
     metadata = []
     try:
         repo = Repo(REPO_ROOT, search_parent_directories=True)
+        catalogs: dict[Path, str | None] = {
+            VERSIONS_DIR / f"{provider}.ndjson": provider for provider in PROVIDERS
+        }
+        catalogs[LEGACY_VERSIONS_FILE] = None
 
-        for commit in repo.iter_commits(paths=VERSIONS_FILE):
-            try:
-                # Ensure the file exists in the commit tree
-                blob = commit.tree / str(VERSIONS_FILE.relative_to(REPO_ROOT))
-                content = blob.data_stream.read().decode()
-                data = json.loads(content)
-                metadata.extend(data.values())
-            except KeyError:
-                logger.warning(
-                    f"File {VERSIONS_FILE} not found in commit {commit.hexsha}. Skipping."
-                )
-            except json.JSONDecodeError as e:
-                logger.error(f"Error decoding JSON in commit {commit.hexsha}: {e}")
+        for commit in repo.iter_commits(paths=list(catalogs)):
+            for path, provider in catalogs.items():
+                try:
+                    blob = commit.tree / str(path.relative_to(REPO_ROOT))
+                    content = blob.data_stream.read().decode()
+                    if provider is None:
+                        metadata.extend(json.loads(content).values())
+                    else:
+                        metadata.extend(iter_downloads(provider, content))
+                except KeyError:
+                    continue
+                except json.JSONDecodeError as e:
+                    logger.error(
+                        f"Error decoding {path} in commit {commit.hexsha}: {e}"
+                    )
 
     except GitCommandError as e:
         logger.error(f"Git command error: {e}")
@@ -264,8 +272,13 @@ def main():
     if args.from_all_history:
         metadata = collect_metadata_from_git_history()
     else:
-        with open(VERSIONS_FILE) as f:
-            metadata = list(json.load(f).values())
+        metadata = [
+            download
+            for provider in PROVIDERS
+            for download in iter_downloads(
+                provider, (VERSIONS_DIR / f"{provider}.ndjson").read_text()
+            )
+        ]
 
     version = re.compile(args.version) if args.version else None
     filtered_metadata = filter_metadata(
