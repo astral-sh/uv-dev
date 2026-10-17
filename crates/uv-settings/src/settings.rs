@@ -1420,7 +1420,10 @@ pub struct PythonInstallMirrors {
     )]
     pub pyodide_install_mirror: Option<String>,
 
-    /// URL pointing to JSON of custom Python installations.
+    /// URL pointing to JSON or NDJSON describing custom Python installations.
+    ///
+    /// The URL path or local filename must end in `.ndjson` for NDJSON catalogs. Other names are
+    /// parsed as JSON.
     #[option(
         default = "None",
         value_type = "str",
