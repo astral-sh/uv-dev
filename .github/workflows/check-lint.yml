@@ -35,6 +35,8 @@ jobs:
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
           version: "0.13.0"
           checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
+      - name: "Check Windows trampoline dependency versions"
+        run: uv run --no-project scripts/check-trampoline-version-consistency.py
       - run: uv run --only-group check ruff check .
 
   ty:
