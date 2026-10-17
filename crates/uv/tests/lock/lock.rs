@@ -22413,6 +22413,187 @@ fn lock_removed_empty_extra() -> Result<()> {
     Ok(())
 }
 
+/// Restoring declarations already represented in the preview graph identifies metadata omission.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_metadata_mismatch_restores_declarations() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        empty = []
+
+        [dependency-groups]
+        dev = []
+    "#})?;
+    context
+        .lock()
+        .arg("--offline")
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: The existing lockfile uses the `lock-without-metadata` preview format, but that preview feature is not enabled. To keep using this format, pass `--preview-features lock-without-metadata`.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
+/// Adding a dependency to a stable empty project is not evidence of the preview format.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_metadata_mismatch_first_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    context
+        .temp_dir
+        .child("child/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "child"
+        version = "0.1.0"
+    "#})?;
+    pyproject.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["child"]
+
+        [tool.uv.sources]
+        child = { path = "child" }
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
+/// A new empty extra changes declarations without indicating previous preview usage.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_metadata_mismatch_new_empty_extra() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let original = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#};
+    pyproject.write_str(original)?;
+    context.lock().arg("--offline").assert().success();
+    pyproject.write_str(&format!(
+        "{original}\n[project.optional-dependencies]\nempty = []\n"
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
+/// An unreachable first requirement has no graph edges that could prove metadata was omitted.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_metadata_mismatch_unreachable_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let pyproject = context.temp_dir.child("pyproject.toml");
+    let original = indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#};
+    pyproject.write_str(original)?;
+    context.lock().arg("--offline").assert().success();
+    pyproject.write_str(&format!(
+        "{original}dependencies = [\"child ; python_version < '3.12'\"]\n"
+    ))?;
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
+/// Empty script locks do not indicate that an explicitly enabled preview feature was disabled.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_metadata_mismatch_remove_script_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("simple/dependency-groups.toml");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["iniconfig"]
+        # ///
+    "#})?;
+    context
+        .lock()
+        .arg("--script")
+        .arg("script.py")
+        .arg("--preview-features")
+        .arg("lock-without-metadata")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.lock().arg("--script").arg("script.py")
+        .arg("--preview-features").arg("lock-without-metadata")
+        .arg("--index-url").arg(server.index_url())
+        .arg("--locked").arg("--offline"), @r"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    Ok(())
+}
+
 /// Regenerate registry dependencies and dependency policies when package metadata is omitted.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -22476,6 +22657,38 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     ----- stderr -----
     Resolved 9 packages in [TIME]
     ");
+
+    let lock = context.read("uv.lock");
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--index-url").arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 9 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: The existing lockfile uses the `lock-without-metadata` preview format, but that preview feature is not enabled. To keep using this format, pass `--preview-features lock-without-metadata`.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--locked")
+        .arg("--only-group")
+        .arg("dev")
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("python")
+        .arg("-c")
+        .arg("pass"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 9 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: The existing lockfile uses the `lock-without-metadata` preview format, but that preview feature is not enabled. To keep using this format, pass `--preview-features lock-without-metadata`.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), lock);
 
     pyproject_toml.write_str(&original_pyproject.replace("six>=2", "six>=3"))?;
     uv_snapshot!(context.filters(), context.lock()
