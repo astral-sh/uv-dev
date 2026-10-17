@@ -1,0 +1,152 @@
+name: Integration tests
+run-name: Integration tests for CI ${{ inputs.run }}, attempt ${{ inputs.attempt }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "The producing CI run ID"
+        required: true
+        type: string
+      attempt:
+        description: "The producing CI run attempt"
+        required: true
+        type: string
+      head_sha:
+        description: "The producing CI head SHA"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: integration-tests-${{ inputs.run }}-${{ inputs.attempt }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: ${{ github.repository == 'astral-sh/uv' || github.repository == 'astral-sh/uv-dev' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      run-tests: ${{ steps.ready.outputs.run-tests }}
+      run-id: ${{ steps.source.outputs.run-id }}
+      sha: ${{ steps.source.outputs.sha }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN_ID: ${{ inputs.run }}
+      SOURCE_RUN_ATTEMPT: ${{ inputs.attempt }}
+      SOURCE_HEAD_SHA: ${{ inputs.head_sha }}
+    steps:
+      - name: Validate the producing CI attempt
+        shell: bash
+        id: source
+        run: |
+          if ! [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ && "$SOURCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ && "$SOURCE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::Invalid CI run, attempt, or head SHA.'
+            exit 1
+          fi
+          source_run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")
+          if ! jq -e --arg repository "$GITHUB_REPOSITORY" --argjson repository_id "$GITHUB_REPOSITORY_ID" --arg sha "$SOURCE_HEAD_SHA" '
+            .event == "push" and .head_branch == "main" and
+            (.path | split("@")[0]) == ".github/workflows/ci.yml" and
+            .repository.full_name == $repository and .repository.id == $repository_id and
+            .head_repository.full_name == $repository and .head_repository.id == $repository_id and
+            .head_sha == $sha
+          ' <<< "$source_run" > /dev/null; then
+            echo '::error::The source is not the expected same-repository main-branch CI push.'
+            exit 1
+          fi
+          if [[ $(jq -r .run_attempt <<< "$source_run") != "$SOURCE_RUN_ATTEMPT" ]]; then
+            echo 'The producing CI run has advanced to another attempt.'
+            exit 0
+          fi
+          if [[ "$GITHUB_SHA" != "$SOURCE_HEAD_SHA" ]]; then
+            echo 'The consumer revision differs from CI; CI will run its own integration definitions.'
+            exit 0
+          fi
+          echo 'current=true' >> "$GITHUB_OUTPUT"
+          echo "run-id=$SOURCE_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "sha=$SOURCE_HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "started-at=$(jq -r .run_started_at <<< "$source_run")" >> "$GITHUB_OUTPUT"
+
+      - name: Check out integration workflow scripts
+        if: ${{ steps.source.outputs.current == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Ignore duplicate workflow notifications
+        shell: bash
+        id: claim
+        if: ${{ steps.source.outputs.current == 'true' }}
+        env:
+          INTEGRATION_RUN_NAME: Integration tests for CI ${{ inputs.run }}, attempt ${{ inputs.attempt }}
+          SOURCE_STARTED_AT: ${{ steps.source.outputs.started-at }}
+        run: |
+          export INTEGRATION_STARTED_AT="$SOURCE_STARTED_AT"
+          first_run=$(bash "$GITHUB_WORKSPACE/.github/scripts/select-integration-consumer.sh")
+          if [[ -z "$first_run" ]]; then
+            echo '::error::No active integration consumer was found for this CI attempt.'
+            exit 1
+          fi
+          if [[ "$first_run" == "$GITHUB_RUN_ID" ]]; then
+            echo 'selected=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "CI attempt is already handled by integration run $first_run"
+          fi
+
+      - name: Wait for binary builds
+        shell: bash
+        id: ready
+        if: ${{ steps.claim.outputs.selected == 'true' }}
+        run: |
+          # CI's meta job starts only after all binary builds succeed. A retry
+          # may reuse that job's successful result without scheduling tests.
+          deadline=$((SECONDS + 2100))
+          while (( SECONDS < deadline )); do
+            source_run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")
+            if [[ $(jq -r .run_attempt <<< "$source_run") != "$SOURCE_RUN_ATTEMPT" ]]; then
+              echo 'The producing CI run has advanced to another attempt.'
+              echo 'run-tests=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/attempts/$SOURCE_RUN_ATTEMPT/jobs?per_page=100" --paginate --slurp)
+            job=$(jq -ce '[.[].jobs[] | select(.name == "integration dispatch")] | if length == 1 then .[0] elif length == 0 then {} else error("Multiple CI meta jobs matched") end' <<< "$jobs")
+            status=$(jq -r '.status // empty' <<< "$job")
+            conclusion=$(jq -r '.conclusion // empty' <<< "$job")
+            if [[ "$status" == completed && ( "$conclusion" == success || "$conclusion" == skipped ) ]]; then
+              echo "CI already has an integration result: $conclusion"
+              echo 'run-tests=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [[ $(jq -r .status <<< "$source_run") == completed && -z "$status" ]]; then
+              echo 'CI completed without scheduling integration tests in this attempt.'
+              echo 'run-tests=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [[ $(jq -r .status <<< "$source_run") == completed || "$status" == completed ]]; then
+              echo '::error::The producing CI attempt ended before integration tests were ready.'
+              exit 1
+            fi
+            if [[ "$status" == in_progress ]]; then
+              echo 'run-tests=true' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo '::error::Timed out waiting for CI to finish building the binaries.'
+          exit 1
+
+  test-integration:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.run-tests == 'true' }}
+    uses: $/.github/workflows/test-integration.yml
+    secrets: inherit
+    with:
+      sha: ${{ needs.prepare.outputs.sha }}
+      run-id: ${{ fromJSON(needs.prepare.outputs.run-id || '0') }}
