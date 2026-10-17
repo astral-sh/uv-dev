@@ -36712,6 +36712,177 @@ fn lock_no_build_static_metadata() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_policy_requires_source_artifact() -> Result<()> {
+    let server = PackseServer::new("wheels/only-wheels.toml");
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a==1.0.0"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("--locked").args(["--no-binary-package", "a"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no source distribution and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: A source distribution is required for `a` because using pre-built wheels is disabled for `a` (i.e., with `--no-binary-package a`)
+    ");
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_policy_requires_wheel_artifact() -> Result<()> {
+    let server = PackseServer::new("wheels/no-wheels.toml");
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a==1.0.0"]
+    "#})?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()).arg("--locked").args(["--no-build-package", "a"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
+    ");
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_policy_accepts_inactive_platform_wheel() -> Result<()> {
+    // A wheel for another platform remains valid during universal lock validation. Installation
+    // will enforce compatibility if that package is active on the current platform.
+    let server = PackseServer::new("wheels/requires-python-subset.toml");
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["win-only; sys_platform == 'win32'"]
+
+        [tool.uv]
+        required-environments = ["sys_platform == 'linux'", "sys_platform == 'win32'"]
+        "#,
+    )?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--locked")
+        .arg("--offline")
+        .arg("--no-cache")
+        .arg("--no-build-package")
+        .arg("win-only")
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_build_policy_checks_transitive_artifacts() -> Result<()> {
+    // The same checks must apply behind an immutable registry parent.
+    let server = PackseServer::new("wheels/transitive-artifacts.toml");
+    let context = uv_test::test_context!("3.12");
+    context.temp_dir.child("pyproject.toml").write_str(
+        r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a==1.0.0"]
+        "#,
+    )?;
+    context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .assert()
+        .success();
+
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--locked")
+        .args(["--no-binary-package", "b"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because b==1.0.0 has no source distribution and all versions of a depend on b==1.0.0, we can conclude that all versions of a cannot be used.
+             And because your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: A source distribution is required for `b` because using pre-built wheels is disabled for `b` (i.e., with `--no-binary-package b`)
+    ");
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--locked")
+        .args(["--no-build-package", "c"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because c==1.0.0 has no usable wheels and all versions of a depend on c==1.0.0, we can conclude that all versions of a cannot be used.
+             And because your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Wheels are required for `c` because building from source is disabled for `c` (i.e., with `--no-build-package c`)
+    ");
+    uv_snapshot!(context.filters(), context
+        .lock()
+        .arg("--index-url")
+        .arg(server.index_url())
+        .arg("--locked")
+        .args(["--no-binary-package", "a", "--no-build-package", "a"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving dependencies
+      cause: Because a==1.0.0 has no usable wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+
+    hint: Wheels are required for `a` because building from source is disabled for `a` (i.e., with `--no-build-package a`)
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn lock_no_build_first_party_dynamic_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
