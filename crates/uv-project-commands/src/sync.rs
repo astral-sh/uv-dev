@@ -1034,9 +1034,10 @@ impl From<(&LockTarget<'_>, &LockMode<'_>, &Outcome<'_>)> for LockReport {
                         LockResult::Unchanged(..) => match mode {
                             // When `--frozen` is used, we don't check the lockfile.
                             LockMode::Frozen(_) => LockAction::Use,
-                            LockMode::DryRun(_) | LockMode::Locked(_, _) | LockMode::Write(_) => {
-                                LockAction::Check
-                            }
+                            LockMode::DryRun(_)
+                            | LockMode::Ephemeral(_)
+                            | LockMode::Locked(_, _)
+                            | LockMode::Write(_) => LockAction::Check,
                         },
                         LockResult::Changed(None, ..) => LockAction::Create,
                         LockResult::Changed(Some(_), ..) => LockAction::Update,
