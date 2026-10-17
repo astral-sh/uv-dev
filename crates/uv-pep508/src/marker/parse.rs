@@ -333,7 +333,7 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
                                 Ok(name) => CanonicalMarkerListPair::DependencyGroup(name),
                                 Err(err) => {
                                     reporter.report(
-                                    MarkerWarningKind::ExtrasInvalidComparison,
+                                    MarkerWarningKind::DependencyGroupsInvalidComparison,
                                     format!("Expected dependency group name (found `{l_string}`): {err}"),
                                 );
                                     CanonicalMarkerListPair::Arbitrary {
@@ -696,4 +696,48 @@ pub(crate) fn parse_markers<T: Pep508Url>(
     // If the tree consisted entirely of arbitrary expressions
     // that were ignored, it evaluates to true.
     parse_markers_cursor(&mut chars, reporter).map(|result| result.unwrap_or(MarkerTree::TRUE))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use super::parse_markers;
+    use crate::{MarkerWarningKind, VerbatimUrl};
+
+    #[test]
+    fn invalid_list_marker_names() -> Result<(), Box<dyn Error>> {
+        for (key, kind, name_kind) in [
+            (
+                "extras",
+                MarkerWarningKind::ExtrasInvalidComparison,
+                "extra",
+            ),
+            (
+                "dependency_groups",
+                MarkerWarningKind::DependencyGroupsInvalidComparison,
+                "dependency group",
+            ),
+        ] {
+            for operator in ["in", "not in"] {
+                let input = format!("'invalid name' {operator} {key}");
+                let mut warnings = Vec::new();
+                let marker = parse_markers::<VerbatimUrl>(&input, &mut |kind, message| {
+                    warnings.push((kind, message));
+                })?;
+                assert_eq!(
+                    warnings,
+                    [(
+                        kind,
+                        format!(
+                            "Expected {name_kind} name (found `invalid name`): Not a valid package or extra name: \"invalid name\". Names must start and end with a letter or digit and may only contain -, _, ., and alphanumeric characters."
+                        )
+                    )],
+                    "{input}"
+                );
+                assert_eq!(marker.try_to_string(), Some(input));
+            }
+        }
+        Ok(())
+    }
 }
