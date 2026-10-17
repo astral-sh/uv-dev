@@ -748,7 +748,7 @@ fn workspace_to_workspace_paths_dependencies() -> Result<()> {
     "
     );
 
-    let lock: SourceLock = toml::from_str(&context.read("main-workspace/uv.lock"))?;
+    let lock: SourceLock = context.read_toml("main-workspace/uv.lock");
 
     assert_json_snapshot!(lock.sources(), @r#"
     {
@@ -860,7 +860,7 @@ fn workspace_gitignored_member() -> Result<()> {
     "
     );
 
-    let lock: SourceLock = toml::from_str(&context.read("workspace/uv.lock"))?;
+    let lock: SourceLock = context.read_toml("workspace/uv.lock");
 
     assert_json_snapshot!(lock.sources(), @r#"
     {
@@ -933,7 +933,7 @@ fn workspace_gitignored_member_in_subdirectory() -> Result<()> {
     "
     );
 
-    let lock: SourceLock = toml::from_str(&context.read("workspace/uv.lock"))?;
+    let lock: SourceLock = context.read_toml("workspace/uv.lock");
 
     assert_json_snapshot!(lock.sources(), @r#"
     {
@@ -999,7 +999,7 @@ fn workspace_ignored_member() -> Result<()> {
     "
     );
 
-    let lock: SourceLock = toml::from_str(&context.read("workspace/uv.lock"))?;
+    let lock: SourceLock = context.read_toml("workspace/uv.lock");
 
     assert_json_snapshot!(lock.sources(), @r#"
     {
@@ -1101,7 +1101,7 @@ fn workspace_hidden_files() -> Result<()> {
     "
     );
 
-    let lock: SourceLock = toml::from_str(&context.read("workspace/uv.lock"))?;
+    let lock: SourceLock = context.read_toml("workspace/uv.lock");
 
     assert_json_snapshot!(lock.sources(), @r#"
     {
@@ -1162,7 +1162,7 @@ fn workspace_hidden_member() -> Result<()> {
     "
     );
 
-    let lock: SourceLock = toml::from_str(&context.read("workspace/uv.lock"))?;
+    let lock: SourceLock = context.read_toml("workspace/uv.lock");
 
     assert_json_snapshot!(lock.sources(), @r#"
     {
@@ -1224,7 +1224,7 @@ fn workspace_non_included_member() -> Result<()> {
     "
     );
 
-    let lock: SourceLock = toml::from_str(&context.read("workspace/c/uv.lock"))?;
+    let lock: SourceLock = context.read_toml("workspace/c/uv.lock");
 
     assert_json_snapshot!(lock.sources(), @r#"
     {
@@ -1899,7 +1899,7 @@ fn test_path_hopping() -> Result<()> {
     "
     );
 
-    let lock: SourceLock = toml::from_str(&context.read("project/uv.lock"))?;
+    let lock: SourceLock = context.read_toml("project/uv.lock");
     assert_json_snapshot!(lock.sources(), @r#"
     {
       "bar": {
@@ -1941,7 +1941,7 @@ fn transitive_dep_in_git_workspace_no_root() -> Result<()> {
 
     context.lock().assert().success();
 
-    let lock1: SourceLock = toml::from_str(&context.read("uv.lock"))?;
+    let lock1: SourceLock = context.read_toml("uv.lock");
 
     assert_json_snapshot!(lock1.sources(), @r#"
     {
@@ -1983,7 +1983,7 @@ fn transitive_dep_in_git_workspace_no_root() -> Result<()> {
 
     context.lock().assert().success();
 
-    let lock2: SourceLock = toml::from_str(&context.read("uv.lock"))?;
+    let lock2: SourceLock = context.read_toml("uv.lock");
 
     assert_eq!(lock1, lock2, "sources changed");
 
@@ -2016,7 +2016,7 @@ fn transitive_dep_in_git_workspace_with_root() -> Result<()> {
 
     context.lock().assert().success();
 
-    let lock1: SourceLock = toml::from_str(&context.read("uv.lock"))?;
+    let lock1: SourceLock = context.read_toml("uv.lock");
     assert_json_snapshot!(lock1.sources(), @r#"
     {
       "git-with-root": {
@@ -2050,7 +2050,7 @@ fn transitive_dep_in_git_workspace_with_root() -> Result<()> {
     )?;
 
     context.lock().assert().success();
-    let lock2: SourceLock = toml::from_str(&context.read("uv.lock"))?;
+    let lock2: SourceLock = context.read_toml("uv.lock");
 
     assert_eq!(lock1, lock2, "sources changed");
 
@@ -2207,7 +2207,7 @@ fn workspace_members_with_leading_dot_slash() -> Result<()> {
     "
     );
 
-    let lock: SourceLock = toml::from_str(&context.read("workspace/uv.lock"))?;
+    let lock: SourceLock = context.read_toml("workspace/uv.lock");
 
     assert_json_snapshot!(lock.sources(), @r#"
     {
@@ -2267,7 +2267,7 @@ fn workspace_members_with_parent_directory() -> Result<()> {
     "
     );
 
-    let lock: SourceLock = toml::from_str(&context.read("workspace/uv.lock"))?;
+    let lock: SourceLock = context.read_toml("workspace/uv.lock");
 
     assert_json_snapshot!(lock.sources(), @r#"
     {
@@ -2310,7 +2310,7 @@ fn workspace_members_with_complex_relative_paths() -> Result<()> {
     "
     );
 
-    let lock: SourceLock = toml::from_str(&context.read("workspace/uv.lock"))?;
+    let lock: SourceLock = context.read_toml("workspace/uv.lock");
 
     assert_json_snapshot!(lock.sources(), @r#"
     {
