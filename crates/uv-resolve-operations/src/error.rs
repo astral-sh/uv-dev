@@ -38,7 +38,10 @@ pub enum Error {
     #[error(
         "Requesting extras requires a `pylock.toml`, `pyproject.toml`, `setup.cfg`, or `setup.py` file"
     )]
-    ExtrasWithoutSource { has_editable: bool },
+    ExtrasWithoutSource {
+        has_editable: bool,
+        extra: Option<ExtraName>,
+    },
     #[error(
         "Requested extra{} not found: {}",
         if .0.len() == 1 { "" } else { "s" },
@@ -179,11 +182,15 @@ impl uv_errors::Hinted for Error {
                 &DerivationChain::default(),
                 error.hints(),
             ),
-            Self::ExtrasWithoutSource { has_editable } => {
+            Self::ExtrasWithoutSource {
+                has_editable,
+                extra,
+            } => {
+                let extra = extra.as_ref().map_or("extra", ExtraName::as_str);
                 uv_errors::Hints::from(if *has_editable {
-                    "Use `<dir>[extra]` syntax or `-r <file>` instead"
+                    format!("Use `<dir>[{extra}]` syntax or `-r <file>` instead")
                 } else {
-                    "Use `package[extra]` syntax instead"
+                    format!("Use `package[{extra}]` syntax instead")
                 })
             }
             Self::Hash(_)
