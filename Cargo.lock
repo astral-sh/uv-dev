@@ -6353,6 +6353,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "syn 3.0.5",
  "tagu",
  "tempfile",
  "textwrap",
