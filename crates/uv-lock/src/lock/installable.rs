@@ -28,11 +28,11 @@ use crate::lock::{
 use crate::{Lock, LockError};
 
 fn newly_activated_extras<'lock>(
+    lock: &'lock Lock,
     dep: &'lock Dependency,
     activated_extras: &[(&'lock PackageName, &'lock ExtraName)],
 ) -> Vec<(&'lock PackageName, &'lock ExtraName)> {
-    dep.extra
-        .iter()
+    lock.dependency_extras(dep)
         .filter_map(|extra| {
             let key = (&dep.package_id.name, extra);
             (!activated_extras.contains(&key)).then_some(key)
@@ -86,7 +86,7 @@ fn package_dependencies<'a>(
 
 /// Determines which dependencies are included from an install target root.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InstallableRootKind {
+pub(super) enum InstallableRootKind {
     /// Include the root's production dependencies and selected dependency groups.
     Production,
     /// Include only the root's selected dependency groups.
@@ -318,7 +318,10 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 // Track the activated extras.
                 if groups.prod() {
                     activated_projects.push(&dist.id.name);
-                    for extra in extras.extra_names(dist.optional_dependencies.keys()) {
+                    for extra in extras
+                        .extra_names(dist.optional_dependencies.keys())
+                        .filter(|extra| !dist.is_known_missing_extra(extra))
+                    {
                         activated_extras.push((&dist.id.name, extra));
                     }
                 }
@@ -371,7 +374,10 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     (package_index, None),
                     UniversalMarker::TRUE,
                 );
-                for extra in extras.extra_names(dist.optional_dependencies.keys()) {
+                for extra in extras
+                    .extra_names(dist.optional_dependencies.keys())
+                    .filter(|extra| !dist.is_known_missing_extra(extra))
+                {
                     queue.push_back((package_index, Some(extra)));
                     add_reachability(
                         &mut conflict_reachability,
@@ -397,8 +403,10 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if validate_conflicts && dep.complexified_marker.has_conflict_marker() {
                     dependencies_for_conflict_validation.push((dist, dep));
                 }
-                let additional_activated_extras = newly_activated_extras(dep, &activated_extras);
-                if !dep.complexified_marker.evaluate(
+                let additional_activated_extras =
+                    newly_activated_extras(self.lock(), dep, &activated_extras);
+                let marker = self.lock().constrain_conflicts(dep.complexified_marker);
+                if !marker.evaluate(
                     marker_env,
                     activated_projects.iter().copied(),
                     activated_extras
@@ -462,20 +470,12 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 }
 
                 // Push its dependencies on the queue.
-                add_reachability(
-                    &mut conflict_reachability,
-                    (dep.index, None),
-                    dep.complexified_marker,
-                );
+                add_reachability(&mut conflict_reachability, (dep.index, None), marker);
                 if seen.insert((dep.index, None)) {
                     queue.push_back((dep.index, None));
                 }
-                for extra in &dep.extra {
-                    add_reachability(
-                        &mut conflict_reachability,
-                        (dep.index, Some(extra)),
-                        dep.complexified_marker,
-                    );
+                for extra in self.lock().dependency_extras(dep) {
+                    add_reachability(&mut conflict_reachability, (dep.index, Some(extra)), marker);
                     if seen.insert((dep.index, Some(extra))) {
                         queue.push_back((dep.index, Some(extra)));
                     }
@@ -535,7 +535,11 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if seen.insert((package_index, None)) {
                     queue.push_back((package_index, None));
                 }
-                for extra in &dependency.extras {
+                for extra in dependency
+                    .extras
+                    .iter()
+                    .filter(|extra| !dist.is_known_missing_extra(extra))
+                {
                     add_reachability(
                         &mut conflict_reachability,
                         (package_index, Some(extra)),
@@ -616,7 +620,11 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 // handling in the package-level `dependency_groups` loop above; without this,
                 // conflict markers on transitive dependencies gated by the activated extra
                 // would not evaluate to `true` during the graph traversals below.
-                for extra in &dependency.extras {
+                for extra in dependency
+                    .extras
+                    .iter()
+                    .filter(|extra| !dist.is_known_missing_extra(extra))
+                {
                     let key = (&dist.id.name, extra);
                     if !activated_extras.contains(&key) {
                         activated_extras.push(key);
@@ -632,7 +640,11 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if seen.insert((package_index, None)) {
                     queue.push_back((package_index, None));
                 }
-                for extra in &dependency.extras {
+                for extra in dependency
+                    .extras
+                    .iter()
+                    .filter(|extra| !dist.is_known_missing_extra(extra))
+                {
                     add_reachability(
                         &mut conflict_reachability,
                         (package_index, Some(extra)),
@@ -687,8 +699,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 for dep in package_dependencies(package, extra) {
                     let mut dep_reachability = dep.complexified_marker;
                     dep_reachability.and(parent_reachability);
+                    dep_reachability = self.lock().constrain_conflicts(dep_reachability);
                     let additional_activated_extras =
-                        newly_activated_extras(dep, &activated_extras);
+                        newly_activated_extras(self.lock(), dep, &activated_extras);
                     if !dep_reachability.evaluate(
                         marker_env,
                         activated_projects.iter().copied(),
@@ -716,7 +729,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                     if add_reachability(&mut reachability, (dep.index, None), dep_reachability) {
                         queue.push_back((dep.index, None));
                     }
-                    for extra in &dep.extra {
+                    for extra in self.lock().dependency_extras(dep) {
                         if add_reachability(
                             &mut reachability,
                             (dep.index, Some(extra)),
@@ -769,8 +782,9 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if validate_conflicts && dep.complexified_marker.has_conflict_marker() {
                     dependencies_for_conflict_validation.push((package, dep));
                 }
-                if !dep
-                    .complexified_marker
+                if !self
+                    .lock()
+                    .constrain_conflicts(dep.complexified_marker)
                     .evaluate_activated(marker_env, &activated)
                 {
                     continue;
@@ -821,7 +835,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if seen.insert((dep.index, None)) {
                     queue.push_back((dep.index, None));
                 }
-                for extra in &dep.extra {
+                for extra in self.lock().dependency_extras(dep) {
                     if seen.insert((dep.index, Some(extra))) {
                         queue.push_back((dep.index, Some(extra)));
                     }
@@ -1397,6 +1411,41 @@ provides-extras = ["cli"]
             &InstallOptions::default(),
         )
         .expect("valid resolution")
+    }
+
+    #[test]
+    fn immutable_root_ignores_known_missing_extra() -> Result<(), Box<dyn std::error::Error>> {
+        let lock: Lock = toml::from_str(
+            r#"
+version = 1
+revision = 5
+requires-python = ">=3.11"
+conflicts = [[
+    { package = "tool", extra = "feature" },
+    { package = "tool", extra = "missing" },
+]]
+
+[[package]]
+name = "tool"
+version = "1.0.0"
+source = { registry = "https://example.com/simple" }
+declared-extras = ["feature"]
+sdist = { url = "https://example.com/tool-1.0.0.tar.gz", hash = "sha256:7777777777777777777777777777777777777777777777777777777777777777" }
+
+[package.optional-dependencies]
+feature = []
+missing = []
+"#,
+        )?;
+        let resolution = materialize_with_extras(
+            &lock,
+            &[package(&lock, "tool", "1.0.0")],
+            &DARWIN_MARKERS,
+            &ExtrasSpecification::from_all_extras(),
+        )?;
+        assert_eq!(resolution.graph().node_count(), 2);
+        assert_eq!(resolution.graph().edge_count(), 1);
+        Ok(())
     }
 
     #[test]
