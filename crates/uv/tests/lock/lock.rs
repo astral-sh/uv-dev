@@ -13047,6 +13047,9 @@ async fn lock_core_metadata_hash() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
     let index_server = MockServer::start().await;
     let artifact_server = MockServer::start().await;
+    let context = context
+        .with_endpoint_role(index_server.address(), "[INDEX]")
+        .with_endpoint_role(artifact_server.address(), "[ARTIFACT_HOST]");
 
     let metadata = indoc! {"
         Metadata-Version: 2.1
@@ -13111,7 +13114,7 @@ async fn lock_core_metadata_hash() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Hash mismatch for package metadata at `http://[LOCALHOST]/files/basic_package-0.1.0-py3-none-any.whl.metadata`
+    error: Hash mismatch for package metadata at `http://[ARTIFACT_HOST]/files/basic_package-0.1.0-py3-none-any.whl.metadata`
 
     Expected:
       sha256:1c9f243a45631766eacd673ad9f6a1672ad847c7495a387c3b8d6c9b0572e00b
@@ -13124,7 +13127,7 @@ async fn lock_core_metadata_hash() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Hash mismatch for package metadata at `http://[LOCALHOST]/files/basic_package-0.1.0-py3-none-any.whl.metadata`
+    error: Hash mismatch for package metadata at `http://[ARTIFACT_HOST]/files/basic_package-0.1.0-py3-none-any.whl.metadata`
 
     Expected:
       sha256:1c9f243a45631766eacd673ad9f6a1672ad847c7495a387c3b8d6c9b0572e00b
