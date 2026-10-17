@@ -13,7 +13,7 @@ use uv_client::BaseClientBuilder;
 use uv_configuration::{
     Concurrency, Constraints, DryRun, HashCheckingMode, Modifications, TargetTriple,
 };
-use uv_dispatch::PlatformState;
+use uv_dispatch::{PlatformState, UniversalState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
 use uv_fs::{CWD, Simplified};
@@ -132,9 +132,13 @@ pub async fn upgrade(
     // Constraints that caused upgrades to be skipped or altered.
     let mut collected_constraints: Vec<(PackageName, UpgradeConstraint)> = Vec::new();
 
+    // Git references and index capabilities apply to every tool. Fork the state to keep
+    // resolution indexes and in-flight downloads scoped to each tool's settings and interpreter.
+    let shared_state = UniversalState::default();
     let mut errors = Vec::new();
     for (name, constraints) in &names {
         debug!("Upgrading tool: `{name}`");
+        let state = shared_state.fork();
         let result = Box::pin(upgrade_tool(
             name,
             constraints,
@@ -144,6 +148,7 @@ pub async fn upgrade(
             &installed_tools,
             &args,
             &client_builder,
+            &state,
             cache,
             workspace_cache,
             &filesystem,
@@ -277,6 +282,7 @@ async fn upgrade_tool(
     installed_tools: &InstalledTools,
     args: &ResolverInstallerOptions,
     client_builder: &BaseClientBuilder<'_>,
+    state: &PlatformState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     filesystem: &ResolverInstallerOptions,
@@ -377,8 +383,6 @@ async fn upgrade_tool(
         manifest_overrides,
         manifest_excludes,
     );
-    // Initialize any shared state.
-    let state = PlatformState::default();
     // Check if we need to create a new environment — if so, resolve it first, then install the
     // requested tool.
     let requested_interpreter =
@@ -399,7 +403,7 @@ async fn upgrade_tool(
             build_constraints.clone(),
             &settings.resolver,
             client_builder,
-            &state,
+            state,
             Box::new(SummaryResolveLogger),
             concurrency,
             cache,
@@ -433,7 +437,7 @@ async fn upgrade_tool(
                 build_constraints,
                 (&settings).into(),
                 client_builder,
-                &state,
+                state,
                 Box::new(DefaultInstallLogger),
                 installer_metadata,
                 concurrency,
@@ -506,7 +510,7 @@ async fn upgrade_tool(
                     build_constraints,
                     (&settings).into(),
                     client_builder,
-                    &state,
+                    state,
                     Box::new(UpgradeInstallLogger::new(name.clone())),
                     installer_metadata,
                     concurrency,
@@ -528,7 +532,7 @@ async fn upgrade_tool(
             build_constraints.clone(),
             &settings.resolver,
             client_builder,
-            &state,
+            state,
             Box::new(SummaryResolveLogger),
             concurrency,
             cache,
@@ -546,7 +550,7 @@ async fn upgrade_tool(
             build_constraints,
             (&settings).into(),
             client_builder,
-            &state,
+            state,
             Box::new(DefaultInstallLogger),
             installer_metadata,
             concurrency,
@@ -571,7 +575,7 @@ async fn upgrade_tool(
             ExtraBuildRequires::default(),
             &settings,
             client_builder,
-            &state,
+            state,
             Box::new(SummaryResolveLogger),
             Box::new(UpgradeInstallLogger::new(name.clone())),
             installer_metadata,
