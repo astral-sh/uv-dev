@@ -1491,7 +1491,7 @@ impl Identifier for FileLocation {
             Self::RelativeUrl(base, url) => {
                 DistributionId::RelativeUrl(base.to_string(), url.to_string())
             }
-            Self::AbsoluteUrl(url) => DistributionId::AbsoluteUrl(url.to_string()),
+            Self::AbsoluteUrl(url) => DistributionId::AbsoluteUrl(url.as_ref().to_owned()),
         }
     }
 
@@ -1500,7 +1500,7 @@ impl Identifier for FileLocation {
             Self::RelativeUrl(base, url) => {
                 ResourceId::RelativeUrl(base.to_string(), url.to_string())
             }
-            Self::AbsoluteUrl(url) => ResourceId::AbsoluteUrl(url.to_string()),
+            Self::AbsoluteUrl(url) => ResourceId::AbsoluteUrl(url.as_ref().to_owned()),
         }
     }
 }
