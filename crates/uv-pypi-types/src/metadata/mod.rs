@@ -97,13 +97,17 @@ impl<'a> Headers<'a> {
     }
 
     /// Return all values associated with the header with the given name.
-    fn get_all_values(&self, name: &str) -> Result<impl Iterator<Item = String>, DecodeError> {
-        let values = self
-            .message
+    fn get_all_values<'m>(
+        &'m self,
+        name: &'m str,
+    ) -> impl Iterator<Item = Result<String, DecodeError>> + 'm {
+        self.message
             .all(name)
             .map(|header| header.decoded_value().map(Cow::into_owned))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(values.into_iter().filter(|value| value != "UNKNOWN"))
+            .filter(|value| match value {
+                Ok(value) => value != "UNKNOWN",
+                Err(_error) => true,
+            })
     }
 }
 
@@ -119,4 +123,64 @@ fn parse_version(metadata_version: &str) -> Result<(u8, u8), MetadataError> {
         .parse::<u8>()
         .map_err(|_| MetadataError::InvalidMetadataVersion(metadata_version.to_string()))?;
     Ok((major, minor))
+}
+
+#[cfg(test)]
+mod headers_tests {
+    use super::{DecodeError, Headers, MetadataError, ResolutionMetadata};
+
+    #[test]
+    fn all_values_preserve_order_and_duplicates() -> Result<(), DecodeError> {
+        let headers = Headers::parse(
+            b"X-Value: first\r\nx-VALUE: UNKNOWN\r\nOther: ignored\r\nX-VALUE: second\r\nX-Value: first\r\nx-value: unknown\r\n\r\n",
+        );
+        let name = String::from("x-value");
+        let mut values = headers.get_all_values(name.as_str());
+
+        assert_eq!(values.next().transpose()?.as_deref(), Some("first"));
+        assert_eq!(
+            values.collect::<Result<Vec<_>, _>>()?,
+            ["second", "first", "unknown"]
+        );
+        assert!(headers.get_all_values("missing").next().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn all_values_preserve_decoding() -> Result<(), DecodeError> {
+        let headers = Headers::parse(
+            b"X-Value: =?utf-8?Q?touch=C3=A9?=\r\nX-Value: folded\r\n\tvalue\r\nX-Value: touch\xc3\xa9\r\nX-Value: touch\xe9\r\nX-Value: =?utf-8?Q?UNKNOWN?=\r\n\r\n",
+        );
+        let values = headers
+            .get_all_values("X-Value")
+            .collect::<Result<Vec<_>, _>>()?;
+
+        assert_eq!(values, ["touché", "folded value", "touché", "touch�"]);
+        Ok(())
+    }
+
+    #[test]
+    fn pkg_info_reports_first_dynamic_field() {
+        let cases: [(&[u8], &str); 3] = [
+            (
+                b"Metadata-Version: 2.2\r\nName: example\r\nVersion: 1.0\r\nDynamic: UNKNOWN\r\nDynamic: Version\r\ndYnAmIc: Requires-Python\r\nDynamic: Requires-Dist\r\n\r\n",
+                "Requires-Python",
+            ),
+            (
+                b"Metadata-Version: 2.2\r\nName: example\r\nVersion: 1.0\r\nDynamic: Requires-Dist\r\nDynamic: Requires-Python\r\n\r\n",
+                "Requires-Dist",
+            ),
+            (
+                b"Metadata-Version: 2.2\r\nName: example\r\nVersion: 1.0\r\nDynamic: Provides-Extra\r\nDynamic: Requires-Dist\r\n\r\n",
+                "Provides-Extra",
+            ),
+        ];
+
+        for (content, expected) in cases {
+            match ResolutionMetadata::parse_pkg_info(content).unwrap_err() {
+                MetadataError::DynamicField(field) => assert_eq!(field, expected),
+                other => panic!("expected the first dynamic field, got {other}"),
+            }
+        }
+    }
 }
