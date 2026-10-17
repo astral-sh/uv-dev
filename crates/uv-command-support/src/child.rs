@@ -1,6 +1,6 @@
+use std::io;
 use std::path::PathBuf;
 
-use anyhow::bail;
 use tokio::process::Child;
 use tracing::debug;
 use uv_fs::Simplified;
@@ -8,26 +8,36 @@ use uv_warnings::warn_user;
 
 use crate::ExitStatus;
 
+/// A failure to read an environment file for a spawned process.
+#[derive(Debug, thiserror::Error)]
+pub enum EnvFileError {
+    #[error("No environment file found at: {}", _0.simplified_display())]
+    Missing(PathBuf),
+    #[error("Failed to read environment file `{}`", path.simplified_display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+}
+
 /// Read dotenv files into an overlay for a spawned process.
 ///
 /// These values intentionally do not mutate uv's process environment and cannot mutate
 /// the current uv process' settings.
-pub fn read_env_files(env_files: &[PathBuf]) -> anyhow::Result<Vec<(String, String)>> {
+pub fn read_env_files(env_files: &[PathBuf]) -> Result<Vec<(String, String)>, EnvFileError> {
     let mut environment = Vec::new();
 
     for env_file_path in env_files.iter().rev().map(PathBuf::as_path) {
         let iter = match dotenvy::from_path_iter(env_file_path) {
             Err(dotenvy::Error::Io(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-                bail!(
-                    "No environment file found at: {}",
-                    env_file_path.simplified_display()
-                );
+                return Err(EnvFileError::Missing(env_file_path.to_path_buf()));
             }
             Err(dotenvy::Error::Io(err)) => {
-                bail!(
-                    "Failed to read environment file `{}`: {err}",
-                    env_file_path.simplified_display()
-                );
+                return Err(EnvFileError::Read {
+                    path: env_file_path.to_path_buf(),
+                    source: err,
+                });
             }
             Err(dotenvy::Error::LineParse(content, position)) => {
                 warn_user!(
@@ -55,10 +65,10 @@ pub fn read_env_files(env_files: &[PathBuf]) -> anyhow::Result<Vec<(String, Stri
                     }
                 }
                 Err(dotenvy::Error::Io(err)) => {
-                    bail!(
-                        "Failed to read environment file `{}`: {err}",
-                        env_file_path.simplified_display()
-                    );
+                    return Err(EnvFileError::Read {
+                        path: env_file_path.to_path_buf(),
+                        source: err,
+                    });
                 }
                 Err(dotenvy::Error::LineParse(content, position)) => {
                     warn_user!(
