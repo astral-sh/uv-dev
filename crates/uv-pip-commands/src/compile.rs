@@ -65,6 +65,8 @@ use uv_resolve_operations::locked_requirements::{
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
+const NO_EMIT_INDEX_THRESHOLD: usize = 32;
+
 /// Resolve a set of requirements into a set of pinned versions.
 #[expect(clippy::fn_params_excessive_bools)]
 pub async fn pip_compile(
@@ -787,19 +789,31 @@ pub async fn pip_compile(
     }
 
     // If any "unsafe" packages were excluded, notify the user.
-    let excluded = no_emit_packages
-        .into_iter()
-        .filter(|name| resolution.contains(name))
-        .collect::<Vec<_>>();
-    if include_annotations && !excluded.is_empty() {
-        writeln!(writer)?;
-        writeln!(
-            writer,
-            "{}",
-            "# The following packages were excluded from the output:".green()
-        )?;
-        for package in excluded {
-            writeln!(writer, "# {package}")?;
+    if include_annotations {
+        let resolution_packages = (no_emit_packages.len() > NO_EMIT_INDEX_THRESHOLD).then(|| {
+            resolution
+                .package_names()
+                .collect::<FxHashSet<&PackageName>>()
+        });
+        let excluded = no_emit_packages
+            .into_iter()
+            .filter(|name| {
+                resolution_packages.as_ref().map_or_else(
+                    || resolution.contains(name),
+                    |packages| packages.contains(name),
+                )
+            })
+            .collect::<Vec<_>>();
+        if !excluded.is_empty() {
+            writeln!(writer)?;
+            writeln!(
+                writer,
+                "{}",
+                "# The following packages were excluded from the output:".green()
+            )?;
+            for package in excluded {
+                writeln!(writer, "# {package}")?;
+            }
         }
     }
 
