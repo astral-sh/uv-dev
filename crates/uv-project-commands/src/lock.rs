@@ -8,7 +8,9 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun};
+use uv_configuration::{
+    ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, LockFormat,
+};
 use uv_dispatch::UniversalState;
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
@@ -16,7 +18,7 @@ use uv_environment_operations::{
 use uv_git_types::GitOid;
 use uv_lock::{Lock, Package};
 use uv_lock_operations::{
-    LockError, LockMode, LockOperation, LockResult, LockTarget, MissingLockfileSource,
+    LockError, LockMode, LockOperation, LockReporter, LockResult, LockTarget, MissingLockfileSource,
 };
 use uv_normalize::PackageName;
 use uv_pep440::Version;
@@ -34,9 +36,78 @@ use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, VirtualProject, WorkspaceCache};
 
 use crate::ScriptPath;
+use crate::lock_report::LockReport;
 
 /// Resolve the project requirements into a lockfile.
 pub async fn lock(
+    project_dir: &Path,
+    lock_check: LockCheck,
+    output_format: LockFormat,
+    frozen: Option<FrozenSource>,
+    dry_run: DryRun,
+    refresh: Refresh,
+    python: Option<String>,
+    install_mirrors: PythonInstallMirrors,
+    settings: ResolverSettings,
+    client_builder: BaseClientBuilder<'_>,
+    script: Option<ScriptPath>,
+    python_preference: PythonPreference,
+    python_arch: Option<PythonArchitecture>,
+    python_downloads: PythonDownloads,
+    concurrency: Concurrency,
+    config_discovery: ConfigDiscovery,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    printer: Printer,
+    preview: Preview,
+) -> anyhow::Result<ExitStatus> {
+    let mut report = match output_format {
+        LockFormat::Text => None,
+        LockFormat::Json => {
+            if !preview.is_enabled(PreviewFeature::JsonOutput) {
+                warn_user!(
+                    "The `--output-format json` option is experimental and the schema may change without warning. Pass `--preview-features {}` to disable this warning.",
+                    PreviewFeature::JsonOutput
+                );
+            }
+            Some(LockReport::new(lock_check, frozen, dry_run))
+        }
+    };
+    let result = Box::pin(lock_inner(
+        project_dir,
+        lock_check,
+        frozen,
+        dry_run,
+        refresh,
+        python,
+        install_mirrors,
+        settings,
+        client_builder,
+        script,
+        python_preference,
+        python_arch,
+        python_downloads,
+        concurrency,
+        config_discovery,
+        cache,
+        workspace_cache,
+        printer,
+        preview,
+        report.as_mut(),
+    ))
+    .await;
+    if let Some(mut report) = report {
+        report.finish(&result);
+        writeln!(
+            printer.stdout_important(),
+            "{}",
+            serde_json::to_string_pretty(&report)?
+        )?;
+    }
+    result
+}
+
+async fn lock_inner(
     project_dir: &Path,
     lock_check: LockCheck,
     frozen: Option<FrozenSource>,
@@ -56,6 +127,7 @@ pub async fn lock(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
+    mut report: Option<&mut LockReport>,
 ) -> anyhow::Result<ExitStatus> {
     // If necessary, initialize the PEP 723 script.
     let script = match script {
@@ -95,6 +167,9 @@ pub async fn lock(
         .await?;
         LockTarget::Workspace(workspace.workspace())
     };
+    if let Some(report) = report.as_deref_mut() {
+        report.set_path(&target.lock_path());
+    }
 
     // Determine the lock mode.
     let interpreter;
@@ -160,7 +235,7 @@ pub async fn lock(
     let state = UniversalState::default();
 
     // Perform the lock operation.
-    match Box::pin(
+    let result = Box::pin(
         LockOperation::new(
             mode,
             &settings,
@@ -178,10 +253,21 @@ pub async fn lock(
             matches!(&refresh, Refresh::All(..))
                 && preview.is_enabled(PreviewFeature::LockfileFormatCheck),
         )
+        .with_reporter(
+            report
+                .as_deref_mut()
+                .map(|report| report as &mut dyn LockReporter),
+        )
         .execute(target),
     )
-    .await
-    {
+    .await;
+    if let Some(report) = report {
+        match &result {
+            Ok(lock) => report.operation_success(&mode, lock),
+            Err(error) => report.operation_error(error),
+        }
+    }
+    match result {
         Ok(lock) => {
             if let Some(frozen_source) = frozen {
                 warn_user!(
