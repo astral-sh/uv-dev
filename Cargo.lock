@@ -6237,6 +6237,7 @@ dependencies = [
  "uv-errors",
  "uv-extract",
  "uv-fastid",
+ "uv-flags",
  "uv-fs",
  "uv-git",
  "uv-macros",
