@@ -1,5 +1,6 @@
 //! Edit project and script metadata while preserving TOML formatting.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::str::FromStr;
 use std::{fmt, mem};
@@ -7,12 +8,13 @@ use std::{fmt, mem};
 use itertools::Itertools;
 use thiserror::Error;
 use toml_edit::{
-    Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TomlError, Value,
+    Array, ArrayOfTables, DocumentMut, Formatted, Item, RawString, Table, TableLike, TomlError,
+    Value,
 };
 
 use uv_cache_key::CanonicalUrl;
 use uv_configuration::AddBoundsKind;
-use uv_distribution_types::{Index, IndexFormat, IndexUrl};
+use uv_distribution_types::{Index, IndexFormat, IndexName, IndexUrl};
 use uv_fs::{PortablePath, is_same_file_allow_missing, try_relative_to_if};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionParseError};
@@ -294,7 +296,94 @@ impl PyProjectTomlMut {
     }
 
     /// Add an [`Index`] to `tool.uv.index`.
-    pub fn add_index(&mut self, index: &Index, root_dir: &Path) -> Result<(), Error> {
+    #[cfg(test)]
+    fn add_index(&mut self, index: &Index, root_dir: &Path) -> Result<(), Error> {
+        self.add_indexes(&[index], root_dir, &[])
+    }
+
+    /// Add indexes before updating source names against the final declarations.
+    /// Replacement names shadowed by workspace members retain explicit aliases for old sources.
+    pub fn add_indexes(
+        &mut self,
+        indexes: &[&Index],
+        root_dir: &Path,
+        member_indexes: &[&Index],
+    ) -> Result<(), Error> {
+        let original_names = self
+            .index_tables()
+            .filter_map(|index| index.get("name").and_then(Item::as_str))
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>();
+        let shadowed_names = member_indexes
+            .iter()
+            .filter_map(|member| {
+                let name = member.name.as_ref()?;
+                let root = self.index_tables().find(|table| {
+                    table.get("name").and_then(Item::as_str) == Some(name.as_ref())
+                })?;
+                let url = root.get("url").and_then(Item::as_str)?;
+                let format = match root.get("format").and_then(Item::as_str) {
+                    Some("flat") => IndexFormat::Flat,
+                    _ => IndexFormat::Simple,
+                };
+                (!index_locations_equal(url, &member.url, root_dir) || member.format != format)
+                    .then(|| name.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        let mut renames = std::collections::BTreeMap::new();
+        for index in indexes {
+            let previous_names =
+                self.edit_index(index, root_dir, &shadowed_names, member_indexes)?;
+            if let Some(name) = index.name.as_deref() {
+                for previous in previous_names {
+                    if previous != name {
+                        renames.insert(previous, name.to_owned());
+                    }
+                }
+            }
+        }
+        let names = self
+            .index_tables()
+            .filter_map(|index| index.get("name").and_then(Item::as_str))
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>();
+        // Only original root bindings can rename inherited sources. Stop a rename chain when
+        // its declaration survives as an alias, so a member override cannot capture the source.
+        for original in original_names {
+            let mut name = original.as_str();
+            let mut visited = BTreeSet::new();
+            while !names.contains(name) && visited.insert(name) {
+                let Some(next) = renames.get(name) else {
+                    break;
+                };
+                name = next;
+            }
+            if name != original && names.contains(name) {
+                self.rename_index_sources(&original, name);
+            }
+        }
+        Ok(())
+    }
+
+    fn index_tables(&self) -> impl Iterator<Item = &Table> {
+        self.doc
+            .get("tool")
+            .and_then(Item::as_table_like)
+            .and_then(|tool| tool.get("uv"))
+            .and_then(Item::as_table_like)
+            .and_then(|uv| uv.get("index"))
+            .and_then(Item::as_array_of_tables)
+            .into_iter()
+            .flat_map(|indexes| indexes.iter())
+    }
+
+    fn edit_index(
+        &mut self,
+        index: &Index,
+        root_dir: &Path,
+        shadowed_names: &BTreeSet<IndexName>,
+        member_indexes: &[&Index],
+    ) -> Result<Vec<String>, Error> {
         let size = self.doc.len();
         let existing = self
             .doc
@@ -444,45 +533,63 @@ impl PyProjectTomlMut {
             }
         }
 
-        // Remove any replaced tables.
-        existing.retain(|table| {
-            // If the index has the same name, skip it.
-            if let Some(index) = index.name.as_deref()
-                && table
-                    .get("name")
-                    .and_then(|name| name.as_str())
-                    .is_some_and(|name| name == index)
-            {
-                return false;
-            }
-
-            // If there's another default index, skip it.
-            if index.default
-                && table
-                    .get("default")
-                    .is_some_and(|default| default.as_bool() == Some(true))
-            {
-                return false;
-            }
-
-            // If there's another index with the same URL, skip it.
-            if table
-                .get("url")
-                .and_then(|item| item.as_str())
-                .is_some_and(|url| index_locations_equal(url, &index.url, root_dir))
-            {
-                return false;
-            }
-
-            true
+        let replacement_name = table.get("name").and_then(Item::as_str);
+        let replacement_format = match table.get("format").and_then(Item::as_str) {
+            Some("flat") => IndexFormat::Flat,
+            _ => IndexFormat::Simple,
+        };
+        // Compare the declaration that will be written, including its retained name and format.
+        let incoming_shadowed = replacement_name.is_some_and(|name| {
+            member_indexes.iter().any(|member| {
+                member.name.as_deref() == Some(name)
+                    && (table
+                        .get("url")
+                        .and_then(Item::as_str)
+                        .is_none_or(|url| !index_locations_equal(url, &member.url, root_dir))
+                        || member.format != replacement_format)
+            })
         });
 
+        // Remove any replaced tables and retain every name whose sources need updating.
+        let mut previous_names = Vec::new();
+        let mut aliases = Vec::new();
+        existing.retain(|table| {
+            let same_name = index
+                .name
+                .as_deref()
+                .is_some_and(|name| table.get("name").and_then(Item::as_str) == Some(name));
+            let replaced_default =
+                index.default && table.get("default").and_then(Item::as_bool) == Some(true);
+            let same_url = table
+                .get("url")
+                .and_then(Item::as_str)
+                .is_some_and(|url| index_locations_equal(url, &index.url, root_dir));
+            let replaced = same_name || replaced_default || same_url;
+            if replaced && let Some(name) = table.get("name").and_then(Item::as_str) {
+                previous_names.push(name.to_owned());
+                let previous_shadowed =
+                    IndexName::from_str(name).is_ok_and(|name| shadowed_names.contains(&name));
+                if (incoming_shadowed || previous_shadowed) && replacement_name != Some(name) {
+                    let mut alias = table.clone();
+                    // Retained aliases are available to pinned sources, not implicit searches.
+                    alias.remove("default");
+                    alias.insert("explicit", toml_edit::value(true));
+                    aliases.push(alias);
+                }
+            }
+            !replaced
+        });
         // Set the position to the minimum, if it's not already the first element.
-        if let Some(min) = existing.iter().filter_map(Table::position).min() {
+        if let Some(min) = existing
+            .iter()
+            .chain(&aliases)
+            .filter_map(Table::position)
+            .min()
+        {
             table.set_position(Some(min));
 
             // Increment the position of all existing elements.
-            for table in existing.iter_mut() {
+            for table in existing.iter_mut().chain(&mut aliases) {
                 if let Some(position) = table.position() {
                     table.set_position(Some(position + 1));
                 }
@@ -494,8 +601,38 @@ impl PyProjectTomlMut {
 
         // Push the item to the table.
         existing.push(table);
+        // Match the real replacement before synthetic aliases during subsequent batch edits.
+        for alias in aliases {
+            existing.push(alias);
+        }
 
-        Ok(())
+        Ok(previous_names)
+    }
+
+    fn rename_index_sources(&mut self, previous_name: &str, name: &str) {
+        if let Some(sources) = self
+            .doc
+            .get_mut("tool")
+            .and_then(Item::as_table_like_mut)
+            .and_then(|tool| tool.get_mut("uv"))
+            .and_then(Item::as_table_like_mut)
+            .and_then(|uv| uv.get_mut("sources"))
+            .and_then(Item::as_table_like_mut)
+        {
+            for (_, source) in sources.iter_mut() {
+                if let Some(source) = source.as_table_like_mut() {
+                    rename_index_source(source, previous_name, name);
+                } else if let Some(source) = source.as_array_mut() {
+                    for source in source.iter_mut().filter_map(Value::as_inline_table_mut) {
+                        rename_index_source(source, previous_name, name);
+                    }
+                } else if let Some(source) = source.as_array_of_tables_mut() {
+                    for source in source.iter_mut() {
+                        rename_index_source(source, previous_name, name);
+                    }
+                }
+            }
+        }
     }
 
     /// Adds a dependency to `project.optional-dependencies`.
@@ -1657,6 +1794,19 @@ fn find_source(name: &PackageName, sources: &Table) -> Option<String> {
     None
 }
 
+fn rename_index_source(source: &mut dyn TableLike, previous_name: &str, name: &str) {
+    let Some(index) = source.get_mut("index").and_then(Item::as_value_mut) else {
+        return;
+    };
+    if previous_name == name || index.as_str() != Some(previous_name) {
+        return;
+    }
+
+    let decor = index.decor().clone();
+    *index = Value::from(name);
+    *index.decor_mut() = decor;
+}
+
 // Add a source to `tool.uv.sources`.
 fn add_source(req: &PackageName, source: &Source, sources: &mut Table) -> Result<(), Error> {
     // Serialize as an inline table.
@@ -2243,6 +2393,108 @@ dependencies = [
     }
 
     #[test]
+    fn add_index_renames_all_replaced_source_tables() -> Result<()> {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"[project]
+name = "project"
+version = "0.1.0"
+dependencies = ["inline", "array", "table", "tables"]
+
+[tool.uv.sources]
+inline = { index = "old-a" }
+array = [{ index = "old-b", marker = "sys_platform == 'linux'" }, { index = "old-a", marker = "sys_platform != 'linux'" }]
+
+[tool.uv.sources.table]
+index = "old-b"
+
+[[tool.uv.sources.tables]]
+index = "old-a"
+marker = "sys_platform == 'linux'"
+
+[[tool.uv.sources.tables]]
+index = "old-b"
+marker = "sys_platform != 'linux'"
+
+[[tool.uv.index]]
+name = "old-a"
+url = "https://example.com/simple"
+
+[[tool.uv.index]]
+name = "old-b"
+url = "https://example.com/simple"
+"#,
+            DependencyTarget::PyProjectToml,
+        )?;
+        doc.add_index(
+            &Index::from_str("new=https://example.com/simple")?,
+            Path::new("."),
+        )?;
+        assert_snapshot!(doc.to_string(), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = ["inline", "array", "table", "tables"]
+
+        [tool.uv.sources]
+        inline = { index = "new" }
+        array = [{ index = "new", marker = "sys_platform == 'linux'" }, { index = "new", marker = "sys_platform != 'linux'" }]
+
+        [[tool.uv.index]]
+        name = "new"
+        url = "https://example.com/simple"
+
+        [tool.uv.sources.table]
+        index = "new"
+
+        [[tool.uv.sources.tables]]
+        index = "new"
+        marker = "sys_platform == 'linux'"
+
+        [[tool.uv.sources.tables]]
+        index = "new"
+        marker = "sys_platform != 'linux'"
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn add_index_same_name_preserves_source_string_representation() -> Result<()> {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"[project]
+name = "project"
+version = "0.1.0"
+dependencies = ["foo"]
+
+[tool.uv.sources]
+foo = { index = 'internal' } # Keep this source declaration.
+
+[[tool.uv.index]]
+name = "internal"
+url = "https://example.com/simple"
+"#,
+            DependencyTarget::PyProjectToml,
+        )?;
+        doc.add_index(
+            &Index::from_str("internal=https://example.com/simple")?,
+            Path::new("."),
+        )?;
+        assert_snapshot!(doc.to_string(), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        dependencies = ["foo"]
+
+        [tool.uv.sources]
+        foo = { index = 'internal' } # Keep this source declaration.
+
+        [[tool.uv.index]]
+        name = "internal"
+        url = "https://example.com/simple"
+        "#);
+        Ok(())
+    }
+
+    #[test]
     fn add_index_syncs_format_on_url_update() {
         let toml = r#"
 [[tool.uv.index]]
@@ -2274,6 +2526,176 @@ format = "flat"
 name = "index"
 url = "https://pypi.org/simple"
 "#);
+    }
+
+    #[test]
+    fn add_unnamed_index_retains_effective_name_with_shadow() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/simple"
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let incoming = Index::from_str("https://example.com/simple").unwrap();
+        let member = Index::from_str("old=https://member.example.com/simple").unwrap();
+        doc.add_indexes(&[&incoming], Path::new("."), &[&member])
+            .unwrap();
+        assert_snapshot!(doc.to_string(), @r#"
+
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/simple"
+"#);
+    }
+
+    #[test]
+    fn add_index_retains_alias_for_shadowed_effective_format() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/flat"
+format = "flat"
+
+[tool.uv.sources]
+foo = { index = "old" }
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let incoming = Index::from_str("new=https://example.com/flat").unwrap();
+        let member = Index::from_str("new=https://example.com/flat").unwrap();
+        doc.add_indexes(&[&incoming], Path::new("."), &[&member])
+            .unwrap();
+        assert_snapshot!(doc.to_string(), @r#"
+
+[[tool.uv.index]]
+name = "new"
+url = "https://example.com/flat"
+format = "flat"
+
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/flat"
+format = "flat"
+explicit = true
+
+[tool.uv.sources]
+foo = { index = "old" }
+"#);
+    }
+
+    #[test]
+    fn add_indexes_do_not_copy_synthetic_alias_policy() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/simple"
+
+[tool.uv.sources]
+foo = { index = "old" }
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let middle = Index::from_str("middle=https://example.com/simple").unwrap();
+        let new = Index::from_str("new=https://example.com/simple").unwrap();
+        let mut member = Index::from_str("middle=https://member.example.com/simple").unwrap();
+        member.explicit = true;
+        doc.add_indexes(&[&middle, &new], Path::new("."), &[&member])
+            .unwrap();
+        assert_snapshot!(doc.to_string(), @r#"
+
+[[tool.uv.index]]
+name = "new"
+url = "https://example.com/simple"
+
+[tool.uv.sources]
+foo = { index = "new" }
+"#);
+    }
+
+    #[test]
+    fn add_indexes_do_not_rename_member_only_sources() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[tool.uv.sources]
+foo = { index = "member-only" }
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let temporary = Index::from_str("member-only=https://example.com/simple").unwrap();
+        let new = Index::from_str("new=https://example.com/simple").unwrap();
+        let member = Index::from_str("member-only=https://member.example.com/simple").unwrap();
+        doc.add_indexes(&[&temporary, &new], Path::new("."), &[&member])
+            .unwrap();
+        assert_eq!(
+            doc.doc["tool"]["uv"]["sources"]["foo"]["index"].as_str(),
+            Some("member-only")
+        );
+        assert_eq!(doc.index_tables().count(), 1);
+    }
+
+    #[test]
+    fn add_indexes_stop_rename_chains_at_retained_aliases() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/simple"
+[tool.uv.sources]
+foo = { index = "old" }
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let middle = Index::from_str("middle=https://example.com/simple").unwrap();
+        let new = Index::from_str("new=https://example.com/simple").unwrap();
+        let member = Index::from_str("new=https://member.example.com/simple").unwrap();
+        doc.add_indexes(&[&middle, &new], Path::new("."), &[&member])
+            .unwrap();
+        assert_snapshot!(doc.to_string(), @r#"
+
+[[tool.uv.index]]
+name = "new"
+url = "https://example.com/simple"
+
+[[tool.uv.index]]
+name = "middle"
+url = "https://example.com/simple"
+explicit = true
+[tool.uv.sources]
+foo = { index = "middle" }
+"#);
+    }
+
+    #[test]
+    fn add_index_equivalent_member_location_does_not_retain_alias() {
+        let mut doc = PyProjectTomlMut::from_toml(
+            r#"
+[[tool.uv.index]]
+name = "old"
+url = "https://example.com/simple"
+[tool.uv.sources]
+foo = { index = "old" }
+"#,
+            DependencyTarget::PyProjectToml,
+        )
+        .unwrap();
+        let incoming = Index::from_str("new=https://example.com/simple").unwrap();
+        let member = Index::from_str("new=https://example.com/simple/").unwrap();
+        doc.add_indexes(&[&incoming], Path::new("."), &[&member])
+            .unwrap();
+        assert_eq!(
+            doc.doc["tool"]["uv"]["sources"]["foo"]["index"].as_str(),
+            Some("new")
+        );
+        assert_eq!(doc.index_tables().count(), 1);
     }
 
     #[cfg(windows)]
