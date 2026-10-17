@@ -1030,7 +1030,13 @@ async fn do_lock(
             let unchanged = if let Some(check_lockfile_contents) = check_lockfile_contents {
                 previous.is_some() && check_lockfile_contents == lock.to_toml()?.as_str()
             } else {
-                previous.as_ref().is_some_and(|previous| *previous == lock)
+                // Specifier equality can ignore wildcard precision, which changes Python support.
+                previous.as_ref().is_some_and(|previous| {
+                    *previous == lock
+                        && previous
+                            .requires_python()
+                            .has_same_release_versions(lock.requires_python())
+                })
             };
 
             if unchanged {
