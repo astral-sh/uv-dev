@@ -40,11 +40,8 @@ use uv_workspace::WorkspaceCache;
 
 use uv_lock_operations::LockValidationError;
 
-use crate::common::{
-    ToolLock, ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints,
-    tool_environment_spec,
-};
-use crate::error::ToolLockError;
+use crate::common::{ToolPython, finalize_tool_install, refine_interpreter, remove_entrypoints};
+use crate::lock::{ToolLock, ToolLockError, tool_environment_spec};
 use crate::requirements::resolve_names;
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
