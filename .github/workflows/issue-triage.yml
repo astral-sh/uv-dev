@@ -2,8 +2,6 @@
 name: "issue-triage"
 
 on:
-  issues:
-    types: [opened]
   workflow_dispatch:
     inputs:
       issue:
@@ -53,7 +51,7 @@ jobs:
             "$RUNNER_TEMP/issue.json" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE: ${{ inputs.issue || github.event.issue.number }}
+          ISSUE: ${{ inputs.issue }}
 
       - name: "Get issue context token"
         id: token
@@ -258,7 +256,7 @@ jobs:
       issues: read
     uses: $/.github/workflows/reproduce-bug.yml
     with:
-      issue: ${{ inputs.issue || github.event.issue.number }}
+      issue: ${{ inputs.issue }}
       issue-type: ${{ fromJSON(needs.triage.outputs.result).type }}
       runner: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     secrets: inherit
@@ -280,7 +278,7 @@ jobs:
       issues: read
     uses: $/.github/workflows/fix-bug.yml
     with:
-      issue: ${{ inputs.issue || github.event.issue.number }}
+      issue: ${{ inputs.issue }}
       issue-number: ${{ needs.reproduce-bug.outputs.issue-number }}
       reproduction-result: ${{ needs.reproduce-bug.outputs.result }}
       reproduction-thread-artifact-id: ${{ needs.reproduce-bug.outputs.thread-artifact-id }}

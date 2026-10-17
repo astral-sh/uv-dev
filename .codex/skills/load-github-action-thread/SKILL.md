@@ -8,26 +8,33 @@ description:
 
 # Load GitHub Action Thread
 
-When given an issue instead of a run, find the related issue-triage run first. Resolve the issue
-title and number, then match the run display title:
+When given an issue instead of a run, resolve its number and find the retained triage thread
+artifact. Artifact names identify the issue independently of run titles and dispatch events:
 
 ```bash
 repository=astral-sh/uv
 issue=20477
-issue_title="$(gh issue view "$issue" --repo "$repository" --json title --jq '.title')"
 issue_number="$(gh issue view "$issue" --repo "$repository" --json number --jq '.number')"
 
-gh run list --repo "$repository" --workflow issue-triage.yml --limit 500 \
-  --json databaseId,displayTitle,event,status,conclusion,createdAt,url \
-  | jq -c --arg title "$issue_title" '.[] | select(.displayTitle == $title)'
+gh api --paginate \
+  "repos/$repository/actions/artifacts?name=codex-thread-issue-$issue_number&per_page=100" \
+  --jq '.artifacts[] | select(.expired == false) | .workflow_run.id' \
+  | sort -u \
+  | while IFS= read -r run_id; do
+      gh api "repos/$repository/actions/runs/$run_id" \
+        --jq 'select(.path == ".github/workflows/issue-triage.yml")
+          | {databaseId: .id, event, status, conclusion, createdAt: .created_at, url: .html_url}'
+    done \
+  | jq --slurp --compact-output 'sort_by(.createdAt) | reverse | .[]'
 ```
 
 Use the newest matching run. An issue-triage run can contain both the triage and bug-reproduction
-threads. Also check for directly dispatched bug-reproduction runs; their display title does not
-include the issue title. If the issue title changed or a run was manually dispatched, list recent
-candidates and confirm them from their logs:
+threads. Also check for directly dispatched bug-reproduction runs. If no triage artifact is
+available, list recent candidates and confirm the issue from their logs:
 
 ```bash
+gh run list --repo "$repository" --workflow issue-triage.yml --limit 100 \
+  --json databaseId,event,status,conclusion,createdAt,url
 gh run list --repo "$repository" --workflow reproduce-bug.yml --limit 100 \
   --json databaseId,event,status,conclusion,createdAt,url
 gh run view <run-id> --repo "$repository" --log | rg -m 2 "ISSUE: $issue_number|issue: $issue_number"

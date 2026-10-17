@@ -18,6 +18,16 @@
     {
       "repository": "uv",
       "on": {
+        "issues": ["opened"]
+      },
+      "workflow": "issue-triage.yml",
+      "inputs": {
+        "issue": "/issue/number"
+      }
+    },
+    {
+      "repository": "uv",
+      "on": {
         "workflow_run": ["completed"]
       },
       "target_repository": "uv-dev",
