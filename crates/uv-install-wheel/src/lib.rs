@@ -47,6 +47,8 @@ pub enum Error {
     /// The wheel is broken
     #[error("The wheel is invalid: {0}")]
     InvalidWheel(String),
+    #[error("The wheel is invalid")]
+    InvalidMetadata(#[source] uv_pypi_types::MetadataError),
     /// Doesn't follow file name schema
     #[error("Failed to move data files")]
     WalkDir(#[from] walkdir::Error),
@@ -99,6 +101,7 @@ impl Error {
     pub fn is_user_failure(&self) -> bool {
         match self {
             Self::InvalidWheel(_)
+            | Self::InvalidMetadata(_)
             | Self::RecordFile { .. }
             | Self::RecordCsv(_)
             | Self::NonUtf8WheelPath(..)
