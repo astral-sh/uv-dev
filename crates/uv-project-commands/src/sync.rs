@@ -13,7 +13,7 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, Constraints, DependencyGroups, DryRun, EditableMode,
+    ActiveEnvironment, ConcurrencyState, Constraints, DependencyGroups, DryRun, EditableMode,
     ExtrasSpecification, InstallOptions, Modifications, SyncFormat, TargetTriple,
 };
 use uv_dispatch::{PlatformState, UniversalState};
@@ -74,7 +74,7 @@ pub async fn sync(
     client_builder: BaseClientBuilder<'_>,
     script: Option<Pep723Script>,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,

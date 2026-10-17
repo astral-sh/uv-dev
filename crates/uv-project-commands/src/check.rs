@@ -8,8 +8,8 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
-    ActiveEnvironment, ColorChoice, Concurrency, DependencyGroups, DependencyGroupsWithDefaults,
-    DryRun, ExtrasSpecification, InstallOptions, Modifications,
+    ActiveEnvironment, ColorChoice, ConcurrencyState, DependencyGroups,
+    DependencyGroupsWithDefaults, DryRun, ExtrasSpecification, InstallOptions, Modifications,
 };
 use uv_dispatch::UniversalState;
 use uv_environment_operations::environment::CachedEnvironment;
@@ -73,7 +73,7 @@ pub async fn check(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     color: ColorChoice,

@@ -19,7 +19,7 @@ use uv_cache::{Cache, CacheBucket};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::{ExitStatus, Printer};
 use uv_configuration::{
-    BuildIsolation, BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints,
+    BuildIsolation, BuildKind, BuildOptions, BuildOutput, ConcurrencyState, Constraints,
     DependencyGroupsWithDefaults, DependencyMode, DependencyModifiers, HashCheckingMode,
     IndexStrategy, KeyringProviderType, NoSources,
 };
@@ -240,7 +240,7 @@ pub async fn build_frontend(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
@@ -549,7 +549,7 @@ async fn build_package(
     keyring_provider: KeyringProviderType,
     exclude_newer: ExcludeNewer,
     sources: NoSources,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     build_options: &BuildOptions,
     sdist: bool,
     wheel: bool,
