@@ -192,7 +192,7 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        ATTR_CMN_ERROR, VREG, files_with_one_hardlink, files_with_one_hardlink_from_buffer,
+        ATTR_CMN_ERROR, VDIR, VREG, files_with_one_hardlink, files_with_one_hardlink_from_buffer,
     };
 
     #[test]
@@ -265,11 +265,62 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_when_link_counts_are_unavailable() -> io::Result<()> {
-        let mut attributes = record(b"file");
-        attributes[16..20].copy_from_slice(&0_u32.to_ne_bytes());
-        assert!(files_with_one_hardlink_from_buffer(Path::new("files"), &attributes, 1)?.is_none());
+    fn discards_candidates_when_a_later_record_requires_fallback() -> io::Result<()> {
+        let mut directory = record(b"nested");
+        directory[36..40].copy_from_slice(&VDIR.to_ne_bytes());
+
+        let mut missing_name = record(b"missing-name");
+        missing_name[4..8].copy_from_slice(&libc::ATTR_CMN_OBJTYPE.to_ne_bytes());
+
+        let mut missing_object_type = record(b"missing-object-type");
+        missing_object_type[4..8].copy_from_slice(&libc::ATTR_CMN_NAME.to_ne_bytes());
+
+        let mut missing_link_count = record(b"missing-link-count");
+        missing_link_count[16..20].copy_from_slice(&0_u32.to_ne_bytes());
+
+        for unsupported in [
+            directory,
+            missing_name,
+            missing_object_type,
+            missing_link_count,
+        ] {
+            let mut attributes = record(b"candidate");
+            attributes.extend_from_slice(&unsupported);
+            assert!(
+                files_with_one_hardlink_from_buffer(Path::new("files"), &attributes, 2)?.is_none()
+            );
+        }
         Ok(())
+    }
+
+    #[test]
+    fn skips_records_that_disappear_during_the_scan() -> io::Result<()> {
+        let mut missing = record(b"missing");
+        missing[24..28].copy_from_slice(&libc::ENOENT.cast_unsigned().to_ne_bytes());
+
+        let mut attributes = record(b"before");
+        attributes.extend_from_slice(&missing);
+        attributes.extend_from_slice(&record(b"after"));
+        assert_eq!(
+            files_with_one_hardlink_from_buffer(Path::new("files"), &attributes, 3)?,
+            Some(vec![
+                Path::new("files").join("before"),
+                Path::new("files").join("after")
+            ]),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn propagates_other_record_errors() {
+        let mut denied = record(b"denied");
+        denied[24..28].copy_from_slice(&libc::EACCES.cast_unsigned().to_ne_bytes());
+
+        let mut attributes = record(b"candidate");
+        attributes.extend_from_slice(&denied);
+        let error =
+            files_with_one_hardlink_from_buffer(Path::new("files"), &attributes, 2).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EACCES));
     }
 
     #[test]
