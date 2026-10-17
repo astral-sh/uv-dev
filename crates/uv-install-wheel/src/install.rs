@@ -28,7 +28,7 @@ pub fn installed_dist_info_path(
 }
 
 /// Return the wheel's `.dist-info` prefix and target `site-packages` directory.
-fn wheel_destination<'layout>(
+pub(crate) fn wheel_destination<'layout>(
     layout: &'layout Layout,
     wheel: &Path,
 ) -> Result<(String, &'layout Path), Error> {
