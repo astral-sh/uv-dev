@@ -113,6 +113,10 @@ urls = { "github" = "https://github.com/astral-sh/uv" }
 [build-system]
 requires = ["uv_build>=0.12,<0.14"]
 build-backend = "uv_build"
+
+# These fixtures must build source distributions, unlike repository tooling.
+[tool.uv]
+no-build = false
 """.lstrip()
 
 SCRIPT_DIR = Path(__file__).parent
