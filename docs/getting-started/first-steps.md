@@ -1,7 +1,6 @@
 # First steps with uv
 
-After [installing uv](./installation.md), you can check that uv is available by running the `uv`
-command:
+After [installing uv](./installation.md), run the `uv` command to confirm that uv is available:
 
 ```console
 $ uv
@@ -12,10 +11,9 @@ Usage: uv [OPTIONS] <COMMAND>
 ...
 ```
 
-You should see a help menu listing the available commands.
+The command displays a help menu with the available commands.
 
 ## Next steps
 
-Now that you've confirmed uv is installed, check out an [overview of features](./features.md), learn
-how to [get help](./help.md) if you run into any problems, or jump to the
-[guides](../guides/index.md) to start using uv.
+Review the [feature overview](./features.md). Read how to [get help](./help.md) if you have
+problems. Follow the [guides](../guides/index.md) to start using uv.
