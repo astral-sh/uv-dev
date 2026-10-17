@@ -48,9 +48,12 @@ impl uv_python_managed::downloads::Reporter for PythonDownloadReporter {
         self.reporter.on_request_progress(id, inc);
     }
 
-    fn on_request_complete(&self, direction: uv_python_managed::downloads::Direction, id: usize) {
-        self.reporter
-            .on_request_complete(progress_direction(direction), id);
+    fn on_request_complete(&self, id: usize) {
+        self.reporter.on_request_complete(id);
+    }
+
+    fn on_request_failed(&self, id: usize) {
+        self.reporter.on_request_failed(id);
     }
 }
 

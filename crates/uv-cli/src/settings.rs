@@ -57,9 +57,9 @@ use crate::comma::CommaSeparatedRequirements;
 use crate::{
     AddArgs, AuditArgs, AuditCommonArgs, AuditOutputFormat, AuthLoginArgs, AuthLogoutArgs,
     AuthTokenArgs, ColorChoice, DependencyConstraintsArgs, ExternalCommand, GlobalArgs, InitArgs,
-    ListFormat, LockArgs, Maybe, MetadataArgs, PipCheckArgs, PipCompileArgs, PipFreezeArgs,
-    PipInstallArgs, PipInstallFormat, PipListArgs, PipShowArgs, PipSyncArgs, PipTreeArgs,
-    PipUninstallArgs, ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs,
+    ListFormat, LockArgs, Maybe, MetadataArgs, MetadataOutputFormat, PipCheckArgs, PipCompileArgs,
+    PipFreezeArgs, PipInstallArgs, PipInstallFormat, PipListArgs, PipShowArgs, PipSyncArgs,
+    PipTreeArgs, PipUninstallArgs, ProjectDependencyGroupsArgs, PythonFindArgs, PythonInstallArgs,
     PythonListArgs, PythonListFormat, PythonPinArgs, PythonUninstallArgs, PythonUpgradeArgs,
     RemoveArgs, RunArgs, SyncArgs, SyncFormat, ToolAuditArgs, ToolDirArgs, ToolInstallArgs,
     ToolListArgs, ToolRunArgs, ToolUninstallArgs, TreeArgs, TreeFormat, UpgradeArgs, VenvArgs,
@@ -2141,6 +2141,7 @@ pub struct MetadataSettings {
     pub refresh: Refresh,
     pub settings: ResolverSettings,
     pub malware_settings: MalwareCheckSettings,
+    pub output_format: MetadataOutputFormat,
 }
 
 impl MetadataSettings {
@@ -2163,6 +2164,7 @@ impl MetadataSettings {
             exact,
             active,
             python,
+            output_format,
         } = *args;
 
         let filesystem_install_mirrors = filesystem
@@ -2195,6 +2197,7 @@ impl MetadataSettings {
                 .install_mirrors
                 .combine(filesystem_install_mirrors),
             malware_settings,
+            output_format,
         })
     }
 }

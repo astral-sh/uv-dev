@@ -256,6 +256,10 @@ mod tests {
         machine-readable output for use by other tools. The JSON schemas are experimental and may
         change without warning; enabling this feature silences the preview warning.
 
+        ### `jsonl` {#jsonl}
+
+        Allows `--output-format jsonl` to stream progress and final JSON output.
+
         ### `lock-without-metadata` {#lock-without-metadata}
 
         uv omits the `package.metadata` tables from `uv.lock`, except for remote URL and Git

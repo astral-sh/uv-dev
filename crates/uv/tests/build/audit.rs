@@ -233,6 +233,94 @@ async fn audit_json_no_vulnerabilities() {
     "#);
 }
 
+#[tokio::test]
+async fn audit_jsonl_no_vulnerabilities() {
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
+    write_audit_output_project(&context.temp_dir, &proxy.url("/simple"));
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": []}]
+        })))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .audit()
+        .arg("--preview-features")
+        .arg("audit,jsonl")
+        .arg("--output-format")
+        .arg("jsonl")
+        .arg("--frozen")
+        .arg("--service-url")
+        .arg(server.uri()), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {"type":"progress","phase":"audit","status":"started"}
+    {"type":"progress","phase":"audit","status":"completed"}
+    {"type":"result","schema":{"version":"preview"},"summary":{"audited_packages":1,"vulnerabilities":0,"adverse_statuses":0},"vulnerabilities":[],"adverse_statuses":[]}
+    "#
+    );
+}
+
+/// Service errors terminate the audit operation without a successful result.
+#[tokio::test]
+async fn audit_jsonl_service_error() {
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let proxy = crate::pypi_proxy::start().await;
+    write_audit_output_project(&context.temp_dir, &proxy.url("/simple"));
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.audit()
+        .args(["--preview-features", "audit,jsonl", "--output-format", "jsonl", "--frozen", "--service-url"])
+        .arg(server.uri())
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true"), @r#"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    {"type":"progress","phase":"audit","status":"started"}
+    {"type":"progress","phase":"audit","status":"failed"}
+
+    ----- stderr -----
+    error: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/v1/querybatch)
+    "#);
+}
+
+/// Response decoding failures also terminate the audit operation.
+#[tokio::test]
+async fn audit_jsonl_malformed_response() {
+    let context = uv_test::test_context!("3.12");
+    let proxy = crate::pypi_proxy::start().await;
+    write_audit_output_project(&context.temp_dir, &proxy.url("/simple"));
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("invalid json"))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.audit()
+        .args(["--preview-features", "audit,jsonl", "--output-format", "jsonl", "--frozen", "--service-url"])
+        .arg(server.uri()), @r#"
+    exit_code: 2 (failure)
+    ----- stdout -----
+    {"type":"progress","phase":"audit","status":"started"}
+    {"type":"progress","phase":"audit","status":"failed"}
+
+    ----- stderr -----
+    error: error decoding response body for url (http://[LOCALHOST]/v1/querybatch)
+      cause: expected value at line 1 column 1
+    "#);
+}
+
 /// Requesting JSON output warns unless the JSON preview feature is enabled.
 #[tokio::test]
 async fn audit_json_preview_warning() {

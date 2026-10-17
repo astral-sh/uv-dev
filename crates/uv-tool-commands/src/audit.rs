@@ -21,8 +21,7 @@ use uv_warnings::warn_user;
 use uv_audit_operations::{
     AuditResults, artifact_uri, audit_lock, json, sarif, warn_unmatched_ignores,
 };
-use uv_command_support::ExitStatus;
-use uv_command_support::Printer;
+use uv_command_support::{ExitStatus, Printer, jsonl_result};
 use uv_settings::ResolverInstallerSettings;
 
 /// Audit selected installed tools, or every installed tool if no names are provided.
@@ -262,13 +261,14 @@ fn render_audits(
                 results.render()?;
             }
         }
-        AuditOutputFormat::Json => {
+        AuditOutputFormat::Json | AuditOutputFormat::Jsonl => {
             let report = json::ToolReports::from_audits(audits);
-            writeln!(
-                printer.stdout_important(),
-                "{}",
+            let output = if matches!(output_format, AuditOutputFormat::Jsonl) {
+                jsonl_result(&report)?
+            } else {
                 serde_json::to_string_pretty(&report)?
-            )?;
+            };
+            writeln!(printer.stdout_important(), "{output}")?;
         }
         AuditOutputFormat::Sarif => {
             let report = sarif::Report::from_audits(audits);

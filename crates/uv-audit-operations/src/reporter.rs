@@ -2,10 +2,15 @@ use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use uv_command_support::Printer;
+use uv_command_support::progress::{
+    JsonlProgressEvent, ProgressPhase, ProgressStatus, emit_jsonl_progress,
+};
 
 #[derive(Debug)]
 pub(crate) struct AuditReporter {
+    printer: Printer,
     progress: ProgressBar,
+    completed: bool,
 }
 
 impl From<Printer> for AuditReporter {
@@ -18,13 +23,38 @@ impl From<Printer> for AuditReporter {
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
         );
         progress.set_message("Auditing dependencies...");
-        Self { progress }
+        emit_jsonl_progress(
+            printer,
+            &JsonlProgressEvent::new(ProgressPhase::Audit, ProgressStatus::Started),
+        );
+        Self {
+            printer,
+            progress,
+            completed: false,
+        }
     }
 }
 
 impl AuditReporter {
-    pub(crate) fn on_audit_complete(&self) {
+    pub(crate) fn on_audit_complete(mut self) {
+        self.finish(ProgressStatus::Completed);
+        self.completed = true;
+    }
+
+    fn finish(&self, status: ProgressStatus) {
         self.progress.set_message("");
+        emit_jsonl_progress(
+            self.printer,
+            &JsonlProgressEvent::new(ProgressPhase::Audit, status),
+        );
         self.progress.finish_and_clear();
+    }
+}
+
+impl Drop for AuditReporter {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.finish(ProgressStatus::Failed);
+        }
     }
 }

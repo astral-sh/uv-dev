@@ -31,6 +31,8 @@ fs-err = { workspace = true }
 indicatif = { workspace = true }
 owo-colors = { workspace = true }
 rustc-hash = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

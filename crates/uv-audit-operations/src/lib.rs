@@ -14,7 +14,7 @@ use uv_audit::{
 };
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, CachedClient, RegistryClientBuilder};
-use uv_command_support::{ExitStatus, Printer};
+use uv_command_support::{ExitStatus, Printer, jsonl_result};
 use uv_configuration::{
     AuditOutputFormat, Concurrency, DependencyGroupsWithDefaults, ExtrasSpecificationWithDefaults,
     KeyringProviderType,
@@ -174,7 +174,7 @@ impl AuditResults {
     pub fn render(&self) -> Result<ExitStatus> {
         match self.output_format {
             AuditOutputFormat::Text => self.render_text(),
-            AuditOutputFormat::Json => self.render_json(),
+            AuditOutputFormat::Json | AuditOutputFormat::Jsonl => self.render_json(),
             AuditOutputFormat::Sarif => self.render_sarif(),
         }
     }
@@ -341,11 +341,12 @@ impl AuditResults {
         let (vulnerabilities, statuses) = self.split_findings();
         let report = json::Report::from_findings(self.n_packages, &vulnerabilities, &statuses);
 
-        writeln!(
-            self.printer.stdout_important(),
-            "{}",
+        let output = if matches!(self.output_format, AuditOutputFormat::Jsonl) {
+            jsonl_result(&report)?
+        } else {
             serde_json::to_string_pretty(&report)?
-        )?;
+        };
+        writeln!(self.printer.stdout_important(), "{output}")?;
 
         Ok(self.exit_status())
     }
