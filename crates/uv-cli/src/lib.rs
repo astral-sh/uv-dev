@@ -6660,13 +6660,8 @@ pub struct RegistryClientArgs {
 pub struct SourcesArgs {
     /// Ignore the `tool.uv.sources` table when resolving dependencies. Used to lock against the
     /// standards-compliant, publishable package metadata, as opposed to using any workspace, Git,
-    /// URL, or local path sources.
-    #[arg(
-        long,
-        env = EnvVars::UV_NO_SOURCES,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        help_heading = "Resolver options",
-    )]
+    /// URL, or local path sources [env: `UV_NO_SOURCES`=].
+    #[arg(long, help_heading = "Resolver options")]
     no_sources: bool,
 
     /// Don't use sources from the `tool.uv.sources` table for the specified packages [env: `UV_NO_SOURCES_PACKAGE`=]

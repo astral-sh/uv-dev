@@ -681,6 +681,27 @@ fn resolve_lock_check(
     }
 }
 
+/// Check resolution-policy conflicts after environment-derived lock flags are resolved.
+fn check_resolution_policy_conflicts(
+    locked: LockCheck,
+    frozen: Option<FrozenSource>,
+    upgrade: bool,
+    no_sources: Flag,
+) -> Result<()> {
+    let locked = Flag::from(locked);
+    let frozen = frozen.map_or(Flag::Disabled, Flag::from);
+
+    check_conflicts(locked, frozen)?;
+
+    if upgrade {
+        let upgrade = Flag::from_cli("upgrade");
+        check_conflicts(locked, upgrade)?;
+        check_conflicts(frozen, upgrade)?;
+    }
+    check_conflicts(frozen, no_sources)?;
+    Ok(())
+}
+
 /// The resolved settings to use for a `run` invocation.
 #[derive(Debug, Clone)]
 pub struct RunSettings {
@@ -786,6 +807,17 @@ impl RunSettings {
         let no_sync = resolve_flag(no_sync, "no-sync", environment.no_sync);
 
         let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
+
+        check_resolution_policy_conflicts(
+            locked,
+            frozen,
+            installer.upgrade,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
+        )?;
 
         let (dev, no_dev) = resolve_flag_pair(
             dev,
@@ -1874,6 +1906,23 @@ impl SyncSettings {
             .unwrap_or_default();
 
         let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
+        // Resolve flags from CLI and environment variables before consuming installer arguments.
+        let locked = resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked);
+        let frozen = resolve_frozen(frozen, no_frozen, FrozenFlag::Frozen, environment.frozen);
+
+        let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
+
+        check_resolution_policy_conflicts(
+            locked,
+            frozen,
+            installer.upgrade,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
+        )?;
+
         let settings =
             resolve_resolver_installer_settings(installer, build, filesystem, &environment)?;
 
@@ -1883,12 +1932,6 @@ impl SyncSettings {
         } else {
             DryRun::from_args(dry_run)
         };
-
-        // Resolve flags from CLI and environment variables.
-        let locked = resolve_lock_check(locked, no_locked, LockedFlag::Locked, environment.locked);
-        let frozen = resolve_frozen(frozen, no_frozen, FrozenFlag::Frozen, environment.frozen);
-
-        let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
 
         let (dev, no_dev) = resolve_flag_pair(
             dev,
@@ -2071,6 +2114,9 @@ impl LockSettings {
         );
 
         let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
+        if resolver.upgrade {
+            check_conflicts(locked.into(), Flag::from_cli("upgrade"))?;
+        }
 
         Ok(Self {
             lock_check: locked,
@@ -2175,6 +2221,9 @@ impl MetadataSettings {
         let frozen = resolve_frozen(frozen, no_frozen, FrozenFlag::Frozen, environment.frozen);
 
         let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
+        if resolver.upgrade {
+            check_conflicts(locked.into(), Flag::from_cli("upgrade"))?;
+        }
 
         let malware_settings = MalwareCheckSettings::resolve(filesystem.as_ref(), &environment);
 
@@ -2388,6 +2437,17 @@ impl AddSettings {
 
         let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
 
+        check_resolution_policy_conflicts(
+            locked,
+            frozen,
+            installer.upgrade,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
+        )?;
+
         // Check for conflicts between no_sync and frozen.
         check_conflicts(no_sync, frozen.map_or(Flag::Disabled, Flag::from))?;
 
@@ -2551,6 +2611,17 @@ impl RemoveSettings {
 
         let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
 
+        check_resolution_policy_conflicts(
+            locked,
+            frozen,
+            installer.upgrade,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
+        )?;
+
         // Check for conflicts between no_sync and frozen.
         check_conflicts(no_sync, frozen.map_or(Flag::Disabled, Flag::from))?;
 
@@ -2639,6 +2710,17 @@ impl VersionSettings {
         let no_sync = resolve_flag(no_sync, "no-sync", environment.no_sync);
 
         let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
+
+        check_resolution_policy_conflicts(
+            locked,
+            frozen,
+            installer.upgrade,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
+        )?;
 
         // Check for conflicts between no_sync and frozen.
         check_conflicts(no_sync, frozen.map_or(Flag::Disabled, Flag::from))?;
@@ -2739,6 +2821,17 @@ impl TreeSettings {
         let frozen = resolve_frozen(frozen, no_frozen, FrozenFlag::Frozen, environment.frozen);
 
         let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
+
+        check_resolution_policy_conflicts(
+            locked,
+            frozen,
+            resolver.upgrade,
+            resolve_flag(
+                resolver.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
+        )?;
 
         let (dev, no_dev) = resolve_flag_pair(
             dev,
@@ -2888,6 +2981,17 @@ impl ExportSettings {
         );
 
         let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
+
+        check_resolution_policy_conflicts(
+            locked,
+            frozen,
+            resolver.upgrade,
+            resolve_flag(
+                resolver.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
+        )?;
 
         let (dev, no_dev) = resolve_flag_pair(
             dev,
@@ -3099,6 +3203,17 @@ impl CheckSettings {
         );
         let isolated = resolve_flag(isolated, "isolated", environment.isolated).is_enabled();
         let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
+
+        check_resolution_policy_conflicts(
+            locked,
+            frozen,
+            installer.upgrade,
+            resolve_flag(
+                installer.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
+        )?;
         check_conflicts(no_install_project, no_sync)?;
         if script.is_some() {
             check_conflicts(no_install_project, Flag::from_cli("script"))?;
@@ -3232,6 +3347,17 @@ impl AuditSettings {
         let frozen = resolve_frozen(frozen, no_frozen, FrozenFlag::Frozen, environment.frozen);
 
         let (locked, frozen) = resolve_lock_flags(locked, frozen)?;
+
+        check_resolution_policy_conflicts(
+            locked,
+            frozen,
+            resolver.upgrade,
+            resolve_flag(
+                resolver.sources.no_sources,
+                "no-sources",
+                environment.no_sources,
+            ),
+        )?;
 
         // Audit includes all groups by default, regardless of `tool.uv.default-groups`.
         // `--no-default-groups` disables that implicit selection.
@@ -4470,6 +4596,9 @@ fn combine_resolver_settings(
     args.no_build_package = args
         .no_build_package
         .or(environment.no_build_package.clone());
+    args.no_sources = args
+        .no_sources
+        .or(environment.no_sources.value.filter(|enabled| *enabled));
     args.no_sources_package = args
         .no_sources_package
         .or(environment.no_sources_package.clone());
@@ -4545,6 +4674,9 @@ fn resolver_installer_options_with_environment(
     options.no_build_package = options
         .no_build_package
         .or(environment.no_build_package.clone());
+    options.no_sources = options
+        .no_sources
+        .or(environment.no_sources.value.filter(|enabled| *enabled));
     options.no_sources_package = options
         .no_sources_package
         .or(environment.no_sources_package.clone());
@@ -4938,7 +5070,9 @@ impl PipSettings {
                 .combine(compile_bytecode)
                 .unwrap_or_default(),
             sources: NoSources::from_args(
-                args.no_sources.combine(no_sources),
+                args.no_sources
+                    .or(environment.no_sources.value.filter(|enabled| *enabled))
+                    .combine(no_sources),
                 args_no_sources_package
                     .combine(no_sources_package)
                     .unwrap_or_default(),
