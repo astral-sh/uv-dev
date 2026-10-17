@@ -91,6 +91,23 @@ fn tool_list_empty() {
     ");
 }
 
+#[cfg(unix)]
+#[test]
+fn tool_list_dangling_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let tool_dir = context.temp_dir.join("tools");
+    fs::create_dir_all(&tool_dir)?;
+    fs::os::unix::fs::symlink("missing", tool_dir.join(".lock"))?;
+
+    uv_snapshot!(context.filters(), context.tool_list(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: failed to open file `[TEMP_DIR]/tools/.lock`: No such file or directory (os error 2)
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn tool_list_outdated_empty() {
     let context = uv_test::test_context!("3.12")
