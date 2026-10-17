@@ -32,6 +32,8 @@ impl Lock {
         self.manifest
             .dependency_metadata
             .retain(|entry| filter.includes_metadata(entry));
+        let needs_provenance = self.static_metadata_needs_provenance();
+        self.manifest.dependency_metadata_ordered &= needs_provenance;
         self.options.exclude_newer = self.options.exclude_newer.filter_packages(
             self.packages
                 .iter()
