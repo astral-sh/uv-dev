@@ -8,7 +8,7 @@ use crate::implementation::{
     Error as ImplementationError, ImplementationName, LenientImplementationName,
 };
 use crate::python_build_version_from_env;
-use crate::{PythonInstallationKey, PythonRequest, VersionRequest};
+use crate::{PythonInstallationKey, PythonRequest, PythonVariant, VersionRequest};
 
 /// A failure while parsing or completing a managed Python download request.
 #[derive(Debug, thiserror::Error)]
@@ -420,6 +420,10 @@ impl PythonDownloadRequest {
             }
             if let Some(variant) = version.variant()
                 && variant != key.variant
+                && !matches!(
+                    (variant, key.variant),
+                    (PythonVariant::Gil, PythonVariant::Default)
+                )
             {
                 return false;
             }
@@ -707,7 +711,6 @@ impl FromStr for PythonDownloadRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PythonVariant;
     use std::assert_matches;
     /// Parse a request with all of its fields.
     #[test]
