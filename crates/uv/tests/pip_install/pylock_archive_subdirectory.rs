@@ -1,0 +1,198 @@
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use anyhow::Result;
+use assert_cmd::prelude::*;
+use assert_fs::prelude::*;
+use indoc::{formatdoc, indoc};
+use sha2::{Digest, Sha256};
+
+use uv_fs::PythonExt;
+use uv_test::archive::{generate_source_archive, write_tar_gz};
+use uv_test::package_server::PackageServer;
+use uv_test::packse::generate_wheel;
+use uv_test::uv_snapshot;
+
+fn backend(filename: &str, marker: &Path) -> String {
+    formatdoc! {r#"
+        import shutil
+        from pathlib import Path
+
+        Path({marker}).touch()
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            shutil.copyfile(Path(__file__).with_name("{filename}"), Path(wheel_directory) / "{filename}")
+            return "{filename}"
+    "#, marker = marker.escape_for_python()}
+}
+
+#[tokio::test]
+async fn local_archive_subdirectory_is_not_built_as_root() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let root_marker = context.temp_dir.child("root-backend-ran");
+    let nested_marker = context.temp_dir.child("nested-backend-ran");
+    let name = "demo".parse()?;
+    let (filename, wheel) = generate_wheel(
+        &name,
+        &"1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let project = indoc! {r#"
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#};
+    let root_backend = backend(&filename, root_marker.path());
+    let nested_backend = backend(&filename, nested_marker.path());
+    let mut archive = Vec::new();
+    write_tar_gz(
+        &mut archive,
+        &[
+            ("projects/pyproject.toml", project.as_bytes()),
+            ("projects/backend.py", root_backend.as_bytes()),
+            (&format!("projects/{filename}"), wheel.as_slice()),
+            ("projects/nested/pyproject.toml", project.as_bytes()),
+            ("projects/nested/backend.py", nested_backend.as_bytes()),
+            (&format!("projects/nested/{filename}"), wheel.as_slice()),
+        ],
+    )?;
+    context
+        .temp_dir
+        .child("projects.tar.gz")
+        .write_binary(&archive)?;
+    let hash = hex::encode(Sha256::digest(&archive));
+    let lock = context.temp_dir.child("pylock.toml");
+
+    // Populate the local archive's root cache before selecting a different project within it.
+    lock.write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        requires-python = ">=3.12"
+
+        [[packages]]
+        name = "demo"
+        version = "1.0"
+        archive = {{ path = "projects.tar.gz", hashes = {{ sha256 = "{hash}" }} }}
+    "#})?;
+    context
+        .pip_install()
+        .arg("-r")
+        .arg(lock.path())
+        .arg("--preview-features")
+        .arg("pylock")
+        .arg("--no-index")
+        .assert()
+        .success();
+    assert!(root_marker.exists());
+    context.pip_uninstall().arg("demo").assert().success();
+    context.assert_not_installed("demo");
+    fs_err::remove_file(root_marker.path())?;
+
+    lock.write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        requires-python = ">=3.12"
+
+        [[packages]]
+        name = "demo"
+        version = "1.0"
+        archive = {{ path = "projects.tar.gz", subdirectory = "nested", hashes = {{ sha256 = "{hash}" }} }}
+    "#})?;
+    // Matching identities make the cached root wheel eligible, but its source selection differs.
+    let output = uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg(lock.path())
+        .arg("--preview-features").arg("pylock").arg("--no-index"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `demo` selects subdirectory `nested` in local archive `projects.tar.gz`, which is not supported
+    ");
+    assert!(!output.status.success());
+    assert!(!root_marker.exists());
+    assert!(!nested_marker.exists());
+
+    // A cold request rejects the selected subtree without importing either backend.
+    let output = uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg(lock.path())
+        .arg("--preview-features").arg("pylock").arg("--no-index").arg("--no-cache"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Package `demo` selects subdirectory `nested` in local archive `projects.tar.gz`, which is not supported
+    ");
+    assert!(!output.status.success());
+    assert!(!root_marker.exists());
+    assert!(!nested_marker.exists());
+
+    // The same selected project is supported when the archive has a URL source.
+    let server = PackageServer::new(&name).await;
+    server.serve("projects.tar.gz", &archive, Some(&hash)).await;
+    let url = server.file_url("projects.tar.gz");
+    lock.write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        requires-python = ">=3.12"
+
+        [[packages]]
+        name = "demo"
+        version = "1.0"
+        archive = {{ url = "{url}", subdirectory = "nested", hashes = {{ sha256 = "{hash}" }} }}
+    "#})?;
+    context
+        .pip_install()
+        .arg("-r")
+        .arg(lock.path())
+        .arg("--preview-features")
+        .arg("pylock")
+        .arg("--no-index")
+        .assert()
+        .success();
+    context.assert_installed("demo", "1.0");
+    assert!(!root_marker.exists());
+    assert!(nested_marker.exists());
+    Ok(())
+}
+
+/// A current-directory selection uses the archive root without relying on a previous root build.
+#[test]
+fn local_archive_current_directory_selects_root() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let marker = context.temp_dir.child("root-backend-ran");
+    let archive = generate_source_archive(
+        &"root-demo".parse()?,
+        &"1.0".parse()?,
+        "",
+        Some(marker.path()),
+    )?;
+    context
+        .temp_dir
+        .child("projects.tar.gz")
+        .write_binary(&archive)?;
+    let hash = hex::encode(Sha256::digest(&archive));
+    let lock = context.temp_dir.child("pylock.toml");
+    lock.write_str(&formatdoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        requires-python = ">=3.12"
+
+        [[packages]]
+        name = "root-demo"
+        version = "1.0"
+        archive = {{ path = "projects.tar.gz", subdirectory = ".", hashes = {{ sha256 = "{hash}" }} }}
+    "#})?;
+    context
+        .pip_install()
+        .arg("-r")
+        .arg(lock.path())
+        .arg("--preview-features")
+        .arg("pylock")
+        .arg("--no-index")
+        .assert()
+        .success();
+    context.assert_installed("root_demo", "1.0");
+    assert!(marker.exists());
+    Ok(())
+}
