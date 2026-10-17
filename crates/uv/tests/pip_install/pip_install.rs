@@ -7,6 +7,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, anyhow};
 use assert_cmd::prelude::*;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -351,6 +352,857 @@ fn install_wheel_cache_incompatible_with_older_uv() -> Result<()> {
         Ok::<(), anyhow::Error>(())
     }?;
 
+    Ok(())
+}
+
+#[test]
+fn reject_colliding_wheel_entrypoints_between_sections() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"sections".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "sections-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    runner = sections.cli:main
+                    [gui_scripts]
+                    runner = sections.cli:main
+                "},
+            ),
+            (
+                "sections/cli.py",
+                indoc! {"
+                    def main():
+                        print('sections')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: sections-1.0.0-py3-none-any.whl (sections==1.0.0 (from file://[TEMP_DIR]/sections-1.0.0-py3-none-any.whl))
+      cause: The wheel is invalid: Wheel entry points `runner` and `runner` install to the same destination
+    ");
+    ChildPath::new(context.site_packages().join("sections")).assert(predicate::path::missing());
+    ChildPath::new(context.site_packages().join("sections-1.0.0.dist-info"))
+        .assert(predicate::path::missing());
+    context
+        .venv
+        .child(if cfg!(windows) {
+            "Scripts/runner.exe"
+        } else {
+            "bin/runner"
+        })
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn reject_normalized_wheel_entrypoint_collision() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"normalized".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "normalized-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    runner = normalized.cli:main
+                    nested/../runner = normalized.cli:main
+                "},
+            ),
+            (
+                "normalized/cli.py",
+                indoc! {"
+                    def main():
+                        print('normalized')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: normalized-1.0.0-py3-none-any.whl (normalized==1.0.0 (from file://[TEMP_DIR]/normalized-1.0.0-py3-none-any.whl))
+      cause: The wheel is invalid: Wheel entry points `nested/../runner` and `runner` install to the same destination
+    ");
+    ChildPath::new(context.site_packages().join("normalized")).assert(predicate::path::missing());
+    ChildPath::new(context.site_packages().join("normalized-1.0.0.dist-info"))
+        .assert(predicate::path::missing());
+    context
+        .venv
+        .child(if cfg!(windows) {
+            "Scripts/runner.exe"
+        } else {
+            "bin/runner"
+        })
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn wheel_entrypoint_case_aliases() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"case".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "case-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    RÜinner = case.cli:main
+                    [gui_scripts]
+                    rüINNER = case.cli:main
+                "},
+            ),
+            (
+                "case/cli.py",
+                indoc! {"
+                    def main():
+                        print('case')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    if cfg!(any(windows, target_os = "macos")) {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        error: Failed to install: case-1.0.0-py3-none-any.whl (case==1.0.0 (from file://[TEMP_DIR]/case-1.0.0-py3-none-any.whl))
+          cause: The wheel is invalid: Wheel entry points `RÜinner` and `rüINNER` install to the same destination
+        ");
+    } else {
+        uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Resolved 1 package in [TIME]
+        Prepared 1 package in [TIME]
+        Installed 1 package in [TIME]
+         + case==1.0.0 (from file://[TEMP_DIR]/case-1.0.0-py3-none-any.whl)
+        ");
+        uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("RÜinner{}", std::env::consts::EXE_SUFFIX))), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        case
+        ");
+        uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("rüINNER{}", std::env::consts::EXE_SUFFIX))), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        case
+        ");
+    }
+    Ok(())
+}
+
+#[test]
+fn install_distinct_wheel_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"plugin".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "plugin-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    runner = plugin.cli:main
+                    [gui_scripts]
+                    plugin-runner = plugin.cli:main
+                "},
+            ),
+            (
+                "plugin/cli.py",
+                indoc! {"
+                    def main():
+                        print('plugin')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + plugin==1.0.0 (from file://[TEMP_DIR]/plugin-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("runner{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    plugin
+    ");
+    assert!(
+        venv_bin_path(&context.venv)
+            .join(format!("plugin-runner{}", std::env::consts::EXE_SUFFIX))
+            .is_file()
+    );
+    Ok(())
+}
+
+/// A normalized entry point owns its launcher even when the wheel also supplies that data script.
+#[test]
+fn install_normalized_wheel_entrypoint_over_data_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"normalized-script".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "normalized_script-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    nested/../runner = normalized_script.cli:main
+                "},
+            ),
+            (
+                "normalized_script/cli.py",
+                indoc! {"
+                    def main():
+                        print('normalized_script')
+                "},
+            ),
+            (
+                if cfg!(windows) {
+                    "normalized_script-1.0.0.data/scripts/runner.exe"
+                } else {
+                    "normalized_script-1.0.0.data/scripts/runner"
+                },
+                indoc! {"
+                    #!python
+                    print('DATA_SCRIPT')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + normalized-script==1.0.0 (from file://[TEMP_DIR]/normalized_script-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("runner{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    normalized_script
+    ");
+    Ok(())
+}
+
+#[test]
+fn install_case_aliased_wheel_entrypoint_over_data_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"folded-script".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "folded_script-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    RÜinner = folded_script.cli:main
+                "},
+            ),
+            (
+                "folded_script/cli.py",
+                indoc! {"
+                    def main():
+                        print('folded_script')
+                "},
+            ),
+            (
+                if cfg!(windows) {
+                    "folded_script-1.0.0.data/scripts/rüINNER.exe"
+                } else {
+                    "folded_script-1.0.0.data/scripts/rüINNER"
+                },
+                indoc! {"
+                    #!python
+                    print('DATA_SCRIPT')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + folded-script==1.0.0 (from file://[TEMP_DIR]/folded_script-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("RÜinner{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    folded_script
+    ");
+    if !cfg!(any(windows, target_os = "macos")) {
+        uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("rüINNER{}", std::env::consts::EXE_SUFFIX))), @"
+        exit_code: 0 (success)
+        ----- stdout -----
+        DATA_SCRIPT
+        ");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn install_python_wheel_entrypoint_over_data_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"python-script".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "python_script-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    runner.py = python_script.cli:main
+                "},
+            ),
+            (
+                "python_script/cli.py",
+                indoc! {"
+                    def main():
+                        print('python_script')
+                "},
+            ),
+            (
+                "python_script-1.0.0.data/scripts/runner.exe",
+                indoc! {"
+                    #!python
+                    print('DATA_SCRIPT')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + python-script==1.0.0 (from file://[TEMP_DIR]/python_script-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("runner{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    python_script
+    ");
+    Ok(())
+}
+
+/// Windows compares the uppercase and lowercase forms of an entry-point filename.
+#[cfg(windows)]
+#[test]
+fn reject_windows_sigma_wheel_entrypoint_collision() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"sigma".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "sigma-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    σ = sigma.cli:main
+                    [gui_scripts]
+                    Σ = sigma.cli:main
+                "},
+            ),
+            (
+                "sigma/cli.py",
+                indoc! {"
+                    def main():
+                        print('sigma')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: sigma-1.0.0-py3-none-any.whl (sigma==1.0.0 (from file://[TEMP_DIR]/sigma-1.0.0-py3-none-any.whl))
+      cause: The wheel is invalid: Wheel entry points `Σ` and `σ` install to the same destination
+    ");
+    ChildPath::new(context.site_packages().join("sigma")).assert(predicate::path::missing());
+    ChildPath::new(context.site_packages().join("sigma-1.0.0.dist-info"))
+        .assert(predicate::path::missing());
+    context
+        .venv
+        .child("Scripts/σ.exe")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn install_windows_sigma_wheel_entrypoint_over_data_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"sigma-script".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "sigma_script-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    σ = sigma_script.cli:main
+                "},
+            ),
+            (
+                "sigma_script/cli.py",
+                indoc! {"
+                    def main():
+                        print('sigma_script')
+                "},
+            ),
+            (
+                "sigma_script-1.0.0.data/scripts/Σ.exe",
+                indoc! {"
+                    #!python
+                    print('DATA_SCRIPT')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + sigma-script==1.0.0 (from file://[TEMP_DIR]/sigma_script-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("σ{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    sigma_script
+    ");
+    Ok(())
+}
+
+/// Entry-point uniqueness is scoped to a single wheel; another distribution can replace its launcher.
+#[test]
+fn install_wheel_entrypoint_across_distributions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"first-runner".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "first_runner-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    runner = first_runner.cli:main
+                "},
+            ),
+            (
+                "first_runner/cli.py",
+                indoc! {"
+                    def main():
+                        print('first_runner')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + first-runner==1.0.0 (from file://[TEMP_DIR]/first_runner-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("runner{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    first_runner
+    ");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"second-runner".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "second_runner-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    runner = second_runner.cli:main
+                "},
+            ),
+            (
+                "second_runner/cli.py",
+                indoc! {"
+                    def main():
+                        print('second_runner')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + second-runner==1.0.0 (from file://[TEMP_DIR]/second_runner-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("runner{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    second_runner
+    ");
+    Ok(())
+}
+
+/// Ordinal casing must not apply linguistic expansions such as sharp-s to double-s.
+#[cfg(windows)]
+#[test]
+fn install_distinct_windows_sharp_s_wheel_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"sharp-s".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "sharp_s-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    ß = sharp_s.cli:sharp
+                    ss = sharp_s.cli:double
+                "},
+            ),
+            (
+                "sharp_s/cli.py",
+                indoc! {"
+                    def sharp():
+                        print('sharp-s')
+                    def double():
+                        print('double-s')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + sharp-s==1.0.0 (from file://[TEMP_DIR]/sharp_s-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join("ß.exe")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    sharp-s
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join("ss.exe")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    double-s
+    ");
+    Ok(())
+}
+
+/// Unicode lowercasing expands dotted I, but Windows keeps these two filenames distinct.
+#[cfg(windows)]
+#[test]
+fn install_distinct_windows_dotted_i_wheel_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"dotted-i".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "dotted_i-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    İ = dotted_i.cli:composed
+                    i̇ = dotted_i.cli:expanded
+                "},
+            ),
+            (
+                "dotted_i/cli.py",
+                indoc! {"
+                    def composed():
+                        print('composed-i')
+                    def expanded():
+                        print('expanded-i')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + dotted-i==1.0.0 (from file://[TEMP_DIR]/dotted_i-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join("İ.exe")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    composed-i
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join("i̇.exe")), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    expanded-i
+    ");
+    Ok(())
+}
+
+/// Canonical filename variants on the macOS test filesystem identify the same launcher.
+#[cfg(target_os = "macos")]
+#[test]
+fn reject_canonically_equivalent_macos_wheel_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"canonical".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "canonical-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    café = canonical.cli:main
+                    [gui_scripts]
+                    cafe\u{301} = canonical.cli:main
+                "},
+            ),
+            (
+                "canonical/cli.py",
+                indoc! {"
+                    def main():
+                        print('canonical')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    error: Failed to install: canonical-1.0.0-py3-none-any.whl (canonical==1.0.0 (from file://[TEMP_DIR]/canonical-1.0.0-py3-none-any.whl))
+      cause: The wheel is invalid: Wheel entry points `cafe\u{301}` and `café` install to the same destination
+    ");
+    ChildPath::new(context.site_packages().join("canonical")).assert(predicate::path::missing());
+    ChildPath::new(context.site_packages().join("canonical-1.0.0.dist-info"))
+        .assert(predicate::path::missing());
+    ChildPath::new(venv_bin_path(&context.venv).join("café")).assert(predicate::path::missing());
+    for entry in fs::read_dir(venv_bin_path(&context.venv))? {
+        assert!(
+            !entry?
+                .file_name()
+                .as_encoded_bytes()
+                .starts_with(b".uv-entrypoints-")
+        );
+    }
+
+    Ok(())
+}
+
+/// A decomposed data-script filename must not replace a composed entry-point launcher.
+#[cfg(target_os = "macos")]
+#[test]
+fn install_macos_canonical_entrypoint_over_data_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"canonical-script".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "canonical_script-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    café = canonical_script.cli:main
+                "},
+            ),
+            (
+                "canonical_script/cli.py",
+                indoc! {"
+                    def main():
+                        print('canonical_script')
+                "},
+            ),
+            (
+                "canonical_script-1.0.0.data/scripts/cafe\u{301}",
+                indoc! {"
+                    #!python
+                    print('DATA_SCRIPT')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + canonical-script==1.0.0 (from file://[TEMP_DIR]/canonical_script-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("café{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    canonical_script
+    ");
+    for entry in fs::read_dir(venv_bin_path(&context.venv))? {
+        assert!(
+            !entry?
+                .file_name()
+                .as_encoded_bytes()
+                .starts_with(b".uv-entrypoints-")
+        );
+    }
+
+    Ok(())
+}
+
+/// Compatibility normalization would incorrectly merge the circled digit with its plain form.
+#[cfg(target_os = "macos")]
+#[test]
+fn install_distinct_macos_compatibility_entrypoints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = generate_wheel_with_files(
+        &"compatibility".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::default(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "compatibility-1.0.0.dist-info/entry_points.txt",
+                indoc! {"
+                    [console_scripts]
+                    ① = compatibility.cli:circled
+                    1 = compatibility.cli:plain
+                "},
+            ),
+            (
+                "compatibility/cli.py",
+                indoc! {"
+                    def circled():
+                        print('circled')
+                    def plain():
+                        print('plain')
+                "},
+            ),
+        ],
+    );
+    fs::write(context.temp_dir.join(&filename), wheel)?;
+    uv_snapshot!(context.filters(), context.pip_install().arg(&filename), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + compatibility==1.0.0 (from file://[TEMP_DIR]/compatibility-1.0.0-py3-none-any.whl)
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("①{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    circled
+    ");
+    uv_snapshot!(context.filters(), Command::new(venv_bin_path(&context.venv).join(format!("1{}", std::env::consts::EXE_SUFFIX))), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    plain
+    ");
     Ok(())
 }
 
