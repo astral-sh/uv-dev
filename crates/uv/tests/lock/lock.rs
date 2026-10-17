@@ -17631,7 +17631,7 @@ fn lock_find_links_explicit_index() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "tqdm", index = "file://[TEMP_DIR]/links" }]
+        requires-dist = [{ name = "tqdm", index = "file://[TEMP_DIR]/links", index-format = "flat" }]
 
         [[package]]
         name = "tqdm"
@@ -48679,5 +48679,89 @@ fn lock_resolution_inputs_package_prerelease_constraint() -> Result<()> {
     ");
     assert_eq!(context.read("uv.lock"), lock);
 
+    Ok(())
+}
+
+/// Script locking cannot discard a selected default index's cutoff after a CLI override.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_script_rejects_shadowed_selected_default() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("script.py")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # default = true
+        # exclude-newer = "2023-06-01T00:00:00Z"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--script", "script.py", "--default-index", &format!("{}/unused/simple", server.uri()), "--preview-features", "index-exclude-newer"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to parse entry: `a`
+      cause: Index URL `http://[LOCALHOST]/simple` pinned by requirements no longer has its configured policy
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Project metadata must retain a pinned index's policy when its default role is overridden.
+#[cfg(feature = "test-universal")]
+#[tokio::test]
+async fn lock_project_rejects_shadowed_selected_default() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a"]
+
+        [[tool.uv.index]]
+        name = "private"
+        url = "{url}/simple"
+        default = true
+        exclude-newer = "2023-06-01T00:00:00Z"
+
+        [tool.uv.sources]
+        a = {{ index = "private" }}
+    "#, url = server.uri()})?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--default-index", &format!("{}/unused/simple", server.uri()), "--preview-features", "index-exclude-newer"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: Failed to parse entry: `a`
+      cause: Index URL `http://[LOCALHOST]/simple` pinned by requirements no longer has its configured policy
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
     Ok(())
 }

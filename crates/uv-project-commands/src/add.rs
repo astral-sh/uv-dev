@@ -49,7 +49,9 @@ use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_redacted::SafeUrl;
 use uv_redacted::policy::Raw;
-use uv_requirements::{NamedRequirementsResolver, RequirementsSource, RequirementsSpecification};
+use uv_requirements::{
+    LoweringContext, NamedRequirementsResolver, RequirementsSource, RequirementsSpecification,
+};
 use uv_resolve_operations::Error as ResolveError;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolver::FlatIndex;
@@ -126,7 +128,7 @@ pub async fn add(
     python: Option<String>,
     workspace: Option<bool>,
     install_mirrors: PythonInstallMirrors,
-    settings: ResolverInstallerSettings,
+    mut settings: ResolverInstallerSettings,
     client_builder: BaseClientBuilder<'_>,
     script: Option<ScriptPath>,
     python_preference: PythonPreference,
@@ -385,11 +387,20 @@ pub async fn add(
     let client_builder = client_builder
         .clone()
         .keyring(settings.resolver.keyring_provider);
+    let workspace_cache = WorkspaceCache::default();
+    let lowering_context = LoweringContext::new(
+        &settings.resolver.sources,
+        &settings.resolver.index_locations,
+        cache,
+        &workspace_cache,
+        client_builder.credentials_cache(),
+    );
 
     // Read the requirements.
     let RequirementsSpecification {
         requirements,
         constraints,
+        indexes: source_indexes,
         ..
     } = RequirementsSpecification::from_sources(
         &requirements,
@@ -398,8 +409,15 @@ pub async fn add(
         &[],
         None,
         &client_builder,
+        lowering_context,
     )
     .await?;
+
+    // Retain selected source policies in every client used to lock and sync these requirements.
+    settings.resolver.index_locations = settings
+        .resolver
+        .index_locations
+        .with_source_indexes(source_indexes)?;
 
     // Initialize any shared state.
     let state = PlatformState::default();

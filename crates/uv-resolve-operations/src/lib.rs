@@ -26,8 +26,9 @@ use uv_pep508::{MarkerEnvironment, RequirementOrigin};
 use uv_platform_tags::Tags;
 use uv_pypi_types::Conflicts;
 use uv_requirements::{
-    GroupsSpecification, LookaheadResolver, NamedRequirementsResolver, RequirementsSource,
-    RequirementsSpecification, SourceTree, SourceTreeResolution, SourceTreeResolver,
+    GroupsSpecification, LookaheadResolver, LoweringContext, NamedRequirementsResolver,
+    RequirementsSource, RequirementsSpecification, SourceTree, SourceTreeResolution,
+    SourceTreeResolver,
 };
 use uv_resolver::{
     DependencyMode, Exclusions, FlatIndex, InMemoryIndex, Manifest, Options, Preference,
@@ -57,6 +58,7 @@ pub async fn read_requirements(
     extras: &ExtrasSpecification,
     groups: Option<&GroupsSpecification>,
     client_builder: &BaseClientBuilder<'_>,
+    lowering_context: LoweringContext<'_>,
 ) -> Result<RequirementsSpecification, Error> {
     // If the user requests `extras` but does not provide a valid source (e.g., a `pyproject.toml`),
     // return an error.
@@ -75,6 +77,7 @@ pub async fn read_requirements(
         excludes,
         groups,
         client_builder,
+        lowering_context,
     )
     .await?)
 }
@@ -83,12 +86,18 @@ pub async fn read_requirements(
 pub async fn read_constraints(
     constraints: &[RequirementsSource],
     client_builder: &BaseClientBuilder<'_>,
-) -> Result<Vec<NameRequirementSpecification>, Error> {
-    Ok(
-        RequirementsSpecification::from_sources(&[], constraints, &[], &[], None, client_builder)
-            .await?
-            .constraints,
+    lowering_context: LoweringContext<'_>,
+) -> Result<RequirementsSpecification, Error> {
+    Ok(RequirementsSpecification::from_sources(
+        &[],
+        constraints,
+        &[],
+        &[],
+        None,
+        client_builder,
+        lowering_context,
     )
+    .await?)
 }
 
 /// Resolve a set of requirements, similar to running `pip compile`.

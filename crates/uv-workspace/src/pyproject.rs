@@ -1865,18 +1865,13 @@ impl Source {
         }
 
         let source = match source {
-            RequirementSource::Registry { index: Some(_), .. } => {
-                return Ok(None);
-            }
-            RequirementSource::Registry { index: None, .. } if let Some(index) = index => {
-                Self::Registry {
-                    index,
-                    marker: MarkerTree::TRUE,
-                    extra: None,
-                    group: None,
-                }
-            }
-            RequirementSource::Registry { index: None, .. } => return Ok(None),
+            RequirementSource::Registry { .. } if let Some(index) = index => Self::Registry {
+                index,
+                marker: MarkerTree::TRUE,
+                extra: None,
+                group: None,
+            },
+            RequirementSource::Registry { .. } => return Ok(None),
             RequirementSource::Path {
                 install_path, url, ..
             } => Self::Path {

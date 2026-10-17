@@ -1,21 +1,32 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use itertools::Itertools;
+use tracing::debug;
 
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
-use uv_configuration::{Concurrency, Constraints, GitLfsSetting};
+use uv_configuration::{
+    Concurrency, Constraints, DependencyModifiers, Excludes, GitLfsSetting, Override, Overrides,
+    TargetTriple,
+};
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies};
 use uv_distribution_types::{
-    Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    IndexCapabilities, NameRequirementSpecification, Requirement, RequirementScope,
+    RequirementSource, UnresolvedRequirement, UnresolvedRequirementSpecification,
 };
+use uv_normalize::PackageName;
+use uv_pep440::{VersionSpecifier, VersionSpecifiers};
+use uv_pep508::MarkerTree;
 use uv_preview::Preview;
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
-use uv_requirements::NamedRequirementsResolver;
+use uv_requirements::{NamedRequirementsResolver, RequirementsSpecification};
+use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::reporters::ResolverReporter;
-use uv_resolver::FlatIndex;
+use uv_resolve_operations::resolution_markers;
+use uv_resolver::{Exclusions, FlatIndex, Manifest, Preferences, ResolverEnvironment};
 use uv_settings::ResolverSettings;
 use uv_torch::TorchStrategy;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
@@ -181,4 +192,120 @@ pub(super) async fn resolve_names(
     );
 
     Ok(requirements)
+}
+
+/// Derive the latest-version constraint for one resolution attempt.
+///
+/// The supplied requirements remain unchanged so a different interpreter can select its own index
+/// and latest version without retaining the constraint from an earlier attempt.
+pub(super) async fn with_latest_constraint(
+    specification: &RequirementsSpecification,
+    package: Option<&PackageName>,
+    interpreter: &Interpreter,
+    python_platform: Option<&TargetTriple>,
+    settings: &ResolverSettings,
+    client_builder: &BaseClientBuilder<'_>,
+    concurrency: &Concurrency,
+    cache: &Cache,
+) -> Result<RequirementsSpecification, ToolError> {
+    let mut specification = specification.clone();
+    let Some(package) = package else {
+        return Ok(specification);
+    };
+    let modifiers = DependencyModifiers::new(
+        Overrides::from_entries(
+            specification
+                .override_dependencies
+                .iter()
+                .cloned()
+                .chain(
+                    resolved_requirements(&specification.overrides)?
+                        .into_iter()
+                        .map(Override::Requirement),
+                )
+                .collect(),
+        )
+        .map_err(uv_resolve_operations::Error::from)?,
+        Excludes::from_entries(specification.excludes.iter().cloned()),
+    );
+    let manifest = Manifest::new(
+        resolved_requirements(&specification.requirements)?,
+        Constraints::from_requirements(
+            specification
+                .constraints
+                .iter()
+                .map(|constraint| constraint.requirement.clone()),
+        ),
+        modifiers,
+        Preferences::default(),
+        None,
+        BTreeMap::new(),
+        Exclusions::default(),
+        Vec::new(),
+    );
+    let markers = resolution_markers(None, python_platform, interpreter);
+    let index = manifest
+        .index_for(package, &ResolverEnvironment::specific(markers))
+        .map_err(uv_resolve_operations::Error::from)?;
+    let client = RegistryClientBuilder::new(
+        client_builder.clone().keyring(settings.keyring_provider),
+        cache.clone(),
+    )
+    .index_locations(settings.index_locations.clone())
+    .index_strategy(settings.index_strategy)
+    .markers(interpreter.markers())
+    .platform(interpreter.platform())
+    .build()?;
+    let capabilities = IndexCapabilities::default();
+    let latest_client = LatestClient {
+        client: &client,
+        capabilities: &capabilities,
+        prerelease: &settings.prerelease,
+        exclude_newer: &settings.exclude_newer,
+        index_locations: &settings.index_locations,
+        tags: None,
+        requires_python: None,
+    };
+    if let Some(filename) = latest_client
+        .find_latest(
+            package,
+            index.as_ref().map(Into::into),
+            &concurrency.downloads_semaphore,
+        )
+        .await?
+    {
+        let version = filename.version().clone();
+        debug!("Resolved `{package}@latest` to `{package}=={version}`");
+        specification
+            .constraints
+            .push(NameRequirementSpecification::from(Requirement {
+                name: package.clone(),
+                extras: Box::new([]),
+                groups: Box::new([]),
+                marker: MarkerTree::default(),
+                source: RequirementSource::Registry {
+                    specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
+                    index: None,
+                    conflict: None,
+                },
+                scope: RequirementScope::Global,
+                origin: None,
+            }));
+    }
+    Ok(specification)
+}
+
+fn resolved_requirements(
+    requirements: &[UnresolvedRequirementSpecification],
+) -> Result<Vec<Requirement>, ToolError> {
+    requirements
+        .iter()
+        .map(|requirement| match &requirement.requirement {
+            UnresolvedRequirement::Named(requirement) => Ok(requirement.clone()),
+            UnresolvedRequirement::Unnamed(_) => Err(anyhow::anyhow!(
+                "Expected resolved requirements before selecting the latest tool version"
+            )
+            .into()),
+        })
+        .collect()
 }

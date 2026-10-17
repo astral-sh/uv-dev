@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
-use std::ops::Deref;
+use std::ops::{Deref, Range};
 use std::path::Path;
+use std::ptr;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock, RwLock};
 
@@ -10,7 +11,7 @@ use itertools::Either;
 use rustc_hash::{FxHashMap, FxHashSet};
 use thiserror::Error;
 use url::ParseError;
-use uv_auth::RealmRef;
+use uv_auth::{AuthPolicy, Index as AuthIndex, RealmRef};
 use uv_cache_key::CanonicalUrl;
 use uv_pep508::{Scheme, VerbatimUrl, VerbatimUrlError, split_scheme};
 use uv_pypi_types::HashAlgorithm;
@@ -18,7 +19,219 @@ use uv_redacted::SafeUrl;
 use uv_redacted::policy::{SerializationPolicy, Stripped};
 use uv_warnings::warn_user;
 
-use crate::{ExcludeNewerOverride, Index, IndexStatusCodeStrategy, Verbatim};
+use crate::{
+    ExcludeNewerOverride, Index, IndexMetadata, IndexName, IndexStatusCodeStrategy, Origin,
+    Verbatim,
+};
+
+/// Full index definitions selected by requirements sources, validated before composition.
+#[derive(Debug, Default, Clone)]
+pub struct SourceIndexes(Vec<Index>);
+
+/// Conflicting source-index definitions would discard a selected policy in index clients.
+#[derive(Debug, Error)]
+pub enum SourceIndexError {
+    #[error("Conflicting definitions for index `{0}` in requirements sources")]
+    ConflictingName(IndexName),
+    #[error("Multiple default indexes in requirements sources")]
+    MultipleDefaults,
+    #[error(
+        "A default index from requirements sources conflicts with the command-line default index"
+    )]
+    ConfiguredDefault,
+    #[error(
+        "Conflicting authentication policies for indexes {first} ({first_policy}) and {second} ({second_policy}): authentication scopes overlap"
+    )]
+    ConflictingAuthentication {
+        first: Box<SourceIndexIdentity>,
+        first_policy: AuthPolicy,
+        second: Box<SourceIndexIdentity>,
+        second_policy: AuthPolicy,
+    },
+    #[error("Conflicting policies for indexes {first} and {second}")]
+    ConflictingUrl {
+        first: Box<SourceIndexIdentity>,
+        second: Box<SourceIndexIdentity>,
+    },
+    #[error("Index URL `{0}` pinned by requirements no longer has its configured policy")]
+    MissingPinnedIndex(IndexUrl),
+}
+
+/// A conflicting index definition with credentials removed from its diagnostic URL.
+#[derive(Debug)]
+pub enum SourceIndexIdentity {
+    Named { name: IndexName, url: SafeUrl },
+    Unnamed { url: SafeUrl },
+}
+
+impl From<&Index> for SourceIndexIdentity {
+    fn from(index: &Index) -> Self {
+        let url = index.url.without_credentials().into_owned();
+        if let Some(name) = &index.name {
+            Self::Named {
+                name: name.clone(),
+                url,
+            }
+        } else {
+            Self::Unnamed { url }
+        }
+    }
+}
+
+impl Display for SourceIndexIdentity {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Named { name, url } => write!(f, "`{name}` (`{url}`)"),
+            Self::Unnamed { url } => write!(f, "`{url}`"),
+        }
+    }
+}
+
+impl SourceIndexes {
+    /// Construct a collection while rejecting conflicting selected policies.
+    pub fn try_from_iter(
+        indexes: impl IntoIterator<Item = Index>,
+    ) -> Result<Self, SourceIndexError> {
+        let mut result = Self::default();
+        result.try_extend(indexes)?;
+        Ok(result)
+    }
+
+    /// Merge definitions without losing policies to client name or default-index selection.
+    pub fn try_extend(
+        &mut self,
+        indexes: impl IntoIterator<Item = Index>,
+    ) -> Result<(), SourceIndexError> {
+        for index in indexes {
+            if let Some(name) = index.name.as_ref()
+                && let Some(existing) = self
+                    .0
+                    .iter()
+                    .find(|existing| existing.name.as_ref() == Some(name))
+            {
+                if existing != &index {
+                    return Err(SourceIndexError::ConflictingName(name.clone()));
+                }
+                continue;
+            }
+            for existing in &self.0 {
+                validate_source_index_policy(existing, &index)?;
+                if index.default && existing.default && !is_same_index(&existing.url, &index.url) {
+                    return Err(SourceIndexError::MultipleDefaults);
+                }
+            }
+            self.0.push(index);
+        }
+        Ok(())
+    }
+
+    /// Merge source definitions into index options while retaining command-line precedence.
+    ///
+    /// Legacy index fields and implicit defaults are not part of this declaration list. Validate
+    /// the complete client locations with [`IndexLocations::with_source_indexes`] before persisting
+    /// these definitions.
+    pub fn merge_index_definitions(self, indexes: Vec<Index>) -> Vec<Index> {
+        let (indexes, _) = merge_source_index_definitions(indexes, self);
+        let mut names = FxHashSet::default();
+        let (non_default, default) = indexes
+            .into_iter()
+            .filter(|index| {
+                index
+                    .name
+                    .as_ref()
+                    .is_none_or(|name| names.insert(name.clone()))
+            })
+            .partition::<Vec<_>, _>(|index| !index.default);
+        non_default.into_iter().chain(default).collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn iter(&self) -> std::slice::Iter<'_, Index> {
+        self.0.iter()
+    }
+}
+
+/// Merge declarations in command-line, source, then configured order.
+///
+/// Credential lookup uses shadowed declarations via [`IndexLocations::known_indexes`].
+fn merge_source_index_definitions(
+    indexes: Vec<Index>,
+    sources: SourceIndexes,
+) -> (Vec<Index>, Range<usize>) {
+    let (command_line, configured): (Vec<_>, Vec<_>) = indexes
+        .into_iter()
+        .partition(|index| index.origin == Some(Origin::Cli));
+    let sources = sources.into_iter();
+    let source_range = command_line.len()..command_line.len() + sources.len();
+    let indexes = command_line
+        .into_iter()
+        .chain(sources)
+        .chain(configured)
+        .collect();
+    (indexes, source_range)
+}
+
+/// Authentication scopes and endpoint-based policies must agree across selected definitions.
+fn validate_source_index_policy(existing: &Index, index: &Index) -> Result<(), SourceIndexError> {
+    let conflicting_authentication = existing.authenticate != index.authenticate
+        && AuthIndex::from(existing).has_overlapping_auth_scope(&AuthIndex::from(index));
+    if conflicting_authentication {
+        return Err(SourceIndexError::ConflictingAuthentication {
+            first: Box::new(existing.into()),
+            first_policy: existing.authenticate,
+            second: Box::new(index.into()),
+            second_policy: index.authenticate,
+        });
+    }
+    if is_same_index(&existing.url, &index.url) && !existing.has_same_policy(index) {
+        return Err(SourceIndexError::ConflictingUrl {
+            first: Box::new(existing.into()),
+            second: Box::new(index.into()),
+        });
+    }
+    Ok(())
+}
+
+/// Ensure a selected endpoint and its policies remain in the effective client configuration.
+fn validate_retained_index_policy(
+    index: &Index,
+    url: &IndexUrl,
+    retained_indexes: &[&Index],
+    require_endpoint: bool,
+) -> Result<(), SourceIndexError> {
+    if require_endpoint
+        && !retained_indexes
+            .iter()
+            .any(|retained| is_same_index(&retained.url, url))
+    {
+        return Err(SourceIndexError::MissingPinnedIndex(url.clone()));
+    }
+    for retained in retained_indexes {
+        validate_source_index_policy(index, retained)?;
+    }
+    Ok(())
+}
+
+impl<'a> IntoIterator for &'a SourceIndexes {
+    type Item = &'a Index;
+    type IntoIter = std::slice::Iter<'a, Index>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl IntoIterator for SourceIndexes {
+    type Item = Index;
+    type IntoIter = std::vec::IntoIter<Index>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
 
 pub static PYPI_URL: LazyLock<SafeUrl> =
     LazyLock::new(|| SafeUrl::parse("https://pypi.org/simple").unwrap());
@@ -292,6 +505,105 @@ impl IndexLocations {
         }
     }
 
+    /// Ensure persisted index pins retain the policies they selected before settings overrides.
+    pub fn validate_pinned_indexes<'index>(
+        &self,
+        original: &Self,
+        pins: impl IntoIterator<Item = &'index IndexMetadata>,
+    ) -> Result<(), SourceIndexError> {
+        let original_indexes = original.allowed_indexes();
+        let retained_indexes = self.allowed_indexes();
+        for pin in pins {
+            let Some(original) = original_indexes
+                .iter()
+                .rev()
+                .find(|index| is_same_index(&index.url, &pin.url))
+            else {
+                continue;
+            };
+            validate_retained_index_policy(original, &pin.url, &retained_indexes, true)?;
+        }
+        Ok(())
+    }
+
+    /// Validate selected definitions without reordering an already composed client configuration.
+    ///
+    /// Disabled source indexes do not contribute policies to the client configuration.
+    pub fn validate_source_indexes(&self, indexes: &SourceIndexes) -> Result<(), SourceIndexError> {
+        if self.no_index || indexes.is_empty() {
+            return Ok(());
+        }
+        let retained_indexes = self.allowed_indexes();
+        for index in indexes {
+            validate_retained_index_policy(index, &index.url, &retained_indexes, true)?;
+        }
+        Ok(())
+    }
+
+    /// Validate a selected metadata index against configured endpoint and authentication policies.
+    ///
+    /// Workspace members can select their own endpoints without adding them to the root's index
+    /// configuration. Endpoints declared in the client configuration must retain their policies
+    /// after name and default-index precedence is applied.
+    pub fn validate_metadata_index(&self, index: &Index) -> Result<(), SourceIndexError> {
+        if self.no_index {
+            return Ok(());
+        }
+        let require_endpoint = self
+            .indexes
+            .iter()
+            .chain(self.flat_index.iter())
+            .any(|configured| is_same_index(&configured.url, &index.url));
+        validate_retained_index_policy(index, &index.url, &self.allowed_indexes(), require_endpoint)
+    }
+
+    /// Add index definitions from sources, retaining command-line precedence.
+    pub fn with_source_indexes(mut self, indexes: SourceIndexes) -> Result<Self, SourceIndexError> {
+        if indexes.is_empty() {
+            return Ok(self);
+        }
+        let source_defaults = indexes
+            .iter()
+            .filter(|index| index.default)
+            .cloned()
+            .collect::<Vec<_>>();
+        let (definitions, source_range) = merge_source_index_definitions(self.indexes, indexes);
+        self.indexes = definitions;
+
+        let allowed_indexes = self.allowed_indexes();
+        // Source defaults must retain a compatible endpoint when a command-line default wins.
+        if !self.no_index
+            && allowed_indexes
+                .iter()
+                .any(|index| index.default && index.origin == Some(Origin::Cli))
+        {
+            for index in &source_defaults {
+                if !allowed_indexes
+                    .iter()
+                    .any(|existing| is_same_index(&existing.url, &index.url))
+                {
+                    return Err(SourceIndexError::ConfiguredDefault);
+                }
+                for existing in &allowed_indexes {
+                    validate_source_index_policy(existing, index)?;
+                }
+            }
+        }
+        // Compare retained source definitions against the complete client set.
+        for index in &self.indexes[source_range] {
+            if !allowed_indexes
+                .iter()
+                .any(|existing| ptr::eq(*existing, index))
+            {
+                continue;
+            }
+            for existing in &allowed_indexes {
+                validate_source_index_policy(existing, index)?;
+            }
+        }
+        Ok(self)
+    }
+
     /// Returns `true` if no index configuration is set, i.e., the [`IndexLocations`] matches the
     /// default configuration.
     pub fn is_none(&self) -> bool {
@@ -405,33 +717,36 @@ impl<'a> IndexLocations {
     /// The indexes will be returned in the reverse of the order in which they were defined, such
     /// that the last-defined index is the first item in the vector.
     pub fn allowed_indexes(&'a self) -> Vec<&'a Index> {
-        if self.no_index {
-            self.flat_index.iter().rev().collect()
-        } else {
-            let mut indexes = vec![];
+        let mut indexes = self.effective_indexes().collect::<Vec<_>>();
+        indexes.reverse();
+        indexes
+    }
 
+    /// Return client definitions in declaration order, excluding disabled or shadowed entries.
+    fn effective_indexes(&'a self) -> impl Iterator<Item = &'a Index> + 'a {
+        if self.no_index {
+            Either::Left(self.flat_index.iter())
+        } else {
             let mut seen = FxHashSet::default();
             let mut default = false;
-            for index in {
+            Either::Right(
                 self.indexes
                     .iter()
                     .chain(self.flat_index.iter())
-                    .filter(move |index| index.name.as_ref().is_none_or(|name| seen.insert(name)))
-            } {
-                if index.default {
-                    if default {
-                        continue;
-                    }
-                    default = true;
-                }
-                indexes.push(index);
-            }
-            if !default {
-                indexes.push(&*DEFAULT_INDEX);
-            }
-
-            indexes.reverse();
-            indexes
+                    .chain(std::iter::once(&*DEFAULT_INDEX))
+                    .filter(move |index| {
+                        if index.name.as_ref().is_some_and(|name| !seen.insert(name)) {
+                            return false;
+                        }
+                        if index.default {
+                            if default {
+                                return false;
+                            }
+                            default = true;
+                        }
+                        true
+                    }),
+            )
         }
     }
 
@@ -476,10 +791,9 @@ impl<'a> IndexLocations {
         Either::Right(non_default.into_iter().chain(default))
     }
 
-    /// Return the configured index matching the given URL.
+    /// Return the first effective client definition matching the given URL.
     fn index_for_url(&self, url: &IndexUrl) -> Option<&Index> {
-        self.indexes
-            .iter()
+        self.effective_indexes()
             .find(|index| is_same_index(index.url(), url))
     }
 
@@ -521,21 +835,30 @@ impl<'a> IndexLocations {
     }
 }
 
+impl From<&Index> for AuthIndex {
+    fn from(index: &Index) -> Self {
+        let mut url = index.url().url().clone();
+        url.set_username("").ok();
+        url.set_password(None).ok();
+        let mut root_url = index.url().root().unwrap_or_else(|| url.clone());
+        root_url.set_username("").ok();
+        root_url.set_password(None).ok();
+        Self {
+            url,
+            root_url,
+            auth_policy: index.authenticate,
+        }
+    }
+}
+
 impl From<&IndexLocations> for uv_auth::Indexes {
     fn from(index_locations: &IndexLocations) -> Self {
-        Self::from_indexes(index_locations.allowed_indexes().into_iter().map(|index| {
-            let mut url = index.url().url().clone();
-            url.set_username("").ok();
-            url.set_password(None).ok();
-            let mut root_url = index.url().root().unwrap_or_else(|| url.clone());
-            root_url.set_username("").ok();
-            root_url.set_password(None).ok();
-            uv_auth::Index {
-                url,
-                root_url,
-                auth_policy: index.authenticate,
-            }
-        }))
+        Self::from_indexes(
+            index_locations
+                .allowed_indexes()
+                .into_iter()
+                .map(AuthIndex::from),
+        )
     }
 }
 
@@ -624,14 +947,718 @@ mod tests {
     use std::error::Error;
 
     use super::*;
-    use crate::{IndexCacheControl, IndexFormat, IndexName};
+    use crate::{IndexCacheControl, IndexFormat, IndexHashAlgorithm, IndexName};
     use http::HeaderValue;
+    use uv_auth::AuthPolicy;
 
     fn index_urls<'a>(indexes: impl IntoIterator<Item = &'a Index>) -> Vec<&'a str> {
         indexes
             .into_iter()
             .map(|index| index.url().url().as_str())
             .collect()
+    }
+
+    #[test]
+    fn metadata_indexes_accept_member_only_endpoint() -> Result<(), Box<dyn Error>> {
+        let root = Index::from_str("root=https://root.example/simple")?;
+        let member = Index::from_str("member=https://member.example/simple")?;
+        let locations = IndexLocations::new(vec![root], Vec::new(), false);
+
+        locations.validate_metadata_index(&member)?;
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_indexes_accept_member_name_override() -> Result<(), Box<dyn Error>> {
+        let root = Index::from_str("shared=https://root.example/simple")?;
+        let member = Index::from_str("shared=https://member.example/simple")?;
+        let locations = IndexLocations::new(vec![root], Vec::new(), false);
+
+        locations.validate_metadata_index(&member)?;
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_indexes_reject_hidden_declared_endpoint() -> Result<(), Box<dyn Error>> {
+        let mut configured = Index::from_str("root-default=https://private.example/simple")?;
+        configured.default = true;
+        configured.exclude_newer = Some(ExcludeNewerOverride::from_str("2023-06-01T00:00:00Z")?);
+        let mut selected = configured.clone();
+        selected.name = Some(IndexName::from_str("member")?);
+        selected.default = false;
+        let command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example/simple")?)
+                .with_origin(Origin::Cli);
+        let locations = IndexLocations::new(vec![command_line, configured], Vec::new(), false);
+
+        assert_eq!(
+            locations.validate_metadata_index(&selected).err().map(|err| err.to_string()),
+            Some("Index URL `https://private.example/simple` pinned by requirements no longer has its configured policy".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_indexes_reject_conflicting_authentication_scope() -> Result<(), Box<dyn Error>> {
+        let configured = Index::from_str("configured=https://example.com/private/simple")?;
+        let mut member = Index::from_str("member=https://example.com/simple")?;
+        member.authenticate = AuthPolicy::Always;
+        let locations = IndexLocations::new(vec![configured], Vec::new(), false);
+
+        assert_eq!(
+            locations.validate_metadata_index(&member).err().map(|err| err.to_string()),
+            Some("Conflicting authentication policies for indexes `member` (`https://example.com/simple`) (always) and `configured` (`https://example.com/private/simple`) (auto): authentication scopes overlap".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_retain_shadowed_credentials() -> Result<(), Box<dyn Error>> {
+        let command_line =
+            Index::from_str("private=https://private.example/simple")?.with_origin(Origin::Cli);
+        let mut configured =
+            Index::from_str("private=https://username:password@private.example/simple")?;
+        configured.authenticate = AuthPolicy::Always;
+        configured.cache_control = Some(IndexCacheControl {
+            api: Some(HeaderValue::from_static("max-age=300")),
+            files: None,
+        });
+        let source = Index::from_str("source=https://source.example/simple")?;
+        let locations = IndexLocations::new(vec![command_line, configured], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([source])?)?;
+
+        assert_eq!(
+            locations
+                .known_indexes()
+                .filter(|index| index
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| name.as_ref() == "private"))
+                .map(|index| (index.url.username(), index.authenticate))
+                .collect::<Vec<_>>(),
+            [("username", AuthPolicy::Always), ("", AuthPolicy::Auto)]
+        );
+        assert_eq!(
+            locations
+                .allowed_indexes()
+                .into_iter()
+                .filter(|index| index
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| name.as_ref() == "private"))
+                .map(|index| (index.url.username(), index.authenticate))
+                .collect::<Vec<_>>(),
+            [("", AuthPolicy::Auto)]
+        );
+        assert_eq!(
+            locations.simple_api_cache_control_for(&IndexUrl::from_str(
+                "https://private.example/simple"
+            )?),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn selected_indexes_reject_shadowed_default() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://private.example/simple")?;
+        selected.default = true;
+        selected.exclude_newer = Some(ExcludeNewerOverride::from_str("2023-06-01T00:00:00Z")?);
+        let command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example/simple")?)
+                .with_origin(Origin::Cli);
+        let locations =
+            IndexLocations::new(vec![command_line, selected.clone()], Vec::new(), false);
+        let sources = SourceIndexes::try_from_iter([selected])?;
+
+        assert_eq!(
+            locations.validate_source_indexes(&sources).err().map(|err| err.to_string()),
+            Some("Index URL `https://private.example/simple` pinned by requirements no longer has its configured policy".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn selected_indexes_accept_retained_default_alias() -> Result<(), Box<dyn Error>> {
+        let cutoff = ExcludeNewerOverride::from_str("2023-06-01T00:00:00Z")?;
+        let mut selected = Index::from_str("private=https://private.example/simple")?;
+        selected.default = true;
+        selected.exclude_newer = Some(cutoff.clone());
+        let url = selected.url.clone();
+        let mut alias = Index::from_str("mirror=https://private.example/simple")?;
+        alias.exclude_newer = Some(cutoff.clone());
+        let command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example/simple")?)
+                .with_origin(Origin::Cli);
+        let locations = IndexLocations::new(
+            vec![command_line, selected.clone(), alias],
+            Vec::new(),
+            false,
+        );
+        let sources = SourceIndexes::try_from_iter([selected])?;
+
+        locations.validate_source_indexes(&sources)?;
+        assert_eq!(locations.exclude_newer_for(&url), Some(&cutoff));
+        Ok(())
+    }
+
+    #[test]
+    fn selected_indexes_reject_incompatible_retained_alias() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://private.example/simple")?;
+        selected.default = true;
+        selected.exclude_newer = Some(ExcludeNewerOverride::from_str("2023-06-01T00:00:00Z")?);
+        let alias = Index::from_str("mirror=https://private.example/simple")?;
+        let command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example/simple")?)
+                .with_origin(Origin::Cli);
+        let locations = IndexLocations::new(
+            vec![command_line, selected.clone(), alias],
+            Vec::new(),
+            false,
+        );
+        let sources = SourceIndexes::try_from_iter([selected])?;
+
+        assert_eq!(
+            locations.validate_source_indexes(&sources).err().map(|err| err.to_string()),
+            Some("Conflicting policies for indexes `private` (`https://private.example/simple`) and `mirror` (`https://private.example/simple`)".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn selected_indexes_ignore_disabled_definitions() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/links")?;
+        selected.authenticate = AuthPolicy::Always;
+        let flat = Index::from_find_links(selected.url.clone());
+        let locations = IndexLocations::new(vec![selected.clone()], vec![flat], true);
+        locations.validate_metadata_index(&selected)?;
+        let sources = SourceIndexes::try_from_iter([selected])?;
+
+        locations.validate_source_indexes(&sources)?;
+        Ok(())
+    }
+
+    #[test]
+    fn index_policy_lookup_ignores_shadowed_defaults() -> Result<(), Box<dyn Error>> {
+        let command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example/simple")?)
+                .with_origin(Origin::Cli);
+        let url = IndexUrl::from_str("https://private.example/simple")?;
+        let shadowed = Index::from_index_url(url.clone()).with_origin(Origin::Cli);
+        let cutoff = ExcludeNewerOverride::from_str("2023-06-01T00:00:00Z")?;
+        let mut selected = Index::from_str("private=https://private.example/simple")?;
+        selected.explicit = true;
+        selected.exclude_newer = Some(cutoff.clone());
+        selected.hash_algorithm = Some(IndexHashAlgorithm::Sha256);
+        selected.ignore_error_codes = Some(serde_json::from_str("[403]")?);
+        selected.cache_control = Some(IndexCacheControl {
+            api: Some(HeaderValue::from_static("max-age=300")),
+            files: Some(HeaderValue::from_static("max-age=1800")),
+        });
+
+        let locations = IndexLocations::new(vec![command_line, shadowed], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert_eq!(locations.exclude_newer_for(&url), Some(&cutoff));
+        assert_eq!(
+            locations.hash_algorithm_for(&url),
+            Some(HashAlgorithm::Sha256)
+        );
+        assert!(locations.ignores_error_code_for(&url, StatusCode::FORBIDDEN));
+        assert_eq!(
+            locations.status_code_strategy_for(&url),
+            IndexStatusCodeStrategy::IgnoreErrorCodes {
+                status_codes: FxHashSet::from_iter([StatusCode::FORBIDDEN]),
+            }
+        );
+        assert_eq!(
+            locations.simple_api_cache_control_for(&url),
+            Some(HeaderValue::from_static("max-age=300"))
+        );
+        assert_eq!(
+            locations.artifact_cache_control_for(&url),
+            Some(HeaderValue::from_static("max-age=1800"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn index_policy_lookup_retains_first_effective_alias() -> Result<(), Box<dyn Error>> {
+        let url = IndexUrl::from_str("https://example.com/simple")?;
+        let mut first = Index::from_str("first=https://example.com/simple")?;
+        first.cache_control = Some(IndexCacheControl {
+            api: Some(HeaderValue::from_static("max-age=300")),
+            files: None,
+        });
+        let mut second = Index::from_str("second=https://example.com/simple")?;
+        second.cache_control = Some(IndexCacheControl {
+            api: Some(HeaderValue::from_static("max-age=600")),
+            files: None,
+        });
+        let locations = IndexLocations::new(vec![first, second], Vec::new(), false);
+
+        assert_eq!(
+            locations.simple_api_cache_control_for(&url),
+            Some(HeaderValue::from_static("max-age=300"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn index_policy_lookup_uses_retained_flat_policy() -> Result<(), Box<dyn Error>> {
+        let url = IndexUrl::from_str("https://example.com/links")?;
+        let mut flat = Index::from_find_links(url.clone());
+        flat.cache_control = Some(IndexCacheControl {
+            api: None,
+            files: Some(HeaderValue::from_static("max-age=1800")),
+        });
+        let locations = IndexLocations::new(Vec::new(), vec![flat], false);
+
+        assert_eq!(
+            locations.artifact_cache_control_for(&url),
+            Some(HeaderValue::from_static("max-age=1800"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn index_policy_lookup_ignores_disabled_simple_indexes() -> Result<(), Box<dyn Error>> {
+        let url = IndexUrl::from_str("https://example.com/links")?;
+        let mut disabled = Index::from_str("disabled=https://example.com/links")?;
+        disabled.cache_control = Some(IndexCacheControl {
+            api: None,
+            files: Some(HeaderValue::from_static("max-age=300")),
+        });
+        let mut flat = Index::from_find_links(url.clone());
+        flat.cache_control = Some(IndexCacheControl {
+            api: None,
+            files: Some(HeaderValue::from_static("max-age=1800")),
+        });
+        let locations = IndexLocations::new(vec![disabled], vec![flat], true);
+
+        assert_eq!(
+            locations.artifact_cache_control_for(&url),
+            Some(HeaderValue::from_static("max-age=1800"))
+        );
+        assert!(
+            locations
+                .index_for_url(&IndexUrl::from_str("https://pypi.org/simple")?)
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_defaults_accept_equivalent_command_line_default() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.default = true;
+        let mut command_line = Index::from_index_url(selected.url.clone());
+        command_line.origin = Some(Origin::Cli);
+
+        let locations = IndexLocations::new(vec![command_line], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert_eq!(
+            index_urls(locations.allowed_indexes()),
+            ["https://example.com/simple"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_defaults_retain_endpoint_through_alias() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://private.example.com/simple")?;
+        selected.default = true;
+        selected.authenticate = AuthPolicy::Always;
+        let mut alias = Index::from_str("mirror=https://private.example.com/simple")?;
+        alias.authenticate = AuthPolicy::Always;
+        alias.origin = Some(Origin::Cli);
+        let mut command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example.com/simple")?);
+        command_line.origin = Some(Origin::Cli);
+
+        let locations = IndexLocations::new(vec![command_line, alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert_eq!(
+            index_urls(locations.allowed_indexes()),
+            [
+                "https://private.example.com/simple",
+                "https://default.example.com/simple"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_defaults_reject_incompatible_retained_alias() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://private.example.com/simple")?;
+        selected.default = true;
+        selected.authenticate = AuthPolicy::Always;
+        let mut alias = Index::from_str("mirror=https://private.example.com/simple")?;
+        alias.origin = Some(Origin::Cli);
+        let mut command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example.com/simple")?);
+        command_line.origin = Some(Origin::Cli);
+
+        let result = IndexLocations::new(vec![command_line, alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        assert_eq!(
+            result.err().map(|err| err.to_string()),
+            Some("Conflicting authentication policies for indexes `mirror` (`https://private.example.com/simple`) (auto) and `private` (`https://private.example.com/simple`) (always): authentication scopes overlap".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_defaults_ignore_shadowed_command_line_default() -> Result<(), Box<dyn Error>> {
+        let mut command_line = Index::from_str("shared=https://example.com/primary")?;
+        command_line.origin = Some(Origin::Cli);
+        let mut shadowed = Index::from_str("shared=https://example.com/unused")?;
+        shadowed.default = true;
+        shadowed.origin = Some(Origin::Cli);
+        let mut selected = Index::from_str("private=https://example.com/selected")?;
+        selected.default = true;
+
+        let locations = IndexLocations::new(vec![command_line, shadowed], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert_eq!(
+            index_urls(locations.default_index()),
+            ["https://example.com/selected"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_defaults_ignore_disabled_command_line_default() -> Result<(), Box<dyn Error>> {
+        let mut command_line =
+            Index::from_index_url(IndexUrl::from_str("https://example.com/unused")?);
+        command_line.origin = Some(Origin::Cli);
+        let mut selected = Index::from_str("private=https://example.com/selected")?;
+        selected.default = true;
+        selected.authenticate = AuthPolicy::Always;
+
+        let locations = IndexLocations::new(vec![command_line], Vec::new(), true)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert!(locations.allowed_indexes().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn source_index_definitions_preserve_receipt_precedence() -> Result<(), Box<dyn Error>> {
+        let mut command_line_default = Index::from_str("cli-default=https://example.com/default")?;
+        command_line_default.default = true;
+        command_line_default.origin = Some(Origin::Cli);
+        let mut command_line = Index::from_str("shared=https://example.com/cli")?;
+        command_line.origin = Some(Origin::Cli);
+        let configured = Index::from_str("configured=https://example.com/configured")?;
+        let mut configured_default =
+            Index::from_str("configured-default=https://example.com/unused")?;
+        configured_default.default = true;
+        let indexes = vec![
+            command_line_default,
+            configured,
+            command_line,
+            configured_default,
+        ];
+        let mut source_default = Index::from_str("source-default=https://example.com/default")?;
+        source_default.default = true;
+        let sources = SourceIndexes::try_from_iter([
+            source_default,
+            Index::from_str("source=https://example.com/source")?,
+            Index::from_str("shared=https://example.com/shadowed")?,
+        ])?;
+        let effective = IndexLocations::new(indexes.clone(), Vec::new(), false)
+            .with_source_indexes(sources.clone())?;
+        let definitions = sources.merge_index_definitions(indexes);
+
+        assert_eq!(
+            definitions,
+            effective.defined_indexes().cloned().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            definitions
+                .iter()
+                .map(|index| index.name.as_ref().map(ToString::to_string))
+                .collect::<Vec<_>>(),
+            [
+                Some("shared".to_owned()),
+                Some("source".to_owned()),
+                Some("configured".to_owned()),
+                Some("cli-default".to_owned()),
+                Some("source-default".to_owned()),
+                Some("configured-default".to_owned()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_reject_overlapping_auth_scopes() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let alias = Index::from_str("mirror=https://example.com/+simple")?;
+
+        let result = IndexLocations::new(vec![alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        assert_eq!(
+            result.err().map(|err| err.to_string()),
+            Some("Conflicting authentication policies for indexes `mirror` (`https://example.com/+simple`) (auto) and `private` (`https://example.com/simple`) (always): authentication scopes overlap".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_reject_credentialed_auth_scope_conflict() -> Result<(), Box<dyn Error>> {
+        let mut selected =
+            Index::from_str("private=https://private-user:private-password@example.com/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let alias =
+            Index::from_str("mirror=https://mirror-user:mirror-password@example.com/+simple")?;
+        let selected_auth = AuthIndex::from(&selected);
+        let alias_auth = AuthIndex::from(&alias);
+        assert_eq!(selected_auth.url.as_str(), "https://example.com/simple");
+        assert_eq!(selected_auth.root_url.as_str(), "https://example.com/");
+        assert_eq!(alias_auth.url.as_str(), "https://example.com/+simple");
+        assert_eq!(alias_auth.root_url.as_str(), "https://example.com/");
+
+        let result = IndexLocations::new(vec![alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        let error = result.expect_err("overlapping authentication scopes must conflict");
+        assert_eq!(
+            error.to_string(),
+            "Conflicting authentication policies for indexes `mirror` (`https://example.com/+simple`) (auto) and `private` (`https://example.com/simple`) (always): authentication scopes overlap"
+        );
+        let SourceIndexError::ConflictingAuthentication { first, second, .. } = error else {
+            return Err("expected an authentication policy conflict".into());
+        };
+        let SourceIndexIdentity::Named { name, url } = *first else {
+            return Err("expected the configured index name".into());
+        };
+        assert_eq!(name, IndexName::from_str("mirror")?);
+        assert_eq!(url.as_str(), "https://example.com/+simple");
+        let SourceIndexIdentity::Named { name, url } = *second else {
+            return Err("expected the selected index name".into());
+        };
+        assert_eq!(name, IndexName::from_str("private")?);
+        assert_eq!(url.as_str(), "https://example.com/simple");
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_allow_disjoint_auth_scopes() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/private/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let public = Index::from_str("public=https://example.com/public/simple")?;
+
+        IndexLocations::new(vec![public], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_keep_endpoint_policies_independent() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.ignore_error_codes = Some(serde_json::from_str("[403]")?);
+        let alias = Index::from_str("mirror=https://example.com/+simple")?;
+
+        IndexLocations::new(vec![alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_indexes_reject_conflicting_retained_alias() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let pin = IndexMetadata::from(selected.url.clone());
+        let original = IndexLocations::new(vec![selected.clone()], Vec::new(), false);
+        let alias = Index::from_str("mirror=https://example.com/simple")?;
+        let retained = IndexLocations::new(vec![selected, alias], Vec::new(), false);
+
+        assert_eq!(
+            retained.validate_pinned_indexes(&original, [&pin]).err().map(|err| err.to_string()),
+            Some("Conflicting authentication policies for indexes `private` (`https://example.com/simple`) (always) and `mirror` (`https://example.com/simple`) (auto): authentication scopes overlap".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_indexes_reject_overlapping_auth_scope() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let pin = IndexMetadata::from(selected.url.clone());
+        let original = IndexLocations::new(vec![selected.clone()], Vec::new(), false);
+        let alias = Index::from_str("mirror=https://example.com/+simple")?;
+        let retained = IndexLocations::new(vec![selected, alias], Vec::new(), false);
+
+        assert_eq!(
+            retained.validate_pinned_indexes(&original, [&pin]).err().map(|err| err.to_string()),
+            Some("Conflicting authentication policies for indexes `private` (`https://example.com/simple`) (always) and `mirror` (`https://example.com/+simple`) (auto): authentication scopes overlap".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_indexes_accept_compatible_alias() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/simple")?;
+        selected.authenticate = AuthPolicy::Always;
+        let pin = IndexMetadata::from(selected.url.clone());
+        let original = IndexLocations::new(vec![selected.clone()], Vec::new(), false);
+        let mut alias = Index::from_str("mirror=https://example.com/simple")?;
+        alias.authenticate = AuthPolicy::Always;
+        let retained = IndexLocations::new(vec![selected, alias], Vec::new(), false);
+
+        retained.validate_pinned_indexes(&original, [&pin])?;
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_reject_implicit_artifact_error_policy() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://download.pytorch.org/whl/cpu")?;
+        selected.ignore_error_codes = Some(serde_json::from_str("[403]")?);
+        let alias = Index::from_str("mirror=https://download.pytorch.org/whl/cpu")?;
+        assert_eq!(
+            selected.status_code_strategy(),
+            alias.status_code_strategy()
+        );
+        assert!(selected.ignores_error_code(StatusCode::FORBIDDEN));
+        assert!(!alias.ignores_error_code(StatusCode::FORBIDDEN));
+
+        let result = IndexLocations::new(vec![alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        assert_eq!(
+            result.err().map(|err| err.to_string()),
+            Some("Conflicting policies for indexes `mirror` (`https://download.pytorch.org/whl/cpu`) and `private` (`https://download.pytorch.org/whl/cpu`)".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_accept_reordered_artifact_error_codes() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://download.pytorch.org/whl/cpu")?;
+        selected.ignore_error_codes = Some(serde_json::from_str("[403, 404, 403]")?);
+        let url = selected.url.clone();
+        let mut alias = Index::from_str("mirror=https://download.pytorch.org/whl/cpu")?;
+        alias.ignore_error_codes = Some(serde_json::from_str("[404, 403]")?);
+
+        let locations = IndexLocations::new(vec![alias], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert!(locations.ignores_error_code_for(&url, StatusCode::FORBIDDEN));
+        assert!(locations.ignores_error_code_for(&url, StatusCode::NOT_FOUND));
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_reject_conflicting_implicit_default() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://pypi.org/simple")?;
+        selected.explicit = true;
+        selected.authenticate = AuthPolicy::Always;
+
+        let result = IndexLocations::default()
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        assert_eq!(
+            result.err().map(|err| err.to_string()),
+            Some("Conflicting authentication policies for indexes `https://pypi.org/simple` (auto) and `private` (`https://pypi.org/simple`) (always): authentication scopes overlap".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_default_replaces_implicit_default() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://pypi.org/simple")?;
+        selected.explicit = true;
+        selected.authenticate = AuthPolicy::Always;
+        let selected_url = selected.url.clone();
+        let default = Index::from_index_url(IndexUrl::from_str("https://example.com/simple")?);
+
+        let locations = IndexLocations::default()
+            .with_source_indexes(SourceIndexes::try_from_iter([selected, default])?)?;
+        assert_eq!(
+            index_urls(locations.default_index()),
+            ["https://example.com/simple"]
+        );
+        let selected_policies = locations
+            .allowed_indexes()
+            .into_iter()
+            .filter(|index| is_same_index(&index.url, &selected_url))
+            .map(|index| index.authenticate)
+            .collect::<Vec<_>>();
+        assert_eq!(selected_policies, [AuthPolicy::Always]);
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_reject_retained_flat_policy() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/links")?;
+        selected.format = IndexFormat::Flat;
+        selected.authenticate = AuthPolicy::Always;
+        let flat = Index::from_find_links(selected.url.clone());
+
+        let result = IndexLocations::new(Vec::new(), vec![flat], false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?);
+        assert_eq!(
+            result.err().map(|err| err.to_string()),
+            Some("Conflicting authentication policies for indexes `https://example.com/links` (auto) and `private` (`https://example.com/links`) (always): authentication scopes overlap".to_owned())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_ignore_shadowed_flat_policy() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/links")?;
+        selected.format = IndexFormat::Flat;
+        selected.authenticate = AuthPolicy::Always;
+        let mut flat = Index::from_find_links(selected.url.clone());
+        flat.name = selected.name.clone();
+        let selected_url = selected.url.clone();
+
+        let locations = IndexLocations::new(Vec::new(), vec![flat], false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        let selected_policies = locations
+            .allowed_indexes()
+            .into_iter()
+            .filter(|index| is_same_index(&index.url, &selected_url))
+            .map(|index| index.authenticate)
+            .collect::<Vec<_>>();
+        assert_eq!(selected_policies, [AuthPolicy::Always]);
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_retain_command_line_name_precedence() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://example.com/links")?;
+        selected.format = IndexFormat::Flat;
+        selected.authenticate = AuthPolicy::Always;
+        let mut command_line = selected.clone();
+        command_line.authenticate = AuthPolicy::Auto;
+        command_line.origin = Some(Origin::Cli);
+        let selected_url = selected.url.clone();
+
+        let locations = IndexLocations::new(vec![command_line], Vec::new(), false)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        let selected_policies = locations
+            .allowed_indexes()
+            .into_iter()
+            .filter(|index| is_same_index(&index.url, &selected_url))
+            .map(|index| index.authenticate)
+            .collect::<Vec<_>>();
+        assert_eq!(selected_policies, [AuthPolicy::Auto]);
+        Ok(())
+    }
+
+    #[test]
+    fn source_indexes_have_no_implicit_default_without_index() -> Result<(), Box<dyn Error>> {
+        let mut selected = Index::from_str("private=https://pypi.org/simple")?;
+        selected.explicit = true;
+        selected.authenticate = AuthPolicy::Always;
+
+        let flat = Index::from_find_links(selected.url.clone());
+        let locations = IndexLocations::new(Vec::new(), vec![flat], true)
+            .with_source_indexes(SourceIndexes::try_from_iter([selected])?)?;
+        assert!(locations.default_index().is_none());
+        let allowed = locations.allowed_indexes();
+        assert_eq!(allowed.len(), 1);
+        assert_eq!(allowed[0].format, IndexFormat::Flat);
+        assert_eq!(allowed[0].authenticate, AuthPolicy::Auto);
+        Ok(())
     }
 
     #[test]
@@ -717,6 +1744,27 @@ mod tests {
             ]
         );
 
+        assert!(
+            locations
+                .index_for_url(&IndexUrl::from_str("https://shadowed.example.com/simple")?)
+                .is_none()
+        );
+        assert!(
+            locations
+                .index_for_url(&IndexUrl::from_str(
+                    "https://shadowed-implicit.example.com/simple"
+                )?)
+                .is_none()
+        );
+        assert_eq!(
+            index_urls(locations.allowed_indexes()),
+            [
+                "https://default.example.com/simple",
+                "https://explicit.example.com/simple",
+                "https://first.example.com/simple"
+            ]
+        );
+
         Ok(())
     }
 
@@ -763,6 +1811,24 @@ mod tests {
             [
                 "https://first.example.com/simple",
                 "https://pypi.org/simple",
+            ]
+        );
+
+        assert!(
+            locations
+                .index_for_url(&IndexUrl::from_str("https://shadowed.example.com/simple")?)
+                .is_none()
+        );
+        assert!(
+            locations
+                .index_for_url(&IndexUrl::from_str("https://pypi.org/simple")?)
+                .is_some()
+        );
+        assert_eq!(
+            index_urls(locations.allowed_indexes()),
+            [
+                "https://pypi.org/simple",
+                "https://first.example.com/simple"
             ]
         );
 

@@ -11,7 +11,7 @@ use uv_cache::Cache;
 use uv_distribution_filename::DistExtension;
 use uv_distribution_types::{
     Index, IndexCredentialsError, IndexLocations, IndexMetadata, IndexName, Origin, Requirement,
-    RequirementScope, RequirementSource,
+    RequirementScope, RequirementSource, SourceIndexError,
 };
 use uv_fs::{Simplified, normalize_absolute_path, normalize_path};
 use uv_git_types::{GitLfs, GitReference, GitUrl, GitUrlParseError};
@@ -30,7 +30,9 @@ use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache, WorkspaceError};
 use crate::metadata::GitWorkspaceMember;
 
 #[derive(Debug, Clone)]
-pub struct LoweredRequirement(Requirement);
+pub struct LoweredRequirement {
+    requirement: Requirement,
+}
 
 #[derive(Debug, Clone, Copy)]
 enum RequirementOrigin {
@@ -41,6 +43,10 @@ enum RequirementOrigin {
 }
 
 impl LoweredRequirement {
+    fn new(requirement: Requirement) -> Self {
+        Self { requirement }
+    }
+
     /// Combine `project.dependencies` or `project.optional-dependencies` with `tool.uv.sources`.
     pub(crate) async fn from_requirement<'data>(
         requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
@@ -173,7 +179,7 @@ impl LoweredRequirement {
             let mut remaining = total.negate();
             remaining = remaining.and(requirement.marker);
 
-            Self(Requirement {
+            Self::new(Requirement {
                 marker: remaining,
                 ..Requirement::from(requirement.clone())
             })
@@ -183,6 +189,7 @@ impl LoweredRequirement {
             join_all(sources.into_iter().map(|source| {
                 let requirement = &requirement;
                 async move {
+                    let mut selected_index = None;
                     let (source, mut marker) = match source {
                         Source::Git {
                             git,
@@ -262,6 +269,7 @@ impl LoweredRequirement {
                             if let Some(credentials) = index.credentials()? {
                                 credentials_cache.store_credentials(index.raw_url(), credentials);
                             }
+                            selected_index = Some(index);
                             let index = IndexMetadata {
                                 url: index.url.clone(),
                                 format: index.format,
@@ -304,7 +312,13 @@ impl LoweredRequirement {
 
                     marker = marker.and(requirement.marker);
 
-                    Ok(Self(Requirement {
+                    if !marker.is_false()
+                        && let Some(index) = selected_index
+                    {
+                        locations.validate_metadata_index(index)?;
+                    }
+
+                    Ok(Self::new(Requirement {
                         name: requirement.name.clone(),
                         extras: requirement.extras.clone(),
                         groups: Box::new([]),
@@ -319,7 +333,7 @@ impl LoweredRequirement {
             .into_iter()
             .chain(std::iter::once(Ok(remaining)))
             .filter(|requirement| match requirement {
-                Ok(requirement) => !requirement.0.marker.is_false(),
+                Ok(requirement) => !requirement.requirement.marker.is_false(),
                 Err(_) => true,
             }),
         )
@@ -337,10 +351,43 @@ impl LoweredRequirement {
         workspace_cache: &'data WorkspaceCache,
         credentials_cache: &'data CredentialsCache,
     ) -> impl Iterator<Item = Result<Self, LoweringError>> + 'data {
+        Self::from_non_workspace_requirement_deferred(
+            requirement,
+            dir,
+            sources,
+            indexes,
+            locations,
+            cache,
+            workspace_cache,
+            credentials_cache,
+        )
+        .await
+        .map(move |lowered| {
+            let (requirement, index) = lowered?;
+            if let Some(index) = index {
+                locations.validate_metadata_index(&index)?;
+            }
+            Ok(Self::new(requirement))
+        })
+    }
+
+    /// Lower a requirement while retaining its selected index for later configuration composition.
+    ///
+    /// The caller must compose and validate the returned definition before using the requirement.
+    pub async fn from_non_workspace_requirement_deferred<'data>(
+        requirement: uv_pep508::Requirement<VerbatimParsedUrl>,
+        dir: &'data Path,
+        sources: &'data BTreeMap<PackageName, Sources>,
+        indexes: &'data [Index],
+        locations: &'data IndexLocations,
+        cache: &'data Cache,
+        workspace_cache: &'data WorkspaceCache,
+        credentials_cache: &'data CredentialsCache,
+    ) -> impl Iterator<Item = Result<(Requirement, Option<Index>), LoweringError>> + 'data {
         let source = sources.get(&requirement.name).cloned();
 
         let Some(source) = source else {
-            return Either::Left(std::iter::once(Ok(Self(Requirement::from(requirement)))));
+            return Either::Left(std::iter::once(Ok((Requirement::from(requirement), None))));
         };
 
         // If the source only applies to a given extra, filter it out.
@@ -370,16 +417,20 @@ impl LoweredRequirement {
             let mut remaining = total.negate();
             remaining = remaining.and(requirement.marker);
 
-            Self(Requirement {
-                marker: remaining,
-                ..Requirement::from(requirement.clone())
-            })
+            (
+                Requirement {
+                    marker: remaining,
+                    ..Requirement::from(requirement.clone())
+                },
+                None,
+            )
         };
 
         Either::Right(
             join_all(source.into_iter().map(|source| {
                 let requirement = &requirement;
                 async move {
+                    let mut selected_index = None;
                     let (source, mut marker) = match source {
                         Source::Git {
                             git,
@@ -451,6 +502,7 @@ impl LoweredRequirement {
                             if let Some(credentials) = index.credentials()? {
                                 credentials_cache.store_credentials(index.raw_url(), credentials);
                             }
+                            selected_index = Some(index.clone());
                             let index = IndexMetadata {
                                 url: index.url.clone(),
                                 format: index.format,
@@ -485,22 +537,25 @@ impl LoweredRequirement {
 
                     marker = marker.and(requirement.marker);
 
-                    Ok(Self(Requirement {
-                        name: requirement.name.clone(),
-                        extras: requirement.extras.clone(),
-                        groups: Box::new([]),
-                        marker,
-                        source,
-                        scope: RequirementScope::Global,
-                        origin: requirement.origin.clone(),
-                    }))
+                    Ok((
+                        Requirement {
+                            name: requirement.name.clone(),
+                            extras: requirement.extras.clone(),
+                            groups: Box::new([]),
+                            marker,
+                            source,
+                            scope: RequirementScope::Global,
+                            origin: requirement.origin.clone(),
+                        },
+                        selected_index,
+                    ))
                 }
             }))
             .await
             .into_iter()
             .chain(std::iter::once(Ok(remaining)))
             .filter(|requirement| match requirement {
-                Ok(requirement) => !requirement.0.marker.is_false(),
+                Ok((requirement, _)) => !requirement.marker.is_false(),
                 Err(_) => true,
             }),
         )
@@ -513,26 +568,26 @@ impl LoweredRequirement {
         git_member: Option<&GitWorkspaceMember>,
     ) -> Result<Self, LoweringError> {
         let Some(git_member) = git_member else {
-            return Ok(Self(Requirement::from(requirement)));
+            return Ok(Self::new(Requirement::from(requirement)));
         };
 
         let Some(VersionOrUrl::Url(url)) = &requirement.version_or_url else {
-            return Ok(Self(Requirement::from(requirement)));
+            return Ok(Self::new(Requirement::from(requirement)));
         };
 
         let (install_path, is_archive) = match &url.parsed_url {
             ParsedUrl::Directory(directory) => (directory.install_path.as_ref(), false),
             ParsedUrl::Path(path) => (path.install_path.as_ref(), true),
-            _ => return Ok(Self(Requirement::from(requirement))),
+            _ => return Ok(Self::new(Requirement::from(requirement))),
         };
 
         let install_path = git_path(install_path)?;
         let fetch_root = git_path(git_member.fetch_root)?;
         if !install_path.starts_with(&fetch_root) {
-            return Ok(Self(Requirement::from(requirement)));
+            return Ok(Self::new(Requirement::from(requirement)));
         }
 
-        Ok(Self(Requirement {
+        Ok(Self::new(Requirement {
             name: requirement.name,
             groups: Box::new([]),
             extras: requirement.extras,
@@ -549,7 +604,7 @@ impl LoweredRequirement {
 
     /// Convert back into a [`Requirement`].
     pub fn into_inner(self) -> Requirement {
-        self.0
+        self.requirement
     }
 }
 
@@ -557,6 +612,8 @@ impl LoweredRequirement {
 /// `project.{dependencies,optional-dependencies}`.
 #[derive(Debug, Error)]
 pub enum LoweringError {
+    #[error(transparent)]
+    IndexPolicy(#[from] SourceIndexError),
     #[error(
         "`{0}` is included as a workspace member, but is missing an entry in `tool.uv.sources` (e.g., `{0} = {{ workspace = true }}`)"
     )]
@@ -1050,4 +1107,253 @@ fn git_path(path: &Path) -> Result<PathBuf, LoweringError> {
     path.simple_canonicalize()
         .or_else(|_| normalize_absolute_path(path))
         .map_err(LoweringError::RelativeTo)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::str::FromStr;
+
+    use anyhow::{Result, bail};
+    use indoc::indoc;
+
+    use uv_auth::{AuthPolicy, CredentialsCache};
+    use uv_cache::Cache;
+    use uv_distribution_types::{Index, IndexLocations, IndexUrl, Origin, RequirementSource};
+    use uv_pep508::MarkerTree;
+    use uv_workspace::pyproject::Source;
+    use uv_workspace::{DiscoveryOptions, Workspace, WorkspaceCache};
+
+    use super::LoweredRequirement;
+
+    #[tokio::test]
+    async fn non_workspace_lowering_validates_selected_index() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let cache = Cache::temp()?;
+        let workspace_cache = WorkspaceCache::default();
+        let credentials_cache = CredentialsCache::default();
+        let mut selected = Index::from_str("private=https://private.example/simple")?;
+        selected.default = true;
+        selected.authenticate = AuthPolicy::Always;
+        let command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example/simple")?)
+                .with_origin(Origin::Cli);
+        let locations =
+            IndexLocations::new(vec![command_line, selected.clone()], Vec::new(), false);
+        let indexes = [selected];
+        let sources = BTreeMap::from([(
+            "a".parse()?,
+            [Source::Registry {
+                index: "private".parse()?,
+                marker: MarkerTree::TRUE,
+                extra: None,
+                group: None,
+            }]
+            .into_iter()
+            .collect(),
+        )]);
+
+        let result = LoweredRequirement::from_non_workspace_requirement(
+            "a".parse()?,
+            directory.path(),
+            &sources,
+            &indexes,
+            &locations,
+            &cache,
+            &workspace_cache,
+            &credentials_cache,
+        )
+        .await
+        .map(|requirement| requirement.map(LoweredRequirement::into_inner))
+        .collect::<Result<Vec<_>, _>>();
+
+        assert_eq!(
+            result.err().map(|err| err.to_string()),
+            Some("Index URL `https://private.example/simple` pinned by requirements no longer has its configured policy".to_owned())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn deferred_lowering_retains_selected_index() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let cache = Cache::temp()?;
+        let workspace_cache = WorkspaceCache::default();
+        let credentials_cache = CredentialsCache::default();
+        let mut selected = Index::from_str("private=https://private.example/simple")?;
+        selected.default = true;
+        selected.authenticate = AuthPolicy::Always;
+        let command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example/simple")?)
+                .with_origin(Origin::Cli);
+        let locations =
+            IndexLocations::new(vec![command_line, selected.clone()], Vec::new(), false);
+        let indexes = [selected.clone()];
+        let sources = BTreeMap::from([(
+            "a".parse()?,
+            [Source::Registry {
+                index: "private".parse()?,
+                marker: MarkerTree::TRUE,
+                extra: None,
+                group: None,
+            }]
+            .into_iter()
+            .collect(),
+        )]);
+
+        let lowered = LoweredRequirement::from_non_workspace_requirement_deferred(
+            "a".parse()?,
+            directory.path(),
+            &sources,
+            &indexes,
+            &locations,
+            &cache,
+            &workspace_cache,
+            &credentials_cache,
+        )
+        .await
+        .collect::<Result<Vec<_>, _>>()?;
+
+        let [(requirement, index)] = lowered.as_slice() else {
+            bail!("expected one deferred requirement");
+        };
+        assert_eq!(index.as_ref(), Some(&selected));
+        let RequirementSource::Registry {
+            index: Some(index), ..
+        } = &requirement.source
+        else {
+            bail!("expected a pinned registry requirement");
+        };
+        assert_eq!(index.url, selected.url);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn non_workspace_lowering_ignores_inactive_index_policy() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let cache = Cache::temp()?;
+        let workspace_cache = WorkspaceCache::default();
+        let credentials_cache = CredentialsCache::default();
+        let mut selected = Index::from_str("private=https://private.example/simple")?;
+        selected.default = true;
+        selected.authenticate = AuthPolicy::Always;
+        let command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example/simple")?)
+                .with_origin(Origin::Cli);
+        let locations =
+            IndexLocations::new(vec![command_line, selected.clone()], Vec::new(), false);
+        let indexes = [selected];
+        let sources = BTreeMap::from([(
+            "a".parse()?,
+            [Source::Registry {
+                index: "private".parse()?,
+                marker: "sys_platform == 'linux'".parse()?,
+                extra: None,
+                group: None,
+            }]
+            .into_iter()
+            .collect(),
+        )]);
+
+        let lowered = LoweredRequirement::from_non_workspace_requirement(
+            "a; sys_platform == 'win32'".parse()?,
+            directory.path(),
+            &sources,
+            &indexes,
+            &locations,
+            &cache,
+            &workspace_cache,
+            &credentials_cache,
+        )
+        .await
+        .map(|requirement| requirement.map(LoweredRequirement::into_inner))
+        .collect::<Result<Vec<_>, _>>()?;
+
+        let [requirement] = lowered.as_slice() else {
+            bail!("expected one unselected requirement");
+        };
+        let RequirementSource::Registry { index, .. } = &requirement.source else {
+            bail!("expected an unselected registry requirement");
+        };
+        assert!(index.is_none());
+        assert_eq!(requirement.marker, "sys_platform == 'win32'".parse()?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workspace_lowering_ignores_inactive_index_policy() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        fs_err::write(
+            directory.path().join("pyproject.toml"),
+            indoc! {r#"
+                [project]
+                name = "project"
+                version = "0.1.0"
+                requires-python = ">=3.12"
+            "#},
+        )?;
+        let cache = Cache::temp()?;
+        let workspace_cache = WorkspaceCache::default();
+        let credentials_cache = CredentialsCache::default();
+        let workspace = Workspace::discover(
+            directory.path(),
+            &DiscoveryOptions {
+                stop_discovery_at: Some(directory.path().to_path_buf()),
+                ..DiscoveryOptions::default()
+            },
+            &cache,
+            &workspace_cache,
+        )
+        .await?;
+        let mut selected = Index::from_str("private=https://private.example/simple")?;
+        selected.default = true;
+        selected.authenticate = AuthPolicy::Always;
+        let command_line =
+            Index::from_index_url(IndexUrl::from_str("https://default.example/simple")?)
+                .with_origin(Origin::Cli);
+        let locations =
+            IndexLocations::new(vec![command_line, selected.clone()], Vec::new(), false);
+        let indexes = [selected];
+        let sources = BTreeMap::from([(
+            "a".parse()?,
+            [Source::Registry {
+                index: "private".parse()?,
+                marker: "sys_platform == 'linux'".parse()?,
+                extra: None,
+                group: None,
+            }]
+            .into_iter()
+            .collect(),
+        )]);
+
+        let lowered = LoweredRequirement::from_requirement(
+            "a; sys_platform == 'win32'".parse()?,
+            None,
+            directory.path(),
+            &sources,
+            &indexes,
+            None,
+            None,
+            &locations,
+            &workspace,
+            None,
+            true,
+            &cache,
+            &workspace_cache,
+            &credentials_cache,
+        )
+        .await
+        .map(|requirement| requirement.map(LoweredRequirement::into_inner))
+        .collect::<Result<Vec<_>, _>>()?;
+
+        let [requirement] = lowered.as_slice() else {
+            bail!("expected one unselected requirement");
+        };
+        let RequirementSource::Registry { index, .. } = &requirement.source else {
+            bail!("expected an unselected registry requirement");
+        };
+        assert!(index.is_none());
+        assert_eq!(requirement.marker, "sys_platform == 'win32'".parse()?);
+        Ok(())
+    }
 }

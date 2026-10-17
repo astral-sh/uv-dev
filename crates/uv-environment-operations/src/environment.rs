@@ -77,6 +77,18 @@ impl CachedEnvironment {
         preview: Preview,
     ) -> Result<Self, EnvironmentError> {
         let interpreter = Self::base_interpreter(interpreter, cache)?;
+        let mut source_settings;
+        let settings = if spec.requirements.indexes.is_empty() {
+            settings
+        } else {
+            source_settings = settings.clone();
+            source_settings.resolver.index_locations = source_settings
+                .resolver
+                .index_locations
+                .with_source_indexes(spec.requirements.indexes.clone())
+                .map_err(anyhow::Error::from)?;
+            &source_settings
+        };
 
         // Resolve the requirements with the interpreter.
         let resolution = Resolution::from(

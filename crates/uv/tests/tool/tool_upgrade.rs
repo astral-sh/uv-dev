@@ -1679,6 +1679,242 @@ async fn tool_upgrade_invalid_auth() -> Result<()> {
     Ok(())
 }
 
+/// A no-op upgrade must not persist incompatible alias policies after credentials are added.
+#[test]
+fn tool_upgrade_preserves_receipt_when_auth_promotion_conflicts() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let scenario: Scenario = toml::from_str(indoc! {r#"
+        name = "upgrade-authentication-aliases"
+        [root]
+        requires = ["dependency", "other"]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."1.0.0"]
+        sdist = false
+        [packages.other.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let private = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency", "other"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # authenticate = "auto"
+        # [[tool.uv.index]]
+        # name = "mirror"
+        # url = "{url}"
+        # explicit = true
+        # authenticate = "auto"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # other = {{ index = "mirror" }}
+        # ///
+    "#, url = private.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env_remove("UV_INDEX_PRIVATE_USERNAME")
+        .env_remove("UV_INDEX_PRIVATE_PASSWORD")
+        .env_remove("UV_INDEX_MIRROR_USERNAME")
+        .env_remove("UV_INDEX_MIRROR_PASSWORD")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("tools/simple-launcher/preserved")
+        .write_str("preserved")?;
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    let configuration = context.read("tools/simple-launcher/pyvenv.cfg");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(receipt, @r#"
+        [tool]
+        requirements = [
+            { name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" },
+            { name = "dependency", index = "http://[LOCALHOST]/simple/" },
+            { name = "other", index = "http://[LOCALHOST]/simple/" },
+        ]
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        index = [{ name = "private", url = "http://[LOCALHOST]/simple/", explicit = true, default = false, format = "simple", authenticate = "auto" }, { name = "mirror", url = "http://[LOCALHOST]/simple/", explicit = true, default = false, format = "simple", authenticate = "auto" }]
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .arg("--no-cache")
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env_remove("UV_INDEX_MIRROR_USERNAME")
+        .env_remove("UV_INDEX_MIRROR_PASSWORD")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade simple-launcher
+      cause: Conflicting authentication policies for indexes `private` (`http://[LOCALHOST]/simple/`) (always) and `mirror` (`http://[LOCALHOST]/simple/`) (auto): authentication scopes overlap
+    ");
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert_eq!(
+        context.read("tools/simple-launcher/pyvenv.cfg"),
+        configuration
+    );
+    assert_eq!(context.read("tools/simple-launcher/preserved"), "preserved");
+
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .arg("--no-cache")
+        .env_remove("UV_INDEX_PRIVATE_USERNAME")
+        .env_remove("UV_INDEX_PRIVATE_PASSWORD")
+        .env_remove("UV_INDEX_MIRROR_USERNAME")
+        .env_remove("UV_INDEX_MIRROR_PASSWORD")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
+    ");
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    Ok(())
+}
+
+/// Replacing the environment persists the same validated alias policies as a no-op upgrade.
+#[test]
+fn tool_upgrade_promoted_aliases_survive_environment_replacement() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let scenario: Scenario = toml::from_str(indoc! {r#"
+        name = "upgrade-authentication-aliases"
+        [root]
+        requires = ["dependency", "other"]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."1.0.0"]
+        sdist = false
+        [packages.other.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let private = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency", "other"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # authenticate = "auto"
+        # [[tool.uv.index]]
+        # name = "mirror"
+        # url = "{url}"
+        # explicit = true
+        # authenticate = "auto"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # other = {{ index = "mirror" }}
+        # ///
+    "#, url = private.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env_remove("UV_INDEX_PRIVATE_USERNAME")
+        .env_remove("UV_INDEX_PRIVATE_PASSWORD")
+        .env_remove("UV_INDEX_MIRROR_USERNAME")
+        .env_remove("UV_INDEX_MIRROR_PASSWORD")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("tools/simple-launcher/preserved")
+        .write_str("preserved")?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .args(["--python", "3.13", "--no-cache"])
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env("UV_INDEX_MIRROR_USERNAME", "username")
+        .env("UV_INDEX_MIRROR_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 3 packages in [TIME]
+    Installed 3 packages in [TIME]
+     + dependency==1.0.0
+     + other==1.0.0
+     + simple-launcher==0.1.0 (from file://[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl)
+    Installed 1 executable: simple_launcher
+    Upgraded tool environment for `simple-launcher` to Python 3.13
+    ");
+    context
+        .temp_dir
+        .child("tools/simple-launcher/preserved")
+        .assert(predicate::path::missing());
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(receipt, @r#"
+        [tool]
+        requirements = [
+            { name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" },
+            { name = "dependency", index = "http://[LOCALHOST]/simple/" },
+            { name = "other", index = "http://[LOCALHOST]/simple/" },
+        ]
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        index = [{ name = "private", url = "http://[LOCALHOST]/simple/", explicit = true, default = false, format = "simple", authenticate = "always" }, { name = "mirror", url = "http://[LOCALHOST]/simple/", explicit = true, default = false, format = "simple", authenticate = "always" }]
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .arg("--no-cache")
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env("UV_INDEX_MIRROR_USERNAME", "username")
+        .env("UV_INDEX_MIRROR_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
+    ");
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    Ok(())
+}
+
 #[test]
 fn tool_upgrade_writes_preview_lock() {
     let context = uv_test::test_context!("3.12").with_tool_dirs();

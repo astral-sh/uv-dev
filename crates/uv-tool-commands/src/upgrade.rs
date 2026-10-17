@@ -15,7 +15,9 @@ use uv_configuration::{
 };
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
-use uv_distribution_types::{ExtraBuildRequires, Index, Name, Requirement, RequirementSource};
+use uv_distribution_types::{
+    ExtraBuildRequires, Index, IndexLocations, Name, Requirement, RequirementSource,
+};
 use uv_fs::{CWD, Simplified};
 use uv_installer::{InstallationStrategy, Planner, SitePackages};
 use uv_normalize::PackageName;
@@ -27,8 +29,8 @@ use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
 use uv_requirements::RequirementsSpecification;
-use uv_settings::{Combine, PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
-use uv_tool::{InstalledTools, Tool};
+use uv_settings::{Combine, PythonInstallMirrors, ResolverInstallerOptions};
+use uv_tool::{InstalledTools, Tool, ToolConfiguration};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
@@ -347,9 +349,22 @@ async fn upgrade_tool(
         }
     }
 
+    let receipt_indexes = IndexLocations::from(receipt.indexes.clone());
+
     // Resolve the appropriate settings, preferring: CLI > receipt > user.
     let options = args.clone().combine(receipt.combine(filesystem.clone()));
     let settings = ResolverInstallerSettings::from(options.clone());
+    existing_tool_receipt
+        .validate_pinned_indexes(&settings.resolver.index_locations, &receipt_indexes)?;
+
+    let configuration = ToolConfiguration::new(
+        existing_tool_receipt.requirements().to_vec(),
+        existing_tool_receipt.constraints().to_vec(),
+        existing_tool_receipt.overrides().to_vec(),
+        existing_tool_receipt.excludes().to_vec(),
+        existing_tool_receipt.build_constraints().to_vec(),
+        options,
+    )?;
 
     let build_constraints = existing_tool_receipt.build_constraints().to_vec();
     let manifest_constraints = existing_tool_receipt
@@ -615,14 +630,9 @@ async fn upgrade_tool(
             name,
             &entrypoints,
             installed_tools,
-            &ToolOptions::from(options),
+            configuration,
             true,
             existing_tool_receipt.python().to_owned(),
-            existing_tool_receipt.requirements().to_vec(),
-            existing_tool_receipt.constraints().to_vec(),
-            existing_tool_receipt.overrides().to_vec(),
-            existing_tool_receipt.excludes().to_vec(),
-            existing_tool_receipt.build_constraints().to_vec(),
             tool_lock.as_ref(),
             printer,
         )?;
@@ -632,9 +642,7 @@ async fn upgrade_tool(
         }
         installed_tools.add_tool_receipt(
             name,
-            existing_tool_receipt
-                .clone()
-                .with_options(ToolOptions::from(options)),
+            existing_tool_receipt.with_configuration(configuration),
         )?;
     }
 

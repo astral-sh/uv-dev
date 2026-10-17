@@ -61,6 +61,11 @@ pub struct Index {
 }
 
 impl Index {
+    /// Return whether a request URL can match both authentication scopes.
+    pub fn has_overlapping_auth_scope(&self, other: &Self) -> bool {
+        self.is_prefix_for(&other.root_url) || other.is_prefix_for(&self.root_url)
+    }
+
     fn is_prefix_for(&self, url: &SafeUrl) -> bool {
         if self.root_url.scheme() != url.scheme()
             || self.root_url.host_str() != url.host_str()
@@ -138,6 +143,36 @@ mod tests {
             root_url,
             auth_policy,
         }
+    }
+
+    #[test]
+    fn test_index_authentication_scope_overlap() {
+        let parent = index("https://example.com/private", AuthPolicy::Always);
+        let nested = index("https://example.com/private/packages", AuthPolicy::Auto);
+        assert!(parent.has_overlapping_auth_scope(&nested));
+        assert!(nested.has_overlapping_auth_scope(&parent));
+        assert!(parent.has_overlapping_auth_scope(&index(
+            "https://example.com:443/private",
+            AuthPolicy::Auto,
+        )));
+        assert!(!parent.has_overlapping_auth_scope(&index(
+            "https://example.com/private-other",
+            AuthPolicy::Auto,
+        )));
+        assert!(
+            !parent
+                .has_overlapping_auth_scope(
+                    &index("http://example.com/private", AuthPolicy::Auto,)
+                )
+        );
+        assert!(!parent.has_overlapping_auth_scope(&index(
+            "https://other.example.com/private",
+            AuthPolicy::Auto,
+        )));
+        assert!(!parent.has_overlapping_auth_scope(&index(
+            "https://example.com:8443/private",
+            AuthPolicy::Auto,
+        )));
     }
 
     #[test]

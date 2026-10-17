@@ -1,13 +1,15 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use uv_auth::CredentialsCache;
 use uv_cache::Cache;
 use uv_configuration::{NoSources, Override, PackageOverride};
 use uv_distribution::{LoweredExtraBuildDependencies, LoweredRequirement, LoweringError};
 use uv_distribution_types::{
-    ExtraBuildRequirement, ExtraBuildRequires, IndexLocations, IndexUrlError,
+    ExtraBuildRequirement, ExtraBuildRequires, Index, IndexLocations, IndexUrlError, Origin,
+    Requirement, SourceIndexError, SourceIndexes,
 };
-use uv_scripts::Pep723ItemRef;
+use uv_scripts::{Pep723ItemRef, Pep723Metadata};
 use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependency;
 
@@ -21,6 +23,9 @@ pub enum ScriptRequirementsError {
 
     #[error(transparent)]
     IndexUrl(#[from] IndexUrlError),
+
+    #[error(transparent)]
+    SourceIndex(#[from] SourceIndexError),
 
     #[error(transparent)]
     Lowering(#[from] Box<LoweringError>),
@@ -41,25 +46,59 @@ pub async fn script_specification(
     workspace_cache: &WorkspaceCache,
     credentials_cache: &CredentialsCache,
 ) -> Result<Option<RequirementsSpecification>, ScriptRequirementsError> {
-    let Some(dependencies) = script.metadata().dependencies.as_ref() else {
+    if script.metadata().dependencies.is_none() {
         return Ok(None);
-    };
+    }
 
     let script_dir = script.directory()?;
-    let script_indexes = script
+    let (specification, indexes) = script_metadata_specification(
+        script.metadata(),
+        &script_dir,
+        sources,
+        index_locations,
+        cache,
+        workspace_cache,
+        credentials_cache,
+    )
+    .await?;
+    // Direct script settings contain every declared index in precedence order.
+    index_locations.validate_source_indexes(&indexes)?;
+    Ok(Some(specification))
+}
+
+/// Lower requirements from script metadata relative to its directory.
+pub(crate) async fn script_metadata_specification(
+    metadata: &Pep723Metadata,
+    script_dir: &Path,
+    sources: &NoSources,
+    index_locations: &IndexLocations,
+    cache: &Cache,
+    workspace_cache: &WorkspaceCache,
+    credentials_cache: &CredentialsCache,
+) -> Result<(RequirementsSpecification, SourceIndexes), ScriptRequirementsError> {
+    let script_indexes = metadata
         .indexes(sources)
         .iter()
         .cloned()
-        .map(|index| index.relative_to(&script_dir))
+        .map(|index| index.relative_to(script_dir))
         .collect::<Result<Vec<_>, _>>()?;
-    let script_sources = script.sources(sources);
+    let script_sources = metadata.sources(sources);
 
+    let mut selected_indexes = Vec::new();
+    let mut into_requirement = |(requirement, index): (Requirement, Option<Index>)| {
+        if let Some(index) = index
+            && index.origin != Some(Origin::Cli)
+        {
+            selected_indexes.push(index);
+        }
+        requirement
+    };
     let mut requirements = Vec::new();
-    for requirement in dependencies.iter().cloned() {
+    for requirement in metadata.dependencies.iter().flatten().cloned() {
         requirements.extend(
-            LoweredRequirement::from_non_workspace_requirement(
+            LoweredRequirement::from_non_workspace_requirement_deferred(
                 requirement,
-                script_dir.as_ref(),
+                script_dir,
                 script_sources.as_ref(),
                 &script_indexes,
                 index_locations,
@@ -68,12 +107,11 @@ pub async fn script_specification(
                 credentials_cache,
             )
             .await
-            .map(|requirement| requirement.map(LoweredRequirement::into_inner))
+            .map(|requirement| requirement.map(&mut into_requirement))
             .collect::<Result<Vec<_>, _>>()?,
         );
     }
-    let constraint_dependencies = script
-        .metadata()
+    let constraint_dependencies = metadata
         .tool
         .as_ref()
         .and_then(|tool| tool.uv.as_ref())
@@ -84,9 +122,9 @@ pub async fn script_specification(
     let mut constraints = Vec::new();
     for requirement in constraint_dependencies {
         constraints.extend(
-            LoweredRequirement::from_non_workspace_requirement(
+            LoweredRequirement::from_non_workspace_requirement_deferred(
                 requirement,
-                script_dir.as_ref(),
+                script_dir,
                 script_sources.as_ref(),
                 &script_indexes,
                 index_locations,
@@ -95,13 +133,12 @@ pub async fn script_specification(
                 credentials_cache,
             )
             .await
-            .map(|requirement| requirement.map(LoweredRequirement::into_inner))
+            .map(|requirement| requirement.map(&mut into_requirement))
             .collect::<Result<Vec<_>, _>>()?,
         );
     }
     let overrides = {
-        let override_entries = script
-            .metadata()
+        let override_entries = metadata
             .tool
             .as_ref()
             .and_then(|tool| tool.uv.as_ref())
@@ -114,9 +151,9 @@ pub async fn script_specification(
             match entry {
                 Override::Requirement(requirement) => {
                     overrides.extend(
-                        LoweredRequirement::from_non_workspace_requirement(
+                        LoweredRequirement::from_non_workspace_requirement_deferred(
                             requirement,
-                            script_dir.as_ref(),
+                            script_dir,
                             script_sources.as_ref(),
                             &script_indexes,
                             index_locations,
@@ -126,8 +163,9 @@ pub async fn script_specification(
                         )
                         .await
                         .map(|requirement| {
-                            requirement
-                                .map(|requirement| Override::Requirement(requirement.into_inner()))
+                            requirement.map(|requirement| {
+                                Override::Requirement(into_requirement(requirement))
+                            })
                         })
                         .collect::<Result<Vec<_>, _>>()?,
                     );
@@ -136,9 +174,9 @@ pub async fn script_specification(
                     let mut dependencies = Vec::new();
                     for requirement in package.dependencies.into_vec() {
                         dependencies.extend(
-                            LoweredRequirement::from_non_workspace_requirement(
+                            LoweredRequirement::from_non_workspace_requirement_deferred(
                                 requirement,
-                                script_dir.as_ref(),
+                                script_dir,
                                 script_sources.as_ref(),
                                 &script_indexes,
                                 index_locations,
@@ -147,7 +185,7 @@ pub async fn script_specification(
                                 credentials_cache,
                             )
                             .await
-                            .map(|requirement| requirement.map(LoweredRequirement::into_inner))
+                            .map(|requirement| requirement.map(&mut into_requirement))
                             .collect::<Result<Vec<_>, _>>()?,
                         );
                     }
@@ -160,8 +198,7 @@ pub async fn script_specification(
         }
         overrides
     };
-    let excludes = script
-        .metadata()
+    let excludes = metadata
         .tool
         .as_ref()
         .and_then(|tool| tool.uv.as_ref())
@@ -171,11 +208,18 @@ pub async fn script_specification(
         .cloned()
         .collect::<Vec<_>>();
 
+    let indexes = SourceIndexes::try_from_iter(
+        script_indexes
+            .into_iter()
+            .filter(|index| selected_indexes.contains(index))
+            .map(|index| index.with_origin(Origin::RequirementsTxt)),
+    )?;
+
     let mut specification =
         RequirementsSpecification::from_excludes(requirements, constraints, Vec::new(), Vec::new());
     specification.override_dependencies = overrides;
     specification.excludes = excludes;
-    Ok(Some(specification))
+    Ok((specification, indexes))
 }
 
 /// Determine the extra build requires for a script.

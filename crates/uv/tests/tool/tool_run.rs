@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -7,8 +8,14 @@ use assert_fs::prelude::*;
 #[cfg(unix)]
 use fs_err::{metadata, set_permissions};
 use indoc::indoc;
+use serde_json::json;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+use uv_test::package_server::PackageServer;
+use uv_test::packse::generate_wheel_with_files;
 use uv_test::{copy_dir_ignore, uv_snapshot, venv_bin_path};
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[test]
 fn tool_run_args() {
@@ -3638,4 +3645,914 @@ async fn tool_run_latest_keyring_auth() {
      + executable-application==0.3.0
     Installed 1 executable: app
     ");
+}
+
+/// Source policies apply before discovering names for additional archives.
+#[tokio::test]
+async fn tool_run_pep723_authenticates_unnamed_requirement() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .env_remove(EnvVars::index_username("PRIVATE"))
+        .env_remove(EnvVars::index_password("PRIVATE"))
+        .args(["--with-requirements", "deps.py", "--with"])
+        .arg(format!("{}/private/archive.tar.gz", server.uri()))
+        .args(["python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to resolve `--with` requirement
+      cause: Failed to fetch: http://[LOCALHOST]/private/archive.tar.gz
+      cause: Missing credentials for: http://[LOCALHOST]/private/archive.tar.gz
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Source policies apply before discovering the primary tool package name.
+#[tokio::test]
+async fn tool_run_pep723_authenticates_unnamed_target() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .env_remove(EnvVars::index_username("PRIVATE"))
+        .env_remove(EnvVars::index_password("PRIVATE"))
+        .args(["--with-requirements", "deps.py", "--from"])
+        .arg(format!("{}/private/archive.tar.gz", server.uri()))
+        .arg("a"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to resolve `--with` requirement
+      cause: Failed to fetch: http://[LOCALHOST]/private/archive.tar.gz
+      cause: Missing credentials for: http://[LOCALHOST]/private/archive.tar.gz
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Source policies apply when an override archive needs package metadata.
+#[tokio::test]
+async fn tool_run_pep723_authenticates_unnamed_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    context
+        .temp_dir
+        .child("overrides.txt")
+        .write_str(&format!("{}/private/archive.tar.gz\n", server.uri()))?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .env_remove(EnvVars::index_username("PRIVATE"))
+        .env_remove(EnvVars::index_password("PRIVATE"))
+        .args(["--with-requirements", "deps.py", "--override", "overrides.txt"])
+        .args(["python", "-c", "pass"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to resolve `--with` requirement
+      cause: Failed to fetch: http://[LOCALHOST]/private/archive.tar.gz
+      cause: Missing credentials for: http://[LOCALHOST]/private/archive.tar.gz
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Available source credentials are sent on the first archive request.
+#[tokio::test]
+async fn tool_run_pep723_unnamed_requirement_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/private/archive.tar.gz"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "deps.py", "--with"])
+        .arg(format!("{}/private/archive.tar.gz", server.uri()))
+        .args(["python", "-c", "pass"])
+        .env(EnvVars::index_username("PRIVATE"), "username")
+        .env(EnvVars::index_password("PRIVATE"), "password"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to resolve `--with` requirement
+      cause: Failed to fetch: http://[LOCALHOST]/private/archive.tar.gz
+      cause: HTTP status client error (404 Not Found) for url (http://[LOCALHOST]/private/archive.tar.gz)
+    ");
+    let requests = server.received_requests().await.expect("request recording");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("authorization")
+            .expect("authorization header")
+            .to_str()?,
+        "Basic dXNlcm5hbWU6cGFzc3dvcmQ="
+    );
+    Ok(())
+}
+
+/// Latest-version discovery uses selected stdin indexes before pinning the tool version.
+#[tokio::test]
+async fn tool_run_latest_with_pep723_stdin_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let name = "a".parse()?;
+    let selected = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    selected.serve(&filename, &wheel, None).await;
+    let configured = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    configured.serve(&filename, &wheel, None).await;
+    let input = context.temp_dir.child("deps.py");
+    input.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = selected.index_url()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "-", "--default-index"])
+        .arg(configured.index_url())
+        .arg("a@latest")
+        .stdin(fs_err::File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0
+    ");
+    assert!(
+        configured
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Explicit command-line names override selected indexes for both latest lookup and resolution.
+#[tokio::test]
+async fn tool_run_latest_pep723_index_command_line_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let name = "a".parse()?;
+    let selected = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    selected.serve(&filename, &wheel, None).await;
+    let configured = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    configured.serve(&filename, &wheel, None).await;
+    let input = context.temp_dir.child("deps.py");
+    input.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = selected.index_url()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "deps.py", "--index"])
+        .arg(format!("private={}", configured.index_url()))
+        .arg("a@latest"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    ");
+    assert!(
+        selected
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Explicit flat indexes retain their format during latest-version discovery.
+#[tokio::test]
+async fn tool_run_latest_with_pep723_flat_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let name = "a".parse()?;
+    let selected = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    selected.serve(&filename, &wheel, None).await;
+    Mock::given(method("GET"))
+        .and(path("/flat"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                "<a href=\"{url}\">{filename}</a>",
+                url = selected.file_url(&filename)
+            ),
+            "text/html",
+        ))
+        .mount(selected.mock_server())
+        .await;
+    let configured = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    configured.serve(&filename, &wheel, None).await;
+    let input = context.temp_dir.child("deps.py");
+    input.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # format = "flat"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = selected.file_url("flat")})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "deps.py", "--default-index"])
+        .arg(configured.index_url())
+        .arg("a@latest")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0
+    ");
+    assert!(
+        configured
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// A selected override index replaces the requirement pin before latest-version discovery.
+#[tokio::test]
+async fn tool_run_latest_pep723_override_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let name = "a".parse()?;
+    let selected = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    selected.serve(&filename, &wheel, None).await;
+    let configured = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    configured.serve(&filename, &wheel, None).await;
+    let input = context.temp_dir.child("deps.py");
+    input.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = selected.index_url()})?;
+    let overrides = context.temp_dir.child("overrides.py");
+    overrides.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "mirror"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "mirror" }}
+        # ///
+    "#, url = configured.index_url()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "deps.py", "--override", "-", "--default-index"])
+        .arg(selected.index_url())
+        .arg("a@latest")
+        .stdin(fs_err::File::open(overrides.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    ");
+    assert!(
+        selected
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Conflicting active pins are rejected before querying a default index for the latest version.
+#[tokio::test]
+async fn tool_run_latest_rejects_conflicting_pep723_pins() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("first.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "first"
+        # url = "{url}/first/simple"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "first" }}
+        # ///
+    "#, url = server.uri()})?;
+    context
+        .temp_dir
+        .child("second.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "second"
+        # url = "{url}/second/simple"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "second" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "first.py", "--with-requirements", "second.py", "--default-index"])
+        .arg(format!("{}/default/simple", server.uri()))
+        .arg("a@latest"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Requirements contain conflicting indexes for package `a`:
+    - http://[LOCALHOST]/first/simple
+    - http://[LOCALHOST]/second/simple
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// An explicit package pin cannot bypass disabled index lookups during latest discovery.
+#[tokio::test]
+async fn tool_run_latest_pep723_pin_respects_no_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "deps.py", "--no-index", "a@latest"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving tool dependencies
+      cause: Because a was not found in the provided package locations and you require a, we can conclude that your requirements are unsatisfiable.
+
+    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Latest lookup reselects the package index when resolution requires a newer Python.
+#[tokio::test]
+async fn tool_run_latest_reselects_index_after_python_refinement() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let requires_python = ">=3.13".parse()?;
+    let python312 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python312
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    let python313 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python313
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    context.temp_dir.child("deps.py").write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "python312"
+        # url = "{python312}"
+        # explicit = true
+        # [[tool.uv.index]]
+        # name = "python313"
+        # url = "{python313}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = [{{ index = "python312", marker = "python_version < '3.13'" }}, {{ index = "python313", marker = "python_version >= '3.13'" }}]
+        # ///
+    "#, python312 = python312.index_url(), python313 = python313.index_url()})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "deps.py", "--default-index"])
+        .arg(python312.index_url())
+        .arg("a@latest"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0 Python 3.13
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    ");
+    assert!(
+        !python312
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        !python313
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// A fresh latest constraint does not replace a user's bound when the interpreter changes.
+#[tokio::test]
+async fn tool_run_latest_preserves_constraints_after_python_refinement() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let requires_python = ">=3.13".parse()?;
+    let python312 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python312
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    let python313 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python313
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    context.temp_dir.child("deps.py").write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "python312"
+        # url = "{python312}"
+        # explicit = true
+        # [[tool.uv.index]]
+        # name = "python313"
+        # url = "{python313}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = [{{ index = "python312", marker = "python_version < '3.13'" }}, {{ index = "python313", marker = "python_version >= '3.13'" }}]
+        # ///
+    "#, python312 = python312.index_url(), python313 = python313.index_url()})?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("a<2\n")?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--with-requirements", "deps.py", "--constraints", "constraints.txt", "--default-index"])
+        .arg(python312.index_url())
+        .arg("a@latest"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: No solution found when resolving tool dependencies
+      cause: Because you require a<2 and a==2.0.0, we can conclude that your requirements are unsatisfiable.
+    ");
+    assert!(
+        !python313
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// A requirements-source default removes implicit PyPI before build-index policies are checked.
+#[test]
+fn tool_run_pep723_combines_build_and_requirement_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("a/cli.py", "def main():\n    print('1.0.0')\n"),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    let wheel_path = context.temp_dir.child(&filename);
+    wheel_path.write_binary(&wheel)?;
+    let wheel_url = SafeUrl::from_file_path(wheel_path.path()).expect("absolute wheel path");
+    context
+        .temp_dir
+        .child("overrides.txt")
+        .write_str(&format!("a @ {wheel_url}"))?;
+    context.temp_dir.child("deps.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "https://example.com/simple"
+        # default = true
+        # [tool.uv.sources]
+        # a = { index = "private" }
+        # ///
+    "#})?;
+    let build = context.temp_dir.child("build.py");
+    build.write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["backend"]
+        # [[tool.uv.index]]
+        # name = "build-pypi"
+        # url = "https://pypi.org/simple"
+        # explicit = true
+        # exclude-newer = "2020-01-01T00:00:00Z"
+        # [tool.uv.sources]
+        # backend = { index = "build-pypi" }
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .args(["--offline", "--preview-features", "index-exclude-newer",
+            "--build-constraint", "-", "--with-requirements", "deps.py",
+            "--override", "overrides.txt", "--from"])
+        .arg(wheel_path.path())
+        .arg("a")
+        .stdin(fs_err::File::open(build.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0 (from file://[TEMP_DIR]/a-1.0.0-py3-none-any.whl)
+    ");
+    Ok(())
 }

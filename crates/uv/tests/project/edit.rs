@@ -15,6 +15,7 @@ use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::path::Path;
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
@@ -30,6 +31,7 @@ use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 
 use uv_test::package_server::PackageServer;
+use uv_test::packse::{PackseServer, generate_wheel};
 use uv_test::{uv_snapshot, venv_bin_path};
 
 /// Add a PyPI requirement.
@@ -2916,6 +2918,58 @@ fn add_path_adjacent_directory() -> Result<()> {
         );
     });
 
+    Ok(())
+}
+
+/// Absolute file URLs in requirements scripts remain absolute when added to a project.
+#[test]
+fn add_absolute_file_url_from_script() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let dependency = context.temp_dir.child("dependency");
+    dependency.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "1.0.0"
+    "#})?;
+    let url = SafeUrl::from_directory_path(dependency.path())
+        .map_err(|()| anyhow::anyhow!("dependency path cannot be represented as a file URL"))?;
+    context
+        .temp_dir
+        .child("requirements")
+        .write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency @ {url}"]
+        # ///
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().arg("-r").arg("requirements").arg("--frozen").arg("--no-workspace"), @"
+    exit_code: 0 (success)
+    ");
+    let pyproject = fs_err::read_to_string(context.temp_dir.child("pyproject.toml"))?;
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(pyproject, @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "dependency",
+        ]
+
+        [tool.uv.sources]
+        dependency = { path = "[TEMP_DIR]/dependency" }
+        "#);
+    });
     Ok(())
 }
 
@@ -5997,6 +6051,176 @@ fn add_requirements_file_with_marker_flag() -> Result<()> {
         "numpy>1.9 ; python_full_version == '3.12.*' and sys_platform == 'fantasy_os'",
     ]
     "#
+    );
+
+    Ok(())
+}
+
+/// Constraints read from stdin retain the authentication policy of their selected source index.
+#[tokio::test]
+async fn add_stdin_constraints_require_index_authentication() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+    let server = MockServer::start().await;
+    let constraints = context.temp_dir.child("constraints.py");
+    constraints.write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a>=1"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["a", "-c", "-"])
+        .stdin(fs_err::File::open(constraints.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/simple/a/
+      cause: Missing credentials for: http://[LOCALHOST]/simple/a/
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+
+    Ok(())
+}
+
+/// Selected source policies remain available while adding bounds and syncing the final lock.
+#[tokio::test]
+async fn add_stdin_constraints_with_index_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+    let name = "a".parse()?;
+    let server = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    server.serve(&filename, &wheel, None).await;
+    let constraints = context.temp_dir.child("constraints.py");
+    constraints.write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a>=1"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.index_url()})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["a", "-c", "-"])
+        .env(EnvVars::index_username("PRIVATE"), "public")
+        .env(EnvVars::index_password("PRIVATE"), "heron")
+        .stdin(fs_err::File::open(constraints.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0
+    ");
+    let requests = server
+        .mock_server()
+        .received_requests()
+        .await
+        .expect("request recording");
+    let index_requests = requests
+        .iter()
+        .filter(|request| request.url.path() == "/simple/a/")
+        .collect::<Vec<_>>();
+    assert!(!index_requests.is_empty());
+    assert!(
+        index_requests
+            .iter()
+            .all(|request| request.headers.contains_key("authorization"))
+    );
+
+    Ok(())
+}
+
+/// Command-line index definitions take precedence over policies in stdin constraints.
+#[tokio::test]
+async fn add_stdin_constraints_index_command_line_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = []
+        "#})?;
+    let private = MockServer::start().await;
+    let selected = PackseServer::new("simple/single-package.toml");
+    let constraints = context.temp_dir.child("constraints.py");
+    constraints.write_str(&formatdoc! {r#"
+        # /// script
+        # dependencies = ["a>=1"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = private.uri()})?;
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["a", "-c", "-", "--index"])
+        .arg(format!("private={}", selected.index_url()))
+        .stdin(fs_err::File::open(constraints.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    ");
+    assert!(
+        private
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
     );
 
     Ok(())
@@ -15563,4 +15787,50 @@ async fn add_malware_detected() {
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
+}
+
+/// A lowered script requirement retains the named index selected for an add operation.
+#[test]
+fn add_pep723_requirements_named_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    context
+        .temp_dir
+        .child("requirements")
+        .write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["foo"]
+        # [tool.uv.sources]
+        # foo = { index = "private" }
+        # ///
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().args(["-r", "requirements", "--index", "private=https://example.com/simple", "--frozen"]), @r#"
+    exit_code: 0 (success)
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "foo",
+    ]
+
+    [tool.uv.sources]
+    foo = { index = "private" }
+
+    [[tool.uv.index]]
+    name = "private"
+    url = "https://example.com/simple"
+    "#);
+    Ok(())
 }

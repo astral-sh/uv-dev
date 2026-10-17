@@ -5,7 +5,8 @@ use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
-
+#[cfg(feature = "test-pypi")]
+use indoc::indoc;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -92,16 +93,52 @@ fn uninstall() -> Result<()> {
     context.assert_command("import markupsafe").success();
 
     uv_snapshot!(context.pip_uninstall()
-        .arg("MarkupSafe"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Uninstalled 1 package in [TIME]
-     - markupsafe==2.1.3
-    "
+        .args(["MarkupSafe"]), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Uninstalled 1 package in [TIME]
+             - markupsafe==2.1.3
+            "
     );
 
     context.assert_command("import markupsafe").failure();
+    Ok(())
+}
+#[test]
+#[cfg(feature = "test-pypi")]
+fn uninstall_pep723_names_only() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
 
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str("MarkupSafe==2.1.3")?;
+
+    let script = context.temp_dir.child("requirements.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["MarkupSafe"]
+        # [tool.uv.sources]
+        # markupsafe = { workspace = "./missing-workspace" }
+        # ///
+    "#})?;
+
+    context
+        .pip_sync()
+        .arg("requirements.txt")
+        .assert()
+        .success();
+
+    context.assert_command("import markupsafe").success();
+
+    uv_snapshot!(context.pip_uninstall()
+        .args(["-r", "requirements.py"]), @"
+            exit_code: 0 (success)
+            ----- stderr -----
+            Uninstalled 1 package in [TIME]
+             - markupsafe==2.1.3
+            "
+    );
+
+    context.assert_command("import markupsafe").failure();
     Ok(())
 }
 

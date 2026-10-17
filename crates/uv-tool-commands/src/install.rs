@@ -10,15 +10,15 @@ use tracing::{debug, trace};
 
 use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
-use uv_client::{BaseClientBuilder, RegistryClientBuilder};
+use uv_client::BaseClientBuilder;
 use uv_configuration::{
     Concurrency, Constraints, DependencyMode, DependencyModifiers, DryRun, Excludes, GitLfsSetting,
     HashCheckingMode, Modifications, Overrides, Reinstall, TargetTriple, Upgrade,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
-    RequirementSource, UnresolvedRequirementSpecification,
+    ExtraBuildRequires, NameRequirementSpecification, Requirement, RequirementSource,
+    UnresolvedRequirementSpecification,
 };
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -31,9 +31,9 @@ use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::{
     EnvironmentPreference, PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest,
 };
-use uv_requirements::{RequirementsSource, RequirementsSpecification};
-use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions, ToolOptions};
-use uv_tool::{InstalledTools, Tool};
+use uv_requirements::{LoweringContext, RequirementsSource, RequirementsSpecification};
+use uv_settings::{PythonInstallMirrors, ResolverInstallerOptions};
+use uv_tool::{InstalledTools, Tool, ToolConfiguration};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
@@ -45,16 +45,15 @@ use crate::common::{
     tool_environment_spec,
 };
 use crate::error::ToolLockError;
-use crate::requirements::resolve_names;
+use crate::requirements::{resolve_names, with_latest_constraint};
 use crate::{Target, ToolRequest};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_environment_operations::{
-    EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
-    sync_environment, update_environment,
+    EnvironmentError, EnvironmentResolution, resolve_environment, sync_environment,
+    update_environment,
 };
 use uv_install_operations::loggers::DefaultInstallLogger;
 use uv_resolve_operations as operations;
-use uv_resolve_operations::latest::LatestClient;
 use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::{ResolverInstallerSettings, ResolverSettings};
@@ -116,9 +115,19 @@ pub async fn install(
                 RequirementsSource::from_package(requirement)?
             };
             Some(
-                RequirementsSpecification::from_source(&source, &client_builder)
-                    .await?
-                    .requirements,
+                RequirementsSpecification::from_source(
+                    &source,
+                    &client_builder,
+                    LoweringContext::new(
+                        &settings.resolver.sources,
+                        &settings.resolver.index_locations,
+                        &cache,
+                        workspace_cache,
+                        client_builder.credentials_cache(),
+                    ),
+                )
+                .await?
+                .requirements,
             )
         }
         _ => None,
@@ -157,8 +166,20 @@ pub async fn install(
     .await?
     .into_interpreter();
 
-    let receipt_build_constraints =
-        operations::read_constraints(build_constraints, &client_builder).await?;
+    let build_spec = operations::read_constraints(
+        build_constraints,
+        &client_builder,
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            &cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
+    )
+    .await?;
+    let build_indexes = build_spec.indexes;
+    let receipt_build_constraints = build_spec.constraints;
     let build_constraints =
         Constraints::from_specifications(receipt_build_constraints.iter().cloned());
 
@@ -169,6 +190,31 @@ pub async fn install(
         refresh
     };
     let cache = cache.with_refresh(refresh.clone());
+
+    // Load source index policies before preliminary name and latest-version lookups.
+    let mut spec = RequirementsSpecification::from_sources(
+        with,
+        constraints,
+        overrides,
+        excludes,
+        None,
+        &client_builder,
+        LoweringContext::new(
+            &settings.resolver.sources,
+            &settings.resolver.index_locations,
+            &cache,
+            workspace_cache,
+            client_builder.credentials_cache(),
+        ),
+    )
+    .await?;
+
+    spec.extend_indexes(build_indexes)?;
+    let mut settings = settings;
+    settings.resolver.index_locations = settings
+        .resolver
+        .index_locations
+        .with_source_indexes(spec.indexes.clone())?;
 
     // Resolve the `--from` requirement.
     let requirement = match &request {
@@ -284,69 +330,6 @@ pub async fn install(
         }
     };
 
-    // For `@latest`, fetch the latest version and create a constraint.
-    let latest = if let ToolRequest::Package {
-        target: Target::Latest(_, name, _),
-        ..
-    } = &request
-    {
-        // Build the registry client to fetch the latest version.
-        let client = RegistryClientBuilder::new(
-            client_builder
-                .clone()
-                .keyring(settings.resolver.keyring_provider),
-            cache.clone(),
-        )
-        .index_locations(settings.resolver.index_locations.clone())
-        .index_strategy(settings.resolver.index_strategy)
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
-
-        // Initialize the capabilities.
-        let capabilities = IndexCapabilities::default();
-        let download_concurrency = concurrency.downloads_semaphore.clone();
-
-        // Initialize the client to fetch the latest version.
-        let latest_client = LatestClient {
-            client: &client,
-            capabilities: &capabilities,
-            prerelease: &settings.resolver.prerelease,
-            exclude_newer: &settings.resolver.exclude_newer,
-            index_locations: &settings.resolver.index_locations,
-            tags: None,
-            requires_python: None,
-        };
-
-        // Fetch the latest version.
-        if let Some(dist_filename) = latest_client
-            .find_latest(name, None, &download_concurrency)
-            .await?
-        {
-            let version = dist_filename.version().clone();
-            debug!("Resolved `{name}@latest` to `{name}=={version}`");
-
-            // The constraint pins the version during resolution to prevent backtracking.
-            Some(Requirement {
-                name: name.clone(),
-                extras: vec![].into_boxed_slice(),
-                groups: Box::new([]),
-                marker: MarkerTree::default(),
-                source: RequirementSource::Registry {
-                    specifier: VersionSpecifiers::from(VersionSpecifier::equals_version(version)),
-                    index: None,
-                    conflict: None,
-                },
-                scope: RequirementScope::Global,
-                origin: None,
-            })
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
     let package_name = &requirement.name;
 
     // If the user passed, e.g., `ruff@latest`, we need to mark it as upgradable.
@@ -371,17 +354,6 @@ pub async fn install(
     } else {
         settings
     };
-
-    // Read the `--with` requirements.
-    let spec = RequirementsSpecification::from_sources(
-        with,
-        constraints,
-        overrides,
-        excludes,
-        None,
-        &client_builder,
-    )
-    .await?;
 
     // Resolve the `--from` and `--with` requirements.
     let requirements = {
@@ -464,8 +436,33 @@ pub async fn install(
     // Resolve the excludes.
     let receipt_excludes = spec.excludes.clone();
 
-    // Convert to tool options.
-    let options = ToolOptions::from(options);
+    let latest_package = if let ToolRequest::Package {
+        target: Target::Latest(_, name, _),
+        ..
+    } = &request
+    {
+        Some(name)
+    } else {
+        None
+    };
+
+    // Keep legacy index flags separate so later upgrades can override them.
+    let mut options = options;
+    if !spec.indexes.is_empty() {
+        options.indexes.index = Some(
+            spec.indexes
+                .clone()
+                .merge_index_definitions(options.indexes.index.take().unwrap_or_default()),
+        );
+    }
+    let configuration = ToolConfiguration::new(
+        requirements.clone(),
+        receipt_constraints.clone(),
+        receipt_overrides.clone(),
+        receipt_excludes.clone(),
+        receipt_build_constraints.clone(),
+        options,
+    )?;
     let lock_manifest = ToolLock::manifest(
         &requirements,
         &receipt_constraints,
@@ -631,7 +628,7 @@ pub async fn install(
                 let already_installed = matches!(
                     site_packages.satisfies_requirements(
                         requirements.iter(),
-                        receipt_constraints.iter().chain(latest.iter()),
+                        receipt_constraints.iter(),
                         &DependencyModifiers::new(
                             Overrides::from_requirements(receipt_overrides.clone()),
                             Excludes::from_entries(receipt_excludes.iter().cloned()),
@@ -652,10 +649,10 @@ pub async fn install(
                 );
                 if already_installed {
                     // Then we're done! Though we might need to update the receipt.
-                    if *tool_receipt.options() != options {
+                    if tool_receipt.options() != configuration.options() {
                         installed_tools.add_tool_receipt(
                             package_name,
-                            tool_receipt.clone().with_options(options),
+                            tool_receipt.with_configuration(configuration),
                         )?;
                     }
 
@@ -681,7 +678,6 @@ pub async fn install(
         constraints: receipt_constraints
             .iter()
             .cloned()
-            .chain(latest)
             .map(NameRequirementSpecification::from)
             .collect(),
         overrides: receipt_overrides
@@ -705,6 +701,17 @@ pub async fn install(
     // be invalidated by moving the environment.
     let (environment, tool_lock) = if let Some(environment) = existing_environment {
         let environment = environment.into_environment();
+        let spec = with_latest_constraint(
+            &spec,
+            latest_package,
+            environment.interpreter(),
+            python_platform.as_ref(),
+            &settings.resolver,
+            &client_builder,
+            &concurrency,
+            &cache,
+        )
+        .await?;
         let (environment, tool_lock) = if tool_locks {
             let site_packages = SitePackages::from_environment(&environment)?;
             let satisfied_tool_lock = match existing_tool_lock.take() {
@@ -816,14 +823,9 @@ pub async fn install(
                 installed_tools.add_tool_receipt(
                     package_name,
                     Tool::new(
-                        requirements.clone(),
-                        receipt_constraints.clone(),
-                        receipt_overrides.clone(),
-                        receipt_excludes.clone(),
-                        receipt_build_constraints.clone(),
+                        configuration.clone(),
                         python,
                         existing_tool_receipt.entrypoints().iter().cloned(),
-                        options.clone(),
                     ),
                 )?;
                 writeln!(
@@ -909,22 +911,27 @@ pub async fn install(
             )?;
             (resolution, interpreter, Some(tool_lock))
         } else {
-            let spec = if tool_locks {
-                tool_environment_spec(
-                    spec,
-                    existing_tool_lock
-                        .as_ref()
-                        .and_then(|lock| lock.preference()),
-                    None,
-                )
-            } else {
-                EnvironmentSpecification::from(spec)
-            };
-
             // If we're creating a new environment, ensure that we can resolve the requirements prior
             // to removing any existing tools.
+            let resolution_spec = tool_environment_spec(
+                with_latest_constraint(
+                    &spec,
+                    latest_package,
+                    &interpreter,
+                    python_platform.as_ref(),
+                    &settings.resolver,
+                    &client_builder,
+                    &concurrency,
+                    &cache,
+                )
+                .await?,
+                existing_tool_lock
+                    .as_ref()
+                    .and_then(|lock| lock.preference()),
+                None,
+            );
             let resolution = resolve_environment(
-                spec.clone(),
+                resolution_spec,
                 resolution_scope,
                 &interpreter,
                 python_platform.as_ref(),
@@ -978,8 +985,25 @@ pub async fn install(
                             interpreter.sys_executable().display()
                         );
 
+                        let resolution_spec = tool_environment_spec(
+                            with_latest_constraint(
+                                &spec,
+                                latest_package,
+                                &interpreter,
+                                python_platform.as_ref(),
+                                &settings.resolver,
+                                &client_builder,
+                                &concurrency,
+                                &cache,
+                            )
+                            .await?,
+                            existing_tool_lock
+                                .as_ref()
+                                .and_then(|lock| lock.preference()),
+                            None,
+                        );
                         match resolve_environment(
-                            spec.clone(),
+                            resolution_spec,
                             resolution_scope,
                             &interpreter,
                             python_platform.as_ref(),
@@ -1069,7 +1093,7 @@ pub async fn install(
         package_name,
         entrypoints,
         &installed_tools,
-        &options,
+        configuration,
         force || invalid_tool_receipt,
         // Only persist the Python request if it was explicitly provided
         if explicit_python_request {
@@ -1077,11 +1101,6 @@ pub async fn install(
         } else {
             None
         },
-        requirements,
-        receipt_constraints,
-        receipt_overrides,
-        receipt_excludes,
-        receipt_build_constraints,
         tool_lock.as_ref(),
         printer,
     )?;

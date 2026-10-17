@@ -16,11 +16,16 @@ use assert_fs::{
 use indoc::indoc;
 use insta::{allow_duplicates, assert_snapshot};
 use predicates::prelude::predicate;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 #[cfg(windows)]
 use uv_fs::Simplified;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use uv_test::package_server::PackageServer;
 use uv_test::packse::{
     PackseServer, generate_wheel, generate_wheel_with_files, scenario::Scenario,
 };
@@ -6618,5 +6623,1173 @@ fn tool_install_with_build_hashes() -> Result<()> {
             .child("backend-executed")
             .assert(predicate::path::exists());
     }
+    Ok(())
+}
+
+/// Tool upgrades reload the format of indexes pinned by inline requirements metadata.
+#[test]
+fn tool_install_pep723_flat_index_receipt_upgrade() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let bin = context.temp_dir.child("bin");
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let (filename, wheel) = generate_wheel(
+        &"dependency".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    context.temp_dir.child("deps.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["dependency"]
+        # [[tool.uv.index]]
+        # name = "flat"
+        # url = "./wheels"
+        # format = "flat"
+        # explicit = true
+        # [tool.uv.sources]
+        # dependency = { index = "flat" }
+        # ///
+    "#})?;
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/simple-launcher/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [
+            { name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" },
+            { name = "dependency", index = "file://[TEMP_DIR]/wheels", index-format = "flat" },
+        ]
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        index = [{ name = "flat", url = "file://[TEMP_DIR]/wheels", explicit = true, default = false, format = "flat", authenticate = "auto" }]
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
+    let (filename, wheel) = generate_wheel(
+        &"dependency".parse()?,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    wheels.child(filename).write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Modified simple-launcher environment
+     - dependency==1.0.0
+     + dependency==2.0.0
+    "#);
+    Ok(())
+}
+
+#[test]
+fn tool_install_pep723_index_cutoff_receipt_upgrade() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let bin = context.temp_dir.child("bin");
+    let scenario: Scenario = toml::from_str(indoc! {r#"
+        name = "script-index-cutoff"
+        [root]
+        requires = ["dependency"]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."1.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-01-01T00:00:00Z" }
+        [packages.dependency.versions."2.0.0"]
+        sdist = false
+        wheel = { upload_time = "2024-02-01T00:00:00Z" }
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # exclude-newer = "2024-01-15T00:00:00Z"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # ///
+    "#, url = server.index_url()})?;
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    fs_err::remove_file(context.temp_dir.child("deps.py"))?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .env(EnvVars::PATH, bin.path()), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Setting `exclude-newer` on configured indexes is experimental and may change without warning. Pass `--preview-features index-exclude-newer` to disable this warning.
+    Nothing to upgrade
+    "#);
+    uv_snapshot!(context.filters(), Command::new(uv_test::venv_bin_path(context.temp_dir.child("tools/simple-launcher")).join(format!("python{}", std::env::consts::EXE_SUFFIX)))
+        .args(["-c", "import importlib.metadata; print(importlib.metadata.version('dependency'))"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn tool_install_pep723_build_constraint_authentication() -> anyhow::Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = wiremock::MockServer::start().await;
+    let project = context.temp_dir.child("project");
+    project
+        .child("pyproject.toml")
+        .write_str(indoc::indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        dynamic = ["dependencies"]
+        [build-system]
+        requires = ["setuptools>=40"]
+        build-backend = "setuptools.build_meta"
+    "#})?;
+    let input = context.temp_dir.child("constraints.stdin");
+    input.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["setuptools>=40"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # setuptools = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(project.path()).args(["--build-constraint", "-"])
+        .stdin(fs_err::File::open(input.path())?.into_file()), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to build `project @ file://[TEMP_DIR]/project`
+      cause: Failed to resolve requirements from `build-system.requires`
+      cause: No solution found when resolving: `setuptools>=40`
+      cause: Failed to fetch: http://[LOCALHOST]/simple/setuptools/
+      cause: Missing credentials for: http://[LOCALHOST]/simple/setuptools/
+    "#);
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
+fn tool_install_pep723_receipt_preserves_legacy_index_override() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let first: Scenario = toml::from_str(indoc! {r#"
+        name = "original-default"
+        [root]
+        requires = ["dependency"]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let first = PackseServer::from_scenario(&first);
+    let second: Scenario = toml::from_str(indoc! {r#"
+        name = "updated-default"
+        [root]
+        requires = ["dependency"]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let second = PackseServer::from_scenario(&second);
+    let private = PackseServer::new("simple/single-package.toml");
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = private.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args([
+            "--with",
+            "dependency",
+            "--with-requirements",
+            "deps.py",
+            "--index-url",
+        ])
+        .arg(first.index_url())
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt: toml::Value =
+        toml::from_str(&context.read("tools/simple-launcher/uv-receipt.toml"))?;
+    assert_eq!(
+        receipt["tool"]["options"]["index"]
+            .as_array()
+            .expect("script indexes")
+            .len(),
+        1
+    );
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .arg("--index-url").arg(second.index_url()).env(EnvVars::PATH, bin.path()), @r#"
+        exit_code: 0 (success)
+        ----- stderr -----
+        Modified simple-launcher environment
+         - dependency==1.0.0
+         + dependency==2.0.0
+        "#);
+    uv_snapshot!(context.filters(), Command::new(uv_test::venv_bin_path(context.temp_dir.child("tools/simple-launcher")).join(format!("python{}", std::env::consts::EXE_SUFFIX)))
+        .args(["-c", "import importlib.metadata; print(importlib.metadata.version('dependency'))"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+    ");
+    Ok(())
+}
+
+/// Named upgrade overrides cannot discard authentication policy while retaining a receipt URL pin.
+#[tokio::test]
+async fn tool_install_pep723_receipt_rejects_shadowed_index_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let private = MockServer::start().await;
+    let replacement = MockServer::start().await;
+    let (filename, wheel) = generate_wheel(
+        &"dependency".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    Mock::given(method("GET"))
+        .and(path("/simple/dependency/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("<a href=\"../../{filename}\">{filename}</a>"),
+            "text/html",
+        ))
+        .mount(&private)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&private)
+        .await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # ///
+    "#, url = private.uri()})?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    private.reset().await;
+    uv_snapshot!(context.filters(), context.tool_upgrade().args(["simple-launcher", "--no-cache", "--index"])
+        .arg(format!("private={}/simple", replacement.uri()))
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade simple-launcher
+      cause: Index URL `http://[LOCALHOST]/simple` pinned by requirements no longer has its configured policy
+    ");
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert!(
+        private
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        replacement
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// User-configured aliases cannot weaken authentication for a retained receipt pin.
+#[tokio::test]
+async fn tool_install_pep723_receipt_rejects_conflicting_index_alias() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let private = MockServer::start().await;
+    let (filename, wheel) = generate_wheel(
+        &"dependency".parse()?,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    Mock::given(method("GET"))
+        .and(path("/simple/dependency/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!("<a href=\"../../{filename}\">{filename}</a>"),
+            "text/html",
+        ))
+        .mount(&private)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&private)
+        .await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # ///
+    "#, url = private.uri()})?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    private.reset().await;
+    let config = context.temp_dir.child("uv.toml");
+    config.write_str(&indoc::formatdoc! {r#"
+        [[index]]
+        name = "mirror"
+        url = "{url}/simple"
+        explicit = true
+        authenticate = "auto"
+    "#, url = private.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_upgrade().args(["simple-launcher", "--no-cache", "--config-file"])
+        .arg(config.path())
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to upgrade simple-launcher
+      cause: Conflicting authentication policies for indexes `private` (`http://[LOCALHOST]/simple`) (always) and `mirror` (`http://[LOCALHOST]/simple`) (auto): authentication scopes overlap
+    ");
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert!(
+        private
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Receipt declarations retain per-index policies without synthesizing an implicit default.
+#[test]
+fn tool_install_pep723_receipt_retains_legacy_default_and_index_policy() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    context.temp_dir.child("deps.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["ok"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "https://pypi.org/simple"
+        # explicit = true
+        # exclude-newer = "2020-01-01T00:00:00Z"
+        # [tool.uv.sources]
+        # ok = { index = "private" }
+        # ///
+    "#})?;
+    let wheel = context
+        .workspace_root
+        .join("test/links/ok-1.0.0-py3-none-any.whl");
+    let wheel = SafeUrl::from_file_path(wheel).expect("absolute wheel path");
+    context
+        .temp_dir
+        .child("overrides.txt")
+        .write_str(&format!("ok @ {wheel}"))?;
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    let bin = context.temp_dir.child("bin");
+
+    context
+        .tool_install()
+        .arg(launcher)
+        .args([
+            "--with-requirements",
+            "deps.py",
+            "--override",
+            "overrides.txt",
+            "--index-url",
+            "https://mirror.example/simple",
+            "--offline",
+        ])
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("tools/simple-launcher/uv-receipt.toml"), @r#"
+        [tool]
+        requirements = [
+            { name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" },
+            { name = "ok", index = "https://pypi.org/simple" },
+        ]
+        overrides = [{ name = "ok", path = "[WORKSPACE]/test/links/ok-1.0.0-py3-none-any.whl" }]
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        index = [{ name = "private", url = "https://pypi.org/simple", explicit = true, default = false, format = "simple", authenticate = "auto", exclude-newer = "2020-01-01T00:00:00Z" }]
+        index-url = "https://mirror.example/simple"
+        exclude-newer = "2024-03-25T00:00:00Z"
+        "#);
+    });
+    Ok(())
+}
+
+/// Credential promotion must not replace a tool with a receipt that unchanged upgrades reject.
+#[tokio::test]
+async fn tool_install_pep723_receipt_rejects_promoted_alias_conflict() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let private = MockServer::start().await;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(&launcher)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    let configuration = context.read("tools/simple-launcher/pyvenv.cfg");
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency", "other"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "auto"
+        # [[tool.uv.index]]
+        # name = "mirror"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "auto"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # other = {{ index = "mirror" }}
+        # ///
+    "#, url = private.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_install().arg(&launcher)
+        .args(["--with-requirements", "deps.py", "--force"])
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting authentication policies for indexes `private` (`http://[LOCALHOST]/simple`) (always) and `mirror` (`http://[LOCALHOST]/simple`) (auto): authentication scopes overlap
+    ");
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    assert_eq!(
+        context.read("tools/simple-launcher/pyvenv.cfg"),
+        configuration
+    );
+    assert!(
+        private
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Authentication promotion must also validate different endpoints with overlapping scopes.
+#[tokio::test]
+async fn tool_install_pep723_receipt_rejects_promoted_overlapping_scope() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let private = MockServer::start().await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency", "other"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "auto"
+        # [[tool.uv.index]]
+        # name = "mirror"
+        # url = "{url}/simple"
+        # explicit = true
+        # authenticate = "auto"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # other = {{ index = "mirror" }}
+        # ///
+    "#, url = private.uri()})?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    uv_snapshot!(context.filters(), context.tool_install().arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Conflicting authentication policies for indexes `private` (`http://[LOCALHOST]/private/simple`) (always) and `mirror` (`http://[LOCALHOST]/simple`) (auto): authentication scopes overlap
+    ");
+    context
+        .temp_dir
+        .child("tools/simple-launcher/uv-receipt.toml")
+        .assert(predicate::path::missing());
+    assert!(
+        private
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Consistent promoted aliases remain valid across receipt persistence and unchanged upgrades.
+#[test]
+fn tool_install_pep723_receipt_accepts_consistent_promoted_aliases() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let scenario: Scenario = toml::from_str(indoc! {r#"
+        name = "receipt-authentication-aliases"
+        [root]
+        requires = ["dependency", "other"]
+        [expected]
+        satisfiable = true
+        [packages.dependency.versions."1.0.0"]
+        sdist = false
+        [packages.other.versions."1.0.0"]
+        sdist = false
+    "#})?;
+    let private = PackseServer::from_scenario(&scenario);
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["dependency", "other"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # authenticate = "auto"
+        # [[tool.uv.index]]
+        # name = "mirror"
+        # url = "{url}"
+        # explicit = true
+        # authenticate = "auto"
+        # [tool.uv.sources]
+        # dependency = {{ index = "private" }}
+        # other = {{ index = "mirror" }}
+        # ///
+    "#, url = private.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    let launcher = context
+        .workspace_root
+        .join("test/links/simple_launcher-0.1.0-py3-none-any.whl");
+    context
+        .tool_install()
+        .arg(launcher)
+        .args(["--with-requirements", "deps.py"])
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env("UV_INDEX_MIRROR_USERNAME", "username")
+        .env("UV_INDEX_MIRROR_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let receipt = context.read("tools/simple-launcher/uv-receipt.toml");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(receipt, @r#"
+        [tool]
+        requirements = [
+            { name = "simple-launcher", path = "[WORKSPACE]/test/links/simple_launcher-0.1.0-py3-none-any.whl" },
+            { name = "dependency", index = "http://[LOCALHOST]/simple/" },
+            { name = "other", index = "http://[LOCALHOST]/simple/" },
+        ]
+        entrypoints = [
+            { name = "simple_launcher", install-path = "[TEMP_DIR]/bin/simple_launcher", from = "simple-launcher" },
+        ]
+
+        [tool.options]
+        index = [{ name = "private", url = "http://[LOCALHOST]/simple/", explicit = true, default = false, format = "simple", authenticate = "always" }, { name = "mirror", url = "http://[LOCALHOST]/simple/", explicit = true, default = false, format = "simple", authenticate = "always" }]
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.tool_upgrade().arg("simple-launcher")
+        .arg("--no-cache")
+        .env("UV_INDEX_PRIVATE_USERNAME", "username")
+        .env("UV_INDEX_PRIVATE_PASSWORD", "password")
+        .env("UV_INDEX_MIRROR_USERNAME", "username")
+        .env("UV_INDEX_MIRROR_PASSWORD", "password")
+        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Nothing to upgrade
+    ");
+    assert_eq!(
+        context.read("tools/simple-launcher/uv-receipt.toml"),
+        receipt
+    );
+    Ok(())
+}
+
+/// Requirement sources protect metadata requests for an unnamed primary tool archive.
+#[tokio::test]
+async fn tool_install_pep723_authenticates_unnamed_target() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_tool_dirs();
+    let server = MockServer::start().await;
+    context
+        .temp_dir
+        .child("deps.py")
+        .write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}/private/simple"
+        # explicit = true
+        # authenticate = "always"
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = server.uri()})?;
+    uv_snapshot!(context.filters(), context.tool_install()
+        .env_remove(EnvVars::index_username("PRIVATE"))
+        .env_remove(EnvVars::index_password("PRIVATE"))
+        .args(["--with-requirements", "deps.py"])
+        .arg(format!("{}/private/archive.tar.gz", server.uri())), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to fetch: http://[LOCALHOST]/private/archive.tar.gz
+      cause: Missing credentials for: http://[LOCALHOST]/private/archive.tar.gz
+    ");
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Tool installation selects its latest version from the same indexes as final resolution.
+#[tokio::test]
+async fn tool_install_latest_with_pep723_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let selected = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    selected.serve(&filename, &wheel, None).await;
+    let configured = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "from importlib.metadata import version\ndef main():\n    print(version('a'))\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    configured.serve(&filename, &wheel, None).await;
+    let input = context.temp_dir.child("deps.py");
+    input.write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "{url}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = {{ index = "private" }}
+        # ///
+    "#, url = selected.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["--with-requirements", "deps.py", "--default-index"])
+        .arg(configured.index_url())
+        .arg("a@latest")
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0
+    Installed 1 executable: a
+    ");
+    assert!(
+        configured
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    let executable = bin.child(format!("a{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(executable.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    ");
+    Ok(())
+}
+
+/// Tool installation recomputes latest after refining its initially discovered Python.
+#[tokio::test]
+async fn tool_install_latest_reselects_index_after_python_refinement() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let requires_python = ">=3.13".parse()?;
+    let python312 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python312
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    let python313 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python313
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    context.temp_dir.child("deps.py").write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "python312"
+        # url = "{python312}"
+        # explicit = true
+        # [[tool.uv.index]]
+        # name = "python313"
+        # url = "{python313}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = [{{ index = "python312", marker = "python_version < '3.13'" }}, {{ index = "python313", marker = "python_version >= '3.13'" }}]
+        # ///
+    "#, python312 = python312.index_url(), python313 = python313.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["--with-requirements", "deps.py", "--default-index"])
+        .arg(python312.index_url())
+        .arg("a@latest")
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    Installed 1 executable: a
+    ");
+    let executable = bin.child(format!("a{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(executable.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0 Python 3.13
+    ");
+    assert!(
+        !python312
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    assert!(
+        !python313
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// Latest lookup uses a retained tool interpreter instead of the preliminary discovery result.
+#[tokio::test]
+async fn tool_install_latest_uses_existing_interpreter_index() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let requires_python = ">=3.12".parse()?;
+    let python312 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python312
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    let python313 = PackageServer::new(&name).await;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        Some(&requires_python),
+        "py3-none-any",
+        &[
+            (
+                "a/cli.py",
+                "import sys\nfrom importlib.metadata import version\ndef main():\n    print(version('a'), 'Python', f'{sys.version_info.major}.{sys.version_info.minor}')\n",
+            ),
+            (
+                "a-2.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    python313
+        .serve_with(
+            &filename,
+            &wheel,
+            None,
+            json!({"requires-python": requires_python.to_string()}),
+        )
+        .await;
+    context.temp_dir.child("deps.py").write_str(&indoc::formatdoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "python312"
+        # url = "{python312}"
+        # explicit = true
+        # [[tool.uv.index]]
+        # name = "python313"
+        # url = "{python313}"
+        # explicit = true
+        # [tool.uv.sources]
+        # a = [{{ index = "python312", marker = "python_version < '3.13'" }}, {{ index = "python313", marker = "python_version >= '3.13'" }}]
+        # ///
+    "#, python312 = python312.index_url(), python313 = python313.index_url()})?;
+    let bin = context.temp_dir.child("bin");
+    context
+        .tool_install()
+        .args([
+            "--python",
+            "3.13",
+            "--with-requirements",
+            "deps.py",
+            "--default-index",
+        ])
+        .arg(python313.index_url())
+        .arg("a")
+        .env(EnvVars::PATH, bin.path())
+        .assert()
+        .success();
+    let configuration = context.read("tools/a/pyvenv.cfg");
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["--no-cache", "--with-requirements", "deps.py", "--default-index"])
+        .arg(python313.index_url())
+        .arg("a@latest")
+        .env(EnvVars::PATH, bin.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Checked 1 package in [TIME]
+    Installed 1 executable: a
+    ");
+    assert_eq!(context.read("tools/a/pyvenv.cfg"), configuration);
+    assert!(
+        python312
+            .mock_server()
+            .received_requests()
+            .await
+            .expect("request recording")
+            .is_empty()
+    );
+    let executable = bin.child(format!("a{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(executable.path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0 Python 3.13
+    ");
+    Ok(())
+}
+
+/// Receipt policies are composed after collecting requirements and stdin build constraints.
+#[test]
+fn tool_install_pep723_combines_build_and_requirement_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_tool_dirs()
+        .with_filtered_exe_suffix();
+    let name = "a".parse()?;
+    let (filename, wheel) = generate_wheel_with_files(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[
+            ("a/cli.py", "def main():\n    print('1.0.0')\n"),
+            (
+                "a-1.0.0.dist-info/entry_points.txt",
+                "[console_scripts]\na = a.cli:main\n",
+            ),
+        ],
+    );
+    let wheel_path = context.temp_dir.child(&filename);
+    wheel_path.write_binary(&wheel)?;
+    let wheel_url = SafeUrl::from_file_path(wheel_path.path()).expect("absolute wheel path");
+    context
+        .temp_dir
+        .child("overrides.txt")
+        .write_str(&format!("a @ {wheel_url}"))?;
+    context.temp_dir.child("deps.py").write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["a"]
+        # [[tool.uv.index]]
+        # name = "private"
+        # url = "https://example.com/simple"
+        # default = true
+        # [tool.uv.sources]
+        # a = { index = "private" }
+        # ///
+    "#})?;
+    let build = context.temp_dir.child("build.py");
+    build.write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["backend"]
+        # [[tool.uv.index]]
+        # name = "build-pypi"
+        # url = "https://pypi.org/simple"
+        # explicit = true
+        # exclude-newer = "2020-01-01T00:00:00Z"
+        # [tool.uv.sources]
+        # backend = { index = "build-pypi" }
+        # ///
+    "#})?;
+    let bin = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.tool_install()
+        .args(["--offline", "--preview-features", "index-exclude-newer",
+            "--build-constraint", "-", "--with-requirements", "deps.py",
+            "--override", "overrides.txt"])
+        .arg(wheel_path.path())
+        .env(EnvVars::PATH, bin.path())
+        .stdin(fs_err::File::open(build.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==1.0.0 (from file://[TEMP_DIR]/a-1.0.0-py3-none-any.whl)
+    Installed 1 executable: a
+    ");
     Ok(())
 }
