@@ -24,7 +24,8 @@ pub enum ExtraBuildRequiresError {
 }
 
 /// Lowered extra build dependencies with source resolution applied.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct ExtraBuildRequires(BTreeMap<PackageName, Vec<ExtraBuildRequirement>>);
 
 impl std::ops::Deref for ExtraBuildRequires {
@@ -83,8 +84,14 @@ impl ExtraBuildRequires {
     /// Apply runtime constraints from a resolution to the extra build requirements.
     pub fn match_runtime(self, resolution: &Resolution) -> Result<Self, ExtraBuildRequiresError> {
         self.into_iter()
-            .filter(|(_, requirements)| !requirements.is_empty())
-            .filter(|(name, _)| resolution.distributions().any(|dist| dist.name() == name))
+            .filter_map(|(name, mut requirements)| {
+                if !resolution.distributions().any(|dist| dist.name() == &name) {
+                    // Build backends can have ordinary extra requirements without being runtime
+                    // dependencies themselves. Runtime matching only applies to selected owners.
+                    requirements.retain(|requirement| !requirement.match_runtime);
+                }
+                (!requirements.is_empty()).then_some((name, requirements))
+            })
             .map(|(name, requirements)| {
                 let requirements = requirements
                     .into_iter()
