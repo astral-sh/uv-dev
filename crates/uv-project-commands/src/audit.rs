@@ -15,7 +15,7 @@ use uv_dispatch::UniversalState;
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
-use uv_lock_operations::{LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{LockMode, LockOperation, LockResult, LockTarget};
 use uv_normalize::{DefaultExtras, DefaultGroups};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -157,39 +157,42 @@ pub async fn audit(
         })
     };
 
-    // Determine the lock mode.
-    let mode = if let Some(frozen_source) = frozen {
-        LockMode::Frozen(frozen_source.into())
-    } else if let LockCheck::Enabled(lock_check) = lock_check {
-        LockMode::Locked(interpreter.as_ref().unwrap(), lock_check)
-    } else if matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file() {
-        // If we're locking a script, avoid creating a lockfile if it doesn't already exist.
-        LockMode::DryRun(interpreter.as_ref().unwrap())
-    } else {
-        LockMode::Write(interpreter.as_ref().unwrap())
-    };
-
     // Initialize any shared state.
     let state = UniversalState::default();
 
     // Update the lockfile, if necessary.
-    let lock = match Box::pin(
-        LockOperation::new(
-            mode,
-            &settings,
-            &client_builder,
-            &state,
-            Box::new(DefaultResolveLogger),
-            &concurrency,
-            &cache,
-            workspace_cache,
-            printer,
-            preview,
+    let lock_result = if let Some(frozen_source) = frozen {
+        target
+            .read_frozen(frozen_source.into())
+            .await
+            .map(LockResult::Unchanged)
+    } else {
+        let mode = if let LockCheck::Enabled(lock_check) = lock_check {
+            LockMode::Locked(interpreter.as_ref().unwrap(), lock_check)
+        } else if matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file() {
+            // If we're locking a script, avoid creating a lockfile if it doesn't already exist.
+            LockMode::DryRun(interpreter.as_ref().unwrap())
+        } else {
+            LockMode::Write(interpreter.as_ref().unwrap())
+        };
+        Box::pin(
+            LockOperation::new(
+                mode,
+                &settings,
+                &client_builder,
+                &state,
+                Box::new(DefaultResolveLogger),
+                &concurrency,
+                &cache,
+                workspace_cache,
+                printer,
+                preview,
+            )
+            .execute(target),
         )
-        .execute(target),
-    )
-    .await
-    {
+        .await
+    };
+    let lock = match lock_result {
         Ok(result) => result.into_lock(),
         Err(err) => return Err(UvError::from(err).into()),
     };

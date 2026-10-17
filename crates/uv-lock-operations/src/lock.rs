@@ -36,7 +36,7 @@ use uv_warnings::{warn_user, warn_user_once, warn_user_with_chain};
 use uv_workspace::WorkspaceCache;
 
 use crate::lock_target::find_lock_format_error;
-use crate::{LockError, LockTarget, LockValidationError, MissingLockfileSource, ValidatedLock};
+use crate::{LockError, LockTarget, LockValidationError, ValidatedLock};
 
 /// The result of running a lock operation.
 #[derive(Debug, Clone)]
@@ -75,8 +75,6 @@ pub enum LockMode<'env> {
     DryRun(&'env Interpreter),
     /// Error if the lockfile is not up-to-date with the project requirements.
     Locked(&'env Interpreter, LockedSource),
-    /// Use the existing lockfile without performing a resolution.
-    Frozen(MissingLockfileSource),
 }
 
 /// A lock operation.
@@ -159,15 +157,9 @@ impl<'env> LockOperation<'env> {
 
     /// Perform a [`LockOperation`].
     pub async fn execute(self, target: LockTarget<'_>) -> Result<LockResult, LockError> {
-        if !matches!(&self.mode, LockMode::Frozen(_)) {
-            target.validate_upgrade_groups(&self.settings.upgrade)?;
-        }
+        target.validate_upgrade_groups(&self.settings.upgrade)?;
 
         match self.mode {
-            LockMode::Frozen(source) => {
-                // Read the existing lockfile, but don't attempt to lock the project.
-                Ok(LockResult::Unchanged(target.read_frozen(source).await?))
-            }
             LockMode::Locked(interpreter, lock_source) => {
                 // Read the existing lockfile.
                 let lock_filename = target.lock_filename();
@@ -676,7 +668,7 @@ async fn do_lock(
     // explicit unlocked upgrade releases the selected packages' hashes.
     let hash_upgrade = match mode {
         LockMode::Locked(..) => &Upgrade::default(),
-        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Frozen(_) => upgrade,
+        LockMode::Write(_) | LockMode::DryRun(_) => upgrade,
     };
     let resolution_hasher = if hash_upgrade.is_none() {
         locked_hasher.clone()
@@ -699,7 +691,7 @@ async fn do_lock(
     // Explicit build constraints apply even when fresh resolution can replace lockfile hashes.
     let resolution_build_hasher = match mode {
         LockMode::Locked(..) => locked_hasher.with_constraint_hashes(&build_hasher)?,
-        LockMode::Write(_) | LockMode::DryRun(_) | LockMode::Frozen(_) => build_hasher,
+        LockMode::Write(_) | LockMode::DryRun(_) => build_hasher,
     };
 
     // TODO(charlie): These are all default values. We should consider whether we want to make them
