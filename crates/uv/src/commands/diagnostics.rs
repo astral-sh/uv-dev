@@ -83,10 +83,62 @@ mod tests {
 
     use uv_lock_operations::LockError;
     use uv_project_commands::ProjectError;
+    use uv_pypi_types::ResolutionMetadata;
     use uv_settings::{LockedFlag, LockedSource};
     use uv_workspace::pyproject::{PyprojectTomlError, SourceError};
 
     use super::hints_for_error;
+
+    #[test]
+    fn collects_metadata_hints_through_anyhow_operations_errors() {
+        let metadata_error = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.2\nName: example\nVersion: 1.0.0\nRequires-Dist: dependency @ ./scripts/path\n",
+        )
+        .expect_err("relative paths are invalid in package metadata");
+        let err = anyhow::Error::new(uv_distribution::Error::Metadata(metadata_error));
+        let err = anyhow::Error::new(uv_resolve_operations::Error::Anyhow(err));
+
+        let hints = hints_for_error(&err);
+        assert_debug_snapshot!(hints.iter().collect::<Vec<_>>(), @r#"
+        [
+            "Relative paths are not supported in package metadata. Use an absolute `file://` URL or define a local project dependency in `[tool.uv.sources]`.",
+        ]
+        "#);
+    }
+
+    #[test]
+    fn collects_pkg_info_hints_through_anyhow_operations_errors() {
+        let metadata_error = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.2\nName: example\nVersion: 1.0.0\nRequires-Dist: dependency @ ./scripts/path\n",
+        )
+        .expect_err("relative paths are invalid in package metadata");
+        let err = anyhow::Error::new(uv_distribution::Error::PkgInfo(metadata_error));
+        let err = anyhow::Error::new(uv_resolve_operations::Error::Anyhow(err));
+
+        let hints = hints_for_error(&err);
+        assert_debug_snapshot!(hints.iter().collect::<Vec<_>>(), @r#"
+        [
+            "Relative paths are not supported in package metadata. Use an absolute `file://` URL or define a local project dependency in `[tool.uv.sources]`.",
+        ]
+        "#);
+    }
+
+    #[test]
+    fn collects_pyproject_metadata_hints_through_anyhow_operations_errors() {
+        let metadata_error = ResolutionMetadata::parse_metadata(
+            b"Metadata-Version: 2.2\nName: example\nVersion: 1.0.0\nRequires-Dist: dependency @ ./scripts/path\n",
+        )
+        .expect_err("relative paths are invalid in package metadata");
+        let err = anyhow::Error::new(uv_distribution::Error::PyprojectToml(metadata_error));
+        let err = anyhow::Error::new(uv_resolve_operations::Error::Anyhow(err));
+
+        let hints = hints_for_error(&err);
+        assert_debug_snapshot!(hints.iter().collect::<Vec<_>>(), @r#"
+        [
+            "Relative paths are not supported in package metadata. Use an absolute `file://` URL or define a local project dependency in `[tool.uv.sources]`.",
+        ]
+        "#);
+    }
 
     #[test]
     fn collects_source_hints_through_pyproject_errors() {
