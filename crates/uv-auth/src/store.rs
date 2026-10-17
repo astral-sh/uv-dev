@@ -250,7 +250,7 @@ impl TextCredentialStore {
             return Ok(dir);
         }
 
-        Ok(StateStore::from_settings(None)?.bucket(StateBucket::Credentials))
+        Ok(StateStore::from_settings(None).bucket(StateBucket::Credentials))
     }
 
     /// Return the standard file path for storing credentials.
