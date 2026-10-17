@@ -1,0 +1,30 @@
+name = "alternative-dependencies-only-no-build"
+description = "Alternative parent releases require different dependency ranges, but all matching releases must be built from source."
+
+[root]
+requires = ["parent"]
+
+[expected]
+satisfiable = false
+explanation = "Distinct dependency ranges and the actionable no-build hint should remain visible without enumerating unavailable releases."
+
+[packages.parent.versions."1.0.0"]
+requires = ["dependency>=1,<2"]
+
+[packages.parent.versions."2.0.0"]
+requires = ["dependency>=2,<3"]
+
+[packages.dependency.versions."1.0.0"]
+wheel = false
+
+[packages.dependency.versions."1.5.0"]
+wheel = false
+
+[packages.dependency.versions."2.0.0"]
+wheel = false
+
+[packages.dependency.versions."2.5.0"]
+wheel = false
+
+[resolver_options]
+no_build = ["dependency"]

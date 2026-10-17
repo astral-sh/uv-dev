@@ -1,0 +1,29 @@
+name = "alternative-dependencies-yanked-with-available-gap"
+description = "Alternative dependency ranges only contain yanked releases, but an unyanked release exists between the ranges."
+
+[root]
+requires = ["parent"]
+
+[expected]
+satisfiable = false
+explanation = "An available version between incompatible dependency ranges must not be described as yanked."
+
+[packages.parent.versions."1.0.0"]
+requires = ["dependency>=1,<2"]
+
+[packages.parent.versions."2.0.0"]
+requires = ["dependency>=3,<4"]
+
+[packages.dependency.versions."1.0.0"]
+yanked = true
+
+[packages.dependency.versions."1.5.0"]
+yanked = true
+
+[packages.dependency.versions."2.5.0"]
+
+[packages.dependency.versions."3.0.0"]
+yanked = true
+
+[packages.dependency.versions."3.5.0"]
+yanked = true
