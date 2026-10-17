@@ -2292,10 +2292,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
                 .git()
                 .github_fast_path(
                     resource.git,
-                    client
-                        .unmanaged
-                        .uncached_client(resource.git.url())
-                        .raw_client(),
+                    client.unmanaged.uncached_client(resource.git.url()),
                 )
                 .await
             {
@@ -2594,10 +2591,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
         if let Some(precise) = self
             .build_context
             .git()
-            .github_fast_path(
-                git,
-                client.unmanaged.uncached_client(git.url()).raw_client(),
-            )
+            .github_fast_path(git, client.unmanaged.uncached_client(git.url()))
             .await?
         {
             debug!("Resolved to precise commit via GitHub fast path: {source}");
@@ -2659,7 +2653,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .managed(async |client| {
                 let response = client
                     .uncached_client(git.url())
-                    .get(url.clone())
+                    .get(url.clone().into_unsafe_url())
                     .send()
                     .await?;
 
@@ -3220,7 +3214,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
     fn request(url: SafeUrl, client: &RegistryClient) -> Result<reqwest::Request, reqwest::Error> {
         client
             .uncached_client(&url)
-            .get(url)
+            .get(url.into_unsafe_url())
             .header(
                 // `reqwest` defaults to accepting compressed responses.
                 // Specify identity encoding to get consistent .whl downloading

@@ -1117,7 +1117,7 @@ async fn read_url_to_string(
 ) -> Result<String, RequirementsTxtParserError> {
     let response = client
         .for_host(url)
-        .get(url.clone())
+        .get(url.clone().into_unsafe_url())
         .send()
         .await
         .map_err(|err| RequirementsTxtParserError::from_reqwest_middleware(url.clone(), err))?;

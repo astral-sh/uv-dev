@@ -398,7 +398,7 @@ async fn fetch_downloads_from_url(
     let request = client
         .uncached()
         .for_host(url)
-        .get(url.clone())
+        .get(url.clone().into_unsafe_url())
         .build()
         .map_err(|err| Error::NetworkError(url.clone(), WrappedReqwestError::from(err)))?;
 
@@ -1153,7 +1153,7 @@ async fn read_url(
         let start = Instant::now();
         let response = client
             .for_host(url)
-            .get(url.clone())
+            .get(url.clone().into_unsafe_url())
             .send()
             .await
             .map_err(|err| Error::from_reqwest_middleware(url.clone(), err))?;

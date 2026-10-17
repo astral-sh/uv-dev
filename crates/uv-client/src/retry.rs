@@ -6,7 +6,7 @@ use http::status::StatusCode;
 use http::{Extensions, Method};
 use itertools::Itertools;
 use reqwest::{Request, Response};
-use reqwest_middleware::{Middleware, Next};
+use reqwest_middleware::{Middleware, Next, RequestBuilder};
 use reqwest_retry::policies::ExponentialBackoff;
 use reqwest_retry::{
     RetryPolicy, RetryTransientMiddleware, Retryable, RetryableStrategy, default_on_request_error,
@@ -17,7 +17,7 @@ use tracing::{debug, trace};
 
 use uv_redacted::SafeUrl;
 
-use crate::{RequestBuilder, WrappedReqwestError};
+use crate::WrappedReqwestError;
 
 /// Passes the request method to the retry strategy.
 pub(crate) struct UvRetryMiddleware(pub(crate) ExponentialBackoff);
@@ -111,10 +111,7 @@ impl RetryState {
     }
 
     /// Send a request and count any retries performed by the middleware.
-    pub async fn send(
-        &mut self,
-        request: RequestBuilder<'_>,
-    ) -> reqwest_middleware::Result<Response> {
+    pub async fn send(&mut self, request: RequestBuilder) -> reqwest_middleware::Result<Response> {
         let result = request.send().await;
         self.record_request_retries(result.as_ref());
         result
