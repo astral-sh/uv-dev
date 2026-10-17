@@ -49,6 +49,12 @@ Then, the command can be run from a console:
 $ uv run hello
 ```
 
+The values in `[project.scripts]` are
+[Python function references](https://packaging.python.org/en/latest/specifications/entry-points/#use-for-scripts),
+not shell commands. Installing the project creates an executable that calls the referenced function;
+this table does not define task aliases. To invoke an existing tool or command in the project
+environment, use [`uv run`](./run.md), e.g., `uv run pytest` if `pytest` is a project dependency.
+
 ### Graphical user interfaces
 
 Projects may define graphical user interfaces (GUIs) for the project in the `[project.gui-scripts]`
