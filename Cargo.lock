@@ -8017,6 +8017,7 @@ dependencies = [
 name = "uv-tool-commands"
 version = "0.0.93"
 dependencies = [
+ "anstream",
  "anyhow",
  "console",
  "fs-err",

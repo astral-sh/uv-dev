@@ -15,6 +15,9 @@ mod tool_install;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tool_list;
 
+#[cfg(feature = "test-python")]
+mod tool_list_metadata;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tool_run;
 
