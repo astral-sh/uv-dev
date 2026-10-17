@@ -6,26 +6,27 @@
 #
 # It can take a while to download all the artifacts.
 #
-# Requires `gh` and `jq`.
+# Requires `gh`, `jq`, and Python 3.
+# RUN_ID selects the completed release run. An optional COMMIT must match its source.
 
 set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-
-if [ -z "${COMMIT:-}" ]; then
-    echo "COMMIT is required."
-    exit 1
-fi
 
 if [ -z "${RUN_ID:-}" ]; then
     echo "RUN_ID is required."
     exit 1
 fi
 
+REPO=$(gh repo view --json nameWithOwner | jq .nameWithOwner -r)
+identity_args=(--repository "$REPO" --run-id "$RUN_ID")
+if [ -n "${COMMIT:-}" ]; then
+    identity_args+=(--commit "$COMMIT")
+fi
+COMMIT=$(python3 "$SCRIPT_DIR/check-release-identity.py" "${identity_args[@]}")
+
 # Create directory for artifacts
 mkdir -p "release_$RUN_ID"
 cd "release_$RUN_ID"
-
-REPO=$(gh repo view --json nameWithOwner | jq .nameWithOwner -r)
 
 # Find the publication artifacts across all attempts of this run.
 gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" |
@@ -85,4 +86,6 @@ if [ "$PRERELEASE" = "true" ]; then
     release_args+=(--prerelease)
 fi
 
+python3 "$SCRIPT_DIR/check-release-identity.py" \
+    --repository "$REPO" --commit "$COMMIT" --tag "$TAG" >/dev/null
 gh release create "${release_args[@]}" "${assets[@]}"
