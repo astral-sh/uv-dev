@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use console::Term;
 use owo_colors::OwoColorize;
 use tracing::{debug, info, trace};
-use uv_auth::{Credentials, CredentialsPrompt, CredentialsPromptError};
+use uv_auth::{ArtifactRegistryProvider, Credentials, CredentialsPrompt, CredentialsPromptError};
 use uv_cache::Cache;
 use uv_client::{
     AuthIntegration, BaseClient, BaseClientBuilder, RedirectPolicy, RegistryClientBuilder,
@@ -88,6 +88,8 @@ pub async fn publish(
     } else {
         (publish_url, check_url)
     };
+
+    let client_builder = client_builder.clone().index_locations(&index_locations)?;
 
     let distributions = PublishSession::prepare(paths, no_attestations)?;
     match distributions.len() {
@@ -302,6 +304,20 @@ async fn publish_file(
     Ok(())
 }
 
+/// Skip automatic trusted publishing for registries with their own built-in authentication.
+fn trusted_publishing_for_registry(
+    publish_url: &DisplaySafeUrl,
+    trusted_publishing: TrustedPublishing,
+) -> TrustedPublishing {
+    if ArtifactRegistryProvider::is_artifact_registry(publish_url)
+        && matches!(trusted_publishing, TrustedPublishing::Automatic)
+    {
+        TrustedPublishing::Never
+    } else {
+        trusted_publishing
+    }
+}
+
 /// The publish URL and credentials, with any ignored trusted publishing error.
 struct GatheredCredentials {
     publish_url: SafeUrl,
@@ -312,8 +328,8 @@ struct GatheredCredentials {
 impl GatheredCredentials {
     /// Unify the different possible sources for username and password information.
     ///
-    /// Possible credential sources are environment variables, the CLI, the URL, the keyring, or trusted
-    /// publishing.
+    /// Possible credential sources are environment variables, the CLI, the URL, the keyring, trusted
+    /// publishing, or a built-in provider.
     ///
     /// The username can come from, in order:
     ///
@@ -372,7 +388,7 @@ impl GatheredCredentials {
             username.as_deref(),
             password.as_deref(),
             keyring_provider,
-            trusted_publishing,
+            trusted_publishing_for_registry(&publish_url, trusted_publishing),
             &publish_url,
             oidc_client,
         )
@@ -559,6 +575,32 @@ mod tests {
         assert_snapshot!(
             err.to_string(),
             @"The password can't be set both in the publish URL and in the CLI"
+        );
+    }
+
+    #[test]
+    fn artifact_registry_skips_automatic_trusted_publishing() {
+        let artifact_registry =
+            DisplaySafeUrl::from_str("https://us-central1-python.pkg.dev/project/index").unwrap();
+        let other_google_registry =
+            DisplaySafeUrl::from_str("https://us-central1-docker.pkg.dev/project/image").unwrap();
+        let other_registry = DisplaySafeUrl::from_str("https://example.com").unwrap();
+
+        assert_eq!(
+            trusted_publishing_for_registry(&artifact_registry, TrustedPublishing::Automatic),
+            TrustedPublishing::Never
+        );
+        assert_eq!(
+            trusted_publishing_for_registry(&artifact_registry, TrustedPublishing::Always),
+            TrustedPublishing::Always
+        );
+        assert_eq!(
+            trusted_publishing_for_registry(&other_google_registry, TrustedPublishing::Automatic),
+            TrustedPublishing::Automatic
+        );
+        assert_eq!(
+            trusted_publishing_for_registry(&other_registry, TrustedPublishing::Automatic),
+            TrustedPublishing::Automatic
         );
     }
 }
