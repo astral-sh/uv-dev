@@ -706,11 +706,7 @@ async fn execute_plan(
             tags,
             hasher,
             build_options,
-            DistributionDatabase::new(
-                client,
-                build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            ),
+            DistributionDatabase::new(client, build_dispatch, concurrency),
         )
         .with_reporter(Arc::new(
             PrepareReporter::from(printer).with_length(remote.len() as u64),

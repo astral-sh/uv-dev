@@ -398,12 +398,8 @@ impl BuildContext for BuildDispatch<'_> {
             &modifiers,
             &hasher,
             &self.shared_state.index,
-            DistributionDatabase::new(
-                self.client,
-                self,
-                self.concurrency.downloads_semaphore.clone(),
-            )
-            .with_build_stack(build_stack),
+            DistributionDatabase::new(self.client, self, &self.concurrency)
+                .with_build_stack(build_stack),
         )
         .resolve(&resolver_env)
         .await?;
@@ -431,12 +427,8 @@ impl BuildContext for BuildDispatch<'_> {
             &hasher,
             self,
             EmptyInstalledPackages,
-            DistributionDatabase::new(
-                self.client,
-                self,
-                self.concurrency.downloads_semaphore.clone(),
-            )
-            .with_build_stack(build_stack),
+            DistributionDatabase::new(self.client, self, &self.concurrency)
+                .with_build_stack(build_stack),
         )?;
         let resolution = Resolution::from(resolver.resolve().await.map_err(|source| {
             BuildDispatchError::ResolveRequirements {
@@ -524,12 +516,8 @@ impl BuildContext for BuildDispatch<'_> {
                 tags,
                 hasher,
                 self.build_options,
-                DistributionDatabase::new(
-                    self.client,
-                    self,
-                    self.concurrency.downloads_semaphore.clone(),
-                )
-                .with_build_stack(build_stack),
+                DistributionDatabase::new(self.client, self, &self.concurrency)
+                    .with_build_stack(build_stack),
             );
 
             debug!(

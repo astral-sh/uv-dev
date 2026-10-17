@@ -24,6 +24,8 @@ pub struct Concurrency {
     ///
     /// Note this value must be non-zero.
     pub cache_reads: usize,
+    /// A global semaphore to limit metadata operations before they open cache locks.
+    pub metadata_semaphore: Arc<Semaphore>,
     /// A global semaphore to limit the number of concurrent downloads.
     pub downloads_semaphore: Arc<Semaphore>,
     /// A global semaphore to limit the number of concurrent builds.
@@ -68,6 +70,7 @@ impl Concurrency {
             builds,
             installs,
             cache_reads,
+            metadata_semaphore: Arc::new(Semaphore::new(downloads)),
             downloads_semaphore: Arc::new(Semaphore::new(downloads)),
             builds_semaphore: Arc::new(Semaphore::new(builds)),
         }
