@@ -24,7 +24,7 @@ pub enum MetadataResponse {
 /// Non-fatal metadata fetching error.
 ///
 /// This is also the unavailability reasons for a package, while version unavailability is separate
-/// in [`UnavailableVersion`].
+/// in `UnavailableVersion`.
 #[derive(Debug, Clone)]
 pub enum MetadataUnavailable {
     /// The wheel metadata was not found in the cache and the network is not available.
