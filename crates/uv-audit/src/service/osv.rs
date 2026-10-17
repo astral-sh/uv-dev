@@ -289,40 +289,27 @@ impl Osv {
 
         loop {
             let mut next_pending = Vec::new();
-            for pending_batch in pending.chunks(OSV_QUERY_BATCH_SIZE) {
-                let request = QueryBatchRequest {
-                    queries: pending_batch
-                        .iter()
-                        .map(|(dep, page_token)| QueryRequest {
-                            package: Package {
-                                name: dep.name().to_string(),
-                                ecosystem: "PyPI".to_string(),
-                            },
-                            version: dep.version().to_string(),
-                            page_token: page_token.clone(),
-                        })
-                        .collect(),
-                };
-
-                // NOTE: we need `uncached` here to access the underlying
-                // client for our POST request.
-                let batch_response: QueryBatchResponse = self
-                    .client
-                    .uncached()
-                    .for_host(&url)
-                    .raw_client()
-                    .post(url.as_str())
-                    .json(&request)
-                    .send()
-                    .await?
-                    .error_for_status()
-                    .map_err(reqwest_middleware::Error::Reqwest)?
-                    .json()
-                    .await
-                    .map_err(reqwest_middleware::Error::Reqwest)?;
-
+            let batches = (0..pending.len())
+                .step_by(OSV_QUERY_BATCH_SIZE)
+                .map(|start| start..(start + OSV_QUERY_BATCH_SIZE).min(pending.len()));
+            let mut responses = futures::stream::iter(batches)
+                .map(|range| {
+                    let pending = &pending;
+                    let url = &url;
+                    async move {
+                        let response = self.query_page(url, &pending[range.clone()]).await?;
+                        Ok::<_, Error>((range, response))
+                    }
+                })
+                .buffer_unordered(self.concurrency.downloads)
+                .try_collect::<Vec<_>>()
+                .await?;
+            // A slow response must not hold an available request slot. Apply the completed
+            // batches in input order so findings and the next pagination round are deterministic.
+            responses.sort_unstable_by_key(|(range, _)| range.start);
+            for (range, batch_response) in responses {
                 for ((dep, _), batch_result) in
-                    pending_batch.iter().zip(batch_response.results.iter())
+                    pending[range].iter().zip(batch_response.results.iter())
                 {
                     let ids = result_map.entry(dep).or_default();
                     ids.extend(
@@ -345,6 +332,47 @@ impl Osv {
         }
 
         Ok(result_map)
+    }
+
+    async fn query_page(
+        &self,
+        url: &SafeUrl,
+        pending: &[(&types::Dependency, Option<String>)],
+    ) -> Result<QueryBatchResponse, Error> {
+        let request = QueryBatchRequest {
+            queries: pending
+                .iter()
+                .map(|(dependency, page_token)| QueryRequest {
+                    package: Package {
+                        name: dependency.name().to_string(),
+                        ecosystem: "PyPI".to_string(),
+                    },
+                    version: dependency.version().to_string(),
+                    page_token: page_token.clone(),
+                })
+                .collect(),
+        };
+        let _permit = self
+            .concurrency
+            .downloads_semaphore
+            .acquire()
+            .await
+            .expect("Semaphore is open");
+        // Batch queries are POST requests and use the underlying uncached client.
+        Ok(self
+            .client
+            .uncached()
+            .for_host(url)
+            .raw_client()
+            .post(url.as_str())
+            .json(&request)
+            .send()
+            .await?
+            .error_for_status()
+            .map_err(reqwest_middleware::Error::Reqwest)?
+            .json()
+            .await
+            .map_err(reqwest_middleware::Error::Reqwest)?)
     }
 
     /// Query OSV for vulnerabilities affecting the given dependencies, returning full vulnerability records.
@@ -514,7 +542,9 @@ impl Osv {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::str::FromStr;
+    use std::time::Duration;
 
     use serde_json::json;
     use uv_cache::Cache;
@@ -538,6 +568,23 @@ mod tests {
                 .build()
                 .expect("Failed to build test client"),
         )
+    }
+
+    async fn wait_for_requests(server: &MockServer, count: usize, timeout: Duration) {
+        tokio::time::timeout(timeout, async {
+            loop {
+                let requests = server
+                    .received_requests()
+                    .await
+                    .expect("requests should be recorded");
+                if requests.len() >= count {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("expected requests should arrive");
     }
 
     #[test]
@@ -732,6 +779,90 @@ mod tests {
             batch_sizes,
             [1, 1, OSV_QUERY_BATCH_SIZE, OSV_QUERY_BATCH_SIZE]
         );
+    }
+
+    /// Independent OSV batches share the download limit and refill a completed request slot.
+    #[tokio::test]
+    async fn test_query_identifiers_refills_download_slots() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/querybatch"))
+            .respond_with(|request: &Request| {
+                let body = serde_json::from_slice::<serde_json::Value>(&request.body)
+                    .expect("request body should be valid JSON");
+                let queries = body
+                    .get("queries")
+                    .and_then(serde_json::Value::as_array)
+                    .expect("request body should contain a query array");
+                let first = queries[0]["package"]["name"]
+                    .as_str()
+                    .expect("query should contain a package name");
+                let delay = match first {
+                    "package-0" => Duration::from_secs(3),
+                    "package-1000" => Duration::from_millis(100),
+                    _ => Duration::ZERO,
+                };
+                ResponseTemplate::new(200)
+                    .set_delay(delay)
+                    .set_body_json(json!({
+                        "results": vec![json!({ "vulns": [] }); queries.len()]
+                    }))
+            })
+            .mount(&server)
+            .await;
+
+        let concurrency = Concurrency::new(2, 1, 1, 1);
+        let reserved = concurrency
+            .downloads_semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("download semaphore should be open");
+        let osv = Osv::new(
+            test_client(),
+            Some(SafeUrl::parse(&server.uri()).expect("server URL should be valid")),
+            concurrency,
+            Cache::temp().expect("temporary cache should be available"),
+        );
+        let query = tokio::spawn(async move {
+            let dependencies = (0..=2 * OSV_QUERY_BATCH_SIZE)
+                .map(|index| {
+                    Dependency::new(
+                        PackageName::from_str(&format!("package-{index}"))
+                            .expect("package name should be valid"),
+                        Version::from_str("1.0").expect("version should be valid"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let identifiers = osv
+                .query_identifiers(&dependencies, Filter::All)
+                .await
+                .expect("query should succeed");
+            assert_eq!(
+                identifiers.keys().copied().collect::<Vec<_>>(),
+                dependencies.iter().collect::<Vec<_>>()
+            );
+            assert!(identifiers.values().all(HashSet::is_empty));
+        });
+
+        wait_for_requests(&server, 1, Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("requests should be recorded")
+                .len(),
+            1
+        );
+        drop(reserved);
+        wait_for_requests(&server, 2, Duration::from_secs(3)).await;
+        wait_for_requests(&server, 3, Duration::from_secs(1)).await;
+        tokio::time::timeout(Duration::from_secs(5), query)
+            .await
+            .expect("query should complete")
+            .expect("query task should succeed");
     }
 
     /// Ensure that `query_batch` returns the correct findings for a batch of dependencies
