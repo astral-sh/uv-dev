@@ -1,10 +1,21 @@
+#[cfg(unix)]
+use std::time::Duration;
+
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
+#[cfg(unix)]
+use insta::assert_snapshot;
+#[cfg(unix)]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(unix)]
+use tokio::time::timeout;
 
 use uv_static::EnvVars;
 
+#[cfg(unix)]
+use super::cache_clean::start_build_backend;
 use uv_test::uv_snapshot;
 
 /// `cache prune` should be a no-op if there's nothing out-of-date in the cache.
@@ -600,5 +611,46 @@ fn prune_temporary_build_environment() -> Result<()> {
 
     assert!(!builds.exists());
 
+    Ok(())
+}
+
+/// Pruning can remove a build environment still used by a backend that outlives uv.
+#[cfg(unix)]
+#[tokio::test]
+async fn prune_live_build_environment_after_parent_exit() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_counts()
+        .with_filtered_sizes_and_units()
+        .with_filter((
+            r"\[CACHE_DIR\](\\|\/)(.*?)(\\|\/).*",
+            "[CACHE_DIR]/$2/[ENTRY]",
+        ));
+
+    let (mut child, mut backend) = start_build_backend(&context).await?;
+    child.kill().await?;
+
+    uv_snapshot!(context.filters(), context.prune().arg("--verbose").env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
+    DEBUG uv [VERSION] ([COMMIT] DATE)
+    Pruning cache at: [CACHE_DIR]/
+    DEBUG Removing temporary build environment: [CACHE_DIR]/builds-v0/[ENTRY]
+    Removed [N] files ([SIZE])
+    ");
+
+    backend.write_all(b"R").await?;
+    let mut observations = String::new();
+    timeout(
+        Duration::from_secs(30),
+        backend.read_to_string(&mut observations),
+    )
+    .await??;
+    // Pruning also breaks a backend that outlives uv: astral-sh/uv#22338.
+    assert_snapshot!(observations, @"
+    environment exists: False
+    write: FileNotFoundError
+    import: ModuleNotFoundError
+    ");
     Ok(())
 }
