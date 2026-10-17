@@ -1,5 +1,6 @@
 # Analyze newly opened issues and persist their triage context.
-name: "issue-triage"
+name: Triage
+run-name: "Triage issue ${{ inputs.issue || github.event.issue.number }}"
 
 on:
   issues:
@@ -18,6 +19,7 @@ env:
 
 jobs:
   initialize-context:
+    name: initialize context
     if: github.repository == 'astral-sh/uv'
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-4' || 'ubuntu-latest' }}
     environment: automations
@@ -245,6 +247,7 @@ jobs:
           GH_TOKEN: ${{ steps.token.outputs.token }}
 
   reproduce-bug:
+    name: reproduce
     needs: [triage, context]
     if: >-
       needs.triage.outputs.result != '' &&
@@ -264,6 +267,7 @@ jobs:
     secrets: inherit
 
   fix-bug:
+    name: fix
     needs:
       - triage
       - reproduce-bug

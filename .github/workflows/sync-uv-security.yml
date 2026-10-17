@@ -1,4 +1,5 @@
-name: Sync uv-security
+name: Sync
+run-name: Sync uv-security
 
 on:
   push:
@@ -16,7 +17,7 @@ env:
 
 jobs:
   sync:
-    name: Sync uv-security
+    name: uv-security
     if: github.repository == 'astral-sh/uv' && github.ref == 'refs/heads/main'
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     environment: automations

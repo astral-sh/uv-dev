@@ -1,4 +1,4 @@
-name: Rebase conflicted pull request
+name: Rebase
 
 on:
   workflow_call:
@@ -30,7 +30,7 @@ env:
 
 jobs:
   rebase:
-    name: "Rebase pull request #${{ inputs.number }}"
+    name: rebase
     runs-on: depot-ubuntu-24.04-4
     environment: automations
     timeout-minutes: 30
@@ -158,7 +158,7 @@ jobs:
           retention-days: 1
 
   push:
-    name: "Push rebased pull request #${{ inputs.number }}"
+    name: push
     needs: rebase
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     environment: automations

@@ -1,5 +1,6 @@
 # Incorporate useful issue comments into their existing maintainer context.
-name: "update-issue-context"
+name: Update issue context
+run-name: "Update issue context #${{ github.event.issue.number }}"
 
 on:
   issue_comment:

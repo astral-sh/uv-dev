@@ -1,5 +1,6 @@
 # Diagnose trusted workflow failures and report actionable problems without creating duplicates.
-name: "Diagnose workflow failure"
+name: Diagnose
+run-name: "Diagnose workflow run ${{ inputs.run }}"
 
 on:
   workflow_dispatch:
