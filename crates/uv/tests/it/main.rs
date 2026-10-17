@@ -14,6 +14,9 @@ mod branching_urls;
 ))]
 mod ecosystem;
 
+#[cfg(feature = "test-git")]
+mod git;
+
 mod help;
 
 mod network;
