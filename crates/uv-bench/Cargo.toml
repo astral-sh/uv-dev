@@ -39,6 +39,11 @@ path = "benches/uv_pypi_types.rs"
 harness = false
 
 [[bench]]
+name = "dependency_metadata"
+path = "benches/dependency_metadata.rs"
+harness = false
+
+[[bench]]
 name = "uv_python"
 path = "benches/uv_python.rs"
 harness = false
@@ -73,6 +78,7 @@ uv-extract = { workspace = true }
 uv-git = { workspace = true }
 uv-git-types = { workspace = true }
 uv-install-wheel = { workspace = true }
+uv-normalize = { workspace = true }
 uv-pep440 = { workspace = true }
 uv-pep508 = { workspace = true }
 uv-performance-memory-allocator = { workspace = true }
