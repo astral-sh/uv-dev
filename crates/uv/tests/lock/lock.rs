@@ -22645,7 +22645,7 @@ fn lock_metadata_free_root_extra_project_conflicting_workspace_extra() -> Result
         .arg("--locked")
         .arg("--offline")
         .arg("--no-cache")
-        .env("RUST_LOG", "uv_lock_operations::validated_lock=debug"), @"
+        .env("RUST_LOG", "uv_project::lock=debug"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Existing `uv.lock` satisfies workspace requirements
@@ -22726,7 +22726,7 @@ fn lock_metadata_free_nested_group_conditional_registry_constraint() -> Result<(
         .arg("--no-cache")
         .arg("--index-url")
         .arg(server.index_url())
-        .env("RUST_LOG", "uv_lock_operations::validated_lock=debug"), @"
+        .env("RUST_LOG", "uv_project::lock=debug"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Existing `uv.lock` satisfies workspace requirements
@@ -31634,7 +31634,7 @@ async fn lock_keyring_credentials_always_authenticate_unsupported_mode() -> Resu
         .assert()
         .success();
 
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -31674,7 +31674,7 @@ async fn lock_keyring_credentials_always_authenticate_unsupported_mode() -> Resu
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_multiple_sources() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(

@@ -20,26 +20,10 @@ mod discovery;
 mod installation;
 #[cfg(windows)]
 mod microsoft_store;
-mod project;
-mod reporter;
-mod script;
-mod selection_error;
 mod version_files;
 mod virtualenv_discovery;
 #[cfg(windows)]
 mod windows_registry;
-
-pub use project::{
-    CompatibleProjectPython, ProjectPythonRequest, ProjectPythonRequirement, PythonRequestSource,
-    PythonRequirementConflicts, PythonRequirementSource, find_requires_python,
-    format_requires_python_sources,
-};
-pub use reporter::{PythonDownloadReporter, report_interpreter};
-pub use script::{
-    EnvironmentIncompatibilityError, EnvironmentKind, ScriptInterpreter,
-    check_environment_compatibility, init_script_python_requirement,
-};
-pub use selection_error::PythonSelectionError;
 
 #[cfg(not(test))]
 fn current_dir() -> Result<std::path::PathBuf, std::io::Error> {
