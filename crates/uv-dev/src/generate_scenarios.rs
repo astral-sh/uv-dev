@@ -537,22 +537,7 @@ fn render_lock_case(output: &mut String, case: &ScenarioCase) -> Result<()> {
     if let Some(requires_python) = &case.scenario.root.requires_python {
         writeln!(output, "        requires-python = \"{requires_python}\"").unwrap();
     }
-    if !case
-        .scenario
-        .resolver_options
-        .required_environments
-        .is_empty()
-    {
-        output.push_str("        [tool.uv]\n");
-        output.push_str("        required-environments = [\n");
-        for environment in &case.scenario.resolver_options.required_environments {
-            let environment = environment
-                .contents()
-                .context("required environment markers should not be empty")?;
-            writeln!(output, "          '''{environment}''',").unwrap();
-        }
-        output.push_str("        ]\n");
-    }
+    render_lock_options(output, &case.scenario)?;
     output.push_str("        \"###\n");
     output.push_str("    )?;\n\n");
     output.push_str("    let filters = context.filters();\n\n");
@@ -589,6 +574,47 @@ fn render_lock_case(output: &mut String, case: &ScenarioCase) -> Result<()> {
     Ok(())
 }
 
+/// Keep lock options in `pyproject.toml` so the initial resolution and the `--locked` check use the
+/// same configuration.
+fn render_lock_options(output: &mut String, scenario: &Scenario) -> Result<()> {
+    let options = &scenario.resolver_options;
+    if options.resolution.is_none()
+        && options.fork_strategy.is_none()
+        && !options.prereleases
+        && options.environments.is_empty()
+        && options.required_environments.is_empty()
+    {
+        return Ok(());
+    }
+
+    output.push_str("        [tool.uv]\n");
+    if let Some(resolution) = options.resolution {
+        writeln!(output, "        resolution = \"{resolution}\"").unwrap();
+    }
+    if let Some(fork_strategy) = options.fork_strategy {
+        writeln!(output, "        fork-strategy = \"{fork_strategy}\"").unwrap();
+    }
+    if options.prereleases {
+        output.push_str("        prerelease = \"allow\"\n");
+    }
+    for (key, environments) in [
+        ("environments", &options.environments),
+        ("required-environments", &options.required_environments),
+    ] {
+        if !environments.is_empty() {
+            writeln!(output, "        {key} = [").unwrap();
+            for environment in environments {
+                let environment = environment
+                    .contents()
+                    .with_context(|| format!("{key} markers should not be empty"))?;
+                writeln!(output, "          '''{environment}''',").unwrap();
+            }
+            output.push_str("        ]\n");
+        }
+    }
+    Ok(())
+}
+
 #[derive(Copy, Clone)]
 enum ScenarioCommand {
     Install,
@@ -600,8 +626,17 @@ fn render_resolver_args(
     scenario: &Scenario,
     command: ScenarioCommand,
 ) -> Result<()> {
+    if !scenario.resolver_options.environments.is_empty() {
+        bail!(
+            "scenario `{}` configures `environments`, which requires the lock template",
+            scenario.name,
+        );
+    }
     if let Some(resolution) = scenario.resolver_options.resolution {
         writeln!(output, "        .arg(\"--resolution={resolution}\")").unwrap();
+    }
+    if let Some(fork_strategy) = scenario.resolver_options.fork_strategy {
+        writeln!(output, "        .arg(\"--fork-strategy={fork_strategy}\")").unwrap();
     }
     if scenario.resolver_options.prereleases {
         output.push_str("        .arg(\"--prerelease=allow\")\n");
@@ -930,8 +965,9 @@ fn requirement_specifiers(requirement: &Requirement) -> Option<&uv_pep440::Versi
 #[cfg(test)]
 mod tests {
     use super::{
-        TemplateKind, check_generated_file, compile_requirements, load_scenarios,
-        load_scenarios_from, module_name, render, scenarios_for_template,
+        ScenarioCommand, TemplateKind, check_generated_file, compile_requirements, load_scenarios,
+        load_scenarios_from, module_name, render, render_lock_options, render_resolver_args,
+        scenarios_for_template,
     };
 
     #[test]
@@ -942,6 +978,75 @@ mod tests {
         ];
 
         assert_eq!(compile_requirements(&requirements), "a==1.0.0\nb>=2.0.0");
+    }
+
+    #[test]
+    fn lock_options_are_persisted() {
+        let temporary_directory =
+            tempfile::tempdir().expect("temporary directory should be created");
+        let path = temporary_directory.path().join("lock-options.toml");
+        fs_err::write(
+            &path,
+            r#"
+name = "lock-options"
+
+[root]
+requires = []
+
+[expected]
+satisfiable = true
+
+[resolver_options]
+resolution = "lowest"
+fork_strategy = "fewest"
+prereleases = true
+environments = ["sys_platform == 'win32'"]
+required_environments = ["sys_platform == 'linux'"]
+"#,
+        )
+        .expect("scenario should be written");
+        let scenario = super::Scenario::from_path(&path).expect("scenario should parse");
+        let mut output = String::new();
+        render_lock_options(&mut output, &scenario).expect("lock options should render");
+
+        assert_eq!(
+            output,
+            concat!(
+                "        [tool.uv]\n",
+                "        resolution = \"lowest\"\n",
+                "        fork-strategy = \"fewest\"\n",
+                "        prerelease = \"allow\"\n",
+                "        environments = [\n",
+                "          '''sys_platform == 'win32'''',\n",
+                "        ]\n",
+                "        required-environments = [\n",
+                "          '''sys_platform == 'linux'''',\n",
+                "        ]\n",
+            )
+        );
+    }
+
+    #[test]
+    fn non_lock_fork_options() {
+        let mut scenario = super::Scenario::empty();
+        scenario.resolver_options.fork_strategy = Some(uv_configuration::ForkStrategy::Fewest);
+        for command in [ScenarioCommand::Install, ScenarioCommand::Compile] {
+            let mut output = String::new();
+            render_resolver_args(&mut output, &scenario, command)
+                .expect("fork strategy should render");
+            assert_eq!(output, "        .arg(\"--fork-strategy=fewest\")\n");
+        }
+
+        scenario.resolver_options.environments = vec![
+            "sys_platform == 'win32'"
+                .parse()
+                .expect("valid environment marker"),
+        ];
+        for command in [ScenarioCommand::Install, ScenarioCommand::Compile] {
+            let error = render_resolver_args(&mut String::new(), &scenario, command)
+                .expect_err("environment markers require the lock template");
+            assert!(error.to_string().contains("requires the lock template"));
+        }
     }
 
     #[test]

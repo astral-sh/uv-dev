@@ -1,0 +1,82 @@
+name = "coordinated-agreement-replacement"
+description = '''
+An earlier fork finishes with `switchable==2` and `shared==2`. A delayed sibling
+initially selects `flaky==2`, which requires `shared==1` and `leaf==1`.
+Coordination can therefore replace the earlier parent with `switchable==1`.
+A separate dependency chain eventually requires `leaf==2`, forcing the live
+sibling to backtrack to `flaky==1` and `shared==2`. The earlier fork must then
+replace its `shared==1` agreement with `shared==2`, without retaining the
+incompatibilities learned from the withdrawn agreement or the sibling's
+retracted `shared==1` decision.
+
+The final lock contains `shared==2` in both environments. A resolver trace is
+also needed to distinguish agreement replacement from never coordinating.
+'''
+
+[testgen]
+kind = "lock"
+
+[environment]
+python = "3.12"
+
+[resolver_options]
+universal = true
+fork_strategy = "fewest"
+environments = ["python_version == '3.12'", "python_version == '3.13'"]
+
+[expected]
+satisfiable = true
+
+[root]
+requires_python = ">=3.12,<3.14"
+requires = [
+  "switchable; python_version < '3.13'",
+  "later-entry; python_version >= '3.13'",
+]
+
+[packages.switchable.versions."1.0.0"]
+requires = ["shared==1.0.0"]
+
+[packages.switchable.versions."2.0.0"]
+requires = ["shared==2.0.0"]
+
+[packages.later-entry.versions."1.0.0"]
+requires = ["start-one"]
+
+[packages.start-one.versions."1.0.0"]
+requires = ["start-two"]
+
+[packages.start-two.versions."1.0.0"]
+requires = ["start-three"]
+
+[packages.start-three.versions."1.0.0"]
+requires = ["later-root"]
+
+[packages.later-root.versions."1.0.0"]
+requires = ["flaky>=1.0.0,<=2.0.0", "conflict-one"]
+
+[packages.flaky.versions."1.0.0"]
+requires = ["shared==2.0.0", "leaf==2.0.0"]
+
+[packages.flaky.versions."2.0.0"]
+requires = ["shared==1.0.0", "leaf==1.0.0"]
+
+[packages.conflict-one.versions."1.0.0"]
+requires = ["conflict-two"]
+
+[packages.conflict-two.versions."1.0.0"]
+requires = ["conflict-three"]
+
+[packages.conflict-three.versions."1.0.0"]
+requires = ["conflict-four"]
+
+[packages.conflict-four.versions."1.0.0"]
+requires = ["conflict-five"]
+
+[packages.conflict-five.versions."1.0.0"]
+requires = ["leaf==2.0.0"]
+
+[packages.shared.versions."1.0.0"]
+[packages.shared.versions."2.0.0"]
+[packages.leaf.versions."1.0.0"]
+[packages.leaf.versions."2.0.0"]

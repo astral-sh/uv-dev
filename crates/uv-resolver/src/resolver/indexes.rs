@@ -62,4 +62,17 @@ impl Indexes {
         }
         self.indexes.get(name, env)
     }
+
+    /// Whether the manifest imposes this index throughout the entire universal fork.
+    pub(crate) fn is_fixed(
+        &self,
+        name: &PackageName,
+        env: &ResolverEnvironment,
+        index: &IndexMetadata,
+    ) -> bool {
+        if let Some(recorder) = &self.recorder {
+            recorder.source_policy(name);
+        }
+        self.indexes.is_fixed(name, env, index)
+    }
 }
