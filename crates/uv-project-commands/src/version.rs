@@ -639,7 +639,7 @@ async fn lock_and_sync(
         &groups,
         None,
         install_options,
-        Modifications::Sufficient,
+        Modifications::Sufficient.into(),
         None,
         settings.into(),
         &client_builder,
