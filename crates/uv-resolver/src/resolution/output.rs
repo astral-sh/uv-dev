@@ -70,32 +70,48 @@ pub(crate) fn from_state(
                 package,
                 version: selected.version().clone(),
             };
-            let entry = match inverse.entry(node) {
+            let node = match inverse.entry(node) {
                 Entry::Occupied(entry) => {
-                    node_indices.push(*entry.get());
-                    continue;
+                    let node = *entry.get();
+                    if let ResolutionGraphNode::Dist(distribution) = &mut graph[node] {
+                        for &preference in selected.preferences() {
+                            if let Some((_, preference_marker)) = distribution
+                                .preferences
+                                .iter_mut()
+                                .find(|(id, _)| *id == preference)
+                            {
+                                preference_marker.or(marker);
+                            } else {
+                                distribution.preferences.push((preference, marker));
+                            }
+                        }
+                    }
+                    node
                 }
-                Entry::Vacant(entry) => entry,
+                Entry::Vacant(entry) => {
+                    let package = &entry.key().package;
+                    let package_role = if project == Some(&package.name) {
+                        PackageRole::Project
+                    } else if workspace_members.contains(&package.name) {
+                        PackageRole::WorkspaceMember
+                    } else {
+                        PackageRole::Dependency
+                    };
+                    let node = add_version(
+                        &mut graph,
+                        &mut diagnostics,
+                        preferences,
+                        hasher,
+                        index,
+                        package,
+                        selected,
+                        marker,
+                        package_role,
+                    );
+                    entry.insert(node);
+                    node
+                }
             };
-            let package = &entry.key().package;
-            let package_role = if project == Some(&package.name) {
-                PackageRole::Project
-            } else if workspace_members.contains(&package.name) {
-                PackageRole::WorkspaceMember
-            } else {
-                PackageRole::Dependency
-            };
-            let node = add_version(
-                &mut graph,
-                &mut diagnostics,
-                preferences,
-                hasher,
-                index,
-                package,
-                selected,
-                package_role,
-            );
-            entry.insert(node);
             node_indices.push(node);
         }
 
@@ -125,6 +141,9 @@ pub(crate) fn from_state(
         if let ResolutionGraphNode::Dist(dist) = &mut graph[index] {
             dist.marker = reachability.remove(&index).unwrap_or_default();
             dist.marker.imbibe(conflict_marker);
+            for (_, marker) in &mut dist.preferences {
+                marker.and(dist.marker);
+            }
         }
     }
     for weight in graph.edge_weights_mut() {
@@ -225,6 +244,7 @@ fn add_version(
     in_memory: &InMemoryIndex,
     package: &ResolutionPackage,
     selected: SelectedDistribution,
+    preference_marker: UniversalMarker,
     package_role: PackageRole,
 ) -> NodeIndex {
     let ResolutionPackage {
@@ -243,7 +263,7 @@ fn add_version(
         hasher,
         in_memory,
     );
-    let (version, dist, metadata) = selected.into_parts();
+    let (version, dist, metadata, selected_preferences) = selected.into_parts();
 
     // Track yanks for registry distributions.
     match dist.yanked() {
@@ -293,6 +313,10 @@ fn add_version(
         metadata,
         role: package_role,
         marker: UniversalMarker::TRUE,
+        preferences: selected_preferences
+            .into_iter()
+            .map(|preference| (preference, preference_marker))
+            .collect(),
     }))
 }
 
