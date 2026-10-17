@@ -134,6 +134,11 @@ impl ProgressReporter {
         }
     }
 
+    /// Returns `true` when progress status should be written directly to standard error.
+    pub fn should_write_progress(&self) -> bool {
+        self.root.is_hidden() && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS
+    }
+
     /// Start reporting a build using the caller's source display.
     pub fn on_build_start(&self, source: &dyn fmt::Display) -> usize {
         let ProgressMode::Multi {
@@ -237,9 +242,11 @@ impl ProgressReporter {
                     .progress_chars("--"),
             );
             // If the file is larger than 1MB, show a message to indicate that this may take
-            // a while keeping the log concise.
+            // a while keeping the log concise. Publishing reports its own status after validating
+            // the registry response.
             if multi_progress.is_hidden()
                 && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS
+                && direction != Direction::Upload
                 && size > 1024 * 1024
             {
                 let _ = writeln!(
@@ -253,7 +260,10 @@ impl ProgressReporter {
             progress.set_message(name);
         } else {
             progress.set_style(ProgressStyle::with_template("{wide_msg:.dim} ....").unwrap());
-            if multi_progress.is_hidden() && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS {
+            if multi_progress.is_hidden()
+                && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS
+                && direction != Direction::Upload
+            {
                 let _ = writeln!(
                     self.printer.stderr(),
                     "{} {}",
@@ -299,6 +309,7 @@ impl ProgressReporter {
         if let ProgressBarKind::Numeric { progress, size } = state.bars.remove(&id).unwrap() {
             if multi_progress.is_hidden()
                 && !*HAS_UV_INTERNAL__TEST_NO_CLI_PROGRESS
+                && direction != Direction::Upload
                 && size.is_none_or(|size| size > 1024 * 1024)
             {
                 let _ = writeln!(
