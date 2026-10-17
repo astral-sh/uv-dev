@@ -47,7 +47,8 @@ You can check if the lockfile is up-to-date by passing the `--check` flag to `uv
 $ uv lock --check
 ```
 
-This is equivalent to the `--locked` flag for other commands.
+This is equivalent to the `--locked` flag for other commands. It does not check whether the project
+environment is [synchronized](#checking-the-environment).
 
 !!! important
 
@@ -75,6 +76,18 @@ $ uv sync
 
 Syncing the environment manually is especially useful for ensuring your editor has the correct
 versions of dependencies.
+
+### Checking the environment
+
+To check whether synchronization would change the environment without modifying it, use
+[`uv sync --check`](../../reference/cli.md#uv-sync--check):
+
+```console
+$ uv sync --check
+```
+
+The command exits with a non-zero status if the environment is not up-to-date. Run `uv sync` to
+apply the changes.
 
 ### Editable installation
 
