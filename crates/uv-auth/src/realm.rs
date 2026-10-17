@@ -29,6 +29,29 @@ pub struct Realm {
     port: Option<u16>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ProtectionSpace {
+    origin: Realm,
+    scheme: SmallString,
+    realm: SmallString,
+}
+
+impl ProtectionSpace {
+    pub(crate) fn basic(url: &SafeUrl, realm: &str) -> Self {
+        Self {
+            origin: Realm::from(url),
+            scheme: SmallString::from("basic"),
+            realm: SmallString::from(realm),
+        }
+    }
+}
+
+impl Display for ProtectionSpace {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {} realm={:?}", self.origin, self.scheme, self.realm)
+    }
+}
+
 impl From<&SafeUrl> for Realm {
     fn from(url: &SafeUrl) -> Self {
         Self {
