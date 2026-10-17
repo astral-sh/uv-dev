@@ -1,4 +1,4 @@
-# Sign and verify uv's macOS and Windows wheels and GitHub release archives.
+# Sign and assemble uv's macOS and Windows wheels and GitHub release archives.
 name: "Sign release binaries"
 
 on:
@@ -9,6 +9,24 @@ on:
         required: true
         type: string
     outputs:
+      macos:
+        description: "JSON matrix of macOS targets and native verification runners"
+        value: ${{ jobs.prepare.outputs.macos }}
+      windows:
+        description: "JSON matrix of Windows targets and native verification runners"
+        value: ${{ jobs.prepare.outputs.windows }}
+      signed-macos:
+        description: "Artifact ID for the signed macOS executables"
+        value: ${{ jobs.sign-macos.outputs.artifact }}
+      signed-windows:
+        description: "Artifact ID for the signed Windows executables"
+        value: ${{ jobs.sign-windows.outputs.artifact }}
+      macos-wheels:
+        description: "Artifact ID for the signed macOS wheels grouped by target"
+        value: ${{ jobs.assemble.outputs.macos-wheels }}
+      windows-wheels:
+        description: "Artifact ID for the signed Windows wheels grouped by target"
+        value: ${{ jobs.assemble.outputs.windows-wheels }}
       uv-wheels:
         description: "Artifact ID for all uv release wheels"
         value: ${{ jobs.assemble.outputs.uv-wheels }}
@@ -277,7 +295,6 @@ jobs:
           WINDOWS_TARGETS: ${{ needs.prepare.outputs.windows }}
         run: |
           uv run scripts/assemble-release-artifacts.py . signed-artifacts/wheels signed-artifacts/github-archives release-artifacts
-          uv run scripts/check_uv_wheel_contents.py release-artifacts/wheels/uv/*.whl release-artifacts/wheels/uv_build/*.whl
 
       - name: "Upload signed macOS wheels"
         id: macos-wheels
@@ -334,114 +351,3 @@ jobs:
           name: release-sdist-uv_build-${{ github.run_id }}-${{ github.run_attempt }}
           path: release-artifacts/sdists/uv_build
           if-no-files-found: error
-
-  verify-macos:
-    name: "verify signed ${{ matrix.platform.target }} artifacts"
-    needs: [prepare, sign-macos, assemble]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJSON(needs.prepare.outputs.macos) }}
-    runs-on: ${{ matrix.platform.runner }}
-    permissions:
-      contents: read
-    env:
-      TARGET: ${{ matrix.platform.target }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          cache: ""
-          python-version: "3.13"
-          architecture: ${{ matrix.platform.python-architecture }}
-
-      - name: "Download signed executables"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.sign-macos.outputs.artifact }}
-          path: signed
-          merge-multiple: true
-
-      - name: "Download signed wheels"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.assemble.outputs.macos-wheels }}
-          path: wheels
-          merge-multiple: true
-
-      - name: "Download signed GitHub release archives"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.assemble.outputs.github-archives }}
-          path: github-archives
-          merge-multiple: true
-
-      - name: "Verify signed release artifacts"
-        uses: astral-sh/github-actions/verify-release@b61c7106c7746375df8005eab240be92e4e450b2 # shared release signing actions
-        with:
-          target: ${{ toJSON(matrix.platform) }}
-          signed-directory: signed/${{ matrix.platform.target }}
-          wheels-directory: wheels/${{ matrix.platform.target }}
-          github-archives-directory: github-archives
-
-      - name: "Install and run the signed wheels"
-        run: ./scripts/test-release-wheels-macos.sh "./wheels/$TARGET"
-
-  verify-windows:
-    name: "verify signed ${{ matrix.platform.target }} artifacts"
-    needs: [prepare, sign-windows, assemble]
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: ${{ fromJSON(needs.prepare.outputs.windows) }}
-    runs-on: ${{ matrix.platform.runner }}
-    permissions:
-      contents: read
-    env:
-      TARGET: ${{ matrix.platform.target }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          cache: ""
-          python-version: "3.13"
-          architecture: ${{ matrix.platform.python-architecture }}
-
-      - name: "Download signed executables"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.sign-windows.outputs.artifact }}
-          path: signed
-          merge-multiple: true
-
-      - name: "Download signed wheels"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.assemble.outputs.windows-wheels }}
-          path: wheels
-          merge-multiple: true
-
-      - name: "Download signed GitHub release archives"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: ${{ needs.assemble.outputs.github-archives }}
-          path: github-archives
-          merge-multiple: true
-
-      - name: "Verify signed release artifacts"
-        uses: astral-sh/github-actions/verify-release@b61c7106c7746375df8005eab240be92e4e450b2 # shared release signing actions
-        with:
-          target: ${{ toJSON(matrix.platform) }}
-          signed-directory: signed/${{ matrix.platform.target }}
-          wheels-directory: wheels/${{ matrix.platform.target }}
-          github-archives-directory: github-archives
-
-      - name: "Install and run the signed wheels"
-        shell: pwsh
-        run: ./scripts/test-release-wheels-windows.ps1 "./wheels/$env:TARGET"
