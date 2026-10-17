@@ -19,6 +19,9 @@ resolution-markers = [
 ]
 
 [options]
+config-settings-provenance = 1
+config-settings-digest = "177cd857776a6568"
+config-settings-packages = ["black"]
 exclude-newer = "2026-06-30T00:00:00Z"
 
 [[package]]

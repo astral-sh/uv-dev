@@ -15,6 +15,7 @@ extend-ignore-re = [
     "I borken you cache",
     "eb1ba5f5",
     "e8208120cae3ba69",
+    "049ba5f385c4d505",
     "github_pat_[0-9a-zA-Z_]+",
     "LICENSEs",
     "astroid",

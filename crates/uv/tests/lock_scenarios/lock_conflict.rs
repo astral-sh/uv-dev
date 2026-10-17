@@ -2385,6 +2385,9 @@ fn extra_conflict_environments_omit_redundant_markers() -> Result<()> {
         ]]
 
         [options]
+        config-settings-provenance = 1
+        config-settings-digest = "8a8c197879628b2b"
+        config-settings-packages = ["tqdm"]
         exclude-newer = "2025-09-28T00:00:00Z"
 
         [[package]]
@@ -5819,6 +5822,9 @@ fn extra_inferences() -> Result<()> {
         ]]
 
         [options]
+        config-settings-provenance = 1
+        config-settings-digest = "7d2651be1e944117"
+        config-settings-packages = ["python-nvd3"]
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[manifest.dependency-metadata]]
