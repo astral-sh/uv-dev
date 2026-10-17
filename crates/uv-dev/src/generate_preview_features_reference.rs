@@ -225,6 +225,10 @@ mod tests {
         identify the endpoint; authentication uses `GOOGLE_APPLICATION_CREDENTIALS` or Application
         Default Credentials.
 
+        ### `include-group-workspace` {#include-group-workspace}
+
+        Allows dependency groups to include dependency groups from the workspace root.
+
         ### `index-by-name` {#index-by-name}
 
         The `--index` and `--default-index` options accept the names of configured package indexes
