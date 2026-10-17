@@ -85,10 +85,48 @@ mod error_tests {
     use anyhow::bail;
     use insta::assert_snapshot;
 
-    use uv_command_support::UvError;
+    use uv_command_support::{ExitStatus, UvError};
     use uv_environment_operations::EnvironmentError;
     use uv_project_commands::ProjectError;
     use uv_resolve_operations::Error as ResolveError;
+
+    #[test]
+    fn nested_batches_prefer_user_failures() {
+        for errors in [
+            vec![
+                UvError::user(anyhow::anyhow!("invalid requirement")),
+                UvError::unexpected(anyhow::anyhow!("cache write failed")),
+            ],
+            vec![
+                UvError::unexpected(anyhow::anyhow!("cache write failed")),
+                UvError::user(anyhow::anyhow!("invalid requirement")),
+            ],
+        ] {
+            let error = UvError::batch([
+                UvError::argument(anyhow::anyhow!("invalid argument")),
+                UvError::batch(errors),
+            ]);
+            assert!(match error.exit_status() {
+                ExitStatus::Failure => true,
+                ExitStatus::Success | ExitStatus::Error | ExitStatus::External(_) => false,
+            });
+        }
+    }
+
+    #[test]
+    fn batches_without_user_failures_use_error_status() {
+        let error = UvError::batch([
+            UvError::argument(anyhow::anyhow!("invalid argument")),
+            UvError::batch([
+                UvError::unexpected(anyhow::anyhow!("cache write failed")),
+                UvError::batch([]),
+            ]),
+        ]);
+        assert!(match error.exit_status() {
+            ExitStatus::Error => true,
+            ExitStatus::Success | ExitStatus::Failure | ExitStatus::External(_) => false,
+        });
+    }
 
     #[test]
     fn resolution_context_missing_requirements() -> anyhow::Result<()> {
