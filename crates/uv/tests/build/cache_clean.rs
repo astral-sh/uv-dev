@@ -2,24 +2,57 @@
 use std::fs::Permissions;
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+#[cfg(any(
+    target_os = "linux",
+    all(feature = "test-python", feature = "test-pypi")
+))]
 use assert_cmd::prelude::*;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
+use predicates::prelude::predicate;
 
 #[cfg(target_os = "linux")]
 use std::process::Command;
 
-use uv_cache::Cache;
+use uv_cache::{Cache, CacheBucket};
 #[cfg(unix)]
 use uv_fs::link::{LinkMode, LinkOptions, link_dir};
 use uv_static::EnvVars;
 
 #[cfg(unix)]
-use uv_test::assert_path_missing;
-use uv_test::uv_snapshot;
+use uv_test::assert_link_target;
+use uv_test::{TestContext, assert_path_missing, uv_snapshot};
+
+fn assert_cache_cleared(context: &TestContext) -> Result<()> {
+    let lock = context.cache_dir.child(".lock");
+    lock.assert(predicate::path::is_file());
+    let remaining = fs_err::read_dir(context.cache_dir.path())?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(remaining, [lock.to_path_buf()]);
+    Ok(())
+}
+
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+fn cached_response<'a>(responses: &'a [PathBuf], filename: &str) -> &'a Path {
+    let matches: Vec<_> = responses
+        .iter()
+        .filter(|path| path.file_name().is_some_and(|name| name == filename))
+        .collect();
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected exactly one cached response for {filename}, found {matches:?}"
+    );
+    matches[0]
+}
 
 /// `cache clean` should remove all packages.
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 #[test]
 fn clean_all() -> Result<()> {
     let context = uv_test::test_context!("3.12")
@@ -45,33 +78,32 @@ fn clean_all() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
 
-    assert!(context.cache_dir.child(".lock").is_file());
+    assert_cache_cleared(&context)?;
 
     Ok(())
 }
 
-/// Cache cleanup should count hardlinked storage only when its final link is removed.
 #[cfg(unix)]
-#[test]
-fn clean_all_hardlinked_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_counts();
-
-    // Remove unrelated cache entries so the retained hardlink is the only cached data.
-    context.clean().assert().success();
-    context.cache_dir.create_dir_all()?;
-
+fn external_cache_hardlink(context: &TestContext) -> Result<(ChildPath, Vec<u8>)> {
     // Keep the retained hardlink beside the cache so both entries share a filesystem.
-    let retained = context.cache_dir.path().with_file_name("retained.bin");
-    fs_err::write(&retained, vec![42; 1024 * 1024])?;
+    let retained = ChildPath::new(context.cache_dir.path().with_file_name("retained.bin"));
+    let contents = vec![42; 1024 * 1024];
+    retained.write_binary(&contents)?;
     fs_err::OpenOptions::new()
         .write(true)
-        .open(&retained)?
+        .open(retained.path())?
         .sync_all()?;
+    fs_err::hard_link(&retained, context.cache_dir.child("hardlinked.bin"))?;
+    Ok((retained, contents))
+}
 
-    let cached = context.cache_dir.child("hardlinked.bin");
-    fs_err::hard_link(&retained, &cached)?;
+/// Storage retained outside the cache should not count as freed logical space.
+#[cfg(unix)]
+#[test]
+fn clean_all_external_hardlink_logical() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_counts();
+    let (retained, contents) = external_cache_hardlink(&context)?;
 
-    // Counting the externally retained hardlink would incorrectly report 1.0MiB.
     uv_snapshot!(context.filters(), context.clean(), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -79,8 +111,17 @@ fn clean_all_hardlinked_file() -> Result<()> {
     Removed [N] files (0B)
     ");
 
-    context.cache_dir.create_dir_all()?;
-    fs_err::hard_link(&retained, &cached)?;
+    assert_cache_cleared(&context)?;
+    assert_eq!(context.read_bytes(retained), contents);
+    Ok(())
+}
+
+/// Storage retained outside the cache should not count as freed physical space.
+#[cfg(unix)]
+#[test]
+fn clean_all_external_hardlink_physical() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_counts();
+    let (retained, contents) = external_cache_hardlink(&context)?;
 
     uv_snapshot!(context.filters(), context.clean().arg("--preview-features").arg("cache-physical-space"), @"
     exit_code: 0 (success)
@@ -89,9 +130,17 @@ fn clean_all_hardlinked_file() -> Result<()> {
     Removed [N] files (0B)
     ");
 
-    assert!(retained.is_file());
+    assert_cache_cleared(&context)?;
+    assert_eq!(context.read_bytes(retained), contents);
+    Ok(())
+}
 
-    context.cache_dir.create_dir_all()?;
+/// Storage shared only within the cache should count once when its final link is removed.
+#[cfg(unix)]
+#[test]
+fn clean_all_internal_hardlinks_physical() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_counts();
+    let cached = context.cache_dir.child("hardlinked.bin");
     cached.write_binary(&vec![42; 1024 * 1024])?;
     fs_err::OpenOptions::new()
         .write(true)
@@ -107,6 +156,7 @@ fn clean_all_hardlinked_file() -> Result<()> {
     Removed [N] files (1.0MiB)
     ");
 
+    assert_cache_cleared(&context)?;
     Ok(())
 }
 
@@ -114,7 +164,7 @@ fn clean_all_hardlinked_file() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn clean_all_physical_space_unsupported_fs() -> Result<()> {
-    let Some(context) = uv_test::test_context!("3.12")
+    let Some(context) = uv_test::test_context_with_versions!(&[])
         .with_filtered_counts()
         .with_cache_on_alt_fs()?
     else {
@@ -133,6 +183,7 @@ fn clean_all_physical_space_unsupported_fs() -> Result<()> {
     Removed [N] files (1.0MiB)
     ");
 
+    assert_cache_cleared(&context)?;
     Ok(())
 }
 
@@ -140,7 +191,7 @@ fn clean_all_physical_space_unsupported_fs() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn clean_all_cloned_file() -> Result<()> {
-    let Some(context) = uv_test::test_context!("3.12")
+    let Some(context) = uv_test::test_context_with_versions!(&[])
         .with_filtered_counts()
         .with_cache_on_cow_fs()?
     else {
@@ -149,11 +200,8 @@ fn clean_all_cloned_file() -> Result<()> {
     let retained = context.cache_dir.path().with_file_name("retained");
     fs_err::create_dir_all(&retained)?;
     let original = retained.join("original.bin");
-    fs_err::write(&original, vec![42; 1024 * 1024])?;
-
-    // Remove unrelated cache entries so the cloned file is the only allocated data being cleaned.
-    context.clean().assert().success();
-    context.cache_dir.create_dir_all()?;
+    let contents = vec![42; 1024 * 1024];
+    fs_err::write(&original, &contents)?;
 
     let cached = context.cache_dir.child("cloned");
     let link_mode = link_dir(&retained, &cached, &LinkOptions::new(LinkMode::Clone))?;
@@ -170,7 +218,8 @@ fn clean_all_cloned_file() -> Result<()> {
     Removed [N] files (0B)
     ");
 
-    assert!(original.is_file());
+    assert_cache_cleared(&context)?;
+    assert_eq!(fs_err::read(&original)?, contents);
 
     Ok(())
 }
@@ -179,7 +228,7 @@ fn clean_all_cloned_file() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn clean_all_cached_clones() -> Result<()> {
-    let Some(context) = uv_test::test_context!("3.12")
+    let Some(context) = uv_test::test_context_with_versions!(&[])
         .with_filtered_counts()
         .with_cache_on_cow_fs()?
     else {
@@ -206,6 +255,7 @@ fn clean_all_cached_clones() -> Result<()> {
     Removed [N] files (1.0MiB)
     ");
 
+    assert_cache_cleared(&context)?;
     Ok(())
 }
 
@@ -213,7 +263,7 @@ fn clean_all_cached_clones() -> Result<()> {
 #[cfg(target_os = "linux")]
 #[test]
 fn clean_all_compressed_file() -> Result<()> {
-    let Some(context) = uv_test::test_context!("3.12")
+    let Some(context) = uv_test::test_context_with_versions!(&[])
         .with_filtered_counts()
         .with_cache_on_cow_fs()?
     else {
@@ -247,25 +297,16 @@ fn clean_all_compressed_file() -> Result<()> {
     Removed [N] files (at least 1.0MiB)
     ");
 
+    assert_cache_cleared(&context)?;
     Ok(())
 }
 
 /// `cache clear` should behave as an alias of `cache clean`.
 #[test]
 fn clear_all_alias() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_file_counts()
-        .with_filtered_sizes_and_units();
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("typing-extensions\niniconfig")?;
-
-    // Install a requirement, to populate the cache.
-    context
-        .pip_sync()
-        .arg("requirements.txt")
-        .assert()
-        .success();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes_and_units();
+    let cached = context.cache_dir.child("payload.txt");
+    cached.write_str("payload")?;
 
     let mut command = context.command();
     command.arg("cache").arg("clear").arg("--verbose");
@@ -276,27 +317,18 @@ fn clear_all_alias() -> Result<()> {
     DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
     DEBUG uv [VERSION] ([COMMIT] DATE)
     Clearing cache at: [CACHE_DIR]/
-    Removed [N] files ([SIZE])
+    Removed 1 file ([SIZE])
     ");
 
+    assert_path_missing(cached);
     Ok(())
 }
 
 #[tokio::test]
 async fn clean_force() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_filtered_sizes_and_units();
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("typing-extensions\niniconfig")?;
-
-    // Install a requirement, to populate the cache.
-    context
-        .pip_sync()
-        .arg("requirements.txt")
-        .assert()
-        .success();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes_and_units();
+    let cached = context.cache_dir.child("payload.txt");
+    cached.write_str("payload")?;
 
     // When unlocked, `--force` should still take a lock
     uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("--force"), @"
@@ -305,21 +337,17 @@ async fn clean_force() -> Result<()> {
     DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
     DEBUG uv [VERSION] ([COMMIT] DATE)
     Clearing cache at: [CACHE_DIR]/
-    Removed [N] files ([SIZE])
+    Removed 1 file ([SIZE])
     ");
+    assert_path_missing(&cached);
 
-    // Install a requirement, to re-populate the cache.
-    context
-        .pip_sync()
-        .arg("requirements.txt")
-        .assert()
-        .success();
+    cached.write_str("payload")?;
 
-    // When locked, `--force` should proceed without blocking
+    // Bound the wait so a regression in `--force` fails instead of hanging the test.
     let _cache = Cache::from_path(context.cache_dir.path())
         .with_exclusive_lock()
         .await?;
-    uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("--force"), @"
+    uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("--force").env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
@@ -327,15 +355,17 @@ async fn clean_force() -> Result<()> {
     DEBUG Lock is busy for `[CACHE_DIR]/`
     DEBUG Cache is currently in use, proceeding due to `--force`
     Clearing cache at: [CACHE_DIR]/
-    Removed [N] files ([SIZE])
+    Removed 1 file ([SIZE])
     ");
 
-    assert!(context.cache_dir.child(".lock").is_file());
+    assert_path_missing(cached);
+    assert_cache_cleared(&context)?;
 
     Ok(())
 }
 
 /// `cache clean iniconfig` should remove a single package (`iniconfig`).
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 #[test]
 fn clean_package_pypi() -> Result<()> {
     let context = uv_test::test_context!("3.12")
@@ -357,16 +387,10 @@ fn clean_package_pypi() -> Result<()> {
         .assert()
         .success();
 
-    // Assert that the `.rkyv` file is created for `iniconfig`.
-    let rkyv = context
-        .cache_dir
-        .child("simple-v27")
-        .child("pypi")
-        .child("iniconfig.rkyv");
-    assert!(
-        rkyv.exists(),
-        "Expected the `.rkyv` file to exist for `iniconfig`"
-    );
+    let responses = context.cache_files(CacheBucket::Simple)?;
+    let removed = cached_response(&responses, "iniconfig.rkyv");
+    let retained = cached_response(&responses, "anyio.rkyv");
+    let retained_contents = context.read_bytes(retained);
 
     uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("iniconfig"), @"
     exit_code: 0 (success)
@@ -377,11 +401,8 @@ fn clean_package_pypi() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
 
-    // Assert that the `.rkyv` file is removed for `iniconfig`.
-    assert!(
-        !rkyv.exists(),
-        "Expected the `.rkyv` file to be removed for `iniconfig`"
-    );
+    assert_path_missing(removed);
+    assert_eq!(context.read_bytes(retained), retained_contents);
 
     // Running `uv cache prune` should have no effect.
     uv_snapshot!(context.filters(), context.prune().arg("--verbose"), @"
@@ -397,6 +418,7 @@ fn clean_package_pypi() -> Result<()> {
 }
 
 /// `cache clean iniconfig` should remove a single package (`iniconfig`).
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 #[test]
 fn clean_package_index() -> Result<()> {
     let context = uv_test::test_context!("3.12")
@@ -420,17 +442,10 @@ fn clean_package_index() -> Result<()> {
         .assert()
         .success();
 
-    // Assert that the `.rkyv` file is created for `iniconfig`.
-    let rkyv = context
-        .cache_dir
-        .child("simple-v27")
-        .child("index")
-        .child("e8208120cae3ba69")
-        .child("iniconfig.rkyv");
-    assert!(
-        rkyv.exists(),
-        "Expected the `.rkyv` file to exist for `iniconfig`"
-    );
+    let responses = context.cache_files(CacheBucket::Simple)?;
+    let removed = cached_response(&responses, "iniconfig.rkyv");
+    let retained = cached_response(&responses, "anyio.rkyv");
+    let retained_contents = context.read_bytes(retained);
 
     uv_snapshot!(context.filters(), context.clean().arg("--verbose").arg("iniconfig"), @"
     exit_code: 0 (success)
@@ -441,11 +456,8 @@ fn clean_package_index() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
 
-    // Assert that the `.rkyv` file is removed for `iniconfig`.
-    assert!(
-        !rkyv.exists(),
-        "Expected the `.rkyv` file to be removed for `iniconfig`"
-    );
+    assert_path_missing(removed);
+    assert_eq!(context.read_bytes(retained), retained_contents);
 
     Ok(())
 }
@@ -453,14 +465,11 @@ fn clean_package_index() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn clean_does_not_follow_symlinks() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_sizes_and_units();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_sizes_and_units();
     let victim_dir = context.temp_dir.child("victim");
-    let archive_entry = context.cache_dir.child("archive-v0").child("archive");
-    let package_entry = context
-        .cache_dir
-        .child("wheels-v7")
-        .child("pypi")
-        .child("demo");
+    let cache = Cache::from_path(context.cache_dir.path());
+    let archive_entry = ChildPath::new(cache.bucket(CacheBucket::Archive)).child("archive");
+    let package_entry = ChildPath::new(cache.bucket(CacheBucket::Wheels)).child("pypi/demo");
 
     victim_dir.create_dir_all()?;
     victim_dir.child("payload.txt").write_str("payload")?;
@@ -472,7 +481,7 @@ fn clean_does_not_follow_symlinks() -> Result<()> {
     fs_err::os::unix::fs::symlink(&victim_dir, package_entry.join("escape"))?;
     fs_err::os::unix::fs::symlink(&archive_entry, package_entry.join("archive"))?;
 
-    let files = context.cache_dir.child("files-v0");
+    let files = ChildPath::new(cache.bucket(CacheBucket::Files));
     let shard = files.child("shard");
     shard.child("orphan").write_str("orphan")?;
     shard
@@ -496,22 +505,22 @@ fn clean_does_not_follow_symlinks() -> Result<()> {
     Removed 6 files ([SIZE])
     ");
 
-    assert!(victim_dir.is_dir());
-    assert!(victim_dir.child("payload.txt").is_file());
+    assert_eq!(context.read(victim_dir.child("payload.txt")), "payload");
     assert_path_missing(package_entry);
     assert_path_missing(archive_entry);
-    assert!(!shard.child("orphan").exists());
-    assert!(!shard.child("nested").exists());
-    assert!(fs_err::symlink_metadata(files.child("escape"))?.is_symlink());
-    assert!(fs_err::symlink_metadata(shard.child("escape"))?.is_symlink());
-    assert!(!flat_shard.child("orphan").exists());
-    assert!(retained.is_file());
+    assert_path_missing(shard.child("orphan"));
+    assert_path_missing(shard.child("nested"));
+    assert_link_target(files.child("escape"), &victim_dir);
+    assert_link_target(shard.child("escape"), &victim_dir);
+    assert_path_missing(flat_shard.child("orphan"));
+    assert_eq!(context.read(&retained), "retained");
     assert!(flat_shard.child("retained").is_file());
-    assert!(fs_err::symlink_metadata(flat_shard.child("escape"))?.is_symlink());
+    assert_link_target(flat_shard.child("escape"), &victim_dir);
 
     // A full clean also leaves external targets intact, even through a symlinked cache root.
     let cache_link = context.temp_dir.child("cache-link");
-    fs_err::os::unix::fs::symlink(context.cache_dir.path(), cache_link.path())?;
+    let original_cache = context.cache_dir.to_path_buf();
+    fs_err::os::unix::fs::symlink(&original_cache, cache_link.path())?;
     let context = context
         .with_cache_dir(cache_link.path())
         .with_filtered_file_counts();
@@ -522,9 +531,10 @@ fn clean_does_not_follow_symlinks() -> Result<()> {
     Removed [N] files ([SIZE])
     ");
 
-    assert!(cache_link.path().is_symlink());
-    assert!(!files.exists());
-    assert!(victim_dir.child("payload.txt").is_file());
+    assert_link_target(&cache_link, &original_cache);
+    assert_path_missing(&files);
+    assert_eq!(context.read(victim_dir.child("payload.txt")), "payload");
+    assert_eq!(context.read(&retained), "retained");
 
     Ok(())
 }
@@ -533,8 +543,9 @@ fn clean_does_not_follow_symlinks() -> Result<()> {
 #[cfg(target_os = "macos")]
 #[test]
 fn clean_package_empty_shard_without_search_permission() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let shard = context.cache_dir.child("files-v0").child("shard");
+    let context = uv_test::test_context_with_versions!(&[]);
+    let cache = Cache::from_path(context.cache_dir.path());
+    let shard = ChildPath::new(cache.bucket(CacheBucket::Files)).child("shard");
     shard.create_dir_all()?;
     fs_err::set_permissions(&shard, Permissions::from_mode(0o600))?;
 
@@ -544,19 +555,19 @@ fn clean_package_empty_shard_without_search_permission() -> Result<()> {
     Removed 1 directory (0B)
     ");
 
-    assert!(!shard.exists());
+    assert_path_missing(&shard);
 
     Ok(())
 }
 
 #[tokio::test]
-async fn cache_timeout() {
-    let context = uv_test::test_context!("3.12");
+async fn cache_timeout() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     // Simulate another uv process running and locking the cache, e.g., with a source build.
     let _cache = Cache::from_path(context.cache_dir.path())
         .with_exclusive_lock()
-        .await;
+        .await?;
 
     uv_snapshot!(context.filters(), context.clean().env(EnvVars::UV_LOCK_TIMEOUT, "1"), @"
     exit_code: 2 (failure)
@@ -564,21 +575,18 @@ async fn cache_timeout() {
     Cache is currently in-use, waiting for other uv processes to finish (use `--force` to override)
     error: Timeout ([TIME]) when waiting for lock on `[CACHE_DIR]/` at `[CACHE_DIR]/.lock`, is another uv process running? You can set `UV_LOCK_TIMEOUT` to increase the timeout.
     ");
+    Ok(())
 }
 
 /// `cache clean` should handle file paths normally restricted by Win32 path normalization.
 #[cfg(windows)]
 #[test]
 fn clean_handles_verbatim_paths() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Clean slate
-    fs_err::remove_dir_all(&context.cache_dir)?;
+    let context = uv_test::test_context_with_versions!(&[]);
 
     // Cached sdist path resembling the uwsgi==2.0.31 build failure.
-    let uwsgi_shard = context
-        .cache_dir
-        .child("sdists-v10")
+    let cache = Cache::from_path(context.cache_dir.path());
+    let uwsgi_shard = ChildPath::new(cache.bucket(CacheBucket::SourceDistributions))
         .child("pypi")
         .child("uwsgi")
         .child("2.0.31")

@@ -1,26 +1,28 @@
 use std::collections::BTreeMap;
+use std::process::Command;
 
 use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
-use insta::{allow_duplicates, assert_snapshot};
-use predicates::prelude::predicate;
+use insta::assert_snapshot;
+use predicates::prelude::{PredicateStrExt, predicate};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-#[cfg(feature = "test-git")]
-use std::process::Command;
 use tempfile::tempdir_in;
-use wiremock::matchers::{basic_auth, body_string_contains, method, path};
+use wiremock::matchers::{any, basic_auth, body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_fs::Simplified;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+use uv_test::archive::generate_source_archive;
 use uv_test::package_server::PackageServer;
+use uv_test::packse::scenario::{Package, PackageMetadata, Scenario};
 use uv_test::packse::{PackseServer, generate_wheel, generate_wheel_with_files};
+use uv_test::subdirectory_archive::SubdirectoryArchive;
 
-use uv_test::{TestContext, download_to_disk, uv_snapshot, venv_bin_path};
+use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 
 #[test]
 fn sync() -> Result<()> {
@@ -1068,7 +1070,12 @@ fn sync_no_lock_flags_override_environment() -> Result<()> {
     Resolved 1 package in [TIME]
     Checked in [TIME]
     ");
-    assert_ne!(context.read("uv.lock"), lock);
+    let expected_lock = lock.replacen("version = \"0.1.0\"", "version = \"0.2.0\"", 1);
+    assert_ne!(
+        expected_lock, lock,
+        "initial lock lacks the old project version"
+    );
+    assert_eq!(context.read("uv.lock"), expected_lock);
 
     Ok(())
 }
@@ -1281,8 +1288,8 @@ fn sync_reuses_pip_install_wheel_cache() -> Result<()> {
         "#,
     )?;
 
-    // Create a lockfile with hashes, but populate the wheel cache via `uv pip install`.
-    context.lock().assert().success();
+    // Generate the hashed lock without populating the cache shared by `uv pip install` and sync.
+    context.lock().arg("--no-cache").assert().success();
     context
         .pip_install()
         .arg("iniconfig==2.0.0")
@@ -1319,9 +1326,8 @@ fn sync_reuses_pip_install_sdist_cache() -> Result<()> {
         "#,
     )?;
 
-    // Create a lockfile with hashes, but populate the source distribution cache via `uv pip
-    // install`.
-    context.lock().assert().success();
+    // Generate the hashed lock without populating the cache shared by `uv pip install` and sync.
+    context.lock().arg("--no-cache").assert().success();
     context
         .pip_install()
         .arg("iniconfig==2.0.0")
@@ -2079,19 +2085,19 @@ fn sync_dry_json() -> Result<()> {
     Ok(())
 }
 
-/// Ensure that we use the maximum Python version when a workspace contains mixed requirements.
+/// A member's stricter Python requirement constrains interpreter selection for the workspace.
 #[test]
 fn mixed_requires_python() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
-    // Create a workspace root with a minimum Python requirement of Python 3.12.
+    // The first interpreter in search order satisfies the root but not the child.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
         [project]
         name = "albatross"
         version = "0.1.0"
-        requires-python = ">=3.12"
+        requires-python = ">=3.11"
         dependencies = ["bird-feeder", "anyio>3"]
 
         [tool.uv.sources]
@@ -2108,7 +2114,7 @@ fn mixed_requires_python() -> Result<()> {
     let init = src.child("__init__.py");
     init.touch()?;
 
-    // Create a child with a minimum Python requirement of Python 3.9.
+    // The child's requirement raises the minimum for the entire workspace.
     let child = context.temp_dir.child("packages").child("bird-feeder");
     child.create_dir_all()?;
 
@@ -2124,7 +2130,7 @@ fn mixed_requires_python() -> Result<()> {
         [project]
         name = "bird-feeder"
         version = "0.1.0"
-        requires-python = ">=3.9"
+        requires-python = ">=3.12"
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -2132,8 +2138,7 @@ fn mixed_requires_python() -> Result<()> {
         "#,
     )?;
 
-    // Running `uv sync` should succeed, locking for Python 3.12.
-    uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.12"), @"
+    uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -2148,11 +2153,47 @@ fn mixed_requires_python() -> Result<()> {
     ");
 
     // Running `uv sync` again should fail.
-    uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.9"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.11"), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
-    error: The requested interpreter resolved to Python 3.9.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `albatross`'s `project.requires-python`).
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
+    error: The requested interpreter resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `bird-feeder`'s `project.requires-python`).
+    ");
+
+    Ok(())
+}
+
+/// Attribute an incompatible workspace interpreter to the root when it sets the stricter bound.
+#[test]
+fn mixed_requires_python_root_constraint() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "albatross"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [tool.uv.workspace]
+        members = ["bird-feeder"]
+    "#})?;
+    context
+        .temp_dir
+        .child("bird-feeder/pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "bird-feeder"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().args(["--python", "3.11", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
+    error: The requested interpreter resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from workspace member `albatross`'s `project.requires-python`).
     ");
 
     Ok(())
@@ -3483,52 +3524,37 @@ fn sync_build_isolation() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
         dependencies = ["source-distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz"]
+
+        [tool.uv]
+        package = false
         "#,
     )?;
 
-    // Running `uv sync` should fail (but it could fail when building the root project, or when
-    // building `source-distribution`).
     context
         .sync()
         .arg("--no-build-isolation")
         .assert()
-        .failure();
+        .code(1)
+        .stderr(predicate::str::contains(
+            "ModuleNotFoundError: No module named 'hatchling'",
+        ));
 
-    // Install `setuptools` (for the root project) plus `hatchling` (for `source-distribution`).
-    uv_snapshot!(context.filters(), context.pip_install().arg("wheel").arg("setuptools").arg("hatchling"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 7 packages in [TIME]
-    Prepared 7 packages in [TIME]
-    Installed 7 packages in [TIME]
-     + hatchling==1.22.4
-     + packaging==24.0
-     + pathspec==0.12.1
-     + pluggy==1.4.0
-     + setuptools==69.2.0
-     + trove-classifiers==2024.3.3
-     + wheel==0.43.0
-    ");
+    context.pip_install().arg("hatchling").assert().success();
 
-    // Running `uv sync` should succeed.
     uv_snapshot!(context.filters(), context.sync().arg("--no-build-isolation"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
-    Uninstalled 7 packages in [TIME]
+    Uninstalled 5 packages in [TIME]
     Installed 1 package in [TIME]
      - hatchling==1.22.4
      - packaging==24.0
      - pathspec==0.12.1
      - pluggy==1.4.0
-     - setuptools==69.2.0
      + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
      - trove-classifiers==2024.3.3
-     - wheel==0.43.0
     ");
-
-    assert!(context.temp_dir.child("uv.lock").exists());
 
     Ok(())
 }
@@ -4296,6 +4322,22 @@ fn sync_extra_build_dependencies_setuptools() -> Result<()> {
     Ok(())
 }
 
+const LOCAL_ANYIO_BUILD_BACKEND: &str = indoc! {r#"
+    import sys
+
+    from hatchling.build import *
+
+    try:
+        import anyio
+    except ModuleNotFoundError:
+        print("Missing `anyio` module", file=sys.stderr)
+        sys.exit(1)
+
+    if not hasattr(anyio, 'LOCAL_ANYIO_MARKER'):
+        print("Found system anyio instead of local anyio", file=sys.stderr)
+        sys.exit(1)
+"#};
+
 #[test]
 fn sync_extra_build_dependencies_sources() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_counts();
@@ -4317,41 +4359,28 @@ fn sync_extra_build_dependencies_sources() -> Result<()> {
         backend-path = ["."]
         build-backend = "build_backend"
     "#})?;
-    let build_backend = child.child("build_backend.py");
-    build_backend.write_str(&formatdoc! {r#"
-        import sys
-
-        from hatchling.build import *
-
-        try:
-            import anyio
-        except ModuleNotFoundError:
-            print("Missing `anyio` module", file=sys.stderr)
-            sys.exit(1)
-
-        # Check that we got the local version of anyio by checking for the marker
-        if not hasattr(anyio, 'LOCAL_ANYIO_MARKER'):
-            print("Found system anyio instead of local anyio", file=sys.stderr)
-            sys.exit(1)
-    "#})?;
+    child
+        .child("build_backend.py")
+        .write_str(LOCAL_ANYIO_BUILD_BACKEND)?;
     child.child("src/child/__init__.py").touch()?;
 
+    // A direct URL keeps the child available when `--no-sources` disables the build dependency override.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {r#"
             [project]
             name = "project"
             version = "0.1.0"
             requires-python = ">=3.12"
-            dependencies = ["child"]
+            dependencies = ["child @ {child_url}"]
 
             [tool.uv.sources]
             anyio = {{ path = "{anyio_local}" }}
-            child = {{ path = "child" }}
 
             [tool.uv.extra-build-dependencies]
             child = ["anyio"]
         "#,
         anyio_local = anyio_local.portable_display(),
+        child_url = SafeUrl::from_file_path(child.path()).unwrap(),
     })?;
 
     // Running `uv sync` should succeed, as `anyio` is provided as a source
@@ -4364,8 +4393,14 @@ fn sync_extra_build_dependencies_sources() -> Result<()> {
      + child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    // TODO(zanieb): We want to test with `--no-sources` too but unfortunately that's not easy
-    // because it'll disable the `child` path source too!
+    context
+        .sync()
+        .args(["--no-sources", "--no-cache", "--reinstall-package", "child"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "Found system anyio instead of local anyio",
+        ));
 
     Ok(())
 }
@@ -4537,23 +4572,9 @@ fn sync_extra_build_dependencies_sources_from_child() -> Result<()> {
         anyio = {{ path = "{}" }}
     "#, anyio_local.portable_display()
     })?;
-    let build_backend = child.child("build_backend.py");
-    build_backend.write_str(&formatdoc! {r#"
-        import sys
-
-        from hatchling.build import *
-
-        try:
-            import anyio
-        except ModuleNotFoundError:
-            print("Missing `anyio` module", file=sys.stderr)
-            sys.exit(1)
-
-        # Check that we got the local version of anyio by checking for the marker
-        if not hasattr(anyio, 'LOCAL_ANYIO_MARKER'):
-            print("Found system anyio instead of local anyio", file=sys.stderr)
-            sys.exit(1)
-    "#})?;
+    child
+        .child("build_backend.py")
+        .write_str(LOCAL_ANYIO_BUILD_BACKEND)?;
     child.child("src/child/__init__.py").touch()?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -4573,7 +4594,7 @@ fn sync_extra_build_dependencies_sources_from_child() -> Result<()> {
     })?;
 
     // Running `uv sync` should fail due to the unapplied source
-    uv_snapshot!(context.filters(), context.sync().arg("--reinstall").arg("--refresh"), @"
+    uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -4820,7 +4841,9 @@ fn sync_relative_wheel() -> Result<()> {
 
     context.temp_dir.child("wheels").create_dir_all()?;
     fs_err::copy(
-        "../../test/links/ok-1.0.0-py3-none-any.whl",
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
         context.temp_dir.join("wheels/ok-1.0.0-py3-none-any.whl"),
     )?;
 
@@ -6830,10 +6853,9 @@ fn sync_non_existent_extra_no_optional_dependencies() -> Result<()> {
     Ok(())
 }
 
-/// Ensures that we do not perform validation of extras against a lock file that was generated on a
-/// version of uv that predates when `provides-extras` feature was added.
+/// Extra validation depends on whether the lockfile revision supports `provides-extras`.
 #[test]
-fn sync_ignore_extras_check_when_no_provides_extras() -> Result<()> {
+fn sync_extra_validation_respects_lock_revision() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -6848,9 +6870,8 @@ fn sync_ignore_extras_check_when_no_provides_extras() -> Result<()> {
         "#,
     )?;
 
-    // Write a lockfile that does not have `provides-extra`, simulating a version that predates when
-    // the feature was added.
-    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+    // Omit `provides-extras`, as lockfiles created before extra validation did.
+    let legacy_lock = indoc! {r#"
         version = 1
         requires-python = ">=3.12"
 
@@ -6875,13 +6896,28 @@ fn sync_ignore_extras_check_when_no_provides_extras() -> Result<()> {
         wheels = [
             { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235 },
         ]
-    "#})?;
+    "#};
+    let lockfile = context.temp_dir.child("uv.lock");
+    lockfile.write_str(legacy_lock)?;
 
     // Requesting a non-existent extra should not fail, as no validation should be performed.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("baz"), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--extra", "baz", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Checked in [TIME]
+    ");
+
+    // Revision 1 introduced extra metadata and enables validation of the same request.
+    let validated_lock = legacy_lock.replacen(
+        "[package.metadata]",
+        "[package.metadata]\nprovides-extras = [\"types\"]",
+        1,
+    );
+    lockfile.write_str(&format!("revision = 1\n{validated_lock}"))?;
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--extra", "baz", "--offline"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Extra `baz` is not defined in the `optional-dependencies` table for `project`
     ");
 
     Ok(())
@@ -7119,10 +7155,8 @@ fn sync_non_existent_extra_non_project_workspace() -> Result<()> {
 
 /// Regression test for <https://github.com/astral-sh/uv/issues/6316>.
 ///
-/// Previously, we would read metadata statically from pyproject.toml and write that to `uv.lock`. In
-/// this sync pass, we had also built the project with setuptools, which sorts specifiers by python
-/// string sort through packaging. On the second run, we read the cache that now has the setuptools
-/// sorting, changing the lockfile.
+/// Setuptools writes cached metadata with a different specifier order than the project's static
+/// metadata. A subsequent sync must retain the static metadata in the lockfile.
 #[test]
 fn read_metadata_statically_over_the_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -7138,8 +7172,8 @@ fn read_metadata_statically_over_the_cache() -> Result<()> {
         dependencies = ["anyio>=4,<5"]
 
         [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
+        requires = ["setuptools"]
+        build-backend = "setuptools.build_meta"
         "#,
     )?;
     context
@@ -7150,14 +7184,26 @@ fn read_metadata_statically_over_the_cache() -> Result<()> {
         .touch()?;
 
     context.sync().assert().success();
-    let lock1 = context.read("uv.lock");
-    // Assert we're reading static metadata.
-    assert!(lock1.contains(">=4,<5"));
-    assert!(!lock1.contains("<5,>=4"));
+    let lock = context.read("uv.lock");
+    let document: toml::Value = toml::from_str(&lock)?;
+    let project = document["package"]
+        .as_array()
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package["name"].as_str() == Some("project"))
+        })
+        .ok_or_else(|| anyhow!("project package missing from lockfile"))?;
+    let requirement = &project["metadata"]["requires-dist"][0];
+    assert_eq!(requirement["name"].as_str(), Some("anyio"));
+    assert_eq!(requirement["specifier"].as_str(), Some(">=4,<5"));
+    context
+        .assert_command("from importlib.metadata import requires; print(requires('project'))")
+        .success()
+        .stdout(predicate::str::contains("<5,>=4"));
+
     context.sync().assert().success();
-    let lock2 = context.read("uv.lock");
-    // Assert stability.
-    assert_eq!(lock1, lock2);
+    assert_eq!(lock, context.read("uv.lock"));
 
     Ok(())
 }
@@ -7641,8 +7687,13 @@ fn no_install_local() -> Result<()> {
         name = "local"
         version = "0.1.0"
         requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    local.child("src/local/__init__.py").touch()?;
 
     let local_editable = context.temp_dir.child("local-editable");
     local_editable.create_dir_all()?;
@@ -7653,8 +7704,15 @@ fn no_install_local() -> Result<()> {
         name = "local-editable"
         version = "0.1.0"
         requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    local_editable
+        .child("src/local_editable/__init__.py")
+        .touch()?;
 
     let workspace_member = context.temp_dir.child("workspace-member");
     workspace_member.create_dir_all()?;
@@ -7665,8 +7723,15 @@ fn no_install_local() -> Result<()> {
         name = "workspace-member"
         version = "0.1.0"
         requires-python = ">=3.12"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
         "#,
     )?;
+    workspace_member
+        .child("src/workspace_member/__init__.py")
+        .touch()?;
 
     context.lock().assert().success();
     uv_snapshot!(context.filters(), context.sync().arg("--no-install-local"), @"
@@ -7678,6 +7743,18 @@ fn no_install_local() -> Result<()> {
      + anyio==3.7.0
      + idna==3.6
      + sniffio==1.3.1
+    ");
+
+    // All four local packages are installable when the filter is absent.
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 4 packages in [TIME]
+    Installed 4 packages in [TIME]
+     + local==0.1.0 (from file://[TEMP_DIR]/local)
+     + local-editable==0.1.0 (from file://[TEMP_DIR]/local-editable)
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+     + workspace-member==0.1.0 (from file://[TEMP_DIR]/workspace-member)
     ");
 
     fs_err::remove_dir_all(&context.venv)?;
@@ -8393,8 +8470,7 @@ fn virtual_dependency_group() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn virtual_no_build_dynamic_cached() -> Result<()> {
+fn virtual_project_with_cached_dynamic_metadata() -> Result<TestContext> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -8416,8 +8492,13 @@ fn virtual_no_build_dynamic_cached() -> Result<()> {
         .child("requirements.txt")
         .write_str("anyio==3.7.0")?;
 
-    // Generate a lockfile.
     context.lock().assert().success();
+    Ok(context)
+}
+
+#[test]
+fn virtual_no_build_dynamic_cached() -> Result<()> {
+    let context = virtual_project_with_cached_dynamic_metadata()?;
 
     // `--no-build` should not raise an error, since we don't build or install the project (given
     // that it's virtual and the metadata is cached).
@@ -8437,29 +8518,7 @@ fn virtual_no_build_dynamic_cached() -> Result<()> {
 
 #[test]
 fn virtual_no_build_dynamic_no_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dynamic = ["dependencies"]
-
-        [tool.setuptools.dynamic]
-        dependencies = {file = ["requirements.txt"]}
-        "#,
-    )?;
-
-    context
-        .temp_dir
-        .child("requirements.txt")
-        .write_str("anyio==3.7.0")?;
-
-    // Generate a lockfile.
-    context.lock().assert().success();
+    let context = virtual_project_with_cached_dynamic_metadata()?;
 
     // Clear the cache.
     fs_err::remove_dir_all(&context.cache_dir)?;
@@ -8499,7 +8558,7 @@ fn convert_to_virtual() -> Result<()> {
         .child("src")
         .child("project")
         .child("__init__.py")
-        .touch()?;
+        .write_str("__version__ = '0.1.0'\n")?;
 
     // Running `uv sync` should install the project itself.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -8511,6 +8570,7 @@ fn convert_to_virtual() -> Result<()> {
      + iniconfig==2.0.0
      + project==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_installed("project", "0.1.0");
 
     let lock = context.read("uv.lock");
 
@@ -8568,6 +8628,7 @@ fn convert_to_virtual() -> Result<()> {
     Uninstalled 1 package in [TIME]
      - project==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_not_installed("project");
 
     let lock = context.read("uv.lock");
 
@@ -8624,6 +8685,12 @@ fn convert_to_package() -> Result<()> {
         dependencies = ["iniconfig"]
         "#,
     )?;
+    context
+        .temp_dir
+        .child("src")
+        .child("project")
+        .child("__init__.py")
+        .write_str("__version__ = '0.1.0'\n")?;
 
     // Running `uv sync` should not install the project itself.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -8634,6 +8701,7 @@ fn convert_to_package() -> Result<()> {
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
+    context.assert_not_installed("project");
 
     let lock = context.read("uv.lock");
 
@@ -8686,13 +8754,6 @@ fn convert_to_package() -> Result<()> {
         build-backend = "uv_build"
         "#,
     )?;
-    context
-        .temp_dir
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .touch()?;
-
     // Running `uv sync` should install the project itself.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -8702,6 +8763,7 @@ fn convert_to_package() -> Result<()> {
     Installed 1 package in [TIME]
      + project==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_installed("project", "0.1.0");
 
     let lock = context.read("uv.lock");
 
@@ -8745,9 +8807,7 @@ fn convert_to_package() -> Result<()> {
 
 #[test]
 fn sync_custom_environment_path() -> Result<()> {
-    let mut context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
-        .with_filtered_virtualenv_bin()
-        .with_filtered_python_names();
+    let mut context = uv_test::test_context_with_versions!(&["3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -8799,7 +8859,7 @@ fn sync_custom_environment_path() -> Result<()> {
         .child(".venv")
         .assert(predicate::path::is_dir());
 
-    // An absolute path can be provided
+    // A nested relative path creates its parent directories.
     uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foobar/.venv"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -8809,11 +8869,6 @@ fn sync_custom_environment_path() -> Result<()> {
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
-
-    context
-        .temp_dir
-        .child("foobar")
-        .assert(predicate::path::is_dir());
 
     context
         .temp_dir
@@ -8853,42 +8908,6 @@ fn sync_custom_environment_path() -> Result<()> {
     ChildPath::new(tempdir.path())
         .child(".venv")
         .assert(predicate::path::is_dir());
-
-    // If the directory already exists and is not a virtual environment we should fail with an error
-    fs_err::remove_dir_all(context.temp_dir.join("foo"))?;
-    fs_err::create_dir(context.temp_dir.join("foo"))?;
-    fs_err::write(context.temp_dir.join("foo").join("file"), b"")?;
-    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Project virtual environment directory `[TEMP_DIR]/foo` cannot be used because it is not a valid Python environment (no Python executable was found)
-    ");
-
-    // But if it's just an incompatible virtual environment...
-    fs_err::remove_dir_all(context.temp_dir.join("foo"))?;
-    uv_snapshot!(context.filters(), context.venv().arg("foo").arg("--python").arg("3.11"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
-    warning: The requested interpreter resolved to Python 3.11.[X], which is incompatible with the project's Python requirement: `>=3.12` (from `project.requires-python`)
-    Creating virtual environment at: foo
-    Activate with: source foo/[BIN]/activate
-    ");
-
-    // Even with some extraneous content...
-    fs_err::write(context.temp_dir.join("foo").join("file"), b"")?;
-
-    // We can delete and use it
-    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Removed virtual environment at: foo
-    Creating virtual environment at: foo
-    Resolved 2 packages in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
 
     Ok(())
 }
@@ -9030,27 +9049,19 @@ fn sync_active_project_environment_with_relative_managed_python_dir() -> Result<
         .child(".python-installs")
         .assert(predicate::path::is_dir());
 
-    for _ in 0..2 {
-        let assert = context
-            .sync()
-            .env(EnvVars::UV_PYTHON_INSTALL_DIR, ".python-installs")
-            .env(EnvVars::UV_PYTHON_PREFERENCE, "only-managed")
-            .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic")
-            .env(EnvVars::VIRTUAL_ENV, "foobar")
-            .arg("--active")
-            .assert()
-            .success();
+    let sentinel = context.temp_dir.child("foobar/reuse-sentinel");
+    sentinel.touch()?;
+    let mut sync = context.sync();
+    sync.env(EnvVars::UV_PYTHON_INSTALL_DIR, ".python-installs")
+        .env(EnvVars::UV_PYTHON_PREFERENCE, "only-managed")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic")
+        .env(EnvVars::VIRTUAL_ENV, "foobar")
+        .arg("--active");
 
-        let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
-        assert!(
-            !stderr.contains("Removed virtual environment at: foobar"),
-            "expected `uv sync --active` to reuse the active environment, stderr was:\n{stderr}"
-        );
-        assert!(
-            !stderr.contains("Creating virtual environment at: foobar"),
-            "expected `uv sync --active` to reuse the active environment, stderr was:\n{stderr}"
-        );
-    }
+    sync.assert().success();
+    sentinel.assert(predicate::path::exists());
+    sync.assert().success();
+    sentinel.assert(predicate::path::exists());
 
     context
         .temp_dir
@@ -9291,13 +9302,40 @@ fn sync_active_script_environment_json() -> Result<()> {
         .assert(predicate::path::is_dir());
 
     // A subsequent sync will re-use the environment
-    uv_snapshot!(context.filters(), context.sync().arg("--script").arg("script.py").env(EnvVars::VIRTUAL_ENV, "foo").arg("--active"), @"
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--script").arg("script.py")
+        .arg("--output-format").arg("json")
+        .env(EnvVars::VIRTUAL_ENV, "foo").arg("--active"), @r#"
     exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "target": "script",
+      "script": {
+        "path": "[TEMP_DIR]/script.py"
+      },
+      "sync": {
+        "environment": {
+          "path": "[TEMP_DIR]/foo",
+          "python": {
+            "path": "[TEMP_DIR]/foo/[BIN]/python",
+            "version": "3.11.[X]",
+            "implementation": "cpython"
+          }
+        },
+        "action": "check",
+        "changes": []
+      },
+      "lock": null,
+      "dry_run": false
+    }
+
     ----- stderr -----
-    Using script environment at: foo
     Resolved 3 packages in [TIME]
     Checked 3 packages in [TIME]
-    ");
+    "#);
 
     // Requesting another Python version will invalidate the environment
     uv_snapshot!(context.filters(), context.sync()
@@ -9361,7 +9399,6 @@ fn sync_active_script_environment_json() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-git")]
 fn sync_workspace_custom_environment_path() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -9377,7 +9414,11 @@ fn sync_workspace_custom_environment_path() -> Result<()> {
     )?;
 
     // Create a workspace member
-    context.init().arg("child").assert().success();
+    context
+        .init()
+        .args(["child", "--vcs", "none"])
+        .assert()
+        .success();
 
     // Running `uv sync` should create `.venv` in the workspace root
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -9636,41 +9677,20 @@ fn sync_update_project() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let project = |version: &str| {
+        formatdoc! {r#"
         [project]
         name = "my-project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.sync(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
-
-    // Bump the project version.
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "my-project"
-        version = "0.2.0"
+        version = "{version}"
         requires-python = ">=3.12"
         dependencies = ["iniconfig"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-        "#,
-    )?;
+        "#}
+    };
+    pyproject_toml.write_str(&project("0.1.0"))?;
     context
         .temp_dir
         .child("src")
@@ -9681,11 +9701,39 @@ fn sync_update_project() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + iniconfig==2.0.0
+     + my-project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+
+    // Bump the project version.
+    pyproject_toml.write_str(&project("0.2.0"))?;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
+     - my-project==0.1.0 (from file://[TEMP_DIR]/)
      + my-project==0.2.0 (from file://[TEMP_DIR]/)
     ");
+
+    context
+        .python_command()
+        .args([
+            "-I",
+            "-c",
+            "from importlib.metadata import version; print(version('my-project'), end='')",
+        ])
+        .assert()
+        .success()
+        .stdout("0.2.0");
 
     Ok(())
 }
@@ -9701,26 +9749,26 @@ fn sync_environment_prompt() -> Result<()> {
         name = "my-project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
         "#,
     )?;
 
     // Running `uv sync` should create `.venv`
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
     ");
 
-    // The `pyvenv.cfg` should contain the prompt matching the project name
     let pyvenv_cfg = context.read(".venv/pyvenv.cfg");
-
-    assert!(pyvenv_cfg.contains("prompt = my-project"));
+    assert_eq!(
+        pyvenv_cfg
+            .lines()
+            .find_map(|line| line.strip_prefix("prompt = ")),
+        Some("my-project")
+    );
 
     Ok(())
 }
@@ -10001,22 +10049,58 @@ fn no_build_path_dependency() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn sync_wheel_url_source_error() -> Result<()> {
+/// Create an ABI-incompatible wheel and a compatible transitive dependency for its lock.
+fn incompatible_wheel_with_dependency(context: &TestContext) -> Result<(String, Vec<u8>)> {
+    let (filename, wheel) = generate_wheel(
+        &"pycparser".parse()?,
+        &"2.22".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+
+    Ok(generate_wheel(
+        &"cffi".parse()?,
+        &"1.17.1".parse()?,
+        &["pycparser".parse()?],
+        &BTreeMap::new(),
+        None,
+        "cp310-cp310-macosx_11_0_arm64",
+        &[],
+    ))
+}
+
+#[tokio::test]
+async fn sync_wheel_url_source_error() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = incompatible_wheel_with_dependency(&context)?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .mount(&server)
+        .await;
+    let url = format!("{}/{filename}", server.uri());
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "uv-test"
         version = "0.0.0"
         requires-python = ">=3.10"
-        dependencies = [
-            "cffi @ https://files.pythonhosted.org/packages/08/fd/cc2fedbd887223f9f5d170c96e57cbf655df9831a6546c1727ae13fa977a/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl",
-        ]
-        "#,
-    )?;
+        dependencies = ["cffi @ {url}"]
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
+    "#})?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -10028,7 +10112,7 @@ fn sync_wheel_url_source_error() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 3 packages in [TIME]
-    error: Distribution `cffi==1.17.1 @ direct+https://files.pythonhosted.org/packages/08/fd/cc2fedbd887223f9f5d170c96e57cbf655df9831a6546c1727ae13fa977a/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl` can't be installed because the binary distribution is incompatible with the current platform
+    error: Distribution `cffi==1.17.1 @ direct+http://[LOCALHOST]/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl` can't be installed because the binary distribution is incompatible with the current platform
 
     hint: You're using CPython 3.12 (`cp312`), but `cffi` (v1.17.1) only has wheels with the following Python ABI tag: `cp310`
     ");
@@ -10039,37 +10123,32 @@ fn sync_wheel_url_source_error() -> Result<()> {
 #[test]
 fn sync_wheel_path_source_error() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    // Download a wheel.
-    let archive = context
-        .temp_dir
-        .child("cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/08/fd/cc2fedbd887223f9f5d170c96e57cbf655df9831a6546c1727ae13fa977a/cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl",
-        &archive,
-    );
+    let (filename, wheel) = incompatible_wheel_with_dependency(&context)?;
+    context.temp_dir.child(&filename).write_binary(&wheel)?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "uv-test"
         version = "0.0.0"
         requires-python = ">=3.10"
         dependencies = ["cffi"]
 
-        [tool.uv.sources]
-        cffi = { path = "cffi-1.17.1-cp310-cp310-macosx_11_0_arm64.whl" }
-        "#,
-    )?;
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+        [tool.uv.sources]
+        cffi = {{ path = "{filename}" }}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -10085,10 +10164,8 @@ fn sync_wheel_path_source_error() -> Result<()> {
 fn sync_override_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Create a dependency.
-    let pyproject_toml = context.temp_dir.child("core").child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let core_manifest = context.temp_dir.child("core/pyproject.toml");
+    let core_base = indoc! {r#"
         [project]
         name = "core"
         version = "0.1.0"
@@ -10097,24 +10174,16 @@ fn sync_override_package() -> Result<()> {
         [build-system]
         requires = ["hatchling"]
         build-backend = "hatchling.build"
-
-        [tool.uv]
-        package = false
-        "#,
-    )?;
-
+    "#};
+    core_manifest.write_str(&format!("{core_base}\n[tool.uv]\npackage = false\n"))?;
     context
         .temp_dir
-        .child("core")
-        .child("src")
-        .child("core")
-        .child("__init__.py")
-        .touch()?;
+        .child("core/src/core/__init__.py")
+        .write_str("__version__ = '0.1.0'\n")?;
 
-    // Create a package that depends on it.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let project_manifest = context.temp_dir.child("pyproject.toml");
+    let project_with_source = |source: &str| {
+        formatdoc! {r#"
         [project]
         name = "project"
         version = "0.0.0"
@@ -10126,16 +10195,12 @@ fn sync_override_package() -> Result<()> {
         build-backend = "hatchling.build"
 
         [tool.uv.sources]
-        core = { path = "./core" }
-        "#,
-    )?;
-
-    context
-        .temp_dir
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .touch()?;
+        core = {source}
+        "#}
+    };
+    let no_override = project_with_source(r#"{ path = "./core" }"#);
+    project_manifest.write_str(&no_override)?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
 
     // Syncing the project should _not_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -10146,25 +10211,12 @@ fn sync_override_package() -> Result<()> {
     Installed 1 package in [TIME]
      + project==0.0.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_not_installed("core");
 
-    // Mark the source as `package = true`.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.0.0"
-        requires-python = ">=3.12"
-        dependencies = ["core"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.uv.sources]
-        core = { path = "./core", package = true }
-        "#,
-    )?;
+    // The root's source mapping overrides the child's `package = false`.
+    project_manifest.write_str(&project_with_source(
+        r#"{ path = "./core", package = true }"#,
+    ))?;
 
     // Syncing the project _should_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -10177,21 +10229,9 @@ fn sync_override_package() -> Result<()> {
      + core==0.1.0 (from file://[TEMP_DIR]/core)
      ~ project==0.0.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_installed("core", "0.1.0");
 
-    // Remove `package = false`.
-    let pyproject_toml = context.temp_dir.child("core").child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "core"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-        "#,
-    )?;
+    core_manifest.write_str(core_base)?;
 
     // Syncing the project _should_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -10204,24 +10244,9 @@ fn sync_override_package() -> Result<()> {
      ~ core==0.1.0 (from file://[TEMP_DIR]/core)
     ");
 
-    // Mark the source as `package = false`.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.0.0"
-        requires-python = ">=3.12"
-        dependencies = ["core"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.uv.sources]
-        core = { path = "./core", package = false }
-        "#,
-    )?;
+    project_manifest.write_str(&project_with_source(
+        r#"{ path = "./core", package = false }"#,
+    ))?;
 
     // Syncing the project should _not_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -10235,72 +10260,19 @@ fn sync_override_package() -> Result<()> {
      ~ project==0.0.0 (from file://[TEMP_DIR]/)
     ");
 
-    // Update the source `tool.uv` to `package = true`
-    let pyproject_toml = context.temp_dir.child("core").child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "core"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.uv]
-        package = true
-        "#,
-    )?;
-
-    // Mark the source as `package = false`.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.0.0"
-        requires-python = ">=3.12"
-        dependencies = ["core"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.uv.sources]
-        core = { path = "./core", package = false }
-        "#,
-    )?;
+    // The root's source mapping also overrides the child's `package = true`.
+    core_manifest.write_str(&format!("{core_base}\n[tool.uv]\npackage = true\n"))?;
 
     // Syncing the project should _not_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     ~ project==0.0.0 (from file://[TEMP_DIR]/)
+    Checked 1 package in [TIME]
     ");
+    context.assert_not_installed("core");
 
-    // Remove the `package = false` mark.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.0.0"
-        requires-python = ">=3.12"
-        dependencies = ["core"]
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.uv.sources]
-        core = { path = "./core" }
-        "#,
-    )?;
+    project_manifest.write_str(&no_override)?;
 
     // Syncing the project _should_ install `core`.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -10313,13 +10285,16 @@ fn sync_override_package() -> Result<()> {
      + core==0.1.0 (from file://[TEMP_DIR]/core)
      ~ project==0.0.0 (from file://[TEMP_DIR]/)
     ");
+    context.assert_installed("core", "0.1.0");
 
     Ok(())
 }
 
-/// Avoid installing dev dependencies of transitive dependencies.
+/// Select the target workspace package's development dependencies without including those of a
+/// dependency.
 #[test]
 fn transitive_dev() -> Result<()> {
+    let server = PackseServer::new("extras/lock-without-metadata.toml");
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -10332,7 +10307,7 @@ fn transitive_dev() -> Result<()> {
         dependencies = ["child"]
 
         [tool.uv]
-        dev-dependencies = ["anyio>3"]
+        dev-dependencies = ["anyio==4.3.0"]
 
         [tool.uv.sources]
         child = { workspace = true }
@@ -10342,15 +10317,7 @@ fn transitive_dev() -> Result<()> {
         "#,
     )?;
 
-    let src = context.temp_dir.child("src").child("albatross");
-    src.create_dir_all()?;
-
-    let init = src.child("__init__.py");
-    init.touch()?;
-
     let child = context.temp_dir.child("child");
-    fs_err::create_dir_all(&child)?;
-
     let pyproject_toml = child.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -10364,23 +10331,13 @@ fn transitive_dev() -> Result<()> {
         build-backend = "uv_build"
 
         [tool.uv]
-        dev-dependencies = ["iniconfig>=1"]
+        dev-dependencies = ["six==1.0.0"]
         "#,
     )?;
 
-    let src = child.child("src").child("albatross");
-    src.create_dir_all()?;
+    child.child("src/child/__init__.py").touch()?;
 
-    let init = src.child("__init__.py");
-    init.touch()?;
-
-    child
-        .child("src")
-        .child("child")
-        .child("__init__.py")
-        .touch()?;
-
-    uv_snapshot!(context.filters(), context.sync().arg("--dev"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--dev").arg("--index-url").arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
     warning: The `tool.uv.dev-dependencies` field (used in `child/pyproject.toml`, `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
@@ -10389,14 +10346,29 @@ fn transitive_dev() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + child==0.1.0 (from file://[TEMP_DIR]/child)
-     + idna==3.6
-     + sniffio==1.3.1
+     + idna==1.0.0
+     + sniffio==1.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().args(["--locked", "--dev", "--package", "child", "--index-url"]).arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `child/pyproject.toml`, `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Resolved 6 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 3 packages in [TIME]
+    Installed 1 package in [TIME]
+     - anyio==4.3.0
+     - idna==1.0.0
+     + six==1.0.0
+     - sniffio==1.0.0
     ");
 
     Ok(())
 }
 
-/// Avoid installing dev dependencies of transitive dependencies.
+/// `--no-editable` builds first-party workspace packages under `--no-build` and installs them
+/// independently of their source directories.
 #[test]
 fn sync_no_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -10422,22 +10394,10 @@ fn sync_no_editable() -> Result<()> {
         "#,
     )?;
 
-    let src = context.temp_dir.child("src").child("albatross");
-    src.create_dir_all()?;
-
-    let init = src.child("__init__.py");
-    init.touch()?;
-
-    context
-        .temp_dir
-        .child("src")
-        .child("root")
-        .child("__init__.py")
-        .touch()?;
+    let root_source = context.temp_dir.child("src/root");
+    root_source.child("__init__.py").touch()?;
 
     let child = context.temp_dir.child("child");
-    fs_err::create_dir_all(&child)?;
-
     let pyproject_toml = child.child("pyproject.toml");
     pyproject_toml.write_str(
         r#"
@@ -10452,13 +10412,8 @@ fn sync_no_editable() -> Result<()> {
         "#,
     )?;
 
-    let src = child.child("src").child("child");
-    src.create_dir_all()?;
+    child.child("src/child/__init__.py").touch()?;
 
-    let init = src.child("__init__.py");
-    init.touch()?;
-
-    // `--no-build` should allow building first-party workspace packages in non-editable mode.
     uv_snapshot!(context.filters(), context.sync().arg("--no-editable").arg("--no-build"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -10476,11 +10431,11 @@ fn sync_no_editable() -> Result<()> {
     Checked 2 packages in [TIME]
     ");
 
-    // Remove the project.
+    // Both installations must remain usable after their source directories disappear.
+    fs_err::remove_dir_all(&root_source)?;
     fs_err::remove_dir_all(&child)?;
 
-    // Ensure that we can still import it.
-    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("python").arg("-c").arg("import child"), @"
+    uv_snapshot!(context.filters(), context.run().args(["--no-sync", "python", "-I", "-c", "import root, child"]), @"
     exit_code: 0 (success)
     ");
 
@@ -10589,6 +10544,19 @@ fn sync_no_editable_ignores_source_changes() -> Result<()> {
     Ok(())
 }
 
+fn write_foo_entry_point(context: &TestContext) -> Result<ChildPath> {
+    context
+        .temp_dir
+        .child("src/foo/__init__.py")
+        .write_str(indoc! {r#"
+            def custom_entry():
+                print("Hello")
+        "#})?;
+    Ok(ChildPath::new(
+        venv_bin_path(&context.venv).join(format!("entry{}", std::env::consts::EXE_SUFFIX)),
+    ))
+}
+
 #[test]
 /// Check warning message for <https://github.com/astral-sh/uv/issues/6998>
 /// if no `build-system` section is defined.
@@ -10609,13 +10577,7 @@ fn sync_scripts_without_build_system() -> Result<()> {
         "#,
     )?;
 
-    let test_script = context.temp_dir.child("src/__init__.py");
-    test_script.write_str(
-        r#"
-        def custom_entry():
-            print!("Hello")
-       "#,
-    )?;
+    let entry = write_foo_entry_point(&context)?;
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -10624,6 +10586,7 @@ fn sync_scripts_without_build_system() -> Result<()> {
     warning: Skipping installation of entry points (`project.scripts`) for package `foo` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
     Checked in [TIME]
     ");
+    entry.assert(predicate::path::missing());
 
     Ok(())
 }
@@ -10635,8 +10598,8 @@ fn sync_scripts_project_not_packaged() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let pyproject = |package: bool| {
+        formatdoc! {r#"
         [project]
         name = "foo"
         version = "0.1.0"
@@ -10651,17 +10614,11 @@ fn sync_scripts_project_not_packaged() -> Result<()> {
         build-backend = "hatchling.build"
 
         [tool.uv]
-        package = false
-        "#,
-    )?;
-
-    let test_script = context.temp_dir.child("src/__init__.py");
-    test_script.write_str(
-        r#"
-        def custom_entry():
-            print!("Hello")
-       "#,
-    )?;
+        package = {package}
+        "#}
+    };
+    pyproject_toml.write_str(&pyproject(false))?;
+    let entry = write_foo_entry_point(&context)?;
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -10670,6 +10627,14 @@ fn sync_scripts_project_not_packaged() -> Result<()> {
     warning: Skipping installation of entry points (`project.scripts`) for package `foo` because this project is not packaged; to install entry points, set `tool.uv.package = true` or define a `build-system`
     Checked in [TIME]
     ");
+    entry.assert(predicate::path::missing());
+
+    pyproject_toml.write_str(&pyproject(true))?;
+    context.sync().assert().success();
+    std::process::Command::new(entry.path())
+        .assert()
+        .success()
+        .stdout(predicate::eq("Hello").trim());
 
     Ok(())
 }
@@ -11157,6 +11122,13 @@ fn sync_invalid_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_virtualenv_bin()
         .with_filtered_python_names();
+    let wheels = context.temp_dir.child("wheels");
+    wheels.create_dir_all()?;
+    let wheel = "ok-1.0.0-py3-none-any.whl";
+    fs_err::copy(
+        context.workspace_root.join("test/links").join(wheel),
+        wheels.child(wheel),
+    )?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -11165,21 +11137,28 @@ fn sync_invalid_environment() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["ok==1.0.0"]
+
+        [tool.uv]
+        no-index = true
+        find-links = ["wheels"]
         "#,
     )?;
 
-    // If the directory already exists and is not a virtual environment we should fail with an error
-    fs_err::create_dir(context.temp_dir.join(".venv"))?;
-    fs_err::write(context.temp_dir.join(".venv").join("file"), b"")?;
-    uv_snapshot!(context.filters(), context.sync(), @"
+    // A directory without an environment must not be replaced.
+    let environment = context.temp_dir.child(".venv");
+    let marker = environment.child("user-data");
+    environment.create_dir_all()?;
+    marker.write_str("user data")?;
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project virtual environment directory `[VENV]/` cannot be used because it is not a valid Python environment (no Python executable was found)
     ");
+    marker.assert("user data");
 
-    // But if it's just an incompatible virtual environment...
-    fs_err::remove_dir_all(context.temp_dir.join(".venv"))?;
+    // An incompatible virtual environment may be replaced, even with extraneous content.
+    fs_err::remove_dir_all(&environment)?;
     uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.11"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -11189,11 +11168,8 @@ fn sync_invalid_environment() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     ");
 
-    // Even with some extraneous content...
-    fs_err::write(context.temp_dir.join(".venv").join("file"), b"")?;
-
-    // We can delete and use it
-    uv_snapshot!(context.filters(), context.sync(), @"
+    marker.write_str("user data")?;
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -11202,17 +11178,19 @@ fn sync_invalid_environment() -> Result<()> {
     Resolved 2 packages in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + ok==1.0.0
     ");
+    marker.assert(predicate::path::missing());
+    context.assert_installed("ok", "1.0.0");
 
-    let bin = venv_bin_path(context.temp_dir.join(".venv"));
+    let bin = venv_bin_path(&environment);
 
-    // If there's just a broken symlink, we should warn
+    // A broken Python symlink is detected and reported.
     #[cfg(unix)]
     {
         fs_err::remove_file(bin.join("python"))?;
         fs_err::os::unix::fs::symlink(context.temp_dir.join("does-not-exist"), bin.join("python"))?;
-        uv_snapshot!(context.filters(), context.sync(), @"
+        uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
         exit_code: 0 (success)
         ----- stderr -----
         warning: Ignoring existing virtual environment linked to non-existent Python interpreter: `.venv/[BIN]/[PYTHON]` -> `does-not-exist`
@@ -11221,13 +11199,14 @@ fn sync_invalid_environment() -> Result<()> {
         Creating virtual environment at: .venv
         Resolved 2 packages in [TIME]
         Installed 1 package in [TIME]
-         + iniconfig==2.0.0
+         + ok==1.0.0
         ");
+        context.assert_installed("ok", "1.0.0");
     }
 
-    // If the Python executable is missing entirely, we'll delete and use it
+    // A missing Python executable also causes recreation.
     fs_err::remove_dir_all(&bin)?;
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -11235,11 +11214,12 @@ fn sync_invalid_environment() -> Result<()> {
     Creating virtual environment at: .venv
     Resolved 2 packages in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + ok==1.0.0
     ");
+    context.assert_installed("ok", "1.0.0");
 
-    // But if it's not a virtual environment...
-    fs_err::remove_dir_all(context.temp_dir.join(".venv"))?;
+    // Without `pyvenv.cfg`, an incompatible environment is no longer safe to replace.
+    fs_err::remove_dir_all(&environment)?;
     uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.11"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -11249,38 +11229,25 @@ fn sync_invalid_environment() -> Result<()> {
     Activate with: source .venv/[BIN]/activate
     ");
 
-    // Which we detect by the presence of a `pyvenv.cfg` file
-    fs_err::remove_file(context.temp_dir.join(".venv").join("pyvenv.cfg"))?;
-
-    // Let's make sure some extraneous content isn't removed
-    fs_err::write(context.temp_dir.join(".venv").join("file"), b"")?;
-
-    // We should never delete it
-    uv_snapshot!(context.filters(), context.sync(), @"
+    fs_err::remove_file(environment.child("pyvenv.cfg"))?;
+    marker.write_str("user data")?;
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     error: Project virtual environment directory `[VENV]/` cannot be used because it is not a compatible environment but cannot be recreated because it is not a virtual environment
     ");
+    marker.assert("user data");
 
-    // Even if there's no Python executable
+    // The directory remains protected if its Python executable is removed as well.
     fs_err::remove_dir_all(&bin)?;
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Project virtual environment directory `[VENV]/` cannot be used because it is not a valid Python environment (no Python executable was found)
     ");
 
-    context
-        .temp_dir
-        .child(".venv")
-        .assert(predicate::path::is_dir());
-
-    context
-        .temp_dir
-        .child(".venv")
-        .child("file")
-        .assert(predicate::path::is_file());
+    marker.assert("user data");
 
     Ok(())
 }
@@ -11288,8 +11255,6 @@ fn sync_invalid_environment() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn sync_partial_environment_delete() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
     let context = uv_test::test_context_with_versions!(&["3.13", "3.12"]);
 
     context.init().arg("-p").arg("3.12").assert().success();
@@ -11304,32 +11269,34 @@ fn sync_partial_environment_delete() -> Result<()> {
      + temp==0.1.0 (from file://[TEMP_DIR]/)
     ");
 
-    // Create a directory that's unreadable, erroring on trying to delete its children.
-    // This relies on our implementation listing directory entries before deleting them — which is a
-    // bit of a hack but accomplishes the goal here.
-    let unreadable2 = context.temp_dir.child(".venv/z2.txt");
-    fs_err::create_dir(&unreadable2)?;
-    let perms = std::fs::Permissions::from_mode(0o000);
-    fs_err::set_permissions(&unreadable2, perms)?;
+    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
+    let original_cfg = fs_err::read_to_string(pyvenv_cfg.path())?;
+    let protected_dir = context.venv.child("protected");
+    let protected_file = protected_dir.child("keep.txt");
+    protected_file.write_str("keep")?;
+    let guard = uv_test::ReadOnlyDirectoryGuard::new(protected_dir.path())?;
+    let error = fs_err::remove_file(protected_file.path())
+        .expect_err("the protected file must prevent environment deletion");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
 
     uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.12"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: failed to remove directory `[VENV]/z2.txt`: Permission denied (os error 13)
+    error: failed to remove directory `[VENV]/protected`: Permission denied (os error 13)
     ");
+    pyvenv_cfg.assert(original_cfg.as_str());
 
     uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.12"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    error: failed to remove directory `[VENV]/z2.txt`: Permission denied (os error 13)
+    error: failed to remove directory `[VENV]/protected`: Permission denied (os error 13)
     ");
+    pyvenv_cfg.assert(original_cfg.as_str());
 
-    // Remove the unreadable directory
-    fs_err::remove_dir(unreadable2)?;
-
-    // We should be able to remove the venv now
+    // Restoring write permission lets uv finish deleting and recreate the environment.
+    drop(guard);
     uv_snapshot!(context.filters(), context.sync().arg("-p").arg("3.12"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -11340,6 +11307,7 @@ fn sync_partial_environment_delete() -> Result<()> {
     Installed 1 package in [TIME]
      + temp==0.1.0 (from file://[TEMP_DIR]/)
     ");
+    protected_dir.assert(predicate::path::missing());
 
     Ok(())
 }
@@ -11493,7 +11461,8 @@ fn sync_python_version() -> Result<()> {
     Updated `.python-version` from `3.12` -> `3.10`
     ");
 
-    // We should warn on subsequent uses, but respect the pinned version?
+    let compatible_lock = context.read("uv.lock");
+    // Reject an incompatible pin without replacing the compatible project environment.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 2 (failure)
     ----- stderr -----
@@ -11501,6 +11470,15 @@ fn sync_python_version() -> Result<()> {
     error: The Python request from `.python-version` resolved to Python 3.10.[X], which is incompatible with the project's Python requirement: `>=3.11` (from `project.requires-python`)
     Use `uv python pin` to update the `.python-version` file to a compatible version
     ");
+    assert_eq!(context.read("uv.lock"), compatible_lock);
+    Command::new(context.interpreter())
+        .args([
+            "-I",
+            "-c",
+            "import anyio, sys; assert sys.version_info[:2] == (3, 12), sys.version",
+        ])
+        .assert()
+        .success();
 
     // Unless the pin file is outside the project, in which case we should just ignore it entirely
     let child_dir = context.temp_dir.child("child");
@@ -11536,13 +11514,20 @@ fn sync_python_version() -> Result<()> {
 /// `requires-python` is ignored, falling back to the project's requirement.
 #[test]
 fn sync_ignores_incompatible_global_python_version() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.10", "3.11"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.10"]);
 
     // Create a global pin before creating the project (to avoid pin compatibility check)
     uv_snapshot!(context.filters(), context.python_pin().arg("--global").arg("3.10"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Pinned `[UV_USER_CONFIG_DIR]/.python-version` to `3.10`
+    ");
+
+    // The global pin must override the default interpreter search order.
+    uv_snapshot!(context.filters(), context.python_find(), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    [PYTHON-3.10]
     ");
 
     // Now create a project that requires a different Python version
@@ -11572,30 +11557,38 @@ fn sync_ignores_incompatible_global_python_version() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn sync_explicit() -> Result<()> {
+#[tokio::test]
+async fn sync_explicit_index_uses_cached_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let name = "idna".parse()?;
+    let (filename, wheel) = generate_wheel(
+        &name,
+        &"2.7".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let server = PackageServer::new(&name).await;
+    server.serve(&filename, &wheel, None).await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "root"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = [
-            "idna>2",
-        ]
+        dependencies = ["idna>2"]
 
         [[tool.uv.index]]
         name = "test"
-        url = "https://test.pypi.org/simple"
+        url = "{}"
         explicit = true
 
         [tool.uv.sources]
-        idna = { index = "test" }
-        "#,
-    )?;
+        idna = {{ index = "test" }}
+        "#, server.index_url()})?;
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -11606,10 +11599,15 @@ fn sync_explicit() -> Result<()> {
      + idna==2.7
     ");
 
-    // Clear the environment.
+    // Remove the environment, and reject a second download while leaving the index available.
     fs_err::remove_dir_all(&context.venv)?;
+    Mock::given(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(0)
+        .with_priority(1)
+        .mount(server.mock_server())
+        .await;
 
-    // The package should be drawn from the cache.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -11619,11 +11617,12 @@ fn sync_explicit() -> Result<()> {
     Installed 1 package in [TIME]
      + idna==2.7
     ");
+    context.assert_installed("idna", "2.7");
 
     Ok(())
 }
 
-/// Sync all members in a workspace.
+/// Sync all members, including those outside the root project's dependency graph.
 #[test]
 fn sync_all() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -11635,7 +11634,7 @@ fn sync_all() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["anyio>3", "child"]
+        dependencies = ["anyio>3"]
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -11643,9 +11642,6 @@ fn sync_all() -> Result<()> {
 
         [tool.uv.workspace]
         members = ["child"]
-
-        [tool.uv.sources]
-        child = { workspace = true }
         "#,
     )?;
     context
@@ -12072,11 +12068,30 @@ fn sync_all_groups() -> Result<()> {
 
 #[test]
 fn sync_multiple_sources_index_disjoint_extras() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00Z");
+    let context = uv_test::test_context!("3.12");
+    let index = |name: &str, version: &str, requires| -> Result<PackseServer> {
+        Ok(PackseServer::from_scenario(&Scenario {
+            packages: BTreeMap::from([(
+                name.parse()?,
+                Package {
+                    versions: BTreeMap::from([(
+                        version.parse()?,
+                        PackageMetadata {
+                            requires,
+                            ..PackageMetadata::wheel_only()
+                        },
+                    )]),
+                },
+            )]),
+            ..Scenario::empty()
+        }))
+    };
+    let cu118 = index("jinja2", "3.1.2", vec!["markupsafe>=2".parse()?])?;
+    let cu124 = index("jinja2", "3.1.3", vec!["markupsafe>=2".parse()?])?;
+    let default = index("markupsafe", "2.1.5", vec![])?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -12088,31 +12103,37 @@ fn sync_multiple_sources_index_disjoint_extras() -> Result<()> {
         cu124 = ["jinja2==3.1.3"]
 
         [tool.uv]
-        constraint-dependencies = ["markupsafe<3"]
         conflicts = [
             [
-                { extra = "cu118" },
-                { extra = "cu124" },
+                {{ extra = "cu118" }},
+                {{ extra = "cu124" }},
             ],
         ]
 
         [tool.uv.sources]
         jinja2 = [
-            { index = "torch-cu118", extra = "cu118" },
-            { index = "torch-cu124", extra = "cu124" },
+            {{ index = "torch-cu118", extra = "cu118" }},
+            {{ index = "torch-cu124", extra = "cu124" }},
         ]
 
         [[tool.uv.index]]
         name = "torch-cu118"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118"
+        url = "{cu118}"
         explicit = true
 
         [[tool.uv.index]]
         name = "torch-cu124"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu124"
+        url = "{cu124}"
         explicit = true
+
+        [[tool.uv.index]]
+        url = "{default}"
+        default = true
         "#,
-    )?;
+        cu118 = cu118.index_url(),
+        cu124 = cu124.index_url(),
+        default = default.index_url(),
+    })?;
 
     // Generate a lockfile.
     context.lock().assert().success();
@@ -12125,6 +12146,17 @@ fn sync_multiple_sources_index_disjoint_extras() -> Result<()> {
     Installed 2 packages in [TIME]
      + jinja2==3.1.3
      + markupsafe==2.1.5
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().arg("--extra").arg("cu118"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - jinja2==3.1.3
+     + jinja2==3.1.2
     ");
 
     Ok(())
@@ -12912,52 +12944,6 @@ fn mismatched_name_self_editable_package() -> Result<()> {
     Ok(())
 }
 
-/// A wheel is available in the cache, but was requested under the wrong name.
-#[test]
-fn mismatched_name_cached_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-
-    // Cache the `iniconfig` wheel.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz"]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.sync(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz)
-    ");
-
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["foo @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz"]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.sync(), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to download and build `foo @ https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz`
-      cause: Package metadata name `iniconfig` does not match given name `foo`
-    ");
-
-    Ok(())
-}
-
 /// Sync a Git repository that depends on a package within the same repository via a `path` source.
 ///
 /// See: <https://github.com/astral-sh/uv/issues/9516>
@@ -13109,6 +13095,7 @@ fn lock_git_poetry_path_dependency() -> Result<()> {
         .arg("-c")
         .arg("user.email=example@example.com")
         .arg("commit")
+        .arg("--no-gpg-sign")
         .arg("-m")
         .arg("Initial commit")
         .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
@@ -13243,6 +13230,7 @@ fn sync_git_metadata_archive_dependency() -> Result<()> {
         .arg("-c")
         .arg("user.email=example@example.com")
         .arg("commit")
+        .arg("--no-gpg-sign")
         .arg("-m")
         .arg("Initial commit")
         .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
@@ -13340,23 +13328,14 @@ fn sync_git_metadata_archive_dependency() -> Result<()> {
 fn sync_build_tag() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("build_tag-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
+    let links = context.temp_dir.join("links/");
+    fs_err::create_dir_all(&links)?;
+    for build_tag in [1, 3, 5] {
+        let wheel = format!("build_tag-1.0.0-{build_tag}-py2.py3-none-any.whl");
+        fs_err::copy(
+            context.workspace_root.join("test/links").join(&wheel),
+            links.join(&wheel),
+        )?;
     }
 
     context
@@ -13372,7 +13351,7 @@ fn sync_build_tag() -> Result<()> {
         [tool.uv]
         find-links = ["{}"]
         "#,
-            context.temp_dir.join("links/").portable_display(),
+            links.portable_display(),
         })?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -13509,13 +13488,16 @@ fn url_hash_mismatch() -> Result<()> {
 #[test]
 fn path_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    // Download the source.
+    let marker = context.temp_dir.child("backend-executed");
+    let bytes = generate_source_archive(
+        &"iniconfig".parse()?,
+        &"2.0.0".parse()?,
+        "",
+        Some(marker.path()),
+    )?;
+    let context = context.with_filter((hex::encode(Sha256::digest(&bytes)), "[COMPUTED_HASH]"));
     let archive = context.temp_dir.child("iniconfig-2.0.0.tar.gz");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz",
-        &archive,
-    );
+    archive.write_binary(&bytes)?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13543,7 +13525,7 @@ fn path_hash_mismatch() -> Result<()> {
         name = "iniconfig"
         version = "2.0.0"
         source = { path = "iniconfig-2.0.0.tar.gz" }
-        sdist = { hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b4" }
+        sdist = { hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000" }
 
         [[package]]
         name = "project"
@@ -13558,18 +13540,19 @@ fn path_hash_mismatch() -> Result<()> {
     "#})?;
 
     // Reject the archive while validating lockfile metadata, before it can be built.
-    uv_snapshot!(context.filters(), context.sync(), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to generate package metadata for `iniconfig==2.0.0 @ path+iniconfig-2.0.0.tar.gz`
       cause: Hash mismatch for `iniconfig @ file://[TEMP_DIR]/iniconfig-2.0.0.tar.gz`
 
              Expected:
-               sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b4
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
 
              Computed:
-               sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3
+               sha256:[COMPUTED_HASH]
     ");
+    marker.assert(predicate::path::missing());
 
     Ok(())
 }
@@ -13617,9 +13600,10 @@ fn find_links_relative_in_config_works_from_subdir() -> Result<()> {
     Ok(())
 }
 
+/// See <https://github.com/astral-sh/uv/issues/13744> for a virtual environment replacement flake.
 #[test]
 fn sync_dry_run() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -13644,6 +13628,14 @@ fn sync_dry_run() -> Result<()> {
     Would install 1 package
      + iniconfig==2.0.0
     ");
+    context
+        .temp_dir
+        .child(".venv")
+        .assert(predicate::path::missing());
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicate::path::missing());
 
     // Perform a full sync.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -13656,6 +13648,8 @@ fn sync_dry_run() -> Result<()> {
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
+    let lock = context.read("uv.lock");
+    let pyvenv_cfg = context.read(".venv/pyvenv.cfg");
 
     // Update the requirements.
     pyproject_toml.write_str(
@@ -13680,6 +13674,9 @@ fn sync_dry_run() -> Result<()> {
      - iniconfig==2.0.0
      + typing-extensions==4.10.0
     ");
+    assert_eq!(context.read("uv.lock"), lock);
+    context.assert_command("import iniconfig").success();
+    context.assert_not_installed("typing_extensions");
 
     // Update the `requires-python`.
     pyproject_toml.write_str(
@@ -13687,7 +13684,7 @@ fn sync_dry_run() -> Result<()> {
         [project]
         name = "project"
         version = "0.1.0"
-        requires-python = "==3.9.*"
+        requires-python = "==3.11.*"
         dependencies = ["iniconfig"]
         "#,
     )?;
@@ -13695,37 +13692,29 @@ fn sync_dry_run() -> Result<()> {
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
     Would replace project environment at: .venv
-    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version >= '3.12'` vs `python_full_version == '3.9.*'`
+    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version >= '3.12'` vs `python_full_version == '3.11.*'`
     Resolved 2 packages in [TIME]
     Would update lockfile at: uv.lock
     Would install 1 package
      + iniconfig==2.0.0
     ");
+    assert_eq!(context.read("uv.lock"), lock);
+    assert_eq!(context.read(".venv/pyvenv.cfg"), pyvenv_cfg);
 
     // Perform a full sync.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Using CPython 3.9.[X] interpreter at: [PYTHON-3.9]
+    Using CPython 3.11.[X] interpreter at: [PYTHON-3.11]
     Removed virtual environment at: .venv
     Creating virtual environment at: .venv
-    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version >= '3.12'` vs `python_full_version == '3.9.*'`
+    warning: Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `python_full_version >= '3.12'` vs `python_full_version == '3.11.*'`
     Resolved 2 packages in [TIME]
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
-
-    // TMP: Attempt to catch this flake with verbose output
-    // See https://github.com/astral-sh/uv/issues/13744
-    let output = context.sync().arg("--dry-run").arg("-vv").output()?;
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("Would replace existing virtual environment"),
-        "{}",
-        stderr
-    );
 
     uv_snapshot!(context.filters(), context.sync().arg("--dry-run"), @"
     exit_code: 0 (success)
@@ -13771,6 +13760,9 @@ fn sync_dry_run_and_locked() -> Result<()> {
         "#,
     )?;
 
+    let environment_marker = context.venv.child("preview-marker");
+    environment_marker.write_str("original environment")?;
+
     // Running with `--locked` and `--dry-run` should error.
     uv_snapshot!(context.filters(), context.sync().arg("--locked").arg("--dry-run"), @"
     exit_code: 1 (failure)
@@ -13785,10 +13777,9 @@ fn sync_dry_run_and_locked() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
 
-    let updated = context.read("uv.lock");
-
-    // And the lockfile should be unchanged.
-    assert_eq!(existing, updated);
+    assert_eq!(context.read("uv.lock"), existing);
+    environment_marker.assert("original environment");
+    context.assert_not_installed("iniconfig");
 
     Ok(())
 }
@@ -13810,6 +13801,7 @@ fn sync_dry_run_and_frozen() -> Result<()> {
 
     // Lock the initial requirements.
     context.lock().assert().success();
+    let existing = context.read("uv.lock");
 
     // Update the requirements.
     pyproject_toml.write_str(
@@ -13822,6 +13814,9 @@ fn sync_dry_run_and_frozen() -> Result<()> {
         "#,
     )?;
 
+    let environment_marker = context.venv.child("preview-marker");
+    environment_marker.write_str("original environment")?;
+
     // Running with `--frozen` with `--dry-run` should preview dependencies to be installed.
     uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--dry-run"), @"
     exit_code: 0 (success)
@@ -13833,10 +13828,14 @@ fn sync_dry_run_and_frozen() -> Result<()> {
      + idna==3.6
      + sniffio==1.3.1
     ");
+    assert_eq!(context.read("uv.lock"), existing);
+    environment_marker.assert("original environment");
+    context.assert_not_installed("anyio");
 
     Ok(())
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn sync_script() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
@@ -13866,8 +13865,14 @@ fn sync_script() -> Result<()> {
      + sniffio==1.3.1
     ");
 
-    // If a lockfile didn't exist already, `uv sync --script` shouldn't create one.
-    assert!(!context.temp_dir.child("uv.lock").exists());
+    context
+        .temp_dir
+        .child("script.py.lock")
+        .assert(predicates::path::missing());
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicates::path::missing());
 
     // Modify the script's dependencies.
     script.write_str(indoc! { r#"
@@ -14002,6 +14007,7 @@ fn sync_frozen_script_lockfile_before_environment() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn sync_locked_script() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.9", "3.12"]);
@@ -14241,6 +14247,7 @@ fn sync_locked_script() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn sync_script_with_compatible_build_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -14284,7 +14291,7 @@ fn sync_script_with_compatible_build_constraints() -> Result<()> {
 
 #[test]
 fn sync_script_with_incompatible_build_constraints() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.12");
 
     let test_script = context.temp_dir.child("script.py");
 
@@ -14749,9 +14756,10 @@ fn transitive_group_conflicts_cycle() -> Result<()> {
 #[test]
 fn prune_cache_url_subdirectory() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let archive = SubdirectoryArchive::start()?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -14761,8 +14769,8 @@ fn prune_cache_url_subdirectory() -> Result<()> {
         ]
 
         [tool.uv.sources]
-        root = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
-    "#})?;
+        root = {{ url = "{}", subdirectory = "packages/root" }}
+    "#, archive.url()})?;
 
     // Lock the project.
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -14783,7 +14791,7 @@ fn prune_cache_url_subdirectory() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root==0.0.1 (from http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root)
      + sniffio==1.3.1
     ");
 
@@ -14795,6 +14803,7 @@ fn prune_cache_url_subdirectory() -> Result<()> {
 /// See <https://github.com/astral-sh/uv/issues/12164>
 #[test]
 fn locked_version_coherence() -> Result<()> {
+    let server = PackseServer::new("simple/single-package.toml");
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -14804,72 +14813,40 @@ fn locked_version_coherence() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = ["a==2.0.0"]
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
 
     let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "iniconfig" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "iniconfig" }]
-        "#);
-    });
-
-    // Write an inconsistent iniconfig entry
-    context
-        .temp_dir
-        .child("uv.lock")
-        .write_str(&lock.replace(r#"version = "2.0.0""#, r#"version = "1.0.0""#))?;
+    let original_version = r#"version = "2.0.0""#;
+    assert_eq!(lock.matches(original_version).count(), 1);
+    // Leave the wheel filename intact while corrupting its package's recorded version.
+    context.temp_dir.child("uv.lock").write_str(&lock.replacen(
+        original_version,
+        r#"version = "1.0.0""#,
+        1,
+    ))?;
 
     // An inconsistent lockfile should fail with `--locked`
-    uv_snapshot!(context.filters(), context.sync().arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--locked").arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse `uv.lock`
-      cause: The entry for package `iniconfig` (1.0.0) has wheel `iniconfig-2.0.0-py3-none-any.whl` with inconsistent version (2.0.0), which indicates a malformed wheel. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+      cause: The entry for package `a` (1.0.0) has wheel `a-2.0.0-py3-none-any.whl` with inconsistent version (2.0.0), which indicates a malformed wheel. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
     ");
 
     // Without `--locked`, we could fail or recreate the lockfile, currently, we fail.
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to parse `uv.lock`
-      cause: The entry for package `iniconfig` (1.0.0) has wheel `iniconfig-2.0.0-py3-none-any.whl` with inconsistent version (2.0.0), which indicates a malformed wheel. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
+      cause: The entry for package `a` (1.0.0) has wheel `a-2.0.0-py3-none-any.whl` with inconsistent version (2.0.0), which indicates a malformed wheel. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
     ");
 
     Ok(())
@@ -15004,9 +14981,44 @@ fn sync_build_constraints() -> Result<()> {
 #[test]
 fn sync_workspace_member_build_constraints() -> Result<()> {
     let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12")
-        .with_exclude_newer("2025-03-24T19:00:00Z")
-        .with_filtered_counts();
+    let context = uv_test::test_context!("3.12");
+
+    // The index offers a==1 and a==2. The archive can only build with a==1.
+    let archive = context.temp_dir.child("leaf-0.1.0.tar.gz");
+    uv_test::archive::write_tar_gz(
+        fs_err::File::create(archive.path())?,
+        &[
+            (
+                "leaf-0.1.0/pyproject.toml",
+                indoc! {r#"
+                    [project]
+                    name = "leaf"
+                    version = "0.1.0"
+
+                    [build-system]
+                    requires = ["a", "hatchling"]
+                    build-backend = "backend"
+                    backend-path = ["."]
+                "#},
+            ),
+            (
+                "leaf-0.1.0/backend.py",
+                indoc! {r#"
+                    from importlib.metadata import version as installed_version
+                    from hatchling.build import *
+
+                    build_version = installed_version("a")
+                    if build_version != "1.0.0":
+                        raise RuntimeError(f"build constraint ignored: a=={build_version}")
+                "#},
+            ),
+            (
+                "leaf-0.1.0/PKG-INFO",
+                "Metadata-Version: 2.3\nName: leaf\nVersion: 0.1.0\n\n",
+            ),
+            ("leaf-0.1.0/src/leaf/__init__.py", ""),
+        ],
+    )?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -15018,7 +15030,7 @@ fn sync_workspace_member_build_constraints() -> Result<()> {
         dependencies = ["child"]
 
         [tool.uv]
-        build-constraint-dependencies = ["setuptools<78"]
+        build-constraint-dependencies = ["a<2"]
 
         [tool.uv.sources]
         child = { workspace = true }
@@ -15027,12 +15039,6 @@ fn sync_workspace_member_build_constraints() -> Result<()> {
         members = ["child"]
         "#,
     )?;
-    context
-        .temp_dir
-        .child("src")
-        .child("root")
-        .child("__init__.py")
-        .touch()?;
 
     let child = context.temp_dir.child("child");
     child.child("pyproject.toml").write_str(
@@ -15041,7 +15047,10 @@ fn sync_workspace_member_build_constraints() -> Result<()> {
         name = "child"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["a"]
+        dependencies = ["leaf"]
+
+        [tool.uv.sources]
+        leaf = { path = "../leaf-0.1.0.tar.gz" }
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
@@ -15054,85 +15063,80 @@ fn sync_workspace_member_build_constraints() -> Result<()> {
         .child("__init__.py")
         .touch()?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--package").arg("child").arg("--no-binary-package").arg("a"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--package").arg("child"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + a==2.0.0
+    Resolved 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
      + child==0.1.0 (from file://[TEMP_DIR]/child)
+     + leaf==0.1.0 (from file://[TEMP_DIR]/leaf-0.1.0.tar.gz)
     ");
 
     let lock = context.read("uv.lock");
     assert!(
-        lock.contains(r#"build-constraints = [{ name = "setuptools", specifier = "<78" }]"#),
+        lock.contains(r#"build-constraints = [{ name = "a", specifier = "<2" }]"#),
         "expected workspace build constraints to be recorded in the lockfile:\n{lock}"
     );
 
     fs_err::remove_dir_all(&context.cache_dir)?;
     fs_err::remove_dir_all(&context.venv)?;
 
-    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--package").arg("child").arg("--locked").arg("--no-binary-package").arg("a"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url()).arg("--package").arg("child").arg("--locked"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Creating virtual environment at: .venv
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + a==2.0.0
+    Resolved 3 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
      + child==0.1.0 (from file://[TEMP_DIR]/child)
+     + leaf==0.1.0 (from file://[TEMP_DIR]/leaf-0.1.0.tar.gz)
     ");
 
     Ok(())
 }
 
-// Test that we recreate a virtual environment when `pyvenv.cfg` version
-// is incompatible with the interpreter version.
-#[test]
-fn sync_when_virtual_environment_incompatible_with_interpreter() -> Result<()> {
+fn incompatible_virtual_environment(version_key: &str) -> Result<TestContext> {
     let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.11"
         dependencies = []
-        "#,
+    "#})?;
+
+    let contents = context.read(".venv/pyvenv.cfg");
+    let version_line = contents
+        .lines()
+        .find(|line| line.starts_with("version_info = "))
+        .ok_or_else(|| anyhow!("missing version_info in pyvenv.cfg:\n{contents}"))?;
+    fs_err::write(
+        context.venv.child("pyvenv.cfg"),
+        contents.replacen(version_line, &format!("{version_key} = 3.11.0"), 1),
     )?;
+    Ok(context)
+}
 
-    // Create a virtual environment at `.venv`.
-    context
-        .venv()
-        .arg(context.venv.as_os_str())
-        .arg("--clear")
-        .arg("--python")
-        .arg("3.12")
-        .assert()
-        .success();
+fn assert_recreated_virtual_environment(context: &TestContext) {
+    let contents = context.read(".venv/pyvenv.cfg");
+    assert!(
+        contents
+            .lines()
+            .any(|line| line.starts_with("version_info = 3.12.")),
+        "expected Python 3.12 in the recreated environment:\n{contents}"
+    );
+}
 
-    // Simulate an incompatible `pyvenv.cfg:version` value created
-    // by the venv module.
-    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
-    let contents = context
-        .read(".venv/pyvenv.cfg")
-        .lines()
-        .map(|line| {
-            if line.trim_start().starts_with("version") {
-                "version = 3.11.0".to_string()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs_err::write(&pyvenv_cfg, contents)?;
+/// Recreate an environment whose stdlib `venv` version key disagrees with its interpreter.
+#[test]
+fn sync_recreates_environment_with_incompatible_version() -> Result<()> {
+    let context = incompatible_virtual_environment("version")?;
 
-    // We should also be able to read from the lockfile.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -15142,146 +15146,25 @@ fn sync_when_virtual_environment_incompatible_with_interpreter() -> Result<()> {
     Resolved 1 package in [TIME]
     Checked in [TIME]
     ");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        let contents = context.read(".venv/pyvenv.cfg");
-        let lines: Vec<&str> = contents.split('\n').collect();
-        assert_snapshot!(lines[3], @"version_info = 3.12.[X]");
-    });
-
-    // Simulate an incompatible `pyvenv.cfg:version_info` value created
-    // by uv or virtualenv.
-    let pyvenv_cfg = context.venv.child("pyvenv.cfg");
-    let contents = context
-        .read(".venv/pyvenv.cfg")
-        .lines()
-        .map(|line| {
-            if line.trim_start().starts_with("version") {
-                "version_info = 3.11.0".to_string()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    fs_err::write(&pyvenv_cfg, contents)?;
-
-    // We should also be able to read from the lockfile.
-    uv_snapshot!(context.filters(), context.sync(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Removed virtual environment at: .venv
-    Creating virtual environment at: .venv
-    Resolved 1 package in [TIME]
-    Checked in [TIME]
-    ");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        let contents = context.read(".venv/pyvenv.cfg");
-        let lines: Vec<&str> = contents.split('\n').collect();
-        assert_snapshot!(lines[3], @"version_info = 3.12.[X]");
-    });
-
+    assert_recreated_virtual_environment(&context);
     Ok(())
 }
 
-/// Ensure that existing `uv.lock` files can use `upload_time` or `upload-time` interchangeably.
+/// Recreate an environment whose uv or virtualenv version key disagrees with its interpreter.
 #[test]
-fn sync_upload_time() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+fn sync_recreates_environment_with_incompatible_version_info() -> Result<()> {
+    let context = incompatible_virtual_environment("version_info")?;
 
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Resolved 4 packages in [TIME]
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Removed virtual environment at: .venv
+    Creating virtual environment at: .venv
+    Resolved 1 package in [TIME]
+    Checked in [TIME]
     ");
-
-    let uv_lock = context.temp_dir.child("uv.lock");
-    uv_lock.write_str(r#"
-        version = 1
-        revision = 2
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "anyio"
-        version = "3.7.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", hash = "sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce", size = 142737, upload_time = "2023-05-27T11:12:46.688Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", hash = "sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0", size = 80873, upload_time = "2023-05-27T11:12:44.474Z" },
-        ]
-
-        [[package]]
-        name = "idna"
-        version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload_time = "2023-11-25T15:40:54.902Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload_time = "2023-11-25T15:40:52.604Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "anyio" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "anyio", specifier = "==3.7.0" }]
-
-        [[package]]
-        name = "sniffio"
-        version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload_time = "2024-02-25T23:20:04.057Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload_time = "2024-02-25T23:20:01.196Z" },
-        ]
-    "#)?;
-
-    // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==3.7.0
-     + idna==3.6
-     + sniffio==1.3.1
-    ");
-
-    // Re-install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Checked 3 packages in [TIME]
-    ");
-
+    assert_recreated_virtual_environment(&context);
     Ok(())
 }
 
@@ -15452,32 +15335,6 @@ fn sync_required_environment_hint() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn sync_url_with_query_parameters() -> Result<()> {
-    let context = uv_test::test_context!("3.13").with_exclude_newer("2025-03-24T19:00:00Z");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(r#"
-        [project]
-        name = "example"
-        version = "0.1.0"
-        requires-python = ">=3.13"
-        dependencies = ["source-distribution @ https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz?foo=bar"]
-        "#
-    )?;
-
-    uv_snapshot!(context.filters(), context.sync(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.3 (from https://files.pythonhosted.org/packages/1f/e5/5b016c945d745f8b108e759d428341488a6aee8f51f07c6c4e33498bb91f/source_distribution-0.0.3.tar.gz?foo=bar)
-    ");
-
-    Ok(())
-}
-
 /// Test uv sync with --exclude-newer-package
 #[test]
 fn sync_exclude_newer_package() -> Result<()> {
@@ -15621,9 +15478,7 @@ exclude-newer-package = { tqdm = "2022-09-04T00:00:00Z" }
 
 #[test]
 #[cfg(unix)]
-fn read_only() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
+fn sync_read_only_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -15648,11 +15503,12 @@ fn read_only() -> Result<()> {
 
     assert!(context.temp_dir.child("uv.lock").exists());
 
-    // Remove the flock.
-    fs_err::remove_file(context.venv.child(".lock"))?;
-
-    // Make the virtual environment read and execute (but not write).
-    fs_err::set_permissions(&context.venv, std::fs::Permissions::from_mode(0o555))?;
+    let lock = context.venv.child(".lock");
+    fs_err::remove_file(lock.path())?;
+    let _read_only = uv_test::ReadOnlyDirectoryGuard::new(context.venv.path())?;
+    let error = fs_err::File::create(lock.path())
+        .expect_err("the virtual environment must reject lock creation");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
 
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
@@ -15660,6 +15516,7 @@ fn read_only() -> Result<()> {
     Resolved 2 packages in [TIME]
     Checked 1 package in [TIME]
     ");
+    lock.assert(predicate::path::missing());
 
     Ok(())
 }
@@ -15696,6 +15553,15 @@ fn sync_python_platform() -> Result<()> {
      + pathspec==0.12.1
      + platformdirs==4.2.0
     ");
+    context.assert_not_installed("colorama");
+
+    // Selecting Windows must include Click's platform-specific dependency on every host.
+    context
+        .sync()
+        .args(["--python-platform", "windows"])
+        .assert()
+        .success();
+    context.assert_installed("colorama", "0.4.6");
 
     Ok(())
 }
@@ -16167,10 +16033,8 @@ fn sync_config_settings_package() -> Result<()> {
         build-backend = "setuptools.build_meta"
         "#,
     )?;
-    dependency
-        .child("dependency")
-        .child("__init__.py")
-        .touch()?;
+    let module = dependency.child("dependency/__init__.py");
+    module.write_str("VALUE = 'before'\n")?;
 
     // Install the `dependency` without `editable_mode=compat`.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -16243,6 +16107,15 @@ fn sync_config_settings_package() -> Result<()> {
         .join("__editable___dependency_0_1_0_finder.py");
     assert!(!finder.exists());
 
+    // Compatibility mode must still expose source changes without reinstalling the package.
+    module.write_str("VALUE = 'after'\n")?;
+    context
+        .python_command()
+        .args(["-I", "-c", "import dependency; print(dependency.VALUE)"])
+        .assert()
+        .success()
+        .stdout(predicate::eq("after").trim());
+
     // Remove the virtual environment.
     fs_err::remove_dir_all(&context.venv)?;
 
@@ -16288,7 +16161,7 @@ fn sync_config_settings_package() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn sync_does_not_remove_empty_virtual_environment_directory() -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::MetadataExt;
 
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
@@ -16302,26 +16175,29 @@ fn sync_does_not_remove_empty_virtual_environment_directory() -> Result<()> {
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
+        dependencies = []
         "#,
     )?;
 
     let venv_dir = project_dir.child(".venv");
     fs_err::create_dir(&venv_dir)?;
+    // Keep the original inode allocated so replacing the directory cannot reuse it.
+    let original = fs_err::File::open(venv_dir.path())?;
 
-    // Ensure the parent is read-only, to prevent deletion of the virtual environment
-    fs_err::set_permissions(&project_dir, std::fs::Permissions::from_mode(0o555))?;
+    context
+        .sync()
+        .current_dir(&project_dir)
+        .arg("--offline")
+        .assert()
+        .success();
 
-    // Note we do _not_ fail to create the virtual environment — we fail later when writing to the
-    // project directory
-    uv_snapshot!(context.filters(), context.sync().current_dir(&project_dir), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Resolved 2 packages in [TIME]
-    error: Permission denied (os error 13) at path "[TEMP_DIR]/project/[TMP]"
-    "#);
+    let original = original.metadata()?;
+    let current = fs_err::metadata(&venv_dir)?;
+    assert_eq!(
+        (current.dev(), current.ino()),
+        (original.dev(), original.ino()),
+        "sync replaced the virtual environment directory"
+    );
 
     Ok(())
 }
@@ -16465,9 +16341,9 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
         child = [{ requirement = "a", match-runtime = true }]
     "#})?;
 
-    // The child should be rebuilt with a 0.1, without `--reinstall`.
+    // Changing the matched runtime version should rebuild the child automatically.
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url())
-        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.2"), @"
+        .env("EXPECTED_A_VERSION", "0.2"), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -16484,7 +16360,7 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
     ");
 
     uv_snapshot!(context.filters(), context.sync().arg("--index-url").arg(server.index_url())
-        .arg("--reinstall-package").arg("child").env("EXPECTED_A_VERSION", "0.1"), @"
+        .env("EXPECTED_A_VERSION", "0.1"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved [N] packages in [TIME]
@@ -16496,22 +16372,7 @@ fn sync_build_dependencies_respect_locked_versions() -> Result<()> {
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    // Now, we'll set a constraint in the parent project
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "parent"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["a<0.2", "child"]
-
-        [tool.uv.sources]
-        child = { path = "child" }
-
-        [tool.uv.extra-build-dependencies]
-        child = [{ requirement = "a", match-runtime = true }]
-    "#})?;
-
-    // And an incompatible constraint in the child project
+    // The child's build requirement conflicts with the parent's runtime constraint.
     child_pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "child"
@@ -16756,12 +16617,12 @@ fn sync_git_lfs() -> Result<()> {
     exit_code: 0 (success)
     ");
 
-    let lock = context.read("uv.lock");
+    let with_lfs_lock = context.read("uv.lock");
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            with_lfs_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.13"
@@ -16845,7 +16706,7 @@ fn sync_git_lfs() -> Result<()> {
     SyntaxError: invalid syntax
     "#);
 
-    // `UV_GIT_lfs=true` should not override `lfs = false`
+    // `UV_GIT_LFS=true` should not override `lfs = false`
     uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_GIT_LFS, "true").arg("--reinstall"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -16870,12 +16731,12 @@ fn sync_git_lfs() -> Result<()> {
     SyntaxError: invalid syntax
     "#);
 
-    let lock = context.read("uv.lock");
+    let without_lfs_lock = context.read("uv.lock");
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            without_lfs_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.13"
@@ -16982,8 +16843,8 @@ fn sync_git_lfs() -> Result<()> {
     LFS module imported via env var
     ");
 
-    // Cache should hit non-LFS sources
-    uv_snapshot!(context.filters(), context.sync().arg("--reinstall"), @"
+    // Reuse the non-LFS checkout without network access.
+    uv_snapshot!(context.filters(), context.sync().arg("--reinstall").arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -17008,40 +16869,10 @@ fn sync_git_lfs() -> Result<()> {
     SyntaxError: invalid syntax
     "#);
 
-    let lock = context.read("uv.lock");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.13"
+    assert_eq!(context.read("uv.lock"), without_lfs_lock);
 
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "test-lfs-repo"
-        version = "0.1.0"
-        source = { git = "https://github.com/astral-sh/test-lfs-repo.git?rev=261c828b8e05251f3a3e4f6b47b149d691c7efbb#261c828b8e05251f3a3e4f6b47b149d691c7efbb" }
-
-        [[package]]
-        name = "test-project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "test-lfs-repo" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "test-lfs-repo", git = "https://github.com/astral-sh/test-lfs-repo.git?rev=261c828b8e05251f3a3e4f6b47b149d691c7efbb" }]
-        "#
-        );
-    });
-
-    // Cache should hit LFS sources
-    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_GIT_LFS, "true").arg("--reinstall"), @"
+    // Reuse the LFS checkout without network access.
+    uv_snapshot!(context.filters(), context.sync().env(EnvVars::UV_GIT_LFS, "true").arg("--reinstall").arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -17060,37 +16891,7 @@ fn sync_git_lfs() -> Result<()> {
     LFS module imported via env var
     ");
 
-    let lock = context.read("uv.lock");
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.13"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "test-lfs-repo"
-        version = "0.1.0"
-        source = { git = "https://github.com/astral-sh/test-lfs-repo.git?lfs=true&rev=261c828b8e05251f3a3e4f6b47b149d691c7efbb#261c828b8e05251f3a3e4f6b47b149d691c7efbb" }
-
-        [[package]]
-        name = "test-project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "test-lfs-repo" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "test-lfs-repo", git = "https://github.com/astral-sh/test-lfs-repo.git?lfs=true&rev=261c828b8e05251f3a3e4f6b47b149d691c7efbb" }]
-        "#
-        );
-    });
+    assert_eq!(context.read("uv.lock"), with_lfs_lock);
 
     Ok(())
 }
@@ -17132,6 +16933,12 @@ fn match_runtime_optional() -> Result<()> {
 #[test]
 fn sync_extra_build_dependencies_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let assert_build_environment = |expected: &'static str| {
+        context
+            .assert_command("import child.build_environment as build; print(build.has_iniconfig, build.variable)")
+            .success()
+            .stdout(expected);
+    };
 
     // Write a test package.
     context
@@ -17146,13 +16953,37 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
 
         [build-system]
         requires = ["hatchling"]
-        build-backend = "hatchling.build"
+        build-backend = "build_backend"
+        backend-path = ["."]
     "#})?;
     context
         .temp_dir
         .child("child")
         .child("src/child/__init__.py")
         .touch()?;
+    // Record the build inputs in the wheel without changing the source tree between syncs.
+    context
+        .temp_dir
+        .child("child/build_backend.py")
+        .write_str(indoc! {r#"
+        import os
+        from importlib.util import find_spec
+        from pathlib import Path
+
+        from hatchling.build import build_wheel as hatchling_build_wheel
+        from hatchling.build import get_requires_for_build_wheel, prepare_metadata_for_build_wheel
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            marker = Path(__file__).parent / "src/child/build_environment.py"
+            marker.write_text(
+                f"has_iniconfig = {find_spec('iniconfig') is not None!r}\n"
+                f"variable = {os.getenv('UV_TEST_BUILD_CACHE_MARKER')!r}\n"
+            )
+            try:
+                return hatchling_build_wheel(wheel_directory, config_settings, metadata_directory)
+            finally:
+                marker.unlink()
+    "#})?;
 
     // Create a project that depends on the test package.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -17176,6 +17007,7 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
     Installed 1 package in [TIME]
      + child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
+    assert_build_environment("False None\n");
 
     // Running `uv sync` again should be a no-op.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -17210,6 +17042,7 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
     Installed 1 package in [TIME]
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
+    assert_build_environment("True None\n");
 
     // Running `uv sync` again should be a no-op.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -17266,6 +17099,7 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
     Installed 1 package in [TIME]
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
+    assert_build_environment("False None\n");
 
     // Add a build variable.
     pyproject_toml.write_str(indoc! {r#"
@@ -17279,10 +17113,10 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
         child = { path = "child" }
 
         [tool.uv.extra-build-variables]
-        child = { INI_CONFIG_VERSION = "1.0.0" }
+        child = { UV_TEST_BUILD_CACHE_MARKER = "set" }
     "#})?;
 
-    // Running `uv sync` should rebuild the child package with the new build dependency.
+    // Running `uv sync` should rebuild the child package with the new build variable.
     uv_snapshot!(context.filters(), context.sync(), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -17292,6 +17126,7 @@ fn sync_extra_build_dependencies_cache() -> Result<()> {
     Installed 1 package in [TIME]
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
+    assert_build_environment("False set\n");
 
     // Running `uv sync` again should be a no-op.
     uv_snapshot!(context.filters(), context.sync(), @"
@@ -17389,16 +17224,30 @@ async fn sync_deprecated_zstd_wheel() -> Result<()> {
     Ok(())
 }
 
+async fn assert_source_archive_not_requested(server: &MockServer, archive_url: &str) {
+    let archive_url = SafeUrl::parse(archive_url).expect("valid source archive URL");
+    let requests = server
+        .received_requests()
+        .await
+        .expect("the package server records requests");
+    let requested_paths = requests
+        .iter()
+        .map(|request| request.url.path())
+        .collect::<Vec<_>>();
+    assert!(
+        !requested_paths.contains(&archive_url.path()),
+        "source archive was requested: {requested_paths:?}"
+    );
+}
+
 /// Sync with an index whose only source distribution has a non-PEP 625-compliant
 /// extension (e.g., `.tar.bz2`). The resolver should reject it as incompatible.
 #[tokio::test]
 async fn sync_non_pep625_sdist() -> Result<()> {
     let context = uv_test::test_context!("3.13");
     let server = PackageServer::new(&"basic-package".parse()?).await;
-    // The unsupported filename must be rejected before the archive is downloaded.
-    server
-        .serve("basic_package-0.1.0.tar.bz2", b"", Some(&"0".repeat(64)))
-        .await;
+    let archive = "basic_package-0.1.0.tar.bz2";
+    server.serve(archive, b"", Some(&"0".repeat(64))).await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! { r#"
@@ -17427,6 +17276,7 @@ async fn sync_non_pep625_sdist() -> Result<()> {
 
     hint: `basic-package` was found on http://[LOCALHOST]/simple, but not at the requested version (basic-package==0.1.0). A compatible version may be available on a subsequent index (e.g., https://pypi.org/simple). By default, uv will only consider versions that are published on the first index that contains a given package, to avoid dependency confusion attacks. If all indexes are equally trusted, use `--index-strategy unsafe-best-match` to consider all versions from all indexes, regardless of the order in which they were defined.
     ");
+    assert_source_archive_not_requested(server.mock_server(), &server.file_url(archive)).await;
 
     Ok(())
 }
@@ -17436,12 +17286,6 @@ async fn sync_non_pep625_sdist() -> Result<()> {
 /// without surfacing an incompatibility error.
 #[tokio::test]
 async fn sync_non_pep625_sdist_with_compatible_wheel() -> Result<()> {
-    use serde_json::json;
-    use wiremock::{
-        Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
-    };
-
     let context = uv_test::test_context!("3.13");
     let server = MockServer::start().await;
 
@@ -17475,7 +17319,7 @@ async fn sync_non_pep625_sdist_with_compatible_wheel() -> Result<()> {
         "files": [
             {
                 "filename": "basic_package-0.1.0.tar.bz2",
-                "url": sdist_url,
+                "url": &sdist_url,
                 "hashes": {
                     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
                 }
@@ -17525,6 +17369,7 @@ async fn sync_non_pep625_sdist_with_compatible_wheel() -> Result<()> {
     Installed 1 package in [TIME]
      + basic-package==0.1.0
     ");
+    assert_source_archive_not_requested(&server, &sdist_url).await;
 
     Ok(())
 }
@@ -17610,11 +17455,31 @@ fn toggle_workspace_editable() -> Result<()> {
         build-backend = "hatchling.build"
         "#,
     )?;
-    child
-        .child("src")
-        .child("child")
-        .child("__init__.py")
-        .touch()?;
+    let child_module = child.child("src").child("child").child("__init__.py");
+    child_module.touch()?;
+    let assert_install_mode = |expected: &str| {
+        context
+            .python_command()
+            .args([
+                "-I",
+                "-c",
+                indoc! {r#"
+                    from pathlib import Path
+                    import sys
+
+                    import child
+
+                    installed = Path(child.__file__).resolve()
+                    source = Path(sys.argv[1]).resolve()
+                    print("editable" if installed == source else "non-editable")
+                    print(installed)
+                "#},
+            ])
+            .arg(child_module.path())
+            .assert()
+            .success()
+            .stdout(predicate::str::starts_with(format!("{expected}\n")));
+    };
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -17642,15 +17507,16 @@ fn toggle_workspace_editable() -> Result<()> {
      + child==0.1.0 (from file://[TEMP_DIR]/child)
      + iniconfig==2.0.0
     ");
+    assert_install_mode("editable");
 
-    let lock = context.read("uv.lock");
+    let editable_lock = context.read("uv.lock");
 
     // The child should be editable by default.
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            editable_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -17708,7 +17574,8 @@ fn toggle_workspace_editable() -> Result<()> {
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    assert!(!context.site_packages().join("_child.pth").exists());
+    assert_install_mode("non-editable");
+    assert_eq!(context.read("uv.lock"), editable_lock);
 
     uv_snapshot!(context.filters(), context.sync().arg("--editable"), @"
     exit_code: 0 (success)
@@ -17719,7 +17586,7 @@ fn toggle_workspace_editable() -> Result<()> {
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    assert!(context.site_packages().join("_child.pth").exists());
+    assert_install_mode("editable");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -17747,63 +17614,12 @@ fn toggle_workspace_editable() -> Result<()> {
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    let lock = context.read("uv.lock");
+    // Both the child's source and the project's requirement now refer to a regular directory.
+    let non_editable_lock =
+        editable_lock.replace(r#"editable = "child""#, r#"directory = "child""#);
+    assert_eq!(context.read("uv.lock"), non_editable_lock);
 
-    // Setting `--no-editable` should make the child non-editable.
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [manifest]
-        members = [
-            "child",
-            "project",
-        ]
-
-        [[package]]
-        name = "child"
-        version = "0.1.0"
-        source = { directory = "child" }
-        dependencies = [
-            { name = "iniconfig" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "iniconfig", specifier = ">=1" }]
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "child" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "child", directory = "child" }]
-        "#
-        );
-    });
-
-    // Verify that `_child.pth` does not exist in the site-packages directory.
-    assert!(!context.site_packages().join("_child.pth").exists());
+    assert_install_mode("non-editable");
 
     // But `--editable` on the command line should override the lockfile.
     uv_snapshot!(context.filters(), context.sync().arg("--editable"), @"
@@ -17815,8 +17631,8 @@ fn toggle_workspace_editable() -> Result<()> {
      ~ child==0.1.0 (from file://[TEMP_DIR]/child)
     ");
 
-    // Verify that `_child.pth` exists in the site-packages directory.
-    assert!(context.site_packages().join("_child.pth").exists());
+    assert_install_mode("editable");
+    assert_eq!(context.read("uv.lock"), non_editable_lock);
 
     Ok(())
 }
@@ -18266,7 +18082,7 @@ fn sync_fails_ambiguous_url() -> Result<()> {
 }
 
 /// Test that when a local directory dependency's version changes, the planner reinstalls it
-/// even if the source directory content (cache info) hasn't changed.
+/// even if the source fingerprint recorded on the installed distribution hasn't changed.
 ///
 /// Regression test for: <https://github.com/astral-sh/uv/issues/17370>
 #[test]
@@ -18288,21 +18104,26 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
         "#,
     )?;
 
-    // Create the child package with version 0.1.0.
     let child = context.temp_dir.child("packages/child");
     child.create_dir_all()?;
-    child.child("pyproject.toml").write_str(
-        r#"
+    let child_project = |version: &str| {
+        formatdoc! {r#"
         [project]
         name = "child"
-        version = "0.1.0"
+        version = "{version}"
         requires-python = ">=3.12"
 
         [build-system]
         requires = ["hatchling"]
         build-backend = "hatchling.build"
-        "#,
-    )?;
+
+        [tool.uv]
+        cache-keys = [{{ file = "src/child/__init__.py" }}]
+        "#}
+    };
+    child
+        .child("pyproject.toml")
+        .write_str(&child_project("0.1.0"))?;
     child
         .child("src")
         .child("child")
@@ -18316,7 +18137,8 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    uv_snapshot!(context.filters(), context.sync(), @"
+    // Use an ephemeral build cache to isolate the planner's version comparison from wheel reuse.
+    uv_snapshot!(context.filters(), context.sync().arg("--no-cache"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -18324,20 +18146,22 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
     Installed 1 package in [TIME]
      + child==0.1.0 (from file://[TEMP_DIR]/packages/child)
     ");
-
-    // Now bump the child's version to 0.1.1.
-    child.child("pyproject.toml").write_str(
-        r#"
-        [project]
-        name = "child"
-        version = "0.1.1"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-        "#,
+    let installed_cache_info: uv_cache_info::CacheInfo = serde_json::from_slice(
+        &context.read_bytes(
+            context
+                .site_packages()
+                .join("child-0.1.0.dist-info/uv_cache.json"),
+        ),
     )?;
+    assert!(
+        !installed_cache_info.is_empty(),
+        "the installed child must record a source fingerprint"
+    );
+
+    // Change the version without changing the source cache key.
+    child
+        .child("pyproject.toml")
+        .write_str(&child_project("0.1.1"))?;
 
     // Lock again; lockfile should show v0.1.1.
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -18346,6 +18170,11 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
     Resolved 2 packages in [TIME]
     Updated child v0.1.0 -> v0.1.1
     ");
+    assert_eq!(
+        uv_cache_info::CacheInfo::from_path(child.path())?,
+        installed_cache_info,
+        "the version mismatch must trigger reinstallation without source cache invalidation"
+    );
 
     // Sync should reinstall child with the new version. Before the fix for #17370,
     // this would incorrectly say "Checked 2 packages" and not reinstall the child package.
@@ -18359,6 +18188,11 @@ fn sync_reinstalls_on_version_change() -> Result<()> {
      - child==0.1.0 (from file://[TEMP_DIR]/packages/child)
      + child==0.1.1 (from file://[TEMP_DIR]/packages/child)
     ");
+    context
+        .assert_command(
+            "from importlib.metadata import version; assert version('child') == '0.1.1'",
+        )
+        .success();
 
     Ok(())
 }
@@ -18394,15 +18228,6 @@ async fn sync_malware_detected() {
         .mount(&server)
         .await;
 
-    Mock::given(method("GET"))
-        .and(path("/v1/vulns/MAL-2026-1234"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "MAL-2026-1234",
-            "modified": "2026-01-01T00:00:00Z",
-        })))
-        .mount(&server)
-        .await;
-
     uv_snapshot!(context.filters(), context
         .sync()
         .arg("--preview-features").arg("malware-check")
@@ -18415,6 +18240,7 @@ async fn sync_malware_detected() {
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
+    context.assert_not_installed("iniconfig");
 }
 
 /// Ensure that `uv sync` succeeds when no malware is found.
@@ -18439,9 +18265,11 @@ async fn sync_malware_check_clean() {
 
     Mock::given(method("POST"))
         .and(path("/v1/querybatch"))
+        .and(body_string_contains("iniconfig"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "results": [{"vulns": []}]
         })))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -18507,16 +18335,6 @@ async fn sync_malware_check_keyring_auth() -> Result<()> {
         .mount(&server)
         .await;
 
-    Mock::given(method("GET"))
-        .and(path("/v1/vulns/MAL-2026-1234"))
-        .and(basic_auth("public", "heron"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "MAL-2026-1234",
-            "modified": "2026-01-01T00:00:00Z",
-        })))
-        .mount(&server)
-        .await;
-
     uv_snapshot!(context.filters(), context
         .sync()
         .arg("--preview-features").arg("malware-check")
@@ -18544,7 +18362,7 @@ async fn sync_malware_check_keyring_auth() -> Result<()> {
     Ok(())
 }
 
-/// Ensure that the malware check only reports `MAL-` prefixed IDs and skips others.
+/// Only `MAL-` advisories are reported or block synchronization.
 #[tokio::test]
 async fn sync_malware_check_skips_non_mal() {
     let context = uv_test::test_context!("3.12");
@@ -18567,6 +18385,15 @@ async fn sync_malware_check_skips_non_mal() {
     context.lock().assert().success();
 
     let server = MockServer::start().await;
+    let sync = || {
+        let mut command = context.sync();
+        command
+            .arg("--preview-features")
+            .arg("malware-check")
+            .env(EnvVars::UV_MALWARE_CHECK, "1")
+            .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri());
+        command
+    };
 
     // Return both a MAL- and a non-MAL vulnerability.
     Mock::given(method("POST"))
@@ -18580,28 +18407,34 @@ async fn sync_malware_check_skips_non_mal() {
         .mount(&server)
         .await;
 
-    // Only the MAL- vuln should be fetched.
-    Mock::given(method("GET"))
-        .and(path("/v1/vulns/MAL-2026-5678"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id": "MAL-2026-5678",
-            "modified": "2026-01-01T00:00:00Z",
-        })))
-        .mount(&server)
-        .await;
-
     // The error should only mention the MAL- advisory.
-    uv_snapshot!(context.filters(), context
-        .sync()
-        .arg("--preview-features").arg("malware-check")
-        .env(EnvVars::UV_MALWARE_CHECK, "1")
-        .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri()), @"
+    uv_snapshot!(context.filters(), sync(), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     warning: Malware detected in locked dependencies:
       - `iniconfig==2.0.0`: MAL-2026-5678 (https://osv.dev/vulnerability/MAL-2026-5678)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
+    ");
+    context.assert_not_installed("iniconfig");
+
+    server.reset().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": [{"id": "GHSA-xxxx-yyyy"}]}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), sync(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
     ");
 }
 
@@ -18624,23 +18457,42 @@ async fn sync_malware_check_disabled() {
 
     context.lock().assert().success();
 
+    let server = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": [{"id": "MAL-CONFIG-ENABLED"}]}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
     let user_config_dir = context.user_config_dir.child("uv");
     user_config_dir.create_dir_all().unwrap();
     user_config_dir
         .child("uv.toml")
-        .write_str("[audit]\nmalware-check = true")
+        .write_str(&formatdoc! {r#"
+            [audit]
+            malware-check = true
+            malware-check-url = "{}"
+        "#, server.uri()})
         .unwrap();
 
-    let server = MockServer::start().await;
-
-    // The check is explicitly disabled via env var, so no request should be made. (No mocks are
-    // mounted, so any request would fail.)
+    // Confirm that the user configuration enables the check before overriding it.
+    context
+        .sync()
+        .arg("--preview-features")
+        .arg("malware-check")
+        .env_remove(EnvVars::UV_MALWARE_CHECK)
+        .env_remove(EnvVars::UV_MALWARE_CHECK_URL)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("MAL-CONFIG-ENABLED"));
 
     uv_snapshot!(context.filters(), context
         .sync()
         .arg("--preview-features").arg("malware-check")
         .env(EnvVars::UV_MALWARE_CHECK, "0")
-        .env(EnvVars::UV_MALWARE_CHECK_URL, server.uri()), @"
+        .env_remove(EnvVars::UV_MALWARE_CHECK_URL), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -18692,20 +18544,9 @@ async fn sync_malware_check_network_error() {
 }
 
 /// Ensure that a malformed `UV_MALWARE_CHECK_URL` produces a clear error.
-#[tokio::test]
-async fn sync_malware_check_url_invalid() {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml
-        .write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig==2.0.0"]
-    "#})
-        .unwrap();
+#[test]
+fn sync_malware_check_url_invalid() {
+    let context = uv_test::test_context_with_versions!(&[]);
 
     uv_snapshot!(context.filters(), context
         .sync()
@@ -18747,13 +18588,23 @@ async fn sync_malware_check_skips_inactive_extras_and_groups() {
         .and(body_string_contains("iniconfig"))
         .and(body_string_contains("typing-extensions"))
         .and(body_string_contains("sortedcontainers"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [
-                {"vulns": []},
-                {"vulns": [{"id": "MAL-INACTIVE-GROUP"}]},
-                {"vulns": [{"id": "MAL-INACTIVE-EXTRA"}]}
-            ]
-        })))
+        .respond_with(|request: &wiremock::Request| {
+            let batch = request
+                .body_json::<serde_json::Value>()
+                .expect("the audit request is JSON");
+            // OSV associates each response entry with the query at the same position.
+            let results: Vec<_> = batch["queries"]
+                .as_array()
+                .expect("the audit request contains a query batch")
+                .iter()
+                .map(|query| match query["package"]["name"].as_str() {
+                    Some("sortedcontainers") => json!({"vulns": [{"id": "MAL-INACTIVE-GROUP"}]}),
+                    Some("typing-extensions") => json!({"vulns": [{"id": "MAL-INACTIVE-EXTRA"}]}),
+                    _ => json!({"vulns": []}),
+                })
+                .collect();
+            ResponseTemplate::new(200).set_body_json(json!({ "results": results }))
+        })
         .mount(&server)
         .await;
 
@@ -18891,6 +18742,8 @@ fn build_hash_project() -> Result<(TestContext, String)> {
             return json.loads(os.environ.get("UV_TEST_DYNAMIC_BUILD_REQUIRES", "[]"))
 
         def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            if os.environ.get("UV_TEST_DYNAMIC_BUILD_REQUIRES"):
+                import dynamic_dependency
             wheel = Path(__file__).parent / "wheels" / "project-0.1.0-py3-none-any.whl"
             shutil.copyfile(wheel, Path(wheel_directory) / wheel.name)
             return wheel.name
@@ -18948,8 +18801,20 @@ fn project_build_hashes_lock_and_sync() -> Result<()> {
         "#);
     });
 
-    // `--frozen` uses the build dependency hashes recorded in the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--no-editable"), @"
+    // Make the manifest hash stale so it differs from the trusted hash in the lockfile.
+    pyproject.write_str(
+        &context
+            .read("pyproject.toml")
+            .replace(&hash, &"0".repeat(64)),
+    )?;
+
+    // `--frozen` requires the build dependency hash recorded in the lockfile.
+    uv_snapshot!(context.filters(), context.sync().args([
+        "--frozen",
+        "--no-editable",
+        "--require-build-hashes",
+        "--preview-features=build-dependency-hashes",
+    ]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
@@ -18958,11 +18823,6 @@ fn project_build_hashes_lock_and_sync() -> Result<()> {
     ");
 
     // Changing only a hash makes `--locked` reject the existing lockfile.
-    pyproject.write_str(
-        &context
-            .read("pyproject.toml")
-            .replace(&hash, &"0".repeat(64)),
-    )?;
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -19033,103 +18893,163 @@ fn project_build_hashes_unpinned() -> Result<()> {
 }
 
 #[test]
-fn project_build_hashes_pip() -> Result<()> {
-    // `pip install` and `pip sync` construct separate build hash strategies.
-    for command_name in ["install", "sync"] {
-        let (context, hash) = build_hash_project()?;
-        context
-            .temp_dir
-            .child("requirements.txt")
-            .write_str("project @ ./\n")?;
-        let constraints = context.temp_dir.child("build-constraints.txt");
-        constraints.write_str(&format!(
-            "build-dependency==1.0.0 --hash=sha256:{}\n",
-            "0".repeat(64)
-        ))?;
-        let command = || {
-            let mut command = if command_name == "install" {
-                let mut command = context.pip_install();
-                command.arg("--requirement");
-                command
-            } else {
-                context.pip_sync()
-            };
-            command.arg("requirements.txt").args([
-                "--no-index",
-                "--find-links",
-                "wheels",
-                "--no-cache",
-            ]);
-            command
-        };
+fn project_build_hashes_pip_install() -> Result<()> {
+    let (context, hash) = build_hash_project()?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("project @ ./\n")?;
+    let constraints = context.temp_dir.child("build-constraints.txt");
+    constraints.write_str(&format!(
+        "build-dependency==1.0.0 --hash=sha256:{}\n",
+        "0".repeat(64)
+    ))?;
+    let mut pip_install = context.pip_install();
+    pip_install
+        .args([
+            "--requirement",
+            "requirements.txt",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "--no-cache",
+        ])
+        .arg("--build-constraint")
+        .arg(constraints.path());
 
-        // Provided build hashes are checked independently of runtime hash checking.
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), command()
-                .arg("--build-constraint")
-                .arg(constraints.path()), @"
-            exit_code: 1 (failure)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            error: Failed to build `project @ file://[TEMP_DIR]/`
-              cause: Failed to install requirements from `build-system.requires`
-              cause: Failed to download `build-dependency==1.0.0`
-              cause: Hash mismatch for `build-dependency==1.0.0`
+    // Provided build hashes are checked independently of runtime hash checking.
+    uv_snapshot!(context.filters(), &mut pip_install, @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to download `build-dependency==1.0.0`
+      cause: Hash mismatch for `build-dependency==1.0.0`
 
-                     Expected:
-                       sha256:0000000000000000000000000000000000000000000000000000000000000000
+             Expected:
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
 
-                     Computed:
-                       sha256:[BUILD_HASH]
-            ");
-        }
-        context
-            .temp_dir
-            .child("backend-executed")
-            .assert(predicate::path::missing());
+             Computed:
+               sha256:[BUILD_HASH]
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::missing());
 
-        constraints.write_str(&format!("build-dependency==1.0.0 --hash=sha256:{hash}\n"))?;
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), command()
-                .arg("--build-constraint")
-                .arg(constraints.path()), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Installed 1 package in [TIME]
-             + project==0.1.0 (from file://[TEMP_DIR]/)
-            ");
-        }
-        context
-            .temp_dir
-            .child("backend-executed")
-            .assert(predicate::path::exists());
-        fs_err::remove_file(context.temp_dir.child("backend-executed"))?;
-        constraints.write_str(&format!(
-            "build-dependency==1.0.0 --hash=sha256:{}\n",
-            "0".repeat(64)
-        ))?;
-        // The explicit opt-out permits the mismatched hash while still building the package.
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), command()
-                .arg("--build-constraint")
-                .arg(constraints.path())
-                .args(["--no-verify-hashes", "--reinstall"]), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Uninstalled 1 package in [TIME]
-            Installed 1 package in [TIME]
-             ~ project==0.1.0 (from file://[TEMP_DIR]/)
-            ");
-        }
-        context
-            .temp_dir
-            .child("backend-executed")
-            .assert(predicate::path::exists());
-    }
+    constraints.write_str(&format!("build-dependency==1.0.0 --hash=sha256:{hash}\n"))?;
+    uv_snapshot!(context.filters(), &mut pip_install, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::exists());
+    fs_err::remove_file(context.temp_dir.child("backend-executed"))?;
+    constraints.write_str(&format!(
+        "build-dependency==1.0.0 --hash=sha256:{}\n",
+        "0".repeat(64)
+    ))?;
+    // The explicit opt-out permits the mismatched hash while still building the package.
+    uv_snapshot!(context.filters(), pip_install.args(["--no-verify-hashes", "--reinstall"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::exists());
+    Ok(())
+}
+
+#[test]
+fn project_build_hashes_pip_sync() -> Result<()> {
+    let (context, hash) = build_hash_project()?;
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("project @ ./\n")?;
+    let constraints = context.temp_dir.child("build-constraints.txt");
+    constraints.write_str(&format!(
+        "build-dependency==1.0.0 --hash=sha256:{}\n",
+        "0".repeat(64)
+    ))?;
+    let mut pip_sync = context.pip_sync();
+    pip_sync
+        .args([
+            "requirements.txt",
+            "--no-index",
+            "--find-links",
+            "wheels",
+            "--no-cache",
+        ])
+        .arg("--build-constraint")
+        .arg(constraints.path());
+
+    // Provided build hashes are checked independently of runtime hash checking.
+    uv_snapshot!(context.filters(), &mut pip_sync, @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: Failed to build `project @ file://[TEMP_DIR]/`
+      cause: Failed to install requirements from `build-system.requires`
+      cause: Failed to download `build-dependency==1.0.0`
+      cause: Hash mismatch for `build-dependency==1.0.0`
+
+             Expected:
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+             Computed:
+               sha256:[BUILD_HASH]
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::missing());
+
+    constraints.write_str(&format!("build-dependency==1.0.0 --hash=sha256:{hash}\n"))?;
+    uv_snapshot!(context.filters(), &mut pip_sync, @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::exists());
+    fs_err::remove_file(context.temp_dir.child("backend-executed"))?;
+    constraints.write_str(&format!(
+        "build-dependency==1.0.0 --hash=sha256:{}\n",
+        "0".repeat(64)
+    ))?;
+    // The explicit opt-out permits the mismatched hash while still building the package.
+    uv_snapshot!(context.filters(), pip_sync.args(["--no-verify-hashes", "--reinstall"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     ~ project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicate::path::exists());
     Ok(())
 }
 
@@ -19447,41 +19367,66 @@ fn project_build_hashes_lock_dynamic_metadata() -> Result<()> {
 }
 
 #[test]
-fn project_build_hashes_isolation() -> Result<()> {
-    for isolation in [
-        vec!["--no-build-isolation"],
-        vec!["--no-build-isolation-package", "project"],
-    ] {
-        let (context, _) = build_hash_project()?;
-        // Without isolation, preinstalled build dependencies do not need hashes.
-        context
-            .pip_install()
-            .arg("--no-index")
-            .arg("--find-links")
-            .arg("wheels")
-            .arg("build-dependency")
-            .assert()
-            .success();
-        allow_duplicates! {
-            uv_snapshot!(context.filters(), context.sync().arg("--no-editable").args(&isolation).arg("--no-cache").arg("--require-build-hashes"), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
-            Resolved 1 package in [TIME]
-            Prepared 1 package in [TIME]
-            Uninstalled 1 package in [TIME]
-            Installed 1 package in [TIME]
-             - build-dependency==1.0.0
-             + project==0.1.0 (from file://[TEMP_DIR]/)
-            ");
-            uv_snapshot!(context.filters(), context.sync().arg("--no-editable").args(&isolation).arg("--frozen").arg("--require-build-hashes"), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
-            Checked 1 package in [TIME]
-            ");
-        }
-    }
+fn project_build_hashes_without_isolation() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    // Without isolation, preinstalled build dependencies do not need hashes.
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg("wheels")
+        .arg("build-dependency")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().arg("--no-editable").arg("--no-build-isolation").arg("--no-cache").arg("--require-build-hashes"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - build-dependency==1.0.0
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--no-editable").arg("--no-build-isolation").arg("--frozen").arg("--require-build-hashes"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
+    Checked 1 package in [TIME]
+    ");
+    Ok(())
+}
+
+#[test]
+fn project_build_hashes_without_isolation_for_project() -> Result<()> {
+    let (context, _) = build_hash_project()?;
+    // Without isolation, preinstalled build dependencies do not need hashes.
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg("wheels")
+        .arg("build-dependency")
+        .assert()
+        .success();
+    uv_snapshot!(context.filters(), context.sync().arg("--no-editable").args(["--no-build-isolation-package", "project"]).arg("--no-cache").arg("--require-build-hashes"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - build-dependency==1.0.0
+     + project==0.1.0 (from file://[TEMP_DIR]/)
+    ");
+    uv_snapshot!(context.filters(), context.sync().arg("--no-editable").args(["--no-build-isolation-package", "project"]).arg("--frozen").arg("--require-build-hashes"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `--require-build-hashes` option is experimental and may change without warning. Pass `--preview-features build-dependency-hashes` to disable this warning.
+    Checked 1 package in [TIME]
+    ");
     Ok(())
 }
 

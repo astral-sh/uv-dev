@@ -1,20 +1,21 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
-use insta::allow_duplicates;
 
-#[cfg(feature = "test-pypi")]
-use uv_redacted::SafeUrl;
+#[cfg(feature = "test-python")]
 use uv_static::EnvVars;
+#[cfg(feature = "test-python")]
 use uv_test::packse::PackseServer;
 use uv_test::{TestContext, uv_snapshot};
 
 fn assert_project_unchanged(context: &TestContext, expected: &str) {
     assert_eq!(context.read("pyproject.toml"), expected);
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
 }
 
 /// Write a project where `foo==1` resolves two versions of `bar` in platform forks.
+#[cfg(feature = "test-python")]
 fn write_fork_upgrade_project(
     context: &TestContext,
     server: &PackseServer,
@@ -38,7 +39,6 @@ fn write_fork_upgrade_project(
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
     Ok(pyproject_toml)
 }
 
@@ -133,9 +133,9 @@ fn upgrade_help() {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn upgrade_selects_normalized_production_dependency() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let pyproject_toml = r#"
         [project]
         name = "example"
@@ -150,7 +150,6 @@ fn upgrade_selects_normalized_production_dependency() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -178,14 +177,15 @@ dependencies = ["anyio>=2,!=2.1,<5 ; python_full_version >= '3.12'"]
 exclude-newer = "2024-03-25T00:00:00Z"
 "#
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_ignores_disjoint_fork_version_for_selected_requirement() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml =
         write_fork_upgrade_project(&context, &server, "bar==2 ; sys_platform != 'linux'")?;
@@ -210,8 +210,9 @@ fn upgrade_ignores_disjoint_fork_version_for_selected_requirement() -> Result<()
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_preserves_constraint_that_admits_multiple_fork_versions() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = write_fork_upgrade_project(&context, &server, "bar>=1")?;
 
@@ -314,8 +315,9 @@ fn upgrade_warns_for_skipped_requirement_before_validation_error() -> Result<()>
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_rejects_conflicting_extra_declarations() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -351,7 +353,6 @@ fn upgrade_rejects_conflicting_extra_declarations() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -372,8 +373,9 @@ fn upgrade_rejects_conflicting_extra_declarations() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_expands_constraint_for_multiple_fork_versions() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = write_fork_upgrade_project(&context, &server, "bar<2")?;
 
@@ -397,14 +399,15 @@ fn upgrade_expands_constraint_for_multiple_fork_versions() -> Result<()> {
         context.read("pyproject.toml"),
         pyproject_toml.replace("bar<2", "bar<3")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_expands_compatible_constraint_for_multiple_fork_versions() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/filter-sibling-dependencies.toml");
     let pyproject_toml = format!(
         r#"
@@ -430,7 +433,6 @@ fn upgrade_expands_compatible_constraint_for_multiple_fork_versions() -> Result<
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -452,13 +454,13 @@ fn upgrade_expands_compatible_constraint_for_multiple_fork_versions() -> Result<
         context.read("pyproject.toml"),
         pyproject_toml.replace("a~=3.0", "a~=4.3")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn upgrade_updates_requirement_without_updating_lockfile_or_environment() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let initial_pyproject_toml = r#"
@@ -520,14 +522,14 @@ fn upgrade_updates_requirement_without_updating_lockfile_or_environment() -> Res
         lock_contents.contains("name = \"idna\"\nversion = \"2.10\""),
         "{lock_contents}"
     );
-    assert!(environment_sentinel.exists());
+    environment_sentinel.assert("present");
     Ok(())
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn upgrade_reports_no_solution_without_mutation() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -542,7 +544,6 @@ fn upgrade_reports_no_solution_without_mutation() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(context.filters(), context.upgrade().arg("anyio"), @"
     exit_code: 1 (failure)
@@ -557,9 +558,9 @@ fn upgrade_reports_no_solution_without_mutation() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn upgrade_reports_no_version_change_without_mutation() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -578,9 +579,9 @@ fn upgrade_reports_no_version_change_without_mutation() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 4 packages in [TIME]
     ");
-    fs_err::remove_dir_all(&context.venv)?;
 
     let pyproject = context.read_bytes("pyproject.toml");
     let lock = context.read_bytes("uv.lock");
@@ -595,13 +596,13 @@ fn upgrade_reports_no_version_change_without_mutation() -> Result<()> {
 
     assert_eq!(context.read_bytes("pyproject.toml"), pyproject);
     assert_eq!(context.read_bytes("uv.lock"), lock);
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
 fn upgrade_rejects_dynamic_project_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&[]);
     let pyproject_toml = r#"
         [project]
         name = "project"
@@ -613,7 +614,6 @@ fn upgrade_rejects_dynamic_project_version() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(context.filters(), context.upgrade().arg("anyio"), @"
     exit_code: 2 (failure)
@@ -670,8 +670,9 @@ fn upgrade_requires_production_dependency() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_updates_multiple_marked_production_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -701,7 +702,6 @@ fn upgrade_updates_multiple_marked_production_dependencies() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -748,14 +748,15 @@ fn upgrade_updates_multiple_marked_production_dependencies() -> Result<()> {
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_updates_multiple_named_packages_together() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -778,7 +779,6 @@ fn upgrade_updates_multiple_named_packages_together() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -819,14 +819,15 @@ fn upgrade_updates_multiple_named_packages_together() -> Result<()> {
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_without_package_selects_all_production_dependencies() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -849,7 +850,6 @@ fn upgrade_without_package_selects_all_production_dependencies() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -886,8 +886,8 @@ fn upgrade_without_package_selects_all_production_dependencies() -> Result<()> {
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
@@ -1028,8 +1028,9 @@ fn upgrade_redacts_malformed_direct_url_dependency() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_exclude_leaves_dependency_as_hard_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -1055,7 +1056,6 @@ fn upgrade_exclude_leaves_dependency_as_hard_constraint() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -1096,14 +1096,15 @@ fn upgrade_exclude_leaves_dependency_as_hard_constraint() -> Result<()> {
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_updates_safe_declarations_and_warns_for_blocked_declarations() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1139,7 +1140,6 @@ fn upgrade_updates_safe_declarations_and_warns_for_blocked_declarations() -> Res
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -1192,14 +1192,15 @@ fn upgrade_updates_safe_declarations_and_warns_for_blocked_declarations() -> Res
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_updates_requirement_constrained_by_conflicting_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1231,7 +1232,6 @@ fn upgrade_updates_requirement_constrained_by_conflicting_groups() -> Result<()>
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -1253,14 +1253,15 @@ fn upgrade_updates_requirement_constrained_by_conflicting_groups() -> Result<()>
         context.read("pyproject.toml"),
         pyproject_toml.replace("baz<2", "baz<3")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_succeeds_when_all_selected_declarations_are_blocked() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1283,7 +1284,6 @@ fn upgrade_succeeds_when_all_selected_declarations_are_blocked() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -1301,14 +1301,15 @@ fn upgrade_succeeds_when_all_selected_declarations_are_blocked() -> Result<()> {
     );
 
     assert_project_unchanged(&context, &pyproject_toml);
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_rejects_mixed_updates_after_unrepresentable_blocker() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1332,7 +1333,6 @@ fn upgrade_rejects_mixed_updates_after_unrepresentable_blocker() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -1352,14 +1352,15 @@ fn upgrade_rejects_mixed_updates_after_unrepresentable_blocker() -> Result<()> {
     );
 
     assert_project_unchanged(&context, &pyproject_toml);
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_preserves_hard_constraint_no_solution_failure() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1382,7 +1383,6 @@ fn upgrade_preserves_hard_constraint_no_solution_failure() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     let filters: Vec<_> = context
         .filters()
@@ -1411,14 +1411,15 @@ fn upgrade_preserves_hard_constraint_no_solution_failure() -> Result<()> {
     );
 
     assert_project_unchanged(&context, &pyproject_toml);
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_ignores_unrelated_path_package_when_attributing_versions() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -1456,7 +1457,6 @@ fn upgrade_ignores_unrelated_path_package_when_attributing_versions() -> Result<
         requires-python = ">=3.12"
     "#,
         )?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -1497,8 +1497,8 @@ fn upgrade_ignores_unrelated_path_package_when_attributing_versions() -> Result<
         "#
         );
     });
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
@@ -1587,50 +1587,56 @@ fn upgrade_rejects_git_revision() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn upgrade_rejects_non_registry_sources() -> Result<()> {
+fn assert_upgrade_rejects_non_registry_source(source: &str) -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
+    let pyproject_toml = format!(
+        r#"
+        [project]
+        name = "example"
+        version = "0.1.0"
+        dependencies = ["requests>=2"]
 
-    allow_duplicates! {
-        for source in [
-            r#"{ git = "https://github.com/psf/requests" }"#,
-            r#"{ url = "https://example.com/requests-2.32.0-py3-none-any.whl" }"#,
-            r#"{ path = "vendor/requests" }"#,
-            r"{ workspace = true }",
-        ] {
-            let pyproject_toml = format!(
-                r#"
-                [project]
-                name = "example"
-                version = "0.1.0"
-                dependencies = ["requests>=2"]
+        [tool.uv.sources]
+        requests = {source}
+    "#
+    );
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&pyproject_toml)?;
 
-                [tool.uv.sources]
-                requests = {source}
-                "#
-            );
-            context
-                .temp_dir
-                .child("pyproject.toml")
-                .write_str(&pyproject_toml)?;
+    context
+        .upgrade()
+        .arg("requests")
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr("error: Dependency `requests` uses a non-registry source in `tool.uv.sources` and cannot be upgraded\n");
 
-            uv_snapshot!(
-                context.filters(),
-                context.upgrade().arg("requests"),
-                @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Dependency `requests` uses a non-registry source in `tool.uv.sources` and cannot be upgraded
-    "
-            );
-
-            assert_project_unchanged(&context, &pyproject_toml);
-        }
-
-        Ok::<(), anyhow::Error>(())
-    }?;
-
+    assert_project_unchanged(&context, &pyproject_toml);
     Ok(())
+}
+
+#[test]
+fn upgrade_rejects_git_source_without_revision() -> Result<()> {
+    assert_upgrade_rejects_non_registry_source(r#"{ git = "https://github.com/psf/requests" }"#)
+}
+
+#[test]
+fn upgrade_rejects_url_source() -> Result<()> {
+    assert_upgrade_rejects_non_registry_source(
+        r#"{ url = "https://example.com/requests-2.32.0-py3-none-any.whl" }"#,
+    )
+}
+
+#[test]
+fn upgrade_rejects_path_source() -> Result<()> {
+    assert_upgrade_rejects_non_registry_source(r#"{ path = "vendor/requests" }"#)
+}
+
+#[test]
+fn upgrade_rejects_workspace_source() -> Result<()> {
+    assert_upgrade_rejects_non_registry_source("{ workspace = true }")
 }
 
 #[test]
@@ -1665,13 +1671,13 @@ fn upgrade_skips_non_registry_source_for_undefined_extra() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn upgrade_allows_registry_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let empty_index = context.temp_dir.child("empty-index");
     empty_index.create_dir_all()?;
-    let empty_index = SafeUrl::from_directory_path(empty_index.path())
-        .map_err(|()| anyhow!("Failed to create empty index URL"))?;
+    let empty_index = uv_redacted::SafeUrl::from_directory_path(empty_index.path())
+        .map_err(|()| anyhow::anyhow!("Failed to create empty index URL"))?;
     let pyproject_toml = format!(
         r#"
         [project]
@@ -1701,7 +1707,6 @@ fn upgrade_allows_registry_source() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -1720,15 +1725,15 @@ fn upgrade_allows_registry_source() -> Result<()> {
         context.read("pyproject.toml"),
         pyproject_toml.replace("idna>=2,<3", "idna>=2,<4")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[tokio::test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 async fn upgrade_uses_extra_index_url_credentials_for_registry_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let proxy = crate::pypi_proxy::start().await;
     let pyproject_toml = format!(
         r#"
@@ -1752,7 +1757,6 @@ async fn upgrade_uses_extra_index_url_credentials_for_registry_source() -> Resul
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     let authenticated_index = proxy.authenticated_url("public", "heron", "/basic-auth/simple");
 
@@ -1777,9 +1781,9 @@ async fn upgrade_uses_extra_index_url_credentials_for_registry_source() -> Resul
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn upgrade_ignores_inapplicable_non_registry_source() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let pyproject_toml = r#"
         [project]
         name = "example"
@@ -1797,7 +1801,6 @@ fn upgrade_ignores_inapplicable_non_registry_source() -> Result<()> {
         .temp_dir
         .child("pyproject.toml")
         .write_str(pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -1819,14 +1822,15 @@ fn upgrade_ignores_inapplicable_non_registry_source() -> Result<()> {
             "anyio>=2,<5 ; python_full_version >= '3.12'"
         )
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_ignores_inapplicable_non_registry_source_without_requires_python() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/upgrade-outcomes.toml");
     let pyproject_toml = format!(
         r#"
@@ -1858,7 +1862,6 @@ fn upgrade_ignores_inapplicable_non_registry_source_without_requires_python() ->
         version = "0.1.0"
         "#,
         )?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -1881,14 +1884,15 @@ fn upgrade_ignores_inapplicable_non_registry_source_without_requires_python() ->
         context.read("pyproject.toml"),
         pyproject_toml.replace("baz<2", "baz<3")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn upgrade_skips_excluded_declarations_and_updates_applicable_requirement() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let server = PackseServer::new("fork/fork-upgrade.toml");
     let pyproject_toml = format!(
         r#"
@@ -1917,7 +1921,6 @@ fn upgrade_skips_excluded_declarations_and_updates_applicable_requirement() -> R
         .temp_dir
         .child("pyproject.toml")
         .write_str(&pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -1941,8 +1944,8 @@ fn upgrade_skips_excluded_declarations_and_updates_applicable_requirement() -> R
         context.read("pyproject.toml"),
         pyproject_toml.replacen("bar<2\",", "bar<3\",", 1)
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
@@ -1991,15 +1994,15 @@ fn upgrade_rejects_workspace_root_non_registry_source() -> Result<()> {
         context.read("project/pyproject.toml"),
         project_pyproject_toml
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
     Ok(())
 }
 
 #[test]
-#[cfg(feature = "test-pypi")]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 fn upgrade_updates_nested_workspace_member_only() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
     let workspace_pyproject_toml = r#"
         [tool.uv.workspace]
         members = ["project"]
@@ -2024,7 +2027,6 @@ fn upgrade_updates_nested_workspace_member_only() -> Result<()> {
     project
         .child("pyproject.toml")
         .write_str(project_pyproject_toml)?;
-    fs_err::remove_dir_all(&context.venv)?;
 
     uv_snapshot!(
         context.filters(),
@@ -2044,10 +2046,10 @@ fn upgrade_updates_nested_workspace_member_only() -> Result<()> {
         context.read("project/pyproject.toml"),
         project_pyproject_toml.replace("anyio<=2", "anyio<=4.3.0")
     );
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
-    assert!(!project.child("uv.lock").exists());
-    assert!(!project.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
+    context.assert_path_missing("project/uv.lock");
+    context.assert_path_missing("project/.venv");
     Ok(())
 }
 
@@ -2065,8 +2067,8 @@ fn upgrade_requires_current_project() {
     "
     );
 
-    assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.temp_dir.child(".venv").exists());
+    context.assert_path_missing("uv.lock");
+    context.assert_path_missing(".venv");
 }
 
 #[test]

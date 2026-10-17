@@ -45,13 +45,14 @@ fn update_shell_tool_and_python() -> Result<()> {
         "
     );
 
-    let bash_profile = fs_err::read_to_string(context.home_dir.child(".bash_profile"))?;
-    let bashrc = fs_err::read_to_string(context.home_dir.child(".bashrc"))?;
-    assert_eq!(bash_profile, bashrc);
+    let bash_profile = context.home_dir.child(".bash_profile");
+    let bashrc = context.home_dir.child(".bashrc");
+    let contents = fs_err::read_to_string(&bash_profile)?;
+    assert_eq!(fs_err::read_to_string(&bashrc)?, contents);
 
     // Both startup files retain the separate tool and Python executable directories.
     insta::with_settings!({ filters => context.filters() }, {
-        assert_snapshot!(bash_profile, @r#"
+        assert_snapshot!(contents, @r#"
         # uv
         export PATH="[TEMP_DIR]/tool-bin:$PATH"
 
@@ -74,6 +75,14 @@ fn update_shell_tool_and_python() -> Result<()> {
         error: The executable directory `[TEMP_DIR]/tool-bin` is not in PATH, but the Bash configuration files are already up-to-date
         "
     );
+    for profile in [&bash_profile, &bashrc] {
+        assert_eq!(
+            fs_err::read_to_string(profile)?,
+            contents,
+            "{} changed after a repeated update",
+            profile.path().display()
+        );
+    }
 
     Ok(())
 }

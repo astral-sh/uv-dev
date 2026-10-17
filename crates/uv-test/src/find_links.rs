@@ -2,28 +2,13 @@
 //!
 //! Useful for testing `--find-links` with an HTTP URL.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::Arc;
 
 use wiremock::{Request, ResponseTemplate};
 
-use crate::http_server::{HttpServer, content_type_for_filename};
+use crate::http_server::{FileData, HttpServer, content_type_for_filename};
 use crate::vendor::{VendorArtifact, vendor_artifacts};
-
-enum FileData {
-    Bytes(Arc<[u8]>),
-    Vendor(&'static VendorArtifact),
-}
-
-impl FileData {
-    fn bytes(&self) -> anyhow::Result<Arc<[u8]>> {
-        match self {
-            Self::Bytes(bytes) => Ok(Arc::clone(bytes)),
-            Self::Vendor(artifact) => artifact.bytes(),
-        }
-    }
-}
 
 /// A running HTTP server that serves files from a directory as a flat links page.
 pub struct FindLinksServer {
@@ -33,8 +18,7 @@ pub struct FindLinksServer {
 impl FindLinksServer {
     /// Start a server that serves all files in the given directory.
     pub fn new(directory: &Path) -> Self {
-        let mut files: HashMap<String, FileData> = HashMap::new();
-        let mut filenames: Vec<String> = Vec::new();
+        let mut files = BTreeMap::new();
 
         for entry in fs_err::read_dir(directory).expect("failed to read find-links directory") {
             let entry = entry.expect("failed to read directory entry");
@@ -46,37 +30,28 @@ impl FindLinksServer {
                 continue;
             };
             let bytes = fs_err::read(&path).expect("failed to read file");
-            files.insert(filename.clone(), FileData::Bytes(bytes.into()));
-            filenames.push(filename);
+            files.insert(filename, FileData::Bytes(bytes.into()));
         }
-        filenames.sort();
-
-        let files = Arc::new(files);
-        let filenames = Arc::new(filenames);
-        let server = HttpServer::start(move |request, server_uri| {
-            handle_request(request, server_uri, &files, &filenames)
-        });
-
-        Self { server }
+        Self::from_files(files)
     }
 
     /// Start a server that serves the pinned registry artifacts used by tests.
     pub fn vendor() -> Self {
-        let mut files: HashMap<String, FileData> = HashMap::new();
-        let mut filenames: Vec<String> = Vec::new();
+        Self::from_vendor_artifacts(vendor_artifacts())
+    }
 
-        for artifact in vendor_artifacts() {
-            files.insert(artifact.filename.to_string(), FileData::Vendor(artifact));
-            filenames.push(artifact.filename.to_string());
-        }
-        filenames.sort();
+    fn from_vendor_artifacts(artifacts: &'static [VendorArtifact]) -> Self {
+        let files = artifacts
+            .iter()
+            .map(|artifact| (artifact.filename.to_string(), FileData::Vendor(artifact)))
+            .collect();
+        Self::from_files(files)
+    }
 
-        let files = Arc::new(files);
-        let filenames = Arc::new(filenames);
+    fn from_files(files: BTreeMap<String, FileData>) -> Self {
         let server = HttpServer::start(move |request, server_uri| {
-            handle_request(request, server_uri, &files, &filenames)
+            handle_request(request, server_uri, &files)
         });
-
         Self { server }
     }
 
@@ -89,14 +64,13 @@ impl FindLinksServer {
 fn handle_request(
     request: &Request,
     server_uri: &str,
-    files: &HashMap<String, FileData>,
-    filenames: &[String],
+    files: &BTreeMap<String, FileData>,
 ) -> ResponseTemplate {
     let path = request.url.path();
 
     if path == "/" {
-        let links = filenames
-            .iter()
+        let links = files
+            .keys()
             .map(|filename| format!("<a href=\"{server_uri}/{filename}\">{filename}</a>"))
             .collect::<Vec<_>>()
             .join("\n");
@@ -119,16 +93,24 @@ fn handle_request(
 #[cfg(test)]
 mod tests {
     use super::FindLinksServer;
-    use crate::vendor::vendor_artifacts;
+    use crate::vendor::VendorArtifact;
 
-    #[test]
-    fn vendor_server_construction_does_not_load_artifacts() {
-        let _server = FindLinksServer::vendor();
+    #[tokio::test]
+    async fn vendor_index_does_not_load_artifacts() -> anyhow::Result<()> {
+        static ARTIFACTS: [VendorArtifact; 1] = [VendorArtifact::test_fixture()];
+        let server = FindLinksServer::from_vendor_artifacts(&ARTIFACTS);
+        let index = reqwest::Client::builder()
+            .no_proxy()
+            .build()?
+            .get(server.url())
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
 
-        assert!(
-            vendor_artifacts()
-                .iter()
-                .all(|artifact| !artifact.is_loaded())
-        );
+        assert!(index.contains(ARTIFACTS[0].filename));
+        assert!(!ARTIFACTS[0].is_loaded());
+        Ok(())
     }
 }

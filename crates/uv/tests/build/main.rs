@@ -5,6 +5,7 @@ use uv_test::pypi_proxy;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod audit;
+mod audit_configuration;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod build;
@@ -12,16 +13,41 @@ mod build;
 #[cfg(feature = "test-python")]
 mod build_backend;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+mod build_backend_layout;
+
+mod build_backend_license;
+
+mod build_backend_requires;
+
+#[cfg(feature = "test-python")]
+mod build_dependency_check;
+
+#[cfg(feature = "test-python")]
+mod build_fast_path;
+
+mod build_list_validation;
+
+#[cfg(feature = "test-python")]
+mod build_output;
+
 mod cache;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod cache_clean;
+
+#[cfg(feature = "test-python")]
+mod cache_file_store;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod cache_prune;
 
-#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+#[cfg(feature = "test-python")]
+mod cache_prune_archives;
+
+mod cache_prune_local;
+
+#[cfg(feature = "test-python")]
+mod cache_prune_revisions;
+
 mod cache_size;
 
 mod extract;

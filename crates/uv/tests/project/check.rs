@@ -5,6 +5,8 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
+#[cfg(feature = "test-pypi")]
+use predicates::path::is_dir;
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -20,6 +22,21 @@ fn workspace_check(context: &uv_test::TestContext) -> Command {
     // can exercise new ty features without disrupting other tests.
     command.env(EnvVars::UV_EXCLUDE_NEWER, "2026-09-10T00:00:00Z");
     command
+}
+
+#[cfg(feature = "test-pypi")]
+fn assert_installed_ty_version(context: &uv_test::TestContext, version: &'static str) {
+    context.venv.assert(is_dir().follow_links(true));
+    context
+        .python_command()
+        .args([
+            "-I",
+            "-c",
+            "from importlib.metadata import version; print(version('ty'), end='')",
+        ])
+        .assert()
+        .success()
+        .stdout(version);
 }
 
 fn write_workspace_member(context: &uv_test::TestContext, name: &str, source: &str) -> Result<()> {
@@ -1343,7 +1360,7 @@ fn check_no_sync_creates_lock_without_sync() -> Result<()> {
         requires-dist = [{ name = "a", specifier = "==1.0.0" }]
         "#);
     });
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
 
     Ok(())
 }
@@ -1526,7 +1543,7 @@ fn check_no_sync_updates_stale_lock_without_sync() -> Result<()> {
         +requires-dist = [{ name = "a", specifier = "==2.0.0" }]
         "#);
     });
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
 
     Ok(())
 }
@@ -1579,7 +1596,7 @@ fn check_no_sync_locked_rejects_stale_lock_without_update() -> Result<()> {
     );
 
     assert_eq!(stale_lock, context.read("uv.lock"));
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
 
     Ok(())
 }
@@ -1666,7 +1683,7 @@ fn check_no_sync_frozen_uses_existing_lock_without_update() -> Result<()> {
     );
 
     assert_eq!(stale_lock, context.read("uv.lock"));
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
 
     Ok(())
 }
@@ -1739,7 +1756,7 @@ fn check_no_sync_isolated_does_not_write_lock_or_sync() -> Result<()> {
     );
 
     assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
 
     Ok(())
 }
@@ -1793,7 +1810,7 @@ async fn check_uses_exact_ty_version_from_selected_included_group() -> Result<()
     );
 
     assert!(context.temp_dir.child("uv.lock").exists());
-    assert!(context.site_packages().join("ty").exists());
+    assert_installed_ty_version(&context, "0.0.17");
 
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -1841,9 +1858,10 @@ async fn check_uses_exact_ty_version_from_selected_included_group() -> Result<()
 #[test]
 #[cfg(feature = "test-pypi")]
 fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filter((r"sha256:[0-9a-f]{64}", "sha256:[HASH]"))
-        .with_filtered_http_retries();
+    const INVALID_HASH: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
 
     context
         .temp_dir
@@ -1867,24 +1885,31 @@ fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
         .assert()
         .success();
 
-    let mut lock = context.read("uv.lock");
-    let hash_indices = lock
-        .match_indices("sha256:")
-        .map(|(index, _)| index + "sha256:".len())
+    // Corrupt every platform's candidate, while retaining its real digest for the diagnostic.
+    let lock = context.read("uv.lock");
+    let hashes = regex::Regex::new(r"sha256:[0-9a-f]{64}")?;
+    let original_hashes = hashes
+        .find_iter(&lock)
+        .map(|hash| hash.as_str())
         .collect::<Vec<_>>();
-    assert!(!hash_indices.is_empty());
-    for index in hash_indices.into_iter().rev() {
-        let replacement = if lock.as_bytes()[index] == b'0' {
-            "1"
-        } else {
-            "0"
-        };
-        lock.replace_range(index..=index, replacement);
-    }
-    context.temp_dir.child("uv.lock").write_str(&lock)?;
+    assert!(
+        !original_hashes.is_empty(),
+        "ty has no locked artifact hashes"
+    );
+    assert!(!original_hashes.contains(&INVALID_HASH));
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&hashes.replace_all(&lock, INVALID_HASH))?;
+    let mut filters = context.filters();
+    filters.extend(
+        original_hashes
+            .into_iter()
+            .map(|hash| (hash, "sha256:[COMPUTED_HASH]")),
+    );
 
     uv_snapshot!(
-        context.filters(),
+        filters,
         context.check().arg("--no-sync").arg("--frozen"),
         @"
     exit_code: 1 (failure)
@@ -1894,10 +1919,10 @@ fn check_locked_tool_rejects_invalid_hash() -> Result<()> {
       cause: Hash mismatch for `ty==0.0.17`
 
              Expected:
-               sha256:[HASH]
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
 
              Computed:
-               sha256:[HASH]
+               sha256:[COMPUTED_HASH]
     "
     );
 
@@ -2013,7 +2038,7 @@ fn check_uses_ty_version_from_production_dependency() -> Result<()> {
     "
     );
 
-    assert!(context.site_packages().join("ty").exists());
+    assert_installed_ty_version(&context, "0.0.16");
 
     Ok(())
 }
@@ -2059,7 +2084,7 @@ fn check_uses_ty_version_from_forked_lock() -> Result<()> {
     "
     );
 
-    assert!(context.site_packages().join("ty").exists());
+    assert_installed_ty_version(&context, "0.0.17");
 
     Ok(())
 }
@@ -2132,7 +2157,13 @@ fn check_uses_workspace_ty_subgraph_from_lock() -> Result<()> {
     "
     );
 
-    assert!(!context.site_packages().join("ty").exists());
+    // An editable workspace install would create distribution metadata without a `ty` directory
+    // in site-packages.
+    uv_snapshot!(context.filters(), context.pip_show().arg("ty"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    warning: Package(s) not found for: ty
+    ");
 
     Ok(())
 }
@@ -3141,7 +3172,7 @@ fn check_with_declared_dependency() -> Result<()> {
             "from importlib.metadata import distribution; assert distribution('a').read_text('INSTALLER') == 'uv'",
         )
         .success();
-    assert!(!context.site_packages().join("b").exists());
+    context.assert_not_installed("b");
 
     Ok(())
 }
@@ -3200,7 +3231,7 @@ fn check_no_install_project() -> Result<()> {
     "
     );
 
-    assert!(context.site_packages().join("a").exists());
+    context.assert_installed("a", "1.0.0");
     assert!(
         !context
             .site_packages()
@@ -3230,7 +3261,7 @@ fn check_no_install_project() -> Result<()> {
     "
     );
 
-    assert!(context.site_packages().join("a").exists());
+    context.assert_installed("a", "1.0.0");
     assert!(
         !context
             .site_packages()
@@ -3366,7 +3397,7 @@ fn check_isolated() -> Result<()> {
     );
 
     assert!(!context.temp_dir.child("uv.lock").exists());
-    assert!(!context.site_packages().join("a").exists());
+    context.assert_not_installed("a");
     assert!(environment_sentinel.exists());
 
     // An existing lockfile should not be updated.
@@ -3399,8 +3430,8 @@ fn check_isolated() -> Result<()> {
         .assert()
         .success();
     assert_eq!(existing_lock, context.read("uv.lock"));
-    assert!(!context.site_packages().join("a").exists());
-    assert!(!context.site_packages().join("b").exists());
+    context.assert_not_installed("a");
+    context.assert_not_installed("b");
     assert!(environment_sentinel.exists());
 
     Ok(())

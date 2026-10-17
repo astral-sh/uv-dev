@@ -1,5 +1,6 @@
 #[cfg(feature = "test-universal")]
 use std::collections::BTreeMap;
+use std::path::Path;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use std::process::Command;
 
@@ -13,13 +14,13 @@ use insta::assert_snapshot;
 #[cfg(feature = "test-universal")]
 use serde_json::json;
 #[cfg(feature = "test-universal")]
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 #[cfg(feature = "test-universal")]
 use walkdir::WalkDir;
 #[cfg(feature = "test-universal")]
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{any, method, path},
 };
 
 #[cfg(feature = "test-universal")]
@@ -33,11 +34,57 @@ use uv_test::archive::{generate_source_archive, write_tar_gz};
 use uv_test::package_server::PackageServer;
 #[cfg(feature = "test-universal")]
 use uv_test::packse::{PackseServer, generate_wheel_with_files, scenario::Scenario};
+#[cfg(feature = "test-universal")]
+use uv_test::subdirectory_archive::SubdirectoryArchive;
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
-use uv_test::{diff_snapshot, uv_snapshot};
 #[cfg(feature = "test-universal")]
-use uv_test::{download_to_disk, venv_bin_path};
+use uv_test::{capture_uv_snapshot, diff_uv_snapshot, venv_bin_path};
+use uv_test::{diff_snapshot, uv_snapshot};
+
+const TQDM_WHEEL: &str = "tqdm-1000.0.0-py3-none-any.whl";
+
+fn copy_flat_index_fixture(
+    context: &uv_test::TestContext,
+    index: &Path,
+    filename: &str,
+) -> Result<()> {
+    fs_err::create_dir_all(index)?;
+    fs_err::copy(
+        context.workspace_root.join("test/links").join(filename),
+        index.join(filename),
+    )?;
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+fn assert_cache_missing_files(cache: &Path, filenames: &[&str]) -> Result<()> {
+    for entry in WalkDir::new(cache) {
+        let entry = entry?;
+        assert!(
+            !filenames
+                .iter()
+                .any(|filename| entry.file_name() == *filename),
+            "rejected artifact was retained in the cache at {}",
+            entry.path().display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+fn locked_package(lock: &str, name: &str) -> Result<toml::Value> {
+    let lock: toml::Value = toml::from_str(lock)?;
+    lock.get("package")
+        .and_then(toml::Value::as_array)
+        .and_then(|packages| {
+            packages
+                .iter()
+                .find(|package| package.get("name").and_then(toml::Value::as_str) == Some(name))
+        })
+        .cloned()
+        .ok_or_else(|| anyhow!("package `{name}` not found in lockfile"))
+}
 
 /// Lock validation warnings should explain why a local dependency's metadata could not be read.
 #[cfg(feature = "test-universal")]
@@ -101,15 +148,23 @@ fn lock_without_package_metadata(lock: &str) -> Result<toml_edit::DocumentMut> {
         anyhow::bail!("lockfile did not contain a package array");
     };
     for package in packages.iter_mut() {
-        let extras = package
+        let extras = match package
             .get("metadata")
             .and_then(|metadata| metadata.get("provides-extras"))
-            .and_then(toml_edit::Item::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(toml_edit::Value::as_str)
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
+        {
+            Some(extras) => extras
+                .as_array()
+                .ok_or_else(|| anyhow!("package provided extras were not an array"))?
+                .iter()
+                .map(|extra| {
+                    extra
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                        .ok_or_else(|| anyhow!("package provided extra was not a string: {extra}"))
+                })
+                .collect::<Result<Vec<_>>>()?,
+            None => Vec::new(),
+        };
         if !extras.is_empty() {
             let optional_dependencies = package
                 .entry("optional-dependencies")
@@ -142,8 +197,6 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
         "#
     })?;
 
-    context.lock().arg("--offline").assert().success();
-
     let noncanonical_lock = indoc! {
         r"
         version = 1
@@ -164,12 +217,11 @@ fn lock_preserves_noncanonical_lock() -> Result<()> {
         .child("uv.lock")
         .write_str(noncanonical_lock)?;
 
-    context
-        .lock()
-        .arg("--locked")
-        .arg("--offline")
-        .assert()
-        .success();
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
     assert_eq!(context.read("uv.lock"), noncanonical_lock);
 
     Ok(())
@@ -2629,8 +2681,8 @@ async fn lock_sdist_url_relock_hash_mismatch() -> Result<()> {
     let trusted_digest = hex::encode(Sha256::digest(&trusted));
     let replacement_digest = hex::encode(Sha256::digest(&replacement));
     let context = context
-        .with_filter((trusted_digest, "[TRUSTED_HASH]"))
-        .with_filter((replacement_digest, "[REPLACEMENT_HASH]"));
+        .with_filter((trusted_digest.clone(), "[TRUSTED_HASH]"))
+        .with_filter((replacement_digest.clone(), "[REPLACEMENT_HASH]"));
     server.serve(filename, &trusted, None).await;
     let pyproject = context.temp_dir.child("pyproject.toml");
     pyproject.write_str(&formatdoc! {r#"
@@ -2689,59 +2741,75 @@ async fn lock_sdist_url_relock_hash_mismatch() -> Result<()> {
     );
     assert_eq!(context.read("uv.lock"), locked);
 
-    insta::allow_duplicates! {
-        for args in [
-            vec![],
-            vec!["--refresh"],
-            vec!["--upgrade-package", "project"],
-            vec!["--upgrade-group", "empty"],
-            vec!["--locked", "--upgrade-package", "demo-pkg"],
-            vec!["--locked", "--upgrade-group", "dev"],
-        ] {
-            uv_snapshot!(context.filters(), context.lock().args(args).arg("--no-cache"), @"
-            exit_code: 1 (failure)
-            ----- stderr -----
-            error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
-              cause: Hash mismatch for `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
+    let hash_mismatch = capture_uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
+      cause: Hash mismatch for `demo-pkg @ http://[LOCALHOST]/demo_pkg-1.0.0.tar.gz`
 
-                     Expected:
-                       sha256:[TRUSTED_HASH]
+             Expected:
+               sha256:[TRUSTED_HASH]
 
-                     Computed:
-                       sha256:[REPLACEMENT_HASH]
-            ");
-            assert!(!sentinel.exists(), "relocking executed the replacement");
-            assert_eq!(context.read("uv.lock"), locked);
-        }
-    }
+             Computed:
+               sha256:[REPLACEMENT_HASH]
+    ");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    diff_uv_snapshot!(context.filters(), &hash_mismatch, context.lock().arg("--refresh").arg("--no-cache"), @"");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    diff_uv_snapshot!(context.filters(), &hash_mismatch, context.lock().args(["--upgrade-package", "project"]).arg("--no-cache"), @"");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    diff_uv_snapshot!(context.filters(), &hash_mismatch, context.lock().args(["--upgrade-group", "empty"]).arg("--no-cache"), @"");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    diff_uv_snapshot!(context.filters(), &hash_mismatch, context.lock().args(["--locked", "--upgrade-package", "demo-pkg"]).arg("--no-cache"), @"");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
+
+    diff_uv_snapshot!(context.filters(), &hash_mismatch, context.lock().args(["--locked", "--upgrade-group", "dev"]).arg("--no-cache"), @"");
+    assert!(!sentinel.exists(), "relocking executed the replacement");
+    assert_eq!(context.read("uv.lock"), locked);
 
     // Each explicit upgrade mode releases the selected package's recorded hash.
-    insta::allow_duplicates! {
-        for args in [
-            vec!["--upgrade-package", "demo-pkg"],
-            vec!["--upgrade-group", "dev"],
-            vec!["--upgrade"],
-        ] {
-            uv_snapshot!(context.filters(), context.lock().args(args).arg("--no-cache"), @"
-            exit_code: 0 (success)
-            ----- stderr -----
-            Resolved 2 packages in [TIME]
-            ");
-            assert!(sentinel.exists());
-            assert_ne!(context.read("uv.lock"), locked);
-            context.temp_dir.child("uv.lock").write_str(&locked)?;
-            fs_err::remove_file(&sentinel)?;
-        }
-        Ok::<(), anyhow::Error>(())
-    }?;
+    let upgraded_lock = locked
+        .replace(">=3.12", ">=3.12.1")
+        .replace(&trusted_digest, &replacement_digest);
+    let upgrade_output = capture_uv_snapshot!(context.filters(), context.lock().args(["--upgrade-package", "demo-pkg"]).arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert!(sentinel.exists());
+    assert_eq!(context.read("uv.lock"), upgraded_lock);
+    context.temp_dir.child("uv.lock").write_str(&locked)?;
+    fs_err::remove_file(&sentinel)?;
+
+    diff_uv_snapshot!(context.filters(), &upgrade_output, context.lock().args(["--upgrade-group", "dev"]).arg("--no-cache"), @"");
+    assert!(sentinel.exists());
+    assert_eq!(context.read("uv.lock"), upgraded_lock);
+    context.temp_dir.child("uv.lock").write_str(&locked)?;
+    fs_err::remove_file(&sentinel)?;
+
+    diff_uv_snapshot!(context.filters(), &upgrade_output, context.lock().arg("--upgrade").arg("--no-cache"), @"");
+    assert!(sentinel.exists());
+    assert_eq!(context.read("uv.lock"), upgraded_lock);
+    context.temp_dir.child("uv.lock").write_str(&locked)?;
+    fs_err::remove_file(&sentinel)?;
 
     // A new direct URL is a new identity and does not require an upgrade flag.
     let replacement_server = PackageServer::new(&name).await;
     replacement_server.serve(filename, &replacement, None).await;
+    let replacement_url = replacement_server.file_url(filename);
     pyproject.write_str(
         &context
             .read("pyproject.toml")
-            .replace(&archive_url, &replacement_server.file_url(filename)),
+            .replace(&archive_url, &replacement_url),
     )?;
     uv_snapshot!(context.filters(), context.lock().arg("--no-cache"), @"
     exit_code: 0 (success)
@@ -2749,6 +2817,10 @@ async fn lock_sdist_url_relock_hash_mismatch() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
     assert!(sentinel.exists());
+    assert_eq!(
+        context.read("uv.lock"),
+        upgraded_lock.replace(&archive_url, &replacement_url)
+    );
     Ok(())
 }
 
@@ -2862,9 +2934,15 @@ async fn lock_sdist_registry_relock_hash_mismatch() -> Result<()> {
     Checked 1 package in [TIME]
     ");
     assert!(sentinel.exists());
-    assert_ne!(context.read("uv.lock"), locked);
-    // A local version inherits the public version's trust policy until explicitly upgraded.
     let locked = context.read("uv.lock");
+    let package = locked_package(&locked, "demo-pkg")?;
+    let replacement_hash = format!("sha256:{replacement_digest}");
+    assert_eq!(
+        package["sdist"]["hash"].as_str(),
+        Some(replacement_hash.as_str())
+    );
+
+    // A local version inherits the public version's trust policy until explicitly upgraded.
     fs_err::remove_file(&sentinel)?;
     let local = generate_source_archive(&name, &"1.0.0+local".parse()?, "", Some(sentinel.path()))?;
     let local_digest = hex::encode(Sha256::digest(&local));
@@ -3407,19 +3485,7 @@ async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
         "the replaced build backend was executed"
     );
     assert_eq!(context.read("uv.lock"), locked);
-    for entry in WalkDir::new(context.cache_dir.path()) {
-        let entry = entry?;
-        assert_ne!(
-            entry.file_name(),
-            "backend.py",
-            "the rejected archive was retained in the cache"
-        );
-        assert_ne!(
-            entry.file_name(),
-            "revision.http",
-            "the rejected archive was persisted to the cache"
-        );
-    }
+    assert_cache_missing_files(context.cache_dir.path(), &["backend.py", "revision.http"])?;
 
     // Malformed replacements fail immediately during extraction, before cache persistence.
     server.serve(filename, malformed_archive, None).await;
@@ -3442,19 +3508,7 @@ async fn lock_sdist_url_rejected_archive_not_cached() -> Result<()> {
         "the replaced build backend was executed"
     );
     assert_eq!(context.read("uv.lock"), locked);
-    for entry in WalkDir::new(context.cache_dir.path()) {
-        let entry = entry?;
-        assert_ne!(
-            entry.file_name(),
-            "backend.py",
-            "the rejected archive was retained in the cache"
-        );
-        assert_ne!(
-            entry.file_name(),
-            "revision.http",
-            "the rejected archive was persisted to the cache"
-        );
-    }
+    assert_cache_missing_files(context.cache_dir.path(), &["backend.py", "revision.http"])?;
 
     Ok(())
 }
@@ -3544,7 +3598,7 @@ fn lock_sdist_path_locked_hash_mismatch() -> Result<()> {
     let replacement_digest = hex::encode(Sha256::digest(&replacement));
     let context = context
         .with_filter((trusted_digest, "[TRUSTED_HASH]"))
-        .with_filter((replacement_digest, "[REPLACEMENT_HASH]"));
+        .with_filter((replacement_digest.clone(), "[REPLACEMENT_HASH]"));
 
     archive.write_binary(&trusted)?;
     context
@@ -3605,7 +3659,12 @@ fn lock_sdist_path_locked_hash_mismatch() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
     assert!(sentinel.exists(), "the upgraded backend was not executed");
-    assert_ne!(context.read("uv.lock"), locked);
+    let package = locked_package(&context.read("uv.lock"), "demo-pkg")?;
+    let replacement_hash = format!("sha256:{replacement_digest}");
+    assert_eq!(
+        package["sdist"]["hash"].as_str(),
+        Some(replacement_hash.as_str())
+    );
     Ok(())
 }
 
@@ -3667,13 +3726,7 @@ fn lock_sdist_path_rejected_archive_not_cached() -> Result<()> {
         "the replacement build backend was executed"
     );
     assert_eq!(context.read("uv.lock"), locked);
-    for entry in WalkDir::new(context.cache_dir.path()) {
-        assert_ne!(
-            entry?.file_name(),
-            "backend.py",
-            "the rejected archive was retained in the cache"
-        );
-    }
+    assert_cache_missing_files(context.cache_dir.path(), &["backend.py"])?;
     Ok(())
 }
 
@@ -3746,13 +3799,7 @@ async fn lock_sdist_url_cache_heal_hash_mismatch() -> Result<()> {
         !sentinel.exists(),
         "the replacement build backend was executed"
     );
-    for entry in WalkDir::new(context.cache_dir.path()) {
-        assert_ne!(
-            entry?.file_name(),
-            "backend.py",
-            "cache repair retained the replacement"
-        );
-    }
+    assert_cache_missing_files(context.cache_dir.path(), &["backend.py"])?;
     Ok(())
 }
 
@@ -3760,11 +3807,11 @@ async fn lock_sdist_url_cache_heal_hash_mismatch() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sdist_url_subdirectory() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let archive = SubdirectoryArchive::start()?;
+    let context = uv_test::test_context!("3.12").with_filter((archive.sha256(), "[ARCHIVE_HASH]"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -3772,9 +3819,8 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
         dependencies = ["root"]
 
         [tool.uv.sources]
-        root = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
-        "#,
-    )?;
+        root = {{ url = "{}", subdirectory = "packages/root" }}
+        "#, archive.url()})?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -3827,16 +3873,16 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "root", url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
+        requires-dist = [{ name = "root", url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
 
         [[package]]
         name = "root"
         version = "0.0.1"
-        source = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
+        source = { url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:24b55efee28d08ad3cdc58903e359e820601baa6a4a4b3424311541ebcfb09d3" }
+        sdist = { hash = "sha256:[ARCHIVE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
@@ -3868,7 +3914,7 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root==0.0.1 (from http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root)
      + sniffio==1.3.1
     ");
 
@@ -3886,18 +3932,17 @@ fn lock_sdist_url_subdirectory() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let archive = SubdirectoryArchive::start()?;
+    let context = uv_test::test_context!("3.12").with_filter((archive.sha256(), "[ARCHIVE_HASH]"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["root @ https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root"]
-        "#,
-    )?;
+        dependencies = ["root @ {}#subdirectory=packages/root"]
+        "#, archive.url()})?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -3950,16 +3995,16 @@ fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "root", url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
+        requires-dist = [{ name = "root", url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }]
 
         [[package]]
         name = "root"
         version = "0.0.1"
-        source = { url = "https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz", subdirectory = "packages/root" }
+        source = { url = "http://[LOCALHOST]/subdirectory-test.tar.gz", subdirectory = "packages/root" }
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:24b55efee28d08ad3cdc58903e359e820601baa6a4a4b3424311541ebcfb09d3" }
+        sdist = { hash = "sha256:[ARCHIVE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
@@ -3991,7 +4036,7 @@ fn lock_sdist_url_subdirectory_pep508() -> Result<()> {
     Installed 4 packages in [TIME]
      + anyio==4.3.0
      + idna==3.6
-     + root==0.0.1 (from https://github.com/user-attachments/files/18216295/subdirectory-test.tar.gz#subdirectory=packages/root)
+     + root==0.0.1 (from http://[LOCALHOST]/subdirectory-test.tar.gz#subdirectory=packages/root)
      + sniffio==1.3.1
     ");
 
@@ -5009,7 +5054,7 @@ fn lock_project_with_build_constraints() -> Result<()> {
 }
 
 /// Lock a project with `uv.tool.build-constraint-dependencies` that reference `tool.uv.sources`.
-#[cfg(feature = "test-universal")]
+#[cfg(all(feature = "test-universal", feature = "test-python-eol"))]
 #[test]
 fn lock_project_with_build_constraint_sources() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -5476,21 +5521,8 @@ fn lock_conditional_dependency_extra() -> Result<()> {
         );
     });
 
-    // TODO(charlie): This test became non-deterministic in https://github.com/astral-sh/uv/pull/6065.
-    // But that fix is correct, and the non-determinism itself is a bug.
-    // // Re-run with `--locked`.
-    // uv_snapshot!(context.filters(), context.lock().arg("--locked"), @r###"
-    // success: false
-    // exit_code: 2
-    // ----- stdout -----
-    //
-    // ----- stderr -----
-    // Resolved 7 packages in [TIME]
-    // error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-    //
-    // hint: To update the lockfile, run `uv lock`.
-    // "###);
-
+    // TODO(charlie): Checking `--locked` before sync was nondeterministic after
+    // https://github.com/astral-sh/uv/pull/6065; the nondeterminism is itself a bug.
     // Install from the lockfile.
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 0 (success)
@@ -5504,14 +5536,19 @@ fn lock_conditional_dependency_extra() -> Result<()> {
      + urllib3==2.2.1
     ");
 
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 8 packages in [TIME]
+    ");
+
     // Validate that the extra is included on relevant Python versions.
     let context_38 = uv_test::test_context!("3.8");
 
     fs_err::copy(pyproject_toml, context_38.temp_dir.join("pyproject.toml"))?;
     fs_err::copy(lockfile, context_38.temp_dir.join("uv.lock"))?;
 
-    // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context_38.filters(), context_38.lock().arg("--locked"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 8 packages in [TIME]
@@ -8072,28 +8109,74 @@ fn lock_unsupported_tag() -> Result<()> {
     Ok(())
 }
 
-/// Respect locked versions with `uv lock`, unless `--upgrade` is passed.
+/// Respect a locked Git revision until the package is explicitly upgraded.
 #[cfg(all(feature = "test-universal", feature = "test-git"))]
 #[test]
 fn lock_git_sha() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "uv-public-pypackage"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
 
-    // Lock against `main`.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let git = || {
+        let mut command = Command::new("git");
+        command.arg("-C").arg(repository.path());
+        command
+    };
+    git()
+        .args(["init", "--initial-branch=main"])
+        .assert()
+        .success();
+    git().args(["add", "pyproject.toml"]).assert().success();
+    let commit = |message: &str| -> Result<String> {
+        git()
+            .args([
+                "-c",
+                "user.name=Example",
+                "-c",
+                "user.email=example@example.com",
+                "commit",
+                "--allow-empty",
+                "--no-gpg-sign",
+                "-m",
+                message,
+            ])
+            .assert()
+            .success();
+        let output = git().args(["rev-parse", "HEAD"]).assert().success();
+        Ok(std::str::from_utf8(&output.get_output().stdout)?
+            .trim()
+            .to_owned())
+    };
+    let initial = commit("Initial package")?;
+    let latest = commit("Advance main without changing the package version")?;
+    let context = context
+        .with_filter((latest.clone(), "[LATEST_COMMIT]"))
+        .with_filter((initial[..8].to_owned(), "[INITIAL_COMMIT]"))
+        .with_filter((latest[..8].to_owned(), "[LATEST_COMMIT]"));
+    let repository_url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@main"]
-        "#,
-    )?;
+        dependencies = ["uv-public-pypackage @ git+{repository_url}@main"]
+        "#})?;
 
-    // Write the lockfile such that it's locked against `main`, but a specific commit that isn't
-    // the latest.
-    let lock = context.temp_dir.child("uv.lock");
-    lock.write_str(r#"
+    // Start with an older lockfile revision pinned to the first commit on the branch.
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&formatdoc! {r#"
         version = 1
         revision = 2
         requires-python = ">=3.12"
@@ -8104,56 +8187,39 @@ fn lock_git_sha() -> Result<()> {
         [[package]]
         name = "project"
         version = "0.1.0"
-        source = { virtual = "." }
+        source = {{ virtual = "." }}
         dependencies = [
-            { name = "uv-public-pypackage" },
+            {{ name = "uv-public-pypackage" }},
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "uv-public-pypackage", git = "https://github.com/astral-test/uv-public-pypackage?rev=main" }]
+        requires-dist = [{{ name = "uv-public-pypackage", git = "{repository_url}?rev=main" }}]
 
         [[package]]
         name = "uv-public-pypackage"
         version = "0.1.0"
-        source = { git = "https://github.com/astral-test/uv-public-pypackage?rev=main#0dacfd662c64cb4ceb16e6cf65a157a8b715b979" }
-    "#)?;
+        source = {{ git = "{repository_url}?rev=main#{initial}" }}
+    "#})?;
+    let original = context.read("uv.lock");
 
-    // Lock against `main`.
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@main"]
-        "#,
-    )?;
-
-    // The lockfile should be unchanged.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--no-index"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    assert_eq!(original, context.read("uv.lock"));
 
-    // Relock with `--upgrade`.
-    uv_snapshot!(context.filters(), context.lock().arg("--upgrade-package").arg("uv-public-pypackage"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--upgrade-package", "uv-public-pypackage", "--no-index"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
-    Updated uv-public-pypackage v0.1.0 (0dacfd66) -> v0.1.0 (b270df1a)
+    Updated uv-public-pypackage v0.1.0 ([INITIAL_COMMIT]) -> v0.1.0 ([LATEST_COMMIT])
     ");
 
-    let lock = context.read("uv.lock");
-
-    // The lockfile should resolve to `b270df1a2fb5d012294e9aaf05e7e0bab1e6a389`, the latest commit
-    // on `main`.
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        assert_snapshot!(
-            lock, @r#"
+        assert_snapshot!(context.read("uv.lock"), @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -8170,14 +8236,13 @@ fn lock_git_sha() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "uv-public-pypackage", git = "https://github.com/astral-test/uv-public-pypackage?rev=main" }]
+        requires-dist = [{ name = "uv-public-pypackage", git = "file://[TEMP_DIR]/repository/?rev=main" }]
 
         [[package]]
         name = "uv-public-pypackage"
         version = "0.1.0"
-        source = { git = "https://github.com/astral-test/uv-public-pypackage?rev=main#b270df1a2fb5d012294e9aaf05e7e0bab1e6a389" }
-        "#
-        );
+        source = { git = "file://[TEMP_DIR]/repository/?rev=main#[LATEST_COMMIT]" }
+        "#);
     });
 
     Ok(())
@@ -8820,8 +8885,14 @@ fn lock_requires_python() -> Result<()> {
         );
     });
 
-    // Validate that attempting to install with an unsupported Python version raises an error.
-    let context_unsupported = uv_test::test_context!("3.9").with_filtered_python_sources();
+    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 5 packages in [TIME]
+    ");
+
+    // The copied lock requires a compatible interpreter for validation and installation.
+    let context_unsupported = uv_test::test_context!("3.11").with_filtered_python_sources();
 
     fs_err::copy(
         pyproject_toml,
@@ -8829,15 +8900,14 @@ fn lock_requires_python() -> Result<()> {
     )?;
     fs_err::copy(&lockfile, context_unsupported.temp_dir.join("uv.lock"))?;
 
-    // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
-    exit_code: 0 (success)
+    uv_snapshot!(context_unsupported.filters(), context_unsupported.lock().args(["--locked", "--no-python-downloads"]), @"
+    exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 5 packages in [TIME]
+    error: No interpreter found for Python >=3.12 in [PYTHON SOURCES]
+
+    hint: A managed Python download is available for Python >=3.12, but Python downloads are set to 'never'
     ");
 
-    // Install from the lockfile.
-    // Note we need to disable Python fetches or we'll just download 3.12
     uv_snapshot!(context_unsupported.filters(), context_unsupported.sync().arg("--frozen").arg("--no-python-downloads"), @"
     exit_code: 2 (failure)
     ----- stderr -----
@@ -11791,40 +11861,30 @@ fn lock_pep508_urls_with_vars() -> Result<()> {
         dependencies = ["b @ file://${PWD}/b", "c @ file:///${PROJECT_ROOT}/c"]
         "#,
     })?;
-    context.temp_dir.child("src/a/__init__.py").touch()?;
-    context
-        .temp_dir
-        .child("b/pyproject.toml")
-        .write_str(indoc! {r#"
+    let package_b = context.temp_dir.child("b");
+    package_b.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "b"
         version = "0.1.0"
-        dependencies = []
         requires-python = ">=3.11,<3.13"
-        license = {text = "MIT"}
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
-
     "#})?;
-    context.temp_dir.child("src/b/__init__.py").touch()?;
-    context
-        .temp_dir
-        .child("c/pyproject.toml")
-        .write_str(indoc! {r#"
+    package_b.child("src/b/__init__.py").touch()?;
+    let package_c = context.temp_dir.child("c");
+    package_c.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "c"
         version = "0.1.0"
-        dependencies = []
         requires-python = ">=3.11,<3.13"
-        license = {text = "MIT"}
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
-    context.temp_dir.child("src/c/__init__.py").touch()?;
+    package_c.child("src/c/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.lock().env("PWD", context.temp_dir.path()), @"
     exit_code: 0 (success)
@@ -11879,6 +11939,15 @@ fn lock_pep508_urls_with_vars() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
+    ");
+
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--offline"]).env("PWD", context.temp_dir.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + b==0.1.0 (from file://[TEMP_DIR]/b)
+     + c==0.1.0 (from file://[TEMP_DIR]/c)
     ");
 
     Ok(())
@@ -12032,22 +12101,8 @@ fn lock_constraint_dependency_absolute_path() -> Result<()> {
 fn lock_index_absolute_path_from_config() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Create a local flat index with a wheel.
     let index_dir = context.temp_dir.child("local_index");
-    fs_err::create_dir_all(&index_dir)?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-1000"))
-        {
-            let dest = index_dir.join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &index_dir, TQDM_WHEEL)?;
 
     // Create a project directory.
     let project = context.temp_dir.child("project");
@@ -12735,7 +12790,7 @@ fn lock_metadata_free_new_extra_marker() -> Result<()> {
 
 /// Ensure that the installer rejects invalid hashes from the lockfile.
 ///
-/// In this case, the hashes for `idna` have all been incremented by one in the left-most digit.
+/// The lockfile is current except for the altered hash of the transitive `idna` wheel.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_invalid_hash() -> Result<()> {
@@ -12752,66 +12807,24 @@ fn lock_invalid_hash() -> Result<()> {
         "#,
     )?;
 
-    let lock = context.temp_dir.child("uv.lock");
-
-    lock.write_str(r#"
-        version = 1
-        revision = 2
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "anyio"
-        version = "3.7.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", hash = "sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce", size = 142737 }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", hash = "sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0", size = 80873 },
-        ]
-
-        [[package]]
-        name = "idna"
-        version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:aecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426 }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:d05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567 },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { editable = "." }
-        dependencies = [
-            { name = "anyio" },
-        ]
-        requires-dist = [{ name = "anyio", specifier = "==3.7.0" }]
-
-        [[package]]
-        name = "sniffio"
-        version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372 }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235 },
-        ]
-        "#)?;
-
-    // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
-    exit_code: 1 (failure)
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 4 packages in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
     ");
+
+    let lock = context.read("uv.lock");
+    let wheel_hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f";
+    let invalid_hash = "sha256:d05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f";
+    assert_eq!(
+        lock.matches(wheel_hash).count(),
+        1,
+        "expected one idna wheel"
+    );
+    context
+        .temp_dir
+        .child("uv.lock")
+        .write_str(&lock.replacen(wheel_hash, invalid_hash, 1))?;
 
     // Install from the lockfile.
     uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
@@ -12828,70 +12841,55 @@ fn lock_invalid_hash() -> Result<()> {
 
     hint: `idna` (v3.6) was included because `project` (v0.1.0) depends on `anyio` (v3.7.0) which depends on `idna`
     ");
+    context.assert_not_installed("idna");
 
     Ok(())
 }
 
-/// Ensure that we can install from a lockfile when the index switches hash algorithms.
-/// First lock and sync with SHA256 hashes, then switch to SHA512 and lock/sync again
+/// Reinstall a cached wheel after an index switches its advertised hash from SHA256 to SHA512,
 /// without clearing the cache.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_mixed_hashes() -> Result<()> {
     let context = uv_test::test_context!("3.13");
+    let index_root = context.temp_dir.child("simple-html");
+    let package = index_root.child("basic-package");
+    let wheel_filename = "basic_package-0.1.0-py3-none-any.whl";
+    let sdist_filename = "basic_package-0.1.0.tar.gz";
+    copy_flat_index_fixture(&context, package.path(), wheel_filename)?;
+    copy_flat_index_fixture(&context, package.path(), sdist_filename)?;
 
-    let root = context.temp_dir.child("simple-html");
-    fs_err::create_dir_all(&root)?;
+    let wheel = package.child(wheel_filename);
+    let wheel_bytes = fs_err::read(wheel.path())?;
+    let wheel_sha256 = hex::encode(Sha256::digest(&wheel_bytes));
+    let wheel_sha512 = hex::encode(Sha512::digest(&wheel_bytes));
+    let wheel_url = SafeUrl::from_file_path(wheel.path()).expect("absolute wheel path");
+    let sdist = package.child(sdist_filename);
+    let sdist_sha256 = hex::encode(Sha256::digest(fs_err::read(sdist.path())?));
+    let sdist_url = SafeUrl::from_file_path(sdist.path()).expect("absolute sdist path");
+    let index_page = |algorithm: &str, digest: &str| {
+        formatdoc! {r#"
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <meta name="pypi:repository-version" content="1.1" />
+              </head>
+              <body>
+                <h1>Links for basic-package</h1>
+                <a href="{wheel_url}#{algorithm}={digest}">{wheel_filename}</a>
+                <a href="{sdist_url}#sha256={sdist_sha256}">{sdist_filename}</a>
+              </body>
+            </html>
+        "#}
+    };
+    let index = package.child("index.html");
+    index.write_str(&index_page("sha256", &wheel_sha256))?;
 
-    let basic_package = root.child("basic-package");
-    fs_err::create_dir_all(&basic_package)?;
-
-    // Copy the wheel and sdist from `test/links`.
-    let wheel = basic_package.child("basic_package-0.1.0-py3-none-any.whl");
-    fs_err::copy(
-        context
-            .workspace_root
-            .join("test/links/basic_package-0.1.0-py3-none-any.whl"),
-        &wheel,
-    )?;
-
-    let sdist = basic_package.child("basic_package-0.1.0.tar.gz");
-    fs_err::copy(
-        context
-            .workspace_root
-            .join("test/links/basic_package-0.1.0.tar.gz"),
-        &sdist,
-    )?;
-
-    // Phase 1: Create an `index.html` with SHA256 hashes for both wheel and sdist.
-    let index = basic_package.child("index.html");
-    index.write_str(&formatdoc! {r#"
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta name="pypi:repository-version" content="1.1" />
-          </head>
-          <body>
-            <h1>Links for basic-package</h1>
-            <a
-              href="{}#sha256=7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82"
-            >
-              basic_package-0.1.0-py3-none-any.whl
-            </a>
-            <a
-              href="{}#sha256=af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4"
-            >
-              basic_package-0.1.0.tar.gz
-            </a>
-          </body>
-        </html>
-    "#,
-        SafeUrl::from_file_path(&wheel).unwrap().as_str(),
-        SafeUrl::from_file_path(&sdist).unwrap().as_str(),
-    })?;
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(&formatdoc! { r#"
+    let index_url = SafeUrl::from_file_path(index_root.path()).expect("absolute index path");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -12899,31 +12897,22 @@ fn lock_mixed_hashes() -> Result<()> {
         dependencies = ["basic-package"]
 
         [tool.uv]
-        extra-index-url = ["{}"]
-        "#,
-        SafeUrl::from_file_path(&root).unwrap().as_str()
-    })?;
+        index-url = "{index_url}"
+    "#})?;
 
-    let index_url = SafeUrl::from_file_path(&root).unwrap().to_string();
-    let filters = [(index_url.as_str(), "file://[TMP]")]
-        .into_iter()
-        .chain(context.filters())
-        .collect::<Vec<_>>();
-
-    // Lock with SHA256 hashes.
     uv_snapshot!(context.filters(), context.lock().env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
+    let sha256_lock = context.read("uv.lock");
 
     insta::with_settings!({
-        filters => filters.clone(),
+        filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            sha256_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.13"
@@ -12951,84 +12940,32 @@ fn lock_mixed_hashes() -> Result<()> {
         );
     });
 
-    // Sync with SHA256 hashes to populate the cache.
-    uv_snapshot!(filters.clone(), context.sync().arg("--frozen"), @"
+    // Populate the cache before changing only the wheel's advertised hash.
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + basic-package==0.1.0
     ");
+    index.write_str(&index_page("sha512", &wheel_sha512))?;
 
-    // Phase 2: Update the index to use a SHA512 hash for the wheel instead.
-    index.write_str(&formatdoc! {r#"
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta name="pypi:repository-version" content="1.1" />
-          </head>
-          <body>
-            <h1>Links for basic-package</h1>
-            <a
-              href="{}#sha512=765bde25938af485e492e25ee0e8cde262462565122c1301213a69bf9ceb2008e3997b652a604092a238c4b1a6a334e697ff3cee3c22f9a617cb14f34e26ef17"
-            >
-              basic_package-0.1.0-py3-none-any.whl
-            </a>
-            <a
-              href="{}#sha256=af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4"
-            >
-              basic_package-0.1.0.tar.gz
-            </a>
-          </body>
-        </html>
-    "#,
-        SafeUrl::from_file_path(&wheel).unwrap().as_str(),
-        SafeUrl::from_file_path(&sdist).unwrap().as_str(),
-    })?;
-
-    // Lock again with `--refresh` to pick up the SHA512 hash from the updated index.
     uv_snapshot!(context.filters(), context.lock().arg("--refresh").env_remove(EnvVars::UV_EXCLUDE_NEWER), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    assert_eq!(
+        context.read("uv.lock"),
+        sha256_lock.replacen(
+            &format!("sha256:{wheel_sha256}"),
+            &format!("sha512:{wheel_sha512}"),
+            1,
+        ),
+        "the wheel hash should be the only lockfile change"
+    );
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => filters.clone(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.13"
-
-        [[package]]
-        name = "basic-package"
-        version = "0.1.0"
-        source = { registry = "[TEMP_DIR]/simple-html" }
-        sdist = { path = "[TEMP_DIR]/simple-html/basic-package/basic_package-0.1.0.tar.gz", hash = "sha256:af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4" }
-        wheels = [
-            { path = "[TEMP_DIR]/simple-html/basic-package/basic_package-0.1.0-py3-none-any.whl", hash = "sha512:765bde25938af485e492e25ee0e8cde262462565122c1301213a69bf9ceb2008e3997b652a604092a238c4b1a6a334e697ff3cee3c22f9a617cb14f34e26ef17" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "basic-package" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "basic-package" }]
-        "#
-        );
-    });
-
-    // Reinstalling should re-compute the hash for the `basic-package` wheel to reflect SHA512.
-    uv_snapshot!(filters, context.sync().arg("--frozen").arg("--reinstall"), @"
+    uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--reinstall"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 1 package in [TIME]
@@ -13107,6 +13044,8 @@ async fn lock_core_metadata_hash() -> Result<()> {
         cache-control = {{ api = "max-age=3600, immutable", files = "max-age=3600, immutable" }}
     "#, index_server.uri()})?;
 
+    let lockfile = context.temp_dir.child("uv.lock");
+
     // Reject sidecar bytes that do not match the index's advertised hash.
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
@@ -13119,6 +13058,7 @@ async fn lock_core_metadata_hash() -> Result<()> {
     Computed:
       sha256:987ad54f0d53537fb7157c700260deaa18346f43db7968cf0327de594d631205
     ");
+    lockfile.assert(predicates::path::missing());
 
     // The cached index response must retain the expected sidecar hashes.
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -13132,6 +13072,7 @@ async fn lock_core_metadata_hash() -> Result<()> {
     Computed:
       sha256:987ad54f0d53537fb7157c700260deaa18346f43db7968cf0327de594d631205
     ");
+    lockfile.assert(predicates::path::missing());
 
     // Serve the genuine metadata without refreshing the sidecar cache.
     artifact_server.verify().await;
@@ -13148,7 +13089,7 @@ async fn lock_core_metadata_hash() -> Result<()> {
     // The rejected metadata must not be reused from the cache.
     artifact_server.verify().await;
 
-    fs_err::remove_file(context.temp_dir.join("uv.lock"))?;
+    fs_err::remove_file(&lockfile)?;
     context.lock().assert().success();
     // The verified metadata must be reused without another download.
     artifact_server.verify().await;
@@ -13369,6 +13310,10 @@ async fn lock_index_hash_algorithm_missing() -> Result<()> {
     warning: Setting `hash-algorithm` on configured indexes is experimental and may change without warning. Pass `--preview-features index-hash-algorithm` to disable this warning.
     error: The index `http://[LOCALHOST]/simple` requires `sha256` hashes, but `basic_package-0.1.0-py3-none-any.whl` does not provide one
     ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicates::path::missing());
 
     Ok(())
 }
@@ -13999,7 +13944,15 @@ fn lock_exclusion() -> Result<()> {
         );
     });
 
-    // Re-run with `--locked`.
+    // The excluded project owns its lockfile, even though it depends on the parent.
+    uv_snapshot!(context.filters(), context.lock().current_dir(&child).arg("--locked"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
+    ");
+
+    // The parent workspace does not inherit the excluded project's lockfile.
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -14509,12 +14462,9 @@ fn lock_workspace_member_with_external_workspace_source() -> Result<()> {
 fn lock_peer_member() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    context
-        .temp_dir
-        .child("project")
-        .child("pyproject.toml")
-        .write_str(
-            r#"
+    let project = context.temp_dir.child("project");
+    project.child("pyproject.toml").write_str(
+        r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -14527,7 +14477,7 @@ fn lock_peer_member() -> Result<()> {
         [tool.uv.sources]
         child = { workspace = true }
         "#,
-        )?;
+    )?;
 
     context
         .temp_dir
@@ -14547,7 +14497,7 @@ fn lock_peer_member() -> Result<()> {
         "#,
         )?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(context.temp_dir.child("project")), @"
+    uv_snapshot!(context.filters(), context.lock().current_dir(&project), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
@@ -14594,10 +14544,11 @@ fn lock_peer_member() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
-    exit_code: 2 (failure)
+    uv_snapshot!(context.filters(), context.lock().current_dir(&project).arg("--locked"), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No `pyproject.toml` found in current directory or any parent directory
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 2 packages in [TIME]
     ");
 
     Ok(())
@@ -14983,10 +14934,12 @@ fn lock_dev_transitive() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
-    exit_code: 2 (failure)
+    uv_snapshot!(context.filters(), context.lock().current_dir(&bar).arg("--locked"), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No `pyproject.toml` found in current directory or any parent directory
+    warning: The `tool.uv.dev-dependencies` field (used in `baz/pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 5 packages in [TIME]
     ");
 
     Ok(())
@@ -15196,12 +15149,8 @@ fn lock_index_url_username_change_no_update() -> Result<()> {
     ----- stderr -----
     Resolved 4 packages in [TIME]
     ");
-
-    let lock = context.read("uv.lock");
-
-    // Verify anyio 4.0.0 is locked
-    assert!(lock.contains("name = \"anyio\""));
-    assert!(lock.contains("version = \"4.0.0\""));
+    let anyio = locked_package(&context.read("uv.lock"), "anyio")?;
+    assert_eq!(anyio["version"].as_str(), Some("4.0.0"));
 
     // Update pyproject.toml to simulate availability of newer package with more open but still compatible constraint
     pyproject_toml.write_str(
@@ -15229,12 +15178,7 @@ fn lock_index_url_username_change_no_update() -> Result<()> {
     Resolved 4 packages in [TIME]
     ");
 
-    let lock_after = context.read("uv.lock");
-
-    assert!(
-        lock_after.contains("version = \"4.0.0\""),
-        "anyio should remain at version 4.0.0, not update despite >=4.0.0 constraint"
-    );
+    assert_eq!(locked_package(&context.read("uv.lock"), "anyio")?, anyio);
 
     Ok(())
 }
@@ -16113,147 +16057,6 @@ fn lock_no_sources() -> Result<()> {
     Ok(())
 }
 
-/// Lock a project that has an existing lockfile with a deprecated schema.
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_migrate() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["anyio"]
-        "#,
-    )?;
-
-    // Write a lockfile with a deprecated schema.
-    let lock = context.temp_dir.child("uv.lock");
-    lock.write_str(
-        r#"
-        version = 1
-        revision = 2
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[distribution-term-we-dont-know]]
-        name = "anyio"
-        version = "4.3.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642 }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584 },
-        ]
-
-        [[distribution-term-we-dont-know]]
-        name = "idna"
-        version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426 }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567 },
-        ]
-
-        [[distribution-term-we-dont-know]]
-        name = "project"
-        version = "0.1.0"
-        source = { editable = "." }
-        dependencies = [
-        { name = "anyio" },
-        ]
-
-        [[distribution-term-we-dont-know]]
-        name = "sniffio"
-        version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372 }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235 },
-        ]
-        "#
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 4 packages in [TIME]
-    Added anyio v4.3.0
-    Added idna v3.6
-    Added project v0.1.0
-    Added sniffio v1.3.1
-    ");
-
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "anyio"
-        version = "4.3.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", hash = "sha256:f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6", size = 159642, upload-time = "2024-02-19T08:36:28.641Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", hash = "sha256:048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8", size = 85584, upload-time = "2024-02-19T08:36:26.842Z" },
-        ]
-
-        [[package]]
-        name = "idna"
-        version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "anyio" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "anyio" }]
-
-        [[package]]
-        name = "sniffio"
-        version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
-        ]
-        "#
-        );
-    });
-
-    Ok(())
-}
-
 /// Upgrade a specific package with `--upgrade-package`.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -16900,8 +16703,12 @@ fn lock_upgrade_drop_fork_markers() -> Result<()> {
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .assert()
         .success();
-    let lock = context.read("uv.lock");
-    assert!(lock.contains("resolution-markers"));
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let markers = lock
+        .get("resolution-markers")
+        .and_then(toml::Value::as_array)
+        .ok_or_else(|| anyhow!("forked lockfile is missing resolution markers"))?;
+    assert!(!markers.is_empty());
 
     // Remove the bound and lock with `--upgrade`.
     pyproject_toml.write_str(&requirements.replace("foo==1", "foo"))?;
@@ -16913,8 +16720,26 @@ fn lock_upgrade_drop_fork_markers() -> Result<()> {
         .arg("--upgrade")
         .assert()
         .success();
-    let lock = context.read("uv.lock");
-    assert!(!lock.contains("resolution-markers"));
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    assert!(lock.get("resolution-markers").is_none());
+    let packages = lock
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .ok_or_else(|| anyhow!("upgraded lockfile is missing packages"))?;
+    let foo = packages
+        .iter()
+        .find(|package| package.get("name").and_then(toml::Value::as_str) == Some("foo"))
+        .ok_or_else(|| anyhow!("upgraded lockfile is missing foo"))?;
+    assert_eq!(
+        foo.get("version").and_then(toml::Value::as_str),
+        Some("2.0.0")
+    );
+    for package in packages {
+        assert!(
+            package.get("resolution-markers").is_none(),
+            "upgraded package retained fork markers: {package}"
+        );
+    }
     Ok(())
 }
 
@@ -16953,24 +16778,7 @@ fn lock_warn_missing_transitive_lower_bounds() -> Result<()> {
 fn lock_find_links_local_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &context.temp_dir.join("links"), TQDM_WHEEL)?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -17059,24 +16867,7 @@ fn lock_find_links_local_wheel() -> Result<()> {
 fn lock_find_links_ignore_explicit_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &context.temp_dir.join("links"), TQDM_WHEEL)?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -17174,30 +16965,10 @@ fn lock_find_links_ignore_explicit_index() -> Result<()> {
 #[test]
 fn lock_find_links_relative_url() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
-
     let workspace = context.temp_dir.child("workspace");
+    copy_flat_index_fixture(&context, &workspace.child("links"), TQDM_WHEEL)?;
 
-    let pyproject_toml = workspace.child("pyproject.toml");
-    pyproject_toml.write_str(
+    workspace.child("pyproject.toml").write_str(
         r#"
         [project]
         name = "project"
@@ -17210,71 +16981,29 @@ fn lock_find_links_relative_url() -> Result<()> {
         format = "flat"
         url = "./links"
         explicit = true
+
+        [tool.uv.sources]
+        tqdm = { index = "local" }
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock().current_dir(&workspace), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline").current_dir(&workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Resolved 3 packages in [TIME]
+    Resolved 2 packages in [TIME]
     ");
 
-    let lock = context.read("workspace/uv.lock");
+    let package = locked_package(&context.read("workspace/uv.lock"), "tqdm")?;
+    assert_eq!(package["version"].as_str(), Some("1000.0.0"));
+    assert_eq!(package["source"]["registry"].as_str(), Some("links"));
+    assert_eq!(package["wheels"][0]["path"].as_str(), Some(TQDM_WHEEL));
 
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "colorama"
-        version = "0.4.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44", size = 27697, upload-time = "2022-10-25T02:36:22.414Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6", size = 25335, upload-time = "2022-10-25T02:36:20.889Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "tqdm" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "tqdm" }]
-
-        [[package]]
-        name = "tqdm"
-        version = "4.66.2"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "colorama", marker = "sys_platform == 'win32'" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/ea/85/3ce0f9f7d3f596e7ea57f4e5ce8c18cb44e4a9daa58ddb46ee0d13d6bff8/tqdm-4.66.2.tar.gz", hash = "sha256:6cd52cdf0fef0e0f543299cfc96fec90d7b8a7e88745f411ec33eb44d5ed3531", size = 169462, upload-time = "2024-02-10T18:19:57.214Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/2a/14/e75e52d521442e2fcc9f1df3c5e456aead034203d4797867980de558ab34/tqdm-4.66.2-py3-none-any.whl", hash = "sha256:1ee4f8a893eb9bef51c6e35730cebf234d5d0b6bd112b0271e10ed7c24a02bd9", size = 78296, upload-time = "2024-02-10T18:19:53.524Z" },
-        ]
-        "#
-        );
-    });
-
-    // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked").current_dir(&workspace), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline"]).current_dir(&workspace), @"
     exit_code: 0 (success)
     ----- stderr -----
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Resolved 3 packages in [TIME]
+    Resolved 2 packages in [TIME]
     ");
 
     Ok(())
@@ -17286,24 +17015,11 @@ fn lock_find_links_relative_url() -> Result<()> {
 fn lock_find_links_local_sdist() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(
+        &context,
+        &context.temp_dir.join("links"),
+        "tqdm-999.0.0.tar.gz",
+    )?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -17560,24 +17276,7 @@ fn lock_find_links_http_sdist() -> Result<()> {
 fn lock_find_links_explicit_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &context.temp_dir.join("links"), TQDM_WHEEL)?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -17661,24 +17360,7 @@ fn lock_find_links_explicit_index() -> Result<()> {
 fn lock_find_links_higher_priority_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &context.temp_dir.join("links"), TQDM_WHEEL)?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -17750,24 +17432,7 @@ fn lock_find_links_higher_priority_index() -> Result<()> {
 fn lock_find_links_lower_priority_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Populate the `--find-links` entries.
-    fs_err::create_dir_all(context.temp_dir.join("links"))?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("tqdm-"))
-        {
-            let dest = context
-                .temp_dir
-                .join("links")
-                .join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(&context, &context.temp_dir.join("links"), TQDM_WHEEL)?;
 
     let workspace = context.temp_dir.child("workspace");
 
@@ -17991,20 +17656,24 @@ fn lock_local_index() -> Result<()> {
 ///
 /// When resolving, we should ignore the `tool.uv.sources` and instead pull in `anyio` from PyPI.
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_sources_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+#[tokio::test]
+async fn lock_sources_url() -> Result<()> {
+    let archive = crate::workspace_sources::archive()?;
+    let server = PackageServer::new(&"workspace".parse()?).await;
+    server.serve("workspace.zip", &archive, None).await;
+    let archive_url = server.file_url("workspace.zip");
+    let context = uv_test::test_context!("3.12")
+        .with_filter((hex::encode(Sha256::digest(&archive)), "[WORKSPACE_HASH]"));
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["workspace @ https://github.com/user-attachments/files/16592193/workspace.zip"]
-        "#,
-    )?;
+        dependencies = ["workspace @ {archive_url}"]
+        "#
+    })?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -18057,7 +17726,7 @@ fn lock_sources_url() -> Result<()> {
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "workspace", url = "https://github.com/user-attachments/files/16592193/workspace.zip" }]
+        requires-dist = [{ name = "workspace", url = "http://[LOCALHOST]/workspace.zip" }]
 
         [[package]]
         name = "sniffio"
@@ -18071,11 +17740,11 @@ fn lock_sources_url() -> Result<()> {
         [[package]]
         name = "workspace"
         version = "0.1.0"
-        source = { url = "https://github.com/user-attachments/files/16592193/workspace.zip" }
+        source = { url = "http://[LOCALHOST]/workspace.zip" }
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:ba690a925dc3d1b53e0675201c9ec26ab59eeec72ab271562f53297bf1817263" }
+        sdist = { hash = "sha256:[WORKSPACE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
@@ -18099,7 +17768,7 @@ fn lock_sources_url() -> Result<()> {
      + anyio==4.3.0
      + idna==3.6
      + sniffio==1.3.1
-     + workspace==0.1.0 (from https://github.com/user-attachments/files/16592193/workspace.zip)
+     + workspace==0.1.0 (from http://[LOCALHOST]/workspace.zip)
     ");
 
     Ok(())
@@ -18107,8 +17776,12 @@ fn lock_sources_url() -> Result<()> {
 
 /// Skip direct URL freshness checks while offline without skipping mutable transitive sources.
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
+#[tokio::test]
+async fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
+    let archive = crate::workspace_sources::archive()?;
+    let server = PackageServer::new(&"workspace".parse()?).await;
+    server.serve("workspace.zip", &archive, None).await;
+    let archive_url = server.file_url("workspace.zip");
     let context = uv_test::test_context!("3.12");
 
     // The remote `workspace` archive depends on `anyio`. Override that transitive dependency to
@@ -18116,25 +17789,22 @@ fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
     // offline; changing its version below proves that we still recurse into the parent's locked
     // dependencies.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["workspace @ https://github.com/user-attachments/files/16592193/workspace.zip"]
+        dependencies = ["workspace @ {archive_url}"]
 
         [tool.uv]
         override-dependencies = ["anyio"]
 
         [tool.uv.sources]
-        anyio = { path = "anyio" }
-        "#,
-    )?;
+        anyio = {{ path = "anyio" }}
+        "#
+    })?;
 
-    let transitive = context.temp_dir.child("anyio");
-    fs_err::create_dir_all(&transitive)?;
-    let transitive_pyproject_toml = transitive.child("pyproject.toml");
+    let transitive_pyproject_toml = context.temp_dir.child("anyio/pyproject.toml");
     transitive_pyproject_toml.write_str(
         r#"
         [project]
@@ -18144,12 +17814,14 @@ fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
         "#,
     )?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--no-index"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
 
+    // The direct URL cannot be fetched while validating the modified local dependency.
+    drop(server);
     transitive_pyproject_toml.write_str(
         r#"
         [project]
@@ -18179,14 +17851,11 @@ fn lock_sources_url_offline_validates_transitive_source_tree() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sources_archive() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Download the source.
+    let archive = crate::workspace_sources::archive()?;
+    let context = uv_test::test_context!("3.12")
+        .with_filter((hex::encode(Sha256::digest(&archive)), "[WORKSPACE_HASH]"));
     let workspace_archive = context.temp_dir.child("workspace.zip");
-    download_to_disk(
-        "https://github.com/user-attachments/files/16592193/workspace.zip",
-        &workspace_archive,
-    );
+    fs_err::write(&workspace_archive, archive)?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&formatdoc! {
@@ -18269,7 +17938,7 @@ fn lock_sources_archive() -> Result<()> {
         dependencies = [
             { name = "anyio" },
         ]
-        sdist = { hash = "sha256:ba690a925dc3d1b53e0675201c9ec26ab59eeec72ab271562f53297bf1817263" }
+        sdist = { hash = "sha256:[WORKSPACE_HASH]" }
 
         [package.metadata]
         requires-dist = [{ name = "anyio" }]
@@ -18299,50 +17968,37 @@ fn lock_sources_archive() -> Result<()> {
     Ok(())
 }
 
-/// Lock a local archive requirement that uses `tool.uv.sources` internally (specifically, the root
-/// package `workspace` depends on `anyio`, and declares a source pointing to a local stub of
-/// `anyio`).
+/// Lock an extracted source tree that uses `tool.uv.sources` internally (specifically, the root
+/// package `workspace` depends on `anyio`, and declares a source pointing to a local stub).
 ///
 /// When resolving, we should respect the `tool.uv.sources` and pull in the stub `anyio`.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_sources_source_tree() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    // Download the source.
     let workspace_archive = context.temp_dir.child("workspace.zip");
-    download_to_disk(
-        "https://github.com/user-attachments/files/16592193/workspace.zip",
-        &workspace_archive,
-    );
-
-    // Unzip the file.
+    fs_err::write(&workspace_archive, crate::workspace_sources::archive()?)?;
     let file = fs_err::File::open(&*workspace_archive)?;
     uv_extract::unzip(file, &context.temp_dir)?;
+    let workspace_url = SafeUrl::from_file_path(context.temp_dir.join("workspace"))
+        .map_err(|()| anyhow!("invalid workspace file URL"))?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(&formatdoc! {
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["workspace @ file://{}"]
+        dependencies = ["workspace @ {workspace_url}"]
 
         [build-system]
-        requires = ["hatchling"]
-        build-backend = "hatchling.build"
-
-        [tool.hatch.metadata]
-        allow-direct-references = true
-
-        [tool.hatch.build.targets.wheel]
-        packages = ["src/project"]
-        "#,
-        context.temp_dir.child("workspace").portable_display()
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+        "#
     })?;
+    context.temp_dir.child("src/project/__init__.py").touch()?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
+    uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
@@ -18393,14 +18049,14 @@ fn lock_sources_source_tree() -> Result<()> {
     });
 
     // Re-run with `--locked`.
-    uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--locked", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
 
     // Install from the lockfile.
-    uv_snapshot!(context.filters(), context.sync().arg("--frozen"), @"
+    uv_snapshot!(context.filters(), context.sync().args(["--frozen", "--offline"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Prepared 3 packages in [TIME]
@@ -19353,15 +19009,17 @@ fn lock_no_sources_package_multiple() -> Result<()> {
     Ok(())
 }
 
-/// Test that `--no-sources` takes precedence over `--no-sources-package`.
-#[cfg(all(feature = "test-universal", feature = "test-git"))]
+/// Global source disabling also skips sources absent from package-specific selection.
+#[cfg(feature = "test-universal")]
 #[test]
 fn lock_no_sources_with_no_sources_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let missing_repository_url =
+        SafeUrl::from_directory_path(context.temp_dir.child("missing-repository").path())
+            .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -19372,13 +19030,10 @@ fn lock_no_sources_with_no_sources_package() -> Result<()> {
         ]
 
         [tool.uv.sources]
-        anyio = { git = "https://github.com/agronholm/anyio", tag = "3.7.0" }
-        iniconfig = { git = "https://github.com/pytest-dev/iniconfig", tag = "v2.0.0" }
-        "#,
-    )?;
+        anyio = {{ git = "{missing_repository_url}", tag = "3.7.0" }}
+        iniconfig = {{ git = "{missing_repository_url}", tag = "v2.0.0" }}
+    "#})?;
 
-    // Lock with both --no-sources and --no-sources-package
-    // --no-sources should take precedence and disable all sources
     uv_snapshot!(context.filters(), context.lock().arg("--no-sources").arg("--no-sources-package").arg("iniconfig"), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -19460,15 +19115,17 @@ fn lock_no_sources_with_no_sources_package() -> Result<()> {
     Ok(())
 }
 
-/// Test that `UV_NO_SOURCES_PACKAGE` environment variable works.
-#[cfg(all(feature = "test-universal", feature = "test-git"))]
+/// A space-separated package list from the environment disables every selected source.
+#[cfg(feature = "test-universal")]
 #[test]
 fn lock_no_sources_package_env_var() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let missing_repository_url =
+        SafeUrl::from_directory_path(context.temp_dir.child("missing-repository").path())
+            .map_err(|()| anyhow!("failed to convert repository path to file URL"))?;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -19479,13 +19136,11 @@ fn lock_no_sources_package_env_var() -> Result<()> {
         ]
 
         [tool.uv.sources]
-        anyio = { git = "https://github.com/agronholm/anyio", tag = "3.7.0" }
-        iniconfig = { git = "https://github.com/pytest-dev/iniconfig", tag = "v2.0.0" }
-        "#,
-    )?;
+        anyio = {{ git = "{missing_repository_url}", tag = "3.7.0" }}
+        iniconfig = {{ git = "{missing_repository_url}", tag = "v2.0.0" }}
+    "#})?;
 
-    // Lock with UV_NO_SOURCES_PACKAGE environment variable
-    uv_snapshot!(context.filters(), context.lock().env("UV_NO_SOURCES_PACKAGE", "anyio iniconfig"), @"
+    uv_snapshot!(context.filters(), context.lock().env(EnvVars::UV_NO_SOURCES_PACKAGE, "anyio iniconfig"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
@@ -19597,150 +19252,81 @@ fn unconditional_overlapping_marker_disjoint_version_constraints() -> Result<()>
     Ok(())
 }
 
-/// Checks the output of `uv lock --check` when there isn't a lock
+/// `--check` rejects a missing lockfile without creating one.
 #[cfg(feature = "test-universal")]
 #[test]
 fn check_no_lock() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
-        name = "myproject"
+        name = "project"
         version = "0.1.0"
         requires-python = ">=3.11"
-        dependencies = ["sortedcollections"]
-        "#,
-    )?;
+    "#})?;
 
-    uv_snapshot!(context.filters(), context.lock()
-        .arg("--check"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Unable to find lockfile at `uv.lock`, but `--check` was provided. To create a lockfile, run `uv lock` or `uv sync` without the flag.
     ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicates::path::missing());
+
     Ok(())
 }
 
-/// Checks the output of `uv lock --check` when the lock is outdated
+/// `--check` accepts a current lockfile and rejects a stale one without updating it.
 #[cfg(feature = "test-universal")]
 #[test]
 fn check_outdated_lock() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "myproject"
-        version = "0.1.0"
-        requires-python = ">=3.11"
-        dependencies = ["sortedcollections"]
-        "#,
-    )?;
-
-    // Generate the lock
-    uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    ");
-
-    // Check the --check returns fine
-    uv_snapshot!(context.filters(), context.lock()
-        .arg("--check"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 3 packages in [TIME]
-    ");
-
-    // Edit dependencies so the lock is invalid
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.11"
-        dependencies = ["iniconfig"]
-        "#,
-    )?;
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let original_lock = context.read("uv.lock");
 
-    uv_snapshot!(context.filters(), context.lock()
-        .arg("--check"), @"
-    exit_code: 1 (failure)
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline"]), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    Resolved 2 packages in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
+    Resolved 1 package in [TIME]
     ");
 
-    // Providing both `--check` and `--locked` is okay
-    uv_snapshot!(context.filters(), context.lock()
-        .arg("--check").arg("--locked"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
-    ");
-
-    Ok(())
-}
-
-/// Checks that formatting-only changes are rejected when lockfile-format-check preview is enabled.
-#[cfg(feature = "test-universal")]
-#[test]
-fn check_unformatted_lock() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    context.temp_dir.child("pyproject.toml").write_str(
-        r#"
+    pyproject_toml.write_str(indoc! {r#"
         [project]
         name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["sniffio==1.3.1"]
-        "#,
-    )?;
+        version = "0.2.0"
+        requires-python = ">=3.11"
+    "#})?;
 
-    uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    ");
-
-    let formatted = context.read("uv.lock");
-    let unformatted = formatted.replacen("\n    {", "\n{", 1);
-    assert_ne!(formatted, unformatted);
-    context.temp_dir.child("uv.lock").write_str(&unformatted)?;
-
-    // Formatting is not part of the stable lockfile contract.
-    uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--offline"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--offline").arg("--preview-features").arg("lockfile-format-check"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--offline"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: The lockfile at `uv.lock` has non-canonical formatting at line 13, but `--check` was provided.
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
-    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
+    hint: To update the lockfile, run `uv lock`.
     ");
+    assert_eq!(context.read("uv.lock"), original_lock);
 
-    uv_snapshot!(context.filters(), context.sync().arg("--locked").arg("--offline").arg("--preview-features").arg("lockfile-format-check"), @"
+    uv_snapshot!(context.filters(), context.lock().args(["--check", "--locked", "--offline"]), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: The lockfile at `uv.lock` has non-canonical formatting at line 13, but `--locked` was provided.
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--check` was provided.
 
-    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
+    hint: To update the lockfile, run `uv lock`.
     ");
-
-    assert_eq!(context.read("uv.lock"), unformatted);
+    assert_eq!(context.read("uv.lock"), original_lock);
 
     Ok(())
 }
@@ -19939,198 +19525,6 @@ fn lock_upgrade_with_relaxed_exclude_newer_package() -> Result<()> {
     Resolved 2 packages in [TIME]
     Updated idna v3.3 -> v3.6
     ");
-
-    Ok(())
-}
-
-/// This checks that markers that normalize to 'false', which are serialized
-/// to the lockfile as `python_full_version < '0'`, get read back as false.
-/// Otherwise `uv lock --check` will always fail.
-#[cfg(feature = "test-universal")]
-#[test]
-fn normalize_false_marker_dependency_groups() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let local = context.temp_dir.child("local");
-    local.create_dir_all()?;
-    let local_url = SafeUrl::from_file_path(local.path())
-        .map_err(|()| anyhow::anyhow!("local path is not a valid file URL"))?;
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(&formatdoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.11"
-        [dependency-groups]
-        dev = [
-            "pytest;python_full_version>'3.8' and python_full_version<'3.6'",
-            "local @ {local_url} ; python_full_version>'3.8' and python_full_version<'3.6'",
-        ]
-    "#})?;
-
-    uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.lock().arg("--check"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.11"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-
-        [package.metadata]
-
-        [package.metadata.requires-dev]
-        dev = [
-            { name = "local", marker = "python_version < '0'", directory = "[TEMP_DIR]/local" },
-            { name = "pytest", marker = "python_version < '0'" },
-        ]
-        "#
-        );
-    });
-
-    Ok(())
-}
-
-/// This checks that markers that normalize to 'false', which are serialized
-/// to the lockfile as `python_full_version < '0'`, get read back as false.
-/// Otherwise `uv lock --check` will always fail.
-#[cfg(feature = "test-universal")]
-#[test]
-fn normalize_false_marker_requires_dist() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "debug"
-        version = "0.1.0"
-        requires-python = ">=3.11"
-        dependencies = [
-            "pytest; python_full_version>'3.8' and python_full_version<'3.6'"
-        ]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.lock().arg("--check"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.11"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "debug"
-        version = "0.1.0"
-        source = { virtual = "." }
-
-        [package.metadata]
-        requires-dist = [{ name = "pytest", marker = "python_version < '0'" }]
-        "#
-        );
-    });
-
-    Ok(())
-}
-
-/// Check that multiple markers with known-incompatible platform values are all normalized to
-/// `false`, independent of the order in which they are processed.
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_impossible_platform_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.9"
-        dependencies = [
-            "certifi ; os_name == 'nt' and sys_platform == 'linux'",
-            "idna ; os_name == 'posix' and sys_platform == 'win32'",
-        ]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.lock().arg("--check"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    ");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(context.read("uv.lock"), @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.9"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-
-        [package.metadata]
-        requires-dist = [
-            { name = "certifi", marker = "python_version < '0'" },
-            { name = "idna", marker = "python_version < '0'" },
-        ]
-        "#);
-    });
 
     Ok(())
 }
@@ -22413,6 +21807,40 @@ fn lock_removed_empty_extra() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
+const METADATA_FREE_DEPENDENCY_PROJECT: &str = indoc! {r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "six>=2",
+        "urllib3==1.0.0",
+        "anyio==4.3.0 ; sys_platform == 'win32'",
+        "anyio==4.4.0 ; sys_platform != 'win32'",
+        "excluded",
+        "scoped-excluded",
+    ]
+
+    [project.optional-dependencies]
+    empty = []
+    feature = ["six<2", "httpx[http2]>=1 ; sys_platform != 'win32'", "excluded", "scoped-excluded"]
+
+    [dependency-groups]
+    empty = []
+    dev = ["six>=2", "httpx[http2]==1.0.0 ; sys_platform == 'win32'", "excluded", "scoped-excluded"]
+
+    [tool.uv]
+    override-dependencies = [
+        "six>=0",
+        { package = { name = "project", version = "0.1.0" }, dependencies = ["six==1.0.0"] },
+    ]
+    exclude-dependencies = [
+        "excluded",
+        { package = { name = "project", version = "0.1.0" }, dependencies = ["scoped-excluded"] },
+    ]
+    "#};
+
 /// Regenerate registry dependencies and dependency policies when package metadata is omitted.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -22420,38 +21848,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let server = PackseServer::new("extras/lock-without-metadata.toml");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    let original_pyproject = indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = [
-            "six>=2",
-            "urllib3==1.0.0",
-            "anyio==4.3.0 ; sys_platform == 'win32'",
-            "anyio==4.4.0 ; sys_platform != 'win32'",
-            "excluded",
-            "scoped-excluded",
-        ]
-
-        [project.optional-dependencies]
-        empty = []
-        feature = ["six<2", "httpx[http2]>=1 ; sys_platform != 'win32'", "excluded", "scoped-excluded"]
-
-        [dependency-groups]
-        empty = []
-        dev = ["six>=2", "httpx[http2]==1.0.0 ; sys_platform == 'win32'", "excluded", "scoped-excluded"]
-
-        [tool.uv]
-        override-dependencies = [
-            "six>=0",
-            { package = { name = "project", version = "0.1.0" }, dependencies = ["six==1.0.0"] },
-        ]
-        exclude-dependencies = [
-            "excluded",
-            { package = { name = "project", version = "0.1.0" }, dependencies = ["scoped-excluded"] },
-        ]
-        "#};
+    let original_pyproject = METADATA_FREE_DEPENDENCY_PROJECT;
     pyproject_toml.write_str(original_pyproject)?;
 
     uv_snapshot!(context.filters(), context.lock()
@@ -22463,6 +21860,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     ----- stderr -----
     Resolved 9 packages in [TIME]
     ");
+    let original_lock = context.read("uv.lock");
 
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features")
@@ -22477,6 +21875,12 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     Resolved 9 packages in [TIME]
     ");
 
+    // The root and dev requirements are both superseded by the scoped override.
+    assert_eq!(
+        original_pyproject.matches("six>=2").count(),
+        2,
+        "expected the overridden requirement in both root and dev dependencies"
+    );
     pyproject_toml.write_str(&original_pyproject.replace("six>=2", "six>=3"))?;
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features")
@@ -22490,23 +21894,7 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     ----- stderr -----
     Resolved 9 packages in [TIME]
     ");
-
-    pyproject_toml.write_str(
-        &original_pyproject.replace("sys_platform != 'win32'", "sys_platform == 'linux'"),
-    )?;
-    uv_snapshot!(context.filters(), context.lock()
-        .arg("--preview-features")
-        .arg("lock-without-metadata")
-        .arg("--locked")
-        .arg("--index-url")
-        .arg(server.index_url()), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 9 packages in [TIME]
-    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
-
-    hint: To update the lockfile, run `uv lock`.
-    ");
+    assert_eq!(context.read("uv.lock"), original_lock);
 
     pyproject_toml.write_str(&original_pyproject.replace("urllib3==1.0.0", "urllib3>=2"))?;
     uv_snapshot!(context.filters(), context.lock()
@@ -22575,6 +21963,90 @@ fn lock_regenerates_dependencies_without_metadata() -> Result<()> {
     hint: To update the lockfile, run `uv lock`.
     ");
 
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_regenerates_root_marker_without_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("extras/lock-without-metadata.toml");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(METADATA_FREE_DEPENDENCY_PROJECT)?;
+    context
+        .lock()
+        .args(["--preview-features", "lock-without-metadata", "--index-url"])
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let original_lock = context.read("uv.lock");
+
+    let requirement = "anyio==4.4.0 ; sys_platform != 'win32'";
+    assert_eq!(
+        METADATA_FREE_DEPENDENCY_PROJECT
+            .matches(requirement)
+            .count(),
+        1,
+        "expected one root dependency {requirement}"
+    );
+    pyproject_toml.write_str(&METADATA_FREE_DEPENDENCY_PROJECT.replacen(
+        requirement,
+        "anyio==4.4.0 ; sys_platform == 'linux'",
+        1,
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "lock-without-metadata", "--locked", "--index-url"])
+        .arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 9 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original_lock);
+    Ok(())
+}
+
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_regenerates_optional_marker_without_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackseServer::new("extras/lock-without-metadata.toml");
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(METADATA_FREE_DEPENDENCY_PROJECT)?;
+    context
+        .lock()
+        .args(["--preview-features", "lock-without-metadata", "--index-url"])
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let original_lock = context.read("uv.lock");
+
+    let requirement = "httpx[http2]>=1 ; sys_platform != 'win32'";
+    assert_eq!(
+        METADATA_FREE_DEPENDENCY_PROJECT
+            .matches(requirement)
+            .count(),
+        1,
+        "expected one optional dependency {requirement}"
+    );
+    pyproject_toml.write_str(&METADATA_FREE_DEPENDENCY_PROJECT.replacen(
+        requirement,
+        "httpx[http2]>=1 ; sys_platform == 'linux'",
+        1,
+    ))?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--preview-features", "lock-without-metadata", "--locked", "--index-url"])
+        .arg(server.index_url()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 9 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("uv.lock"), original_lock);
     Ok(())
 }
 
@@ -23374,7 +22846,8 @@ fn lock_metadata_free_frozen_filtered_dependency_selections() -> Result<()> {
 fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    let original_pyproject = indoc! {r#"
+    let project = |selection| {
+        formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -23382,15 +22855,16 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
         dependencies = ["dependency"]
 
         [project.optional-dependencies]
-        original = []
+        {selection} = []
 
         [dependency-groups]
-        original = []
+        {selection} = []
 
         [tool.uv.sources]
-        dependency = { path = "dependency" }
-        "#};
-    pyproject_toml.write_str(original_pyproject)?;
+        dependency = {{ path = "dependency" }}
+        "#}
+    };
+    pyproject_toml.write_str(&project("original"))?;
     context
         .temp_dir
         .child("dependency/pyproject.toml")
@@ -23399,7 +22873,15 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
             name = "dependency"
             version = "1.0.0"
             requires-python = ">=3.12"
+
+            [build-system]
+            requires = ["uv_build>=0.7,<10000"]
+            build-backend = "uv_build"
             "#})?;
+    context
+        .temp_dir
+        .child("dependency/src/dependency/__init__.py")
+        .touch()?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--offline"), @"
     exit_code: 0 (success)
@@ -23409,10 +22891,17 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
 
     let mut lock = context.read("uv.lock").parse::<toml_edit::DocumentMut>()?;
     lock["revision"] = toml_edit::value(4);
+    let revision_4_lock = lock.to_string();
+    assert!(
+        locked_package(&revision_4_lock, "project")?
+            .get("metadata")
+            .is_some(),
+        "expected a revision-4 lock with package metadata"
+    );
     context
         .temp_dir
         .child("uv.lock")
-        .write_str(&lock.to_string())?;
+        .write_str(&revision_4_lock)?;
 
     // Revision-4 lockfiles that retain metadata do not require the preview feature.
     uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
@@ -23421,10 +22910,11 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    pyproject_toml.write_str(&original_pyproject.replace("original =", "added ="))?;
+    pyproject_toml.write_str(&project("added"))?;
 
     uv_snapshot!(context.filters(), context.sync()
         .arg("--frozen")
+        .arg("--offline")
         .arg("--extra")
         .arg("original"), @"
     exit_code: 0 (success)
@@ -23452,9 +22942,10 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
     ----- stderr -----
     error: Group `added` is not defined in the project's `dependency-groups` table
     ");
+    assert_eq!(context.read("uv.lock"), revision_4_lock);
 
     // Locks without package metadata must likewise preserve the recorded empty selections.
-    pyproject_toml.write_str(original_pyproject)?;
+    pyproject_toml.write_str(&project("original"))?;
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features")
         .arg("lock-without-metadata")
@@ -23464,7 +22955,14 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
-    pyproject_toml.write_str(&original_pyproject.replace("original =", "added ="))?;
+    let metadata_free_lock = context.read("uv.lock");
+    assert!(
+        locked_package(&metadata_free_lock, "project")?
+            .get("metadata")
+            .is_none(),
+        "expected the preview lock to omit package metadata"
+    );
+    pyproject_toml.write_str(&project("added"))?;
 
     uv_snapshot!(context.filters(), context.sync().arg("--frozen").arg("--extra").arg("original"), @"
     exit_code: 0 (success)
@@ -23487,6 +22985,7 @@ fn lock_metadata_free_frozen_preserves_recorded_selections() -> Result<()> {
     ----- stderr -----
     error: Group `added` is not defined in the project's `dependency-groups` table
     ");
+    assert_eq!(context.read("uv.lock"), metadata_free_lock);
 
     Ok(())
 }
@@ -24130,6 +23629,7 @@ fn lock_metadata_free_shared_git_direct_source() -> Result<()> {
         .arg("-c")
         .arg("user.email=example@example.com")
         .arg("commit")
+        .arg("--no-gpg-sign")
         .arg("-m")
         .arg("Initial commit")
         .env("GIT_AUTHOR_DATE", "2000-01-01T00:00:00Z")
@@ -25064,143 +24564,6 @@ fn lock_regenerates_marker_specific_requested_extras() -> Result<()> {
     Ok(())
 }
 
-/// Test backwards compatibility for `[package.metadata]`.
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_missing_metadata() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0"]
-        "#,
-    )?;
-
-    let lock = context.temp_dir.child("uv.lock");
-
-    // Write a lockfile with a missing `[package.metadata]` section.
-    lock.write_str(r#"
-        version = 1
-        revision = 2
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "anyio"
-        version = "3.7.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", hash = "sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce", size = 142737 }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", hash = "sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0", size = 80873 },
-        ]
-
-        [[package]]
-        name = "idna"
-        version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426 }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567 },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { editable = "." }
-        dependencies = [
-            { name = "anyio" },
-        ]
-
-        [[package]]
-        name = "sniffio"
-        version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372 }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235 },
-        ]
-    "#)?;
-
-    // Re-locking should add `[package.metadata]`.
-    uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 4 packages in [TIME]
-    ");
-
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "anyio"
-        version = "3.7.0"
-        source = { registry = "https://pypi.org/simple" }
-        dependencies = [
-            { name = "idna" },
-            { name = "sniffio" },
-        ]
-        sdist = { url = "https://files.pythonhosted.org/packages/c6/b3/fefbf7e78ab3b805dec67d698dc18dd505af7a18a8dd08868c9b4fa736b5/anyio-3.7.0.tar.gz", hash = "sha256:275d9973793619a5374e1c89a4f4ad3f4b0a5510a2b5b939444bee8f4c4d37ce", size = 142737, upload-time = "2023-05-27T11:12:46.688Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/68/fe/7ce1926952c8a403b35029e194555558514b365ad77d75125f521a2bec62/anyio-3.7.0-py3-none-any.whl", hash = "sha256:eddca883c4175f14df8aedce21054bfca3adb70ffe76a9f607aef9d7fa2ea7f0", size = 80873, upload-time = "2023-05-27T11:12:44.474Z" },
-        ]
-
-        [[package]]
-        name = "idna"
-        version = "3.6"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", hash = "sha256:9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca", size = 175426, upload-time = "2023-11-25T15:40:54.902Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", hash = "sha256:c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f", size = 61567, upload-time = "2023-11-25T15:40:52.604Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "anyio" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "anyio", specifier = "==3.7.0" }]
-
-        [[package]]
-        name = "sniffio"
-        version = "1.3.1"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
-        ]
-        "#
-        );
-    });
-
-    Ok(())
-}
-
 /// Test backwards compatibility for `package.dependency-groups`. `package.dev-dependencies` was
 /// accidentally renamed to `package.dependency-groups` in v0.4.27, which is technically out of
 /// compliance with our lockfile versioning policy. In v0.4.28, we renamed it back to
@@ -25226,7 +24589,7 @@ fn lock_dev_dependencies_alias() -> Result<()> {
 
     let lock = context.temp_dir.child("uv.lock");
 
-    // Write a lockfile with `[package.dev-dependencies]`.
+    // Write a lockfile with the legacy `[package.dependency-groups]` spelling.
     lock.write_str(r#"
         version = 1
         revision = 2
@@ -25258,6 +24621,17 @@ fn lock_dev_dependencies_alias() -> Result<()> {
         ]
     "#)?;
 
+    let legacy_lock = context.read("uv.lock");
+    // A frozen consumer must follow the dependency edge stored under the legacy group name.
+    uv_snapshot!(context.filters(), context.export().args(["--frozen", "--offline", "--only-group", "dev", "--no-header", "--no-hashes", "--no-annotate"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    iniconfig==2.0.0
+
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    ");
+
     // Re-locking should be a no-op.
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
     exit_code: 0 (success)
@@ -25265,8 +24639,9 @@ fn lock_dev_dependencies_alias() -> Result<()> {
     warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
     Resolved 2 packages in [TIME]
     ");
+    assert_eq!(context.read("uv.lock"), legacy_lock);
 
-    // If we add a package, re-locking should use `dependency-groups`.
+    // A new resolution writes the canonical `[package.dev-dependencies]` spelling.
     pyproject_toml.write_str(
         r#"
         [project]
@@ -27359,19 +26734,21 @@ fn lock_add_empty_dependency_group() -> Result<()> {
         "#,
     )?;
 
+    let original_manifest = context.read("pyproject.toml");
+
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
+    let original_lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            original_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -27432,6 +26809,7 @@ fn lock_add_empty_dependency_group() -> Result<()> {
 
     hint: To update the lockfile, run `uv lock`.
     ");
+    assert_eq!(context.read("uv.lock"), original_lock);
 
     // Re-lock the project.
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -27440,45 +26818,11 @@ fn lock_add_empty_dependency_group() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "iniconfig" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "iniconfig" }]
-
-        [package.metadata.requires-dev]
-        empty = []
-        "#
-        );
-    });
+    let grouped_lock = context.read("uv.lock");
+    assert_eq!(
+        grouped_lock,
+        format!("{original_lock}\n[package.metadata.requires-dev]\nempty = []\n")
+    );
 
     // Re-run with `--locked`.
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
@@ -27488,15 +26832,7 @@ fn lock_add_empty_dependency_group() -> Result<()> {
     ");
 
     // Remove the empty group.
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig"]
-        "#,
-    )?;
+    pyproject_toml.write_str(&original_manifest)?;
 
     // Re-run with `--locked`; this should fail.
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
@@ -27507,6 +26843,7 @@ fn lock_add_empty_dependency_group() -> Result<()> {
 
     hint: To update the lockfile, run `uv lock`.
     ");
+    assert_eq!(context.read("uv.lock"), grouped_lock);
 
     // Re-lock the project.
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -27515,42 +26852,7 @@ fn lock_add_empty_dependency_group() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "iniconfig" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "iniconfig" }]
-        "#
-        );
-    });
+    assert_eq!(context.read("uv.lock"), original_lock);
 
     // Re-run with `--locked`.
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
@@ -27678,51 +26980,6 @@ fn lock_trailing_slash_index_url() -> Result<()> {
 
 #[cfg(feature = "test-universal")]
 #[test]
-fn lock_invalid_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["anyio==3.7.0", "iniconfig==2.0.0"]
-
-        [tool.uv.sources]
-        iniconfig = { index = "internal proxy" }
-
-        [[tool.uv.index]]
-        name = "internal proxy"
-        url = "https://test.pypi.org/simple"
-        explicit = true
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    warning: Failed to parse `pyproject.toml` during settings discovery:
-      TOML parse error at line 12, column 16
-         |
-      12 |         name = "internal proxy"
-         |                ^^^^^^^^^^^^^^^^
-      Index names may only contain letters, digits, hyphens, underscores, and periods, but found unsupported character (` `) in: `internal proxy`
-
-    error: Failed to parse: pyproject.toml
-      cause: TOML parse error at line 9, column 31
-               |
-             9 |         iniconfig = { index = "internal proxy" }
-               |                               ^^^^^^^^^^^^^^^^
-             Index names may only contain letters, digits, hyphens, underscores, and periods, but found unsupported character (` `) in: `internal proxy`
-    "#);
-
-    Ok(())
-}
-
-#[cfg(feature = "test-universal")]
-#[test]
 fn lock_explicit_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -27826,30 +27083,36 @@ fn lock_explicit_index() -> Result<()> {
     Ok(())
 }
 
+/// An explicit default index is available only to packages bound to it by name.
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_explicit_default_index() -> Result<()> {
+#[tokio::test]
+async fn lock_explicit_default_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let package = "ok".parse()?;
+    let index = PackageServer::new(&package).await;
+    let filename = "ok-1.0.0-py3-none-any.whl";
+    let wheel = fs_err::read(context.workspace_root.join("test/links").join(filename))?;
+    let digest = hex::encode(Sha256::digest(&wheel));
+    index.serve(filename, &wheel, Some(&digest)).await;
 
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let unbound_project = formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["iniconfig==2.0.0"]
-
-        [tool.uv.sources]
-        iniconfig = { index = "test" }
+        dependencies = ["ok"]
 
         [[tool.uv.index]]
         name = "test"
-        url = "https://test.pypi.org/simple"
+        url = "{}"
         explicit = true
         default = true
-        "#,
-    )?;
+        "#, index.index_url()
+    };
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(&format!(
+        "{unbound_project}\n[tool.uv.sources]\nok = {{ index = \"test\" }}\n"
+    ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -27858,12 +27121,8 @@ fn lock_explicit_default_index() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -27872,12 +27131,11 @@ fn lock_explicit_default_index() -> Result<()> {
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://test.pypi.org/simple" }
-        sdist = { url = "https://test-files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:16.826Z" }
+        name = "ok"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple" }
         wheels = [
-            { url = "https://test-files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:14.843Z" },
+            { url = "http://[LOCALHOST]/ok-1.0.0-py3-none-any.whl", hash = "sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f", upload-time = "2024-01-01T00:00:00Z" },
         ]
 
         [[package]]
@@ -27885,188 +27143,31 @@ fn lock_explicit_default_index() -> Result<()> {
         version = "0.1.0"
         source = { virtual = "." }
         dependencies = [
-            { name = "iniconfig" },
+            { name = "ok" },
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "iniconfig", specifier = "==2.0.0", index = "https://test.pypi.org/simple" }]
-        "#
-        );
+        requires-dist = [{ name = "ok", index = "http://[LOCALHOST]/simple" }]
+        "#);
     });
 
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["anyio"]
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .with_priority(1)
+        .expect(0)
+        .named("unbound explicit default index")
+        .mount(index.mock_server())
+        .await;
+    pyproject_toml.write_str(&unbound_project)?;
 
-        [[tool.uv.index]]
-        name = "test"
-        url = "https://test.pypi.org/simple"
-        explicit = true
-        default = true
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock().arg("--verbose"), @r#"
+    // Resolve again without reusing the locked package or cached index response.
+    uv_snapshot!(context.filters(), context.lock().arg("--upgrade").arg("--no-cache"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    DEBUG Found workspace root: [TEMP_DIR]/
-    DEBUG Adding root workspace member: [TEMP_DIR]/
-    DEBUG Found workspace configuration at `[TEMP_DIR]/pyproject.toml`
-    DEBUG Searching for user configuration in: [UV_USER_CONFIG_DIR]/uv.toml
-    DEBUG uv [VERSION] ([COMMIT] DATE)
-    DEBUG Found project root: [TEMP_DIR]/
-    DEBUG No Python version file found in workspace: [TEMP_DIR]/
-    DEBUG Using Python request `>=3.12` from `requires-python` metadata
-    DEBUG Checking for Python environment at: .venv
-    DEBUG The project environment's Python version satisfies the request: `Python >=3.12`
-    DEBUG Using request connect timeout of [TIME] and read timeout of [TIME]
-    DEBUG Found static `requires-dist` for: [TEMP_DIR]/
-    DEBUG Resolving despite existing lockfile due to mismatched requirements for: `project==0.1.0`
-      Requested: {Requirement { name: PackageName("anyio"), extras: [], groups: [], marker: true, source: Registry { specifier: VersionSpecifiers([]), index: None, conflict: None }, scope: Global, origin: None }}
-      Existing: {Requirement { name: PackageName("iniconfig"), extras: [], groups: [], marker: true, source: Registry { specifier: VersionSpecifiers([VersionSpecifier { operator: Equal, version: "2" }]), index: Some(IndexMetadata { url: Url(VerbatimUrl { url: SafeUrl { scheme: "https", cannot_be_a_base: false, username: "", password: None, host: Some(Domain("test.pypi.org")), port: None, path: "/simple", query: None, fragment: None }, given: None, expanded: false, force_relative: false }), format: Simple }), conflict: None }, scope: Global, origin: None }}
-    DEBUG Found static `pyproject.toml` for: project @ file://[TEMP_DIR]/
-    DEBUG Solving with installed Python version: 3.12.[X]
-    DEBUG Solving with target Python version: >=3.12
-    DEBUG Solving with exclude-newer: global: 2024-03-25T00:00:00Z
-    DEBUG Adding direct dependency: project*
-    DEBUG Searching for a compatible version of project @ `file://[TEMP_DIR]/` (*)
-    DEBUG Adding direct dependency: anyio*
-    DEBUG Searching for a compatible version of anyio (*)
-    DEBUG No compatible version found for: anyio
-    DEBUG Recording unit propagation conflict of anyio from incompatibility of (project)
-    DEBUG Searching for a compatible version of project @ `file://[TEMP_DIR]/` (<0.1.0 | >0.1.0)
-    DEBUG No compatible version found for: project
     error: No solution found when resolving dependencies
-      cause: Because anyio was not found in the package registry and your project depends on anyio, we can conclude that your project's requirements are unsatisfiable.
-    "#);
-
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://test.pypi.org/simple" }
-        sdist = { url = "https://test-files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:16.826Z" }
-        wheels = [
-            { url = "https://test-files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:14.843Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "iniconfig" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "iniconfig", specifier = "==2.0.0", index = "https://test.pypi.org/simple" }]
-        "#
-        );
-    });
-
-    Ok(())
-}
-
-/// Error when an explicit index does not have a name.
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_unnamed_explicit_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig==2.0.0"]
-
-        [[tool.uv.index]]
-        url = "https://test.pypi.org/simple"
-        explicit = true
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    warning: Failed to parse `pyproject.toml` during settings discovery:
-      TOML parse error at line 8, column 9
-        |
-      8 |         [[tool.uv.index]]
-        |         ^^^^^^^^^^^^^^^^^
-      An index with `explicit = true` requires a `name`: https://test.pypi.org/simple
-
-    error: Failed to parse: pyproject.toml
-      cause: TOML parse error at line 8, column 9
-               |
-             8 |         [[tool.uv.index]]
-               |         ^^^^^^^^^^^^^^^^^
-             An index with `explicit = true` requires a `name`: https://test.pypi.org/simple
+      cause: Because ok was not found in the package registry and your project depends on ok, we can conclude that your project's requirements are unsatisfiable.
     ");
-
-    Ok(())
-}
-
-/// Error when an index cache-control override is not a valid HTTP header value.
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_invalid_index_cache_control() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["iniconfig==2.0.0"]
-
-        [[tool.uv.index]]
-        name = "test"
-        url = "https://test.pypi.org/simple"
-        cache-control.api = """
-        max-age=600
-        """
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    warning: Failed to parse `pyproject.toml` during settings discovery:
-      TOML parse error at line 11, column 9
-         |
-      11 |         cache-control.api = """
-         |         ^^^^^^^^^^^^^
-      `cache-control.api` must be a valid HTTP header value
-
-    error: Failed to parse: pyproject.toml
-      cause: TOML parse error at line 11, column 9
-                |
-             11 |         cache-control.api = """
-                |         ^^^^^^^^^^^^^
-             `cache-control.api` must be a valid HTTP header value
-    "#);
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
@@ -28076,6 +27177,13 @@ fn lock_invalid_index_cache_control() -> Result<()> {
 async fn lock_named_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
+    let unselected = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .named("unselected indexes")
+        .mount(&unselected)
+        .await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(&format!(
@@ -28087,8 +27195,8 @@ async fn lock_named_index() -> Result<()> {
         dependencies = ["typing-extensions"]
 
         [[tool.uv.index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121"
+        name = "explicit"
+        url = "{unselected_uri}/explicit/simple"
         explicit = true
 
         [[tool.uv.index]]
@@ -28096,10 +27204,11 @@ async fn lock_named_index() -> Result<()> {
         url = "{proxy_uri}/simple"
 
         [[tool.uv.index]]
-        name = "test"
-        url = "https://test.pypi.org/simple"
+        name = "fallback"
+        url = "{unselected_uri}/fallback/simple"
         "#,
-        proxy_uri = proxy.uri()
+        proxy_uri = proxy.uri(),
+        unselected_uri = unselected.uri()
     ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
@@ -28149,13 +27258,21 @@ async fn lock_named_index() -> Result<()> {
 }
 
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_default_index() -> Result<()> {
+#[tokio::test]
+async fn lock_default_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let missing_index = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/simple/iniconfig/"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1..)
+        .mount(&missing_index)
+        .await;
+    let index = format!("{}/simple", missing_index.uri());
 
     // If an index is included, PyPI will still be used as the default index.
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&format!(
         r#"
         [project]
         name = "project"
@@ -28164,24 +27281,25 @@ fn lock_default_index() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [[tool.uv.index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121"
+        name = "empty"
+        url = "{index}"
         "#,
-    )?;
+    ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
+    missing_index.verify().await;
 
-    let lock = context.read("uv.lock");
+    let original_lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            original_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -28213,7 +27331,7 @@ fn lock_default_index() -> Result<()> {
     });
 
     // Unless that index is marked as the default.
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&format!(
         r#"
         [project]
         name = "project"
@@ -28222,11 +27340,11 @@ fn lock_default_index() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [[tool.uv.index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121"
+        name = "empty"
+        url = "{index}"
         default = true
         "#,
-    )?;
+    ))?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
@@ -28235,42 +27353,7 @@ fn lock_default_index() -> Result<()> {
       cause: Because iniconfig was not found in the package registry and your project depends on iniconfig, we can conclude that your project's requirements are unsatisfiable.
     ");
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "iniconfig" },
-        ]
-
-        [package.metadata]
-        requires-dist = [{ name = "iniconfig" }]
-        "#
-        );
-    });
+    assert_eq!(original_lock, context.read("uv.lock"));
 
     Ok(())
 }
@@ -28360,105 +27443,6 @@ fn lock_named_index_cli() -> Result<()> {
     Ok(())
 }
 
-/// If a named index is referenced in `tool.uv.sources` but only defined in `uv.toml`, we should
-/// provide a hint that the index was found in a configuration file.
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_named_index_config_file_hint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["jinja2==3.1.2"]
-
-        [tool.uv.sources]
-        jinja2 = { index = "pytorch" }
-        "#,
-    )?;
-
-    let uv_toml = context.temp_dir.child("uv.toml");
-    uv_toml.write_str(
-        r#"
-        [[index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121"
-        explicit = true
-        "#,
-    )?;
-
-    // The index is defined in `uv.toml`, which should produce a hint.
-    uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to build `project @ file://[TEMP_DIR]/`
-      cause: Failed to parse entry: `jinja2`
-      cause: Package `jinja2` references an undeclared index: `pytorch`
-
-    hint: Index `pytorch` was found in a project-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
-    ");
-
-    Ok(())
-}
-
-/// If a named index is referenced in `tool.uv.sources` but only defined in a user-level `uv.toml`
-/// (e.g., `~/.config/uv/uv.toml`), we should provide a hint that the index was found in a
-/// configuration file.
-#[cfg(feature = "test-universal")]
-#[test]
-#[cfg_attr(
-    windows,
-    ignore = "Configuration tests are not yet supported on Windows"
-)]
-fn lock_named_index_user_config_file_hint() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["jinja2==3.1.2"]
-
-        [tool.uv.sources]
-        jinja2 = { index = "pytorch" }
-        "#,
-    )?;
-
-    // Define the index in a user-level configuration file.
-    let xdg = assert_fs::TempDir::new().expect("Failed to create temp dir");
-    let uv_config = xdg.child("uv");
-    let uv_toml = uv_config.child("uv.toml");
-    uv_toml.write_str(
-        r#"
-        [[index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121"
-        explicit = true
-        "#,
-    )?;
-
-    // The index is defined in a user-level `uv.toml`, which should produce a hint.
-    uv_snapshot!(context.filters(), context.lock()
-        .env(EnvVars::XDG_CONFIG_HOME, xdg.path()), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to build `project @ file://[TEMP_DIR]/`
-      cause: Failed to parse entry: `jinja2`
-      cause: Package `jinja2` references an undeclared index: `pytorch`
-
-    hint: Index `pytorch` was found in a user-level `uv.toml`, but indexes referenced via `tool.uv.sources` must be defined in the project's `pyproject.toml`
-    ");
-
-    Ok(())
-}
-
 /// If a name is reused, within a single file, we should raise an error.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -28541,12 +27525,30 @@ fn lock_multiple_default_indexes() -> Result<()> {
 
 /// If a name is defined in both the workspace root and the member, prefer the index in the member.
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_repeat_named_index_member() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
+#[tokio::test]
+async fn lock_repeat_named_index_member() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let package = "ok".parse()?;
+    let fixtures = context.workspace_root.join("test/links");
+
+    let root_index = PackageServer::new(&package).await;
+    let root_filename = "ok-2.0.0-py3-none-any.whl";
+    let root_wheel = fs_err::read(fixtures.join(root_filename))?;
+    let root_digest = hex::encode(Sha256::digest(&root_wheel));
+    root_index
+        .serve(root_filename, &root_wheel, Some(&root_digest))
+        .await;
+
+    let member_index = PackageServer::new(&package).await;
+    let member_filename = "ok-1.0.0-py3-none-any.whl";
+    let member_wheel = fs_err::read(fixtures.join(member_filename))?;
+    let member_digest = hex::encode(Sha256::digest(&member_wheel));
+    member_index
+        .serve(member_filename, &member_wheel, Some(&member_digest))
+        .await;
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
+    pyproject_toml.write_str(&formatdoc! {
         r#"
         [project]
         name = "project"
@@ -28555,40 +27557,41 @@ fn lock_repeat_named_index_member() -> Result<()> {
         dependencies = ["child"]
 
         [[tool.uv.index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121"
+        name = "internal"
+        url = "{}"
 
         [tool.uv.sources]
-        child = { workspace = true }
+        child = {{ workspace = true }}
 
         [tool.uv.workspace]
         members = ["packages/*"]
-        "#,
-    )?;
+        "#, root_index.index_url()
+    })?;
 
     let packages = context.temp_dir.child("packages");
 
     let child = packages.child("child");
-    child.child("pyproject.toml").write_str(
+    child.child("pyproject.toml").write_str(&formatdoc! {
         r#"
         [project]
         name = "child"
         version = "0.1.0"
         requires-python = ">=3.12"
-        dependencies = ["idna"]
+        dependencies = ["ok"]
 
         [[tool.uv.index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cpu"
+        name = "internal"
+        url = "{}"
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
 
         [tool.uv.sources]
-        idna = { index = "pytorch" }
-        "#,
-    )?;
+        ok = {{ index = "internal" }}
+        "#, member_index.index_url()
+    })?;
+    child.child("src/child/__init__.py").touch()?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -28597,9 +27600,12 @@ fn lock_repeat_named_index_member() -> Result<()> {
     ");
 
     let lock = context.read("uv.lock");
+    let member_origin = regex::escape(&member_index.mock_server().uri());
+    let mut filters = context.filters();
+    filters.insert(0, (&member_origin, "http://[MEMBER_INDEX]"));
 
     insta::with_settings!({
-        filters => context.filters(),
+        filters => filters,
     }, {
         assert_snapshot!(
             lock, @r#"
@@ -28608,7 +27614,7 @@ fn lock_repeat_named_index_member() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
-        exclude-newer = "2025-01-30T00:00:00Z"
+        exclude-newer = "2024-03-25T00:00:00Z"
 
         [manifest]
         members = [
@@ -28621,18 +27627,18 @@ fn lock_repeat_named_index_member() -> Result<()> {
         version = "0.1.0"
         source = { editable = "packages/child" }
         dependencies = [
-            { name = "idna" },
+            { name = "ok" },
         ]
 
         [package.metadata]
-        requires-dist = [{ name = "idna", index = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }]
+        requires-dist = [{ name = "ok", index = "http://[MEMBER_INDEX]/simple" }]
 
         [[package]]
-        name = "idna"
-        version = "3.4"
-        source = { registry = "https://astral-sh.github.io/pytorch-mirror/whl/cpu" }
+        name = "ok"
+        version = "1.0.0"
+        source = { registry = "http://[MEMBER_INDEX]/simple" }
         wheels = [
-            { url = "https://download.pytorch.org/whl/idna-3.4-py3-none-any.whl", hash = "sha256:90b77e79eaa3eba6de819a0c442c0b4ceefc341a7a2ab77d7562bf49f425c5c2", upload-time = "2025-01-29T22:50:56.994Z" },
+            { url = "http://[MEMBER_INDEX]/ok-1.0.0-py3-none-any.whl", hash = "sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f", upload-time = "2024-01-01T00:00:00Z" },
         ]
 
         [[package]]
@@ -28653,13 +27659,21 @@ fn lock_repeat_named_index_member() -> Result<()> {
 }
 
 #[cfg(feature = "test-universal")]
-#[test]
-fn lock_unique_named_index() -> Result<()> {
+#[tokio::test]
+async fn lock_unique_named_index() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    for index in ["first", "second"] {
+        Mock::given(method("GET"))
+            .and(path(format!("/{index}/simple/iniconfig/")))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1..)
+            .mount(&server)
+            .await;
+    }
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    pyproject_toml.write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -28667,16 +27681,17 @@ fn lock_unique_named_index() -> Result<()> {
         dependencies = ["iniconfig"]
 
         [[tool.uv.index]]
-        name = "pytorch"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu121"
+        name = "first"
+        url = "{index_uri}/first/simple"
 
         [[tool.uv.index]]
-        name = "example"
-        url = "https://astral.sh"
+        name = "second"
+        url = "{index_uri}/second/simple"
         "#,
-    )?;
+        index_uri = server.uri(),
+    })?;
 
-    // Fall back to PyPI, since `iniconfig` doesn't exist on the PyTorch index.
+    // Both named indexes lack the package, so resolution falls back to PyPI.
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -32765,162 +31780,6 @@ fn lock_multiple_sources_index_overlapping_extras() -> Result<()> {
     Ok(())
 }
 
-/// Sources will be ignored when an `extra` is applied, but references a non-existent extra.
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_multiple_index_with_missing_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["jinja2"]
-
-        [tool.uv.sources]
-        jinja2 = [
-            { index = "torch-cu118", extra = "cu118" },
-        ]
-
-        [[tool.uv.index]]
-        name = "torch-cu118"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118"
-        explicit = true
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @r#"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to build `project @ file://[TEMP_DIR]/`
-      cause: Source entry for `jinja2` only applies to extra `cu118`, but the `cu118` extra does not exist. When an extra is present on a source (e.g., `extra = "cu118"`), the relevant package must be included in the `project.optional-dependencies` section for that extra (e.g., `project.optional-dependencies = { "cu118" = ["jinja2"] }`).
-    "#);
-
-    Ok(())
-}
-
-/// Sources will be ignored when an `extra` is applied, but the dependency isn't in an optional
-/// group.
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_multiple_index_with_absent_extra() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["jinja2>=3"]
-
-        [project.optional-dependencies]
-        cu118 = []
-
-        [tool.uv.sources]
-        jinja2 = [
-            { index = "torch-cu118", extra = "cu118" },
-        ]
-
-        [[tool.uv.index]]
-        name = "torch-cu118"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118"
-        explicit = true
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @r#"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to build `project @ file://[TEMP_DIR]/`
-      cause: Source entry for `jinja2` only applies to extra `cu118`, but `jinja2` was not found under the `project.optional-dependencies` section for that extra. When an extra is present on a source (e.g., `extra = "cu118"`), the relevant package must be included in the `project.optional-dependencies` section for that extra (e.g., `project.optional-dependencies = { "cu118" = ["jinja2"] }`).
-    "#);
-
-    Ok(())
-}
-
-/// Sources will be ignored when a `group` is applied, but references a non-existent group.
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_multiple_index_with_missing_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["jinja2"]
-
-        [tool.uv.sources]
-        jinja2 = [
-            { index = "torch-cu118", group = "cu118" },
-        ]
-
-        [[tool.uv.index]]
-        name = "torch-cu118"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118"
-        explicit = true
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @r#"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to build `project @ file://[TEMP_DIR]/`
-      cause: Source entry for `jinja2` only applies to dependency group `cu118`, but the `cu118` group does not exist. When a group is present on a source (e.g., `group = "cu118"`), the relevant package must be included in the `dependency-groups` section for that extra (e.g., `dependency-groups = { "cu118" = ["jinja2"] }`).
-    "#);
-
-    Ok(())
-}
-
-/// Sources will be ignored when a `group` is applied, but the dependency isn't in a dependency
-/// group.
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_multiple_index_with_absent_group() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-30T00:00:00Z");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["jinja2>=3"]
-
-        [dependency-groups]
-        cu118 = []
-
-        [tool.uv.sources]
-        jinja2 = [
-            { index = "torch-cu118", group = "cu118" },
-        ]
-
-        [[tool.uv.index]]
-        name = "torch-cu118"
-        url = "https://astral-sh.github.io/pytorch-mirror/whl/cu118"
-        explicit = true
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @r#"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to build `project @ file://[TEMP_DIR]/`
-      cause: Source entry for `jinja2` only applies to dependency group `cu118`, but `jinja2` was not found under the `dependency-groups` section for that group. When a group is present on a source (e.g., `group = "cu118"`), the relevant package must be included in the `dependency-groups` section for that extra (e.g., `dependency-groups = { "cu118" = ["jinja2"] }`).
-    "#);
-
-    Ok(())
-}
-
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_dry_run() -> Result<()> {
@@ -32946,6 +31805,7 @@ fn lock_dry_run() -> Result<()> {
     ----- stderr -----
     Resolved 12 packages in [TIME]
     ");
+    let lock = context.read("uv.lock");
 
     pyproject_toml.write_str(
         r#"
@@ -32979,6 +31839,7 @@ fn lock_dry_run() -> Result<()> {
     Add typing-extensions v4.10.0
     Add urllib3 v1.26.18
     ");
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
@@ -33011,12 +31872,17 @@ fn lock_dry_run_noop() -> Result<()> {
     Add project v0.1.0
     Add sniffio v1.3.1
     ");
+    context
+        .temp_dir
+        .child("uv.lock")
+        .assert(predicates::path::missing());
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 5 packages in [TIME]
     ");
+    let lock = context.read("uv.lock");
 
     uv_snapshot!(context.filters(), context.lock().arg("--dry-run"), @"
     exit_code: 0 (success)
@@ -33024,6 +31890,7 @@ fn lock_dry_run_noop() -> Result<()> {
     Resolved 5 packages in [TIME]
     No lockfile changes detected
     ");
+    assert_eq!(context.read("uv.lock"), lock);
 
     uv_snapshot!(context.filters(), context.lock().arg("--dry-run").arg("-U"), @"
     exit_code: 0 (success)
@@ -33031,6 +31898,7 @@ fn lock_dry_run_noop() -> Result<()> {
     Resolved 5 packages in [TIME]
     No lockfile changes detected
     ");
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
@@ -34483,26 +33351,7 @@ fn lock_dynamic_version() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "project"
-        source = { editable = "." }
-        "#
-        );
-    });
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
@@ -34588,29 +33437,32 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "project"
-        source = { editable = "." }
-        "#
-        );
-    });
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
+
+#[cfg(feature = "test-universal")]
+const DYNAMIC_VERSION_NO_BUILD_PROJECT: &str = indoc! {r#"
+    [project]
+    name = "project"
+    requires-python = ">=3.12"
+    dynamic = ["version"]
+    dependencies = []
+
+    [build-system]
+    requires = []
+    build-backend = "backend"
+    backend-path = ["."]
+"#};
+
+#[cfg(feature = "test-universal")]
+const DYNAMIC_VERSION_NO_BUILD_BACKEND: &str = indoc! {r#"
+    from pathlib import Path
+
+    Path(__file__).with_name("backend-executed").touch()
+    raise RuntimeError("the build backend must not run")
+"#};
 
 /// Validating a lockfile with a dynamic version (but static dependencies) shouldn't require
 /// building the package.
@@ -34618,43 +33470,16 @@ fn lock_dynamic_version_dependencies() -> Result<()> {
 #[test]
 fn lock_dynamic_version_no_build() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        requires-python = ">=3.12"
-        dynamic = ["version"]
-        dependencies = []
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-
-        [tool.uv]
-        cache-keys = [{ file = "pyproject.toml" }, { file = "src/project/__init__.py" }]
-
-        [tool.setuptools.dynamic]
-        version = { attr = "project.__version__" }
-
-        [tool.setuptools]
-        package-dir = { "" = "src" }
-
-        [tool.setuptools.packages.find]
-        where = ["src"]
-        "#,
-    )?;
-
     context
         .temp_dir
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .write_str("__version__ = '0.1.0'")?;
+        .child("pyproject.toml")
+        .write_str(DYNAMIC_VERSION_NO_BUILD_PROJECT)?;
+    context
+        .temp_dir
+        .child("backend.py")
+        .write_str(DYNAMIC_VERSION_NO_BUILD_BACKEND)?;
 
-    context.temp_dir.child("uv.lock").write_str(indoc::indoc! {
-    r#"
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
         version = 1
         revision = 2
         requires-python = ">=3.12"
@@ -34665,48 +33490,66 @@ fn lock_dynamic_version_no_build() -> Result<()> {
         [[package]]
         name = "project"
         source = { editable = "." }
-        "#})?;
+    "#})?;
 
-    // Validate the lockfile with `--offline` to ensure that the package itself isn't built.
     uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
-
-    let pyproject = context.read("pyproject.toml");
-    pyproject_toml.write_str(&pyproject.replace(
-        "dependencies = []",
-        indoc! {r#"
-            dependencies = []
-
-            [dependency-groups]
-            dev = ["project>=0.1.0"]
-            "#},
-    ))?;
-    let lock = context
-        .read("uv.lock")
-        .replace("revision = 2", "revision = 4");
     context
         .temp_dir
-        .child("uv.lock")
-        .write_str(&formatdoc! {r#"
-            {lock}
+        .child("backend-executed")
+        .assert(predicates::path::missing());
+    Ok(())
+}
 
-            [package.dev-dependencies]
-            dev = [{{ name = "project" }}]
-            "#})?;
+/// A metadata-free self-reference must not trigger a build for the project's dynamic version.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_dynamic_version_self_reference_no_build() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            {DYNAMIC_VERSION_NO_BUILD_PROJECT}
+            [dependency-groups]
+            dev = ["project>=0.1.0"]
+        "#})?;
+    context
+        .temp_dir
+        .child("backend.py")
+        .write_str(DYNAMIC_VERSION_NO_BUILD_BACKEND)?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 4
+        requires-python = ">=3.12"
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "project"
+        source = { editable = "." }
+
+        [package.dev-dependencies]
+        dev = [{ name = "project" }]
+    "#})?;
     uv_snapshot!(context.filters(), context.lock()
         .arg("--preview-features")
         .arg("lock-without-metadata")
         .arg("--check")
         .arg("--offline")
-        .arg("--no-cache")
         .arg("--no-build"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+    context
+        .temp_dir
+        .child("backend-executed")
+        .assert(predicates::path::missing());
 
     Ok(())
 }
@@ -34842,56 +33685,7 @@ fn lock_dynamic_version_workspace_member() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [manifest]
-        members = [
-            "dynamic",
-            "project",
-        ]
-
-        [[package]]
-        name = "dynamic"
-        source = { editable = "dynamic" }
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "dynamic" },
-            { name = "iniconfig" },
-        ]
-
-        [package.metadata]
-        requires-dist = [
-            { name = "dynamic", editable = "dynamic" },
-            { name = "iniconfig", specifier = ">=2" },
-        ]
-        "#
-        );
-    });
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
@@ -35019,50 +33813,7 @@ fn lock_dynamic_version_path_dependency() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "dynamic"
-        source = { directory = "dynamic" }
-
-        [[package]]
-        name = "iniconfig"
-        version = "2.0.0"
-        source = { registry = "https://pypi.org/simple" }
-        sdist = { url = "https://files.pythonhosted.org/packages/d7/4b/cbd8e699e64a6f16ca3a8220661b5f83792b3017d0f79807cb8708d33913/iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3", size = 4646, upload-time = "2023-01-07T11:08:11.254Z" }
-        wheels = [
-            { url = "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374", size = 5892, upload-time = "2023-01-07T11:08:09.864Z" },
-        ]
-
-        [[package]]
-        name = "project"
-        version = "0.1.0"
-        source = { virtual = "." }
-        dependencies = [
-            { name = "dynamic" },
-            { name = "iniconfig" },
-        ]
-
-        [package.metadata]
-        requires-dist = [
-            { name = "dynamic", directory = "dynamic" },
-            { name = "iniconfig", specifier = ">=2" },
-        ]
-        "#
-        );
-    });
+    assert_eq!(context.read("uv.lock"), lock);
 
     Ok(())
 }
@@ -35445,13 +34196,13 @@ fn lock_dynamic_built_cache() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
+    let initial_lock = context.read("uv.lock");
 
     insta::with_settings!({
         filters => context.filters(),
     }, {
         assert_snapshot!(
-            lock, @r#"
+            initial_lock, @r#"
         version = 1
         revision = 5
         requires-python = ">=3.12"
@@ -35486,26 +34237,11 @@ fn lock_dynamic_built_cache() -> Result<()> {
     Resolved 1 package in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(
-            lock, @r#"
-        version = 1
-        revision = 5
-        requires-python = ">=3.12"
-
-        [options]
-        exclude-newer = "2024-03-25T00:00:00Z"
-
-        [[package]]
-        name = "project"
-        source = { editable = "." }
-        "#
-        );
-    });
+    assert_eq!(
+        context.read("uv.lock"),
+        initial_lock,
+        "building the project must not affect its dynamically versioned lock entry"
+    );
 
     Ok(())
 }
@@ -35794,8 +34530,7 @@ fn lock_dynamic_to_static() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let dynamic_pyproject = indoc! {r#"
         [project]
         name = "project"
         requires-python = ">=3.12"
@@ -35805,27 +34540,12 @@ fn lock_dynamic_to_static() -> Result<()> {
         [build-system]
         requires = ["setuptools"]
         build-backend = "setuptools.build_meta"
-
-        [tool.uv]
-        cache-keys = [{ file = "pyproject.toml" }, { file = "src/project/__init__.py" }]
-
-        [tool.setuptools.dynamic]
-        version = { attr = "project.__version__" }
-
-        [tool.setuptools]
-        package-dir = { "" = "src" }
-
-        [tool.setuptools.packages.find]
-        where = ["src"]
-        "#,
-    )?;
-
+    "#};
+    pyproject_toml.write_str(dynamic_pyproject)?;
     context
         .temp_dir
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .write_str("__version__ = '0.1.0'")?;
+        .child("setup.py")
+        .write_str("from setuptools import setup\nsetup(version='0.1.0')\n")?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -35855,19 +34575,8 @@ fn lock_dynamic_to_static() -> Result<()> {
     });
 
     // Remove the dynamic version (but leave the version unchanged).
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        requires-python = ">=3.12"
-        version = "0.1.0"
-        dependencies = []
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-        "#,
-    )?;
+    pyproject_toml
+        .write_str(&dynamic_pyproject.replace("dynamic = [\"version\"]", "version = \"0.1.0\""))?;
 
     // Rerunning with `--locked` should fail, since the project is no longer dynamic.
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
@@ -35918,8 +34627,7 @@ fn lock_static_to_dynamic() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(
-        r#"
+    let static_pyproject = indoc! {r#"
         [project]
         name = "project"
         requires-python = ">=3.12"
@@ -35929,8 +34637,12 @@ fn lock_static_to_dynamic() -> Result<()> {
         [build-system]
         requires = ["setuptools"]
         build-backend = "setuptools.build_meta"
-        "#,
-    )?;
+    "#};
+    pyproject_toml.write_str(static_pyproject)?;
+    context
+        .temp_dir
+        .child("setup.py")
+        .write_str("from setuptools import setup\nsetup(version='0.1.0')\n")?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
@@ -35961,38 +34673,8 @@ fn lock_static_to_dynamic() -> Result<()> {
     });
 
     // Make the version dynamic (but leave the value unchanged).
-    pyproject_toml.write_str(
-        r#"
-        [project]
-        name = "project"
-        requires-python = ">=3.12"
-        dynamic = ["version"]
-        dependencies = []
-
-        [build-system]
-        requires = ["setuptools"]
-        build-backend = "setuptools.build_meta"
-
-        [tool.uv]
-        cache-keys = [{ file = "pyproject.toml" }, { file = "src/project/__init__.py" }]
-
-        [tool.setuptools.dynamic]
-        version = { attr = "project.__version__" }
-
-        [tool.setuptools]
-        package-dir = { "" = "src" }
-
-        [tool.setuptools.packages.find]
-        where = ["src"]
-        "#,
-    )?;
-
-    context
-        .temp_dir
-        .child("src")
-        .child("project")
-        .child("__init__.py")
-        .write_str("__version__ = '0.1.0'")?;
+    pyproject_toml
+        .write_str(&static_pyproject.replace("version = \"0.1.0\"", "dynamic = [\"version\"]"))?;
 
     // Rerunning with `--locked` should fail, since the project is no longer static.
     uv_snapshot!(context.filters(), context.lock().arg("--locked"), @"
@@ -38369,21 +37051,17 @@ fn lock_script_editable_path_dependency_change() -> Result<()> {
         "#,
     )?;
 
-    // Expected behavior: this should fail because the script lockfile is stale.
-    let output = context
-        .lock()
-        .arg("--script")
-        .arg("script.py")
-        .arg("--locked")
-        .output()?;
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !output.status.success(),
-        "expected `uv lock --script script.py --locked` to fail after editable dependency changes, but it succeeded\n{stderr}"
-    );
-    assert!(stderr.contains("needs to be updated"), "{stderr}");
+    uv_snapshot!(context.filters(), context.lock().args(["--script", "script.py", "--locked"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
 
-    // Expected behavior: re-locking should pick up the new transitive dependency.
+    hint: To update the lockfile, run `uv lock`.
+    ");
+    assert_eq!(context.read("script.py.lock"), lock);
+
+    // Re-locking picks up the editable dependency's new transitive requirement.
     context
         .lock()
         .arg("--script")
@@ -41035,7 +39713,7 @@ fn lock_omit_attached_artifacts_exclude_newer() -> Result<()> {
 }
 
 /// Check that we hint if the resolution failed in a different Python version.
-#[cfg(feature = "test-universal")]
+#[cfg(all(feature = "test-universal", feature = "test-python-eol"))]
 #[test]
 fn lock_conflict_for_disjoint_python_version() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -42608,11 +41286,12 @@ async fn lock_exclude_newer_index_disable() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    let lock = context.read("uv.lock");
-    assert!(lock.contains(&format!(
-        "source = {{ registry = \"{}/no-upload-time/simple\" }}",
-        proxy.uri()
-    )));
+    let iniconfig = locked_package(&context.read("uv.lock"), "iniconfig")?;
+    let registry = format!("{}/no-upload-time/simple", proxy.uri());
+    assert_eq!(
+        iniconfig["source"]["registry"].as_str(),
+        Some(registry.as_str())
+    );
 
     Ok(())
 }
@@ -42970,6 +41649,7 @@ async fn lock_path_dependency_explicit_index_workspace_member() -> Result<()> {
 async fn lock_path_dependency_mixed_indexes() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let proxy = crate::pypi_proxy::start().await;
+    let proxy_index = format!("{}/simple", proxy.uri());
 
     // Create the path dependency with both explicit and non-explicit indexes.
     let pkg_a = context.temp_dir.child("pkg_a");
@@ -42990,14 +41670,13 @@ async fn lock_path_dependency_mixed_indexes() -> Result<()> {
 
         [[tool.uv.index]]
         name = "non-explicit-index"
-        url = "{proxy_uri}/simple"
+        url = "{proxy_index}"
 
         [[tool.uv.index]]
         name = "explicit-index"
         url = "https://pypi.org/simple"
         explicit = true
-        "#,
-        proxy_uri = proxy.uri()
+        "#
     ))?;
 
     // Create a project that depends on pkg_a.
@@ -43030,6 +41709,16 @@ async fn lock_path_dependency_mixed_indexes() -> Result<()> {
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 6 packages in [TIME]
     ");
+
+    let lock = context.read("pkg_b/uv.lock");
+    assert_eq!(
+        locked_package(&lock, "iniconfig")?["source"]["registry"].as_str(),
+        Some("https://pypi.org/simple")
+    );
+    assert_eq!(
+        locked_package(&lock, "anyio")?["source"]["registry"].as_str(),
+        Some(proxy_index.as_str())
+    );
 
     uv_snapshot!(context.filters(), context.lock().arg("--check").current_dir(&pkg_b), @"
     exit_code: 0 (success)
@@ -43104,10 +41793,9 @@ fn lock_path_dependency_no_index() -> Result<()> {
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_path_dependency_marker_gated_requires_python() -> Result<()> {
-    // Use Python 3.9 as the interpreter to reproduce the issue: the installed Python (3.9)
-    // does not satisfy the child's `requires-python = ">=3.12"`, but the child is gated
-    // behind `python_version >= '3.12'`, so it should still resolve.
-    let context = uv_test::test_context!("3.9");
+    // Python 3.11 does not satisfy the child's `requires-python`, but the dependency is gated
+    // behind `python_version >= '3.12'` and should still resolve.
+    let context = uv_test::test_context!("3.11");
 
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
     pyproject_toml.write_str(
@@ -43142,12 +41830,29 @@ fn lock_path_dependency_marker_gated_requires_python() -> Result<()> {
     Resolved 3 packages in [TIME]
     ");
 
+    let locked = context.read("uv.lock");
+    let project = locked_package(&locked, "project")?;
+    let dependency = project
+        .get("dependencies")
+        .and_then(toml::Value::as_array)
+        .and_then(|dependencies| {
+            dependencies.iter().find(|dependency| {
+                dependency.get("name").and_then(toml::Value::as_str) == Some("child")
+            })
+        })
+        .ok_or_else(|| anyhow!("missing project dependency on child"))?;
+    assert_eq!(
+        dependency.get("marker").and_then(toml::Value::as_str),
+        Some("python_full_version >= '3.12'")
+    );
+
     // Re-lock with `--refresh` should also succeed.
     uv_snapshot!(context.filters(), context.lock().arg("--refresh"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 3 packages in [TIME]
     ");
+    assert_eq!(context.read("uv.lock"), locked);
 
     Ok(())
 }
@@ -43717,121 +42422,6 @@ fn lock_refresh() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "test-universal")]
-#[test]
-fn lock_refresh_deindents_lockfile() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    context.temp_dir.child("pyproject.toml").write_str(
-        r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = [
-            "sniffio"
-        ]
-        "#,
-    )?;
-
-    uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    ");
-
-    let original_lock = context.read("uv.lock");
-    let dedented_lock = original_lock
-        .lines()
-        .map(str::trim_start)
-        .collect::<Vec<_>>()
-        .join("\n");
-    context
-        .temp_dir
-        .child("uv.lock")
-        .write_str(&dedented_lock)?;
-
-    uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--preview-features").arg("lockfile-format-check"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: The lockfile at `uv.lock` has non-canonical formatting at line 13, but `--check` was provided.
-
-    hint: To regenerate the lockfile, run `uv lock --refresh --preview-features lockfile-format-check`.
-    ");
-
-    uv_snapshot!(context.filters(), context.lock().arg("--refresh").arg("--dry-run"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    No lockfile changes detected
-    ");
-    assert_eq!(context.read("uv.lock"), dedented_lock);
-
-    uv_snapshot!(context.filters(), context.lock().arg("--refresh"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    ");
-    assert_eq!(context.read("uv.lock"), dedented_lock);
-
-    uv_snapshot!(context.filters(), context.lock().arg("--refresh").arg("--dry-run").arg("--preview-features").arg("lockfile-format-check"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Lockfile changes detected
-    ");
-    assert_eq!(context.read("uv.lock"), dedented_lock);
-
-    uv_snapshot!(context.filters(), context.lock().arg("--refresh").arg("--preview-features").arg("lockfile-format-check"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    ");
-    assert_snapshot!(context.read("uv.lock"), @r#"
-    version = 1
-    revision = 5
-    requires-python = ">=3.12"
-
-    [options]
-    exclude-newer = "2024-03-25T00:00:00Z"
-
-    [[package]]
-    name = "project"
-    version = "0.1.0"
-    source = { virtual = "." }
-    dependencies = [
-        { name = "sniffio" },
-    ]
-
-    [package.metadata]
-    requires-dist = [{ name = "sniffio" }]
-
-    [[package]]
-    name = "sniffio"
-    version = "1.3.1"
-    source = { registry = "https://pypi.org/simple" }
-    sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
-    wheels = [
-        { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
-    ]
-    "#);
-
-    uv_snapshot!(context.filters(), context.lock().arg("--check").arg("--preview-features").arg("lockfile-format-check"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    ");
-
-    uv_snapshot!(context.filters(), context.lock().arg("--refresh").arg("--dry-run").arg("--preview-features").arg("lockfile-format-check"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    No lockfile changes detected
-    ");
-
-    Ok(())
-}
-
 /// Ensure conflicts on virtual packages (such as markers) give good error messages.
 #[cfg(feature = "test-universal")]
 #[test]
@@ -44359,25 +42949,30 @@ fn lock_required_environment_macos_release_python_fork() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-universal")]
+const PY310_WHEEL_SCENARIO: &str = indoc! {r#"
+    name = "required-environment-generic-python-wheel"
+
+    [root]
+
+    [expected]
+    satisfiable = true
+
+    [packages.a.versions."1.0.0"]
+    sdist = false
+    wheel_tags = ["py310-none-any"]
+"#};
+
 /// Generic Python wheel tags cover later minor versions on required platforms.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_environment_generic_python_wheel() -> Result<()> {
-    let scenario = toml::from_str::<Scenario>(indoc! {r#"
-        name = "required-environment-generic-python-wheel"
-
-        [root]
-
-        [expected]
-        satisfiable = true
-
-        [packages.a.versions."1.0.0"]
-        sdist = false
-        wheel_tags = ["py310-none-any"]
-    "#})?;
-    let server = PackseServer::from_scenario(&scenario);
+    let server = PackseServer::from_scenario(&toml::from_str(PY310_WHEEL_SCENARIO)?);
     let context = uv_test::test_context!("3.12");
-    let pyproject = indoc! {r#"
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -44386,11 +42981,7 @@ fn lock_required_environment_generic_python_wheel() -> Result<()> {
 
         [tool.uv]
         required-environments = ["sys_platform == 'linux' and python_version >= '3.12'"]
-    "#};
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(pyproject)?;
+    "#})?;
 
     uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
     exit_code: 0 (success)
@@ -44398,24 +42989,47 @@ fn lock_required_environment_generic_python_wheel() -> Result<()> {
     Resolved 2 packages in [TIME]
     ");
 
-    // The same coverage applies to direct wheel URLs.
+    let package = locked_package(&context.read("uv.lock"), "a")?;
+    assert_eq!(
+        package["source"]
+            .get("registry")
+            .and_then(toml::Value::as_str),
+        Some(server.index_url().as_str())
+    );
+    Ok(())
+}
+
+/// Direct wheel URLs apply the same generic Python-tag coverage to required platforms.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_required_environment_generic_python_wheel_url() -> Result<()> {
+    let server = PackseServer::from_scenario(&toml::from_str(PY310_WHEEL_SCENARIO)?);
+    let context = uv_test::test_context!("3.12");
+    let wheel_url = server.file_url("a-1.0.0-py310-none-any.whl");
     context
         .temp_dir
         .child("pyproject.toml")
-        .write_str(&pyproject.replace(
-            "dependencies = [\"a\"]",
-            &format!(
-                "dependencies = [\"a @ {}\"]",
-                server.file_url("a-1.0.0-py310-none-any.whl")
-            ),
-        ))?;
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12,<4"
+        dependencies = ["a @ {wheel_url}"]
+
+        [tool.uv]
+        required-environments = ["sys_platform == 'linux' and python_version >= '3.12'"]
+    "#})?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
     ");
-
+    let package = locked_package(&context.read("uv.lock"), "a")?;
+    assert_eq!(
+        package["source"].get("url").and_then(toml::Value::as_str),
+        Some(wheel_url.as_str())
+    );
     Ok(())
 }
 
@@ -44613,22 +43227,12 @@ fn lock_supported_environment_wheel_only_package_requires_compatible_wheels() ->
 fn lock_supported_environment_abi3_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
-    // Create a local flat index with the abi3 test wheel.
     let index_dir = context.temp_dir.child("local_index");
-    fs_err::create_dir_all(&index_dir)?;
-
-    for entry in fs_err::read_dir(context.workspace_root.join("test/links"))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.starts_with("abi3_package"))
-        {
-            let dest = index_dir.join(path.file_name().unwrap());
-            fs_err::copy(&path, &dest)?;
-        }
-    }
+    copy_flat_index_fixture(
+        &context,
+        &index_dir,
+        "abi3_package-1.0.0-cp37-abi3-manylinux_2_17_x86_64.whl",
+    )?;
 
     let project = context.temp_dir.child("project");
     fs_err::create_dir_all(&project)?;
@@ -47256,7 +45860,7 @@ fn lock_resolution_inputs_empty_scopes() -> Result<()> {
     Ok(())
 }
 
-/// Settings already stored in older locks remain relevant even for packages outside the graph.
+/// Resolution-input tracking can ignore an unused constraint stored by an older lock.
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_resolution_inputs_legacy_locks() -> Result<()> {
@@ -47282,8 +45886,9 @@ fn lock_resolution_inputs_legacy_locks() -> Result<()> {
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+    let legacy_lock = context.read("uv.lock");
 
-    // The preview can ignore a changed constraint for a package absent from the lock.
+    // The stored constraint changes, but its package remains absent from the graph.
     pyproject.write_str(indoc! {r#"
         [project]
         name = "project"
@@ -47298,11 +45903,24 @@ fn lock_resolution_inputs_legacy_locks() -> Result<()> {
     uv_snapshot!(context.filters(), context.lock()
         .arg("--locked")
         .arg("--offline")
+        .arg("--no-preview"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+    hint: To update the lockfile, run `uv lock`.
+    ");
+
+    uv_snapshot!(context.filters(), context.lock()
+        .arg("--locked")
+        .arg("--offline")
         .arg("--preview-features=resolution-inputs"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     ");
+    assert_eq!(context.read("uv.lock"), legacy_lock);
 
     Ok(())
 }

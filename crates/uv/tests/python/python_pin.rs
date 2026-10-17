@@ -1,27 +1,33 @@
 #[cfg(unix)]
 use std::fs::Permissions;
+#[cfg(all(unix, feature = "test-python"))]
+use std::os::unix::fs::FileTypeExt;
 #[cfg(unix)]
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(all(unix, feature = "test-python"))]
 use std::os::unix::net::UnixListener;
+#[cfg(all(unix, feature = "test-python"))]
 use std::path::PathBuf;
 
 use anyhow::Result;
-use assert_cmd::assert::OutputAssertExt;
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-python"))]
 use assert_fs::fixture::SymlinkToFile;
 use assert_fs::fixture::{FileWriteStr, PathChild, PathCreateDir};
 #[cfg(unix)]
 use indoc::indoc;
 use insta::assert_snapshot;
-use uv_platform::{Arch, Os};
 use uv_python_discovery::{PYTHON_VERSION_FILENAME, PYTHON_VERSIONS_FILENAME};
-use uv_static::EnvVars;
-use uv_test::uv_snapshot;
-use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+use uv_test::{assert_path_missing, uv_snapshot};
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
+
+#[cfg(feature = "test-python")]
+use super::fixtures::interpreter_platform;
 
 /// Pinning through a symlink must not replace a special file at its target.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "test-python"))]
 #[test]
 fn python_pin_symlink_to_special_file() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
@@ -88,8 +94,10 @@ fn python_pin_warning_chain() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_pin() {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    let context =
+        uv_test::test_context_with_versions!(&["3.11", "3.12"]).with_filtered_python_sources();
 
     // Without arguments, we attempt to read the current pin (which does not exist yet)
     uv_snapshot!(context.filters(), context.python_pin(), @"
@@ -114,10 +122,6 @@ fn python_pin() {
     ----- stdout -----
     any
     ");
-
-    // We should not mutate the file
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    assert_snapshot!(python_version, @"any");
 
     // Request Python 3.12
     uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
@@ -193,53 +197,55 @@ fn python_pin() {
         assert_snapshot!(python_version, @"[PYTHON-3.11]");
     });
 
-    // Request an implementation that is not installed
-    // (skip on Windows because the snapshot is different and the behavior is not platform dependent)
-    #[cfg(unix)]
-    {
-        uv_snapshot!(context.filters(), context.python_pin().arg("pypy"), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        Updated `.python-version` from `[PYTHON-3.11]` -> `pypy`
+    // A missing implementation can still be pinned without resolving it.
+    uv_snapshot!(context.filters(), context.python_pin().arg("pypy"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `[PYTHON-3.11]` -> `pypy`
 
-        ----- stderr -----
-        warning: No interpreter found for PyPy in managed installations or search path
-        ");
+    ----- stderr -----
+    warning: No interpreter found for PyPy in [PYTHON SOURCES]
+    ");
 
-        let python_version = context.read(PYTHON_VERSION_FILENAME);
-        assert_snapshot!(python_version, @"pypy");
-    }
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"pypy");
 
-    // Request a version that is not installed
-    // (skip on Windows because the snapshot is different and the behavior is not platform dependent)
-    #[cfg(unix)]
-    {
-        uv_snapshot!(context.filters(), context.python_pin().arg("3.7"), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        Updated `.python-version` from `pypy` -> `3.7`
+    // Request a version that is not installed.
+    uv_snapshot!(context.filters(), context.python_pin().arg("3.7"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Updated `.python-version` from `pypy` -> `3.7`
 
-        ----- stderr -----
-        warning: No interpreter found for Python 3.7 in managed installations or search path
-        ");
+    ----- stderr -----
+    warning: No interpreter found for Python 3.7 in [PYTHON SOURCES]
+    ");
 
-        let python_version = context.read(PYTHON_VERSION_FILENAME);
-        assert_snapshot!(python_version, @"3.7");
-    }
+    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    assert_snapshot!(python_version, @"3.7");
 }
 
-#[test]
-fn python_pin_uses_python_downloads_json_url() {
+async fn empty_download_catalog_requested_once() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn python_pin_uses_python_downloads_json_url() {
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
-    let metadata = context.temp_dir.child("empty-download-metadata.json");
-    metadata.write_str("{}").unwrap();
+    let server = empty_download_catalog_requested_once().await;
 
     uv_snapshot!(context.filters(), context
         .python_pin()
         .arg("--resolved")
         .arg("3.12")
         .arg("--python-downloads-json-url")
-        .arg(metadata.path()), @r"
+        .arg(server.uri()), @r"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No interpreter found for Python 3.12 in [PYTHON SOURCES]
@@ -247,6 +253,7 @@ fn python_pin_uses_python_downloads_json_url() {
 }
 
 #[tokio::test]
+#[cfg(feature = "test-python")]
 async fn python_pin_downloads_metadata_once_for_multiple_pins() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
 
@@ -265,11 +272,7 @@ async fn python_pin_downloads_metadata_once_for_multiple_pins() -> Result<()> {
         .child(PYTHON_VERSION_FILENAME)
         .write_str("3.11\n3.12\n")?;
 
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw("{}", "application/json"))
-        .mount(&server)
-        .await;
+    let server = empty_download_catalog_requested_once().await;
 
     uv_snapshot!(context.filters(), context
         .python_pin()
@@ -281,38 +284,25 @@ async fn python_pin_downloads_metadata_once_for_multiple_pins() -> Result<()> {
     3.12
     ");
 
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
-
     Ok(())
 }
 
-// If there is no project-level `.python-version` file, respect the global pin.
+/// A global pin is readable without a local pin or an installed interpreter.
 #[test]
 fn python_pin_global_if_no_local() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
-    let uv = context.user_config_dir.child("uv");
-    uv.create_dir_all()?;
+    let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .user_config_dir
+        .child("uv")
+        .child(PYTHON_VERSION_FILENAME)
+        .write_str("3.11\n")?;
 
-    // Without arguments, we attempt to read the current pin (which does not exist yet)
-    uv_snapshot!(context.filters(), context.python_pin(), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No Python version file found; specify a version to create one
-    ");
-
-    // Given an argument, we globally pin to that version
-    uv_snapshot!(context.filters(), context.python_pin().arg("3.11").arg("--global"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Pinned `[UV_USER_CONFIG_DIR]/.python-version` to `3.11`
-    ");
-
-    // If no local pin, use global.
     uv_snapshot!(context.filters(), context.python_pin(), @"
     exit_code: 0 (success)
     ----- stdout -----
     3.11
     ");
+    context.assert_path_missing(PYTHON_VERSION_FILENAME);
 
     Ok(())
 }
@@ -320,6 +310,7 @@ fn python_pin_global_if_no_local() -> Result<()> {
 // If there is a project-level `.python-version` file, it takes precedence over
 // the global pin.
 #[test]
+#[cfg(feature = "test-python")]
 fn python_pin_global_use_local_if_available() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
     let uv = context.user_config_dir.child("uv");
@@ -332,21 +323,8 @@ fn python_pin_global_use_local_if_available() -> Result<()> {
     Pinned `[UV_USER_CONFIG_DIR]/.python-version` to `3.12`
     ");
 
-    // With no local, we get the global pin
-    uv_snapshot!(context.filters(), context.python_pin(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    3.12
-    ");
-
-    let mut global_version_path = PathBuf::from(uv.path());
-    global_version_path.push(PYTHON_VERSION_FILENAME);
-    let global_python_version = context.read(&global_version_path);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(global_python_version, @"3.12");
-    });
+    let global_version_file = uv.child(PYTHON_VERSION_FILENAME);
+    assert_eq!(context.read(&global_version_file), "3.12\n");
 
     // Request Python 3.11 for local .python-version
     uv_snapshot!(context.filters(), context.python_pin().arg("3.11"), @"
@@ -369,30 +347,19 @@ fn python_pin_global_use_local_if_available() -> Result<()> {
     3.12
     ");
 
-    // Local .python-version exists and has the right version.
-    let local_python_version = context.read(PYTHON_VERSION_FILENAME);
-    assert_snapshot!(local_python_version, @"3.11");
-
-    // Global .python-version still exists and has the right version.
-    let global_python_version = context.read(&global_version_path);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(global_python_version, @"3.12");
-    });
+    assert_eq!(context.read(PYTHON_VERSION_FILENAME), "3.11\n");
+    assert_eq!(context.read(&global_version_file), "3.12\n");
 
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_pin_global_creates_parent_dirs() {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
     let uv_global_config_dir = context.user_config_dir.child("uv");
 
-    assert!(
-        !uv_global_config_dir.exists(),
-        "Global config directory should not exist yet."
-    );
+    assert_path_missing(&uv_global_config_dir);
 
     uv_snapshot!(context.filters(), context.python_pin().arg("3.12").arg("--global"), @"
     exit_code: 0 (success)
@@ -400,18 +367,17 @@ fn python_pin_global_creates_parent_dirs() {
     Pinned `[UV_USER_CONFIG_DIR]/.python-version` to `3.12`
     ");
 
-    assert!(
-        uv_global_config_dir.exists(),
-        "Global config directory should be automatically created (if missing) after global pin."
+    assert_eq!(
+        context.read(uv_global_config_dir.child(PYTHON_VERSION_FILENAME)),
+        "3.12\n"
     );
+    context.assert_path_missing(PYTHON_VERSION_FILENAME);
 }
 
-/// We do not need a Python interpreter to pin without `--resolved`
-/// (skip on Windows because the snapshot is different and the behavior is not platform dependent)
-#[cfg(unix)]
+/// We do not need a Python interpreter to pin without `--resolved`.
 #[test]
 fn python_pin_no_python() {
-    let context = uv_test::test_context_with_versions!(&[]);
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
 
     uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
     exit_code: 0 (success)
@@ -419,11 +385,13 @@ fn python_pin_no_python() {
     Pinned `.python-version` to `3.12`
 
     ----- stderr -----
-    warning: No interpreter found for Python 3.12 in managed installations or search path
+    warning: No interpreter found for Python 3.12 in [PYTHON SOURCES]
     ");
+    assert_eq!(context.read(PYTHON_VERSION_FILENAME), "3.12\n");
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_pin_compatible_with_requires_python() -> Result<()> {
     let context =
         uv_test::test_context_with_versions!(&["3.10", "3.11"]).with_filtered_python_sources();
@@ -443,27 +411,25 @@ fn python_pin_compatible_with_requires_python() -> Result<()> {
     ----- stderr -----
     error: The requested Python version `3.10` is incompatible with the project `requires-python` value of `>=3.11`.
     ");
+    let version_file = context.temp_dir.child(PYTHON_VERSION_FILENAME);
+    assert_path_missing(&version_file);
 
-    // Request a implementation version that is incompatible
+    // Rejecting an incompatible implementation request must also preserve an existing pin.
+    version_file.write_str("3.11\n")?;
     uv_snapshot!(context.filters(), context.python_pin().arg("cpython@3.10"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: The requested Python version `cpython@3.10` is incompatible with the project `requires-python` value of `>=3.11`.
     ");
+    assert_eq!(context.read(&version_file), "3.11\n");
 
     // Request an incompatible version with project discovery turned off
     uv_snapshot!(context.filters(), context.python_pin().arg("cpython@3.10").arg("--no-project"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Pinned `.python-version` to `cpython@3.10`
+    Updated `.python-version` from `3.11` -> `cpython@3.10`
     ");
-
-    // And, as an alias, workspace discovery
-    uv_snapshot!(context.filters(), context.python_pin().arg("cpython@3.10").arg("--no-workspace"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Pinned `.python-version` to `cpython@3.10`
-    ");
+    assert_eq!(context.read(&version_file), "cpython@3.10\n");
 
     // Request a complex version range that resolves to an incompatible version
     uv_snapshot!(context.filters(), context.python_pin().arg(">3.8,<3.11"), @"
@@ -568,6 +534,7 @@ fn python_pin_compatible_with_requires_python() -> Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn warning_pinned_python_version_not_installed() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.10", "3.11"]);
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
@@ -619,11 +586,14 @@ fn python_pin_resolve_no_python() {
 
     hint: A managed Python download is available for Python 3.12, but Python downloads are set to 'never'
     ");
+    context.assert_path_missing(PYTHON_VERSION_FILENAME);
 }
 
 #[test]
-fn python_pin_resolve() {
-    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+#[cfg(feature = "test-python")]
+fn python_pin_resolve() -> Result<()> {
+    let context =
+        uv_test::test_context_with_versions!(&["3.12", "3.13"]).with_filtered_python_sources();
 
     // We pin the first interpreter on the path
     uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("any"), @"
@@ -639,128 +609,82 @@ fn python_pin_resolve() {
         assert_snapshot!(python_version, @"[PYTHON-3.12]");
     });
 
-    // Request Python 3.13
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("3.13"), @"
+    // A platform-qualified request must replace the first interpreter with the matching one.
+    let (_, python) = &context.python_versions[1];
+    let (os, arch) = interpreter_platform(&context, python)?;
+    uv_snapshot!(context.filters(), context.python_pin()
+        .arg("--resolved")
+        .arg(format!("cpython-3.13-{os}-{arch}")), @"
     exit_code: 0 (success)
     ----- stdout -----
     Updated `.python-version` from `[PYTHON-3.12]` -> `[PYTHON-3.13]`
     ");
 
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
+    let resolved_pin = context.read(PYTHON_VERSION_FILENAME);
     insta::with_settings!({
         filters => context.filters(),
     }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
+        assert_snapshot!(resolved_pin.as_str(), @"[PYTHON-3.13]");
     });
 
-    // Request Python 3.13
+    // Resolving another request to the same interpreter is idempotent.
     uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("3.13"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Pinned `.python-version` to `[PYTHON-3.13]`
     ");
+    assert_eq!(context.read(PYTHON_VERSION_FILENAME), resolved_pin);
 
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
+    // Missing PyPy also reports a download hint on platforms where one is available.
+    #[cfg(unix)]
+    {
+        uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("pypy"), @"
+        exit_code: 2 (failure)
+        ----- stderr -----
+        error: No interpreter found for PyPy in [PYTHON SOURCES]
 
-    // Request CPython
+        hint: A managed Python download is available for PyPy, but Python downloads are set to 'never'
+        ");
+
+        assert_eq!(context.read(PYTHON_VERSION_FILENAME), resolved_pin);
+    }
+
+    // A failed resolved request must leave the existing pin unchanged.
+    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("3.7"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: No interpreter found for Python 3.7 in [PYTHON SOURCES]
+    ");
+
+    assert_eq!(context.read(PYTHON_VERSION_FILENAME), resolved_pin);
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-python")]
+fn python_pin_resolve_implementation_requests() {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"]);
+
     uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("cpython"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Updated `.python-version` from `[PYTHON-3.13]` -> `[PYTHON-3.12]`
+    Pinned `.python-version` to `[PYTHON-3.12]`
     ");
+    let first_pin = context.read(PYTHON_VERSION_FILENAME);
 
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.12]");
-    });
-
-    // Request CPython 3.13
     uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("cpython@3.13"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Updated `.python-version` from `[PYTHON-3.12]` -> `[PYTHON-3.13]`
     ");
 
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
-
-    // Request CPython 3.13 via partial key syntax
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("cpython-3.13"), @"
+    // The partial key leaves platform constraints unspecified and must select 3.12 again.
+    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("cpython-3.12"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Pinned `.python-version` to `[PYTHON-3.13]`
+    Updated `.python-version` from `[PYTHON-3.13]` -> `[PYTHON-3.12]`
     ");
-
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
-
-    // Request CPython 3.13 for the current platform
-    let os = Os::from_env();
-    let arch = Arch::from_env();
-
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved")
-    .arg(format!("cpython-3.13-{os}-{arch}"))
-    , @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Pinned `.python-version` to `[PYTHON-3.13]`
-    ");
-
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
-
-    // Request an implementation that is not installed
-    // (skip on Windows because the snapshot is different and the behavior is not platform dependent)
-    #[cfg(unix)]
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("pypy"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for PyPy in managed installations or search path
-
-    hint: A managed Python download is available for PyPy, but Python downloads are set to 'never'
-    ");
-
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
-
-    // Request a version that is not installed
-    // (skip on Windows because the snapshot is different and the behavior is not platform dependent)
-    #[cfg(unix)]
-    uv_snapshot!(context.filters(), context.python_pin().arg("--resolved").arg("3.7"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No interpreter found for Python 3.7 in managed installations or search path
-    ");
-
-    let python_version = context.read(PYTHON_VERSION_FILENAME);
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        assert_snapshot!(python_version, @"[PYTHON-3.13]");
-    });
+    assert_eq!(context.read(PYTHON_VERSION_FILENAME), first_pin);
 }
 
 #[test]
@@ -777,6 +701,7 @@ fn python_pin_with_comments_and_whitespace() -> Result<()> {
     3.12
     3.10
     ");
+    assert_eq!(context.read(&version_file), content);
     fs_err::remove_file(version_file)?;
 
     let versions_file = context.temp_dir.child(PYTHON_VERSIONS_FILENAME);
@@ -787,6 +712,7 @@ fn python_pin_with_comments_and_whitespace() -> Result<()> {
     3.12
     3.10
     ");
+    assert_eq!(context.read(&versions_file), content);
 
     Ok(())
 }
@@ -794,6 +720,9 @@ fn python_pin_with_comments_and_whitespace() -> Result<()> {
 #[test]
 #[cfg(feature = "test-python-managed")]
 fn python_pin_install() {
+    use assert_cmd::assert::OutputAssertExt;
+    use uv_static::EnvVars;
+
     let context = uv_test::test_context_with_versions!(&[]).with_filtered_python_sources();
 
     // Should not install 3.12 when downloads are not automatic
@@ -811,11 +740,23 @@ fn python_pin_install() {
     ----- stdout -----
     Pinned `.python-version` to `3.12`
     ");
+
+    // Pinning can succeed after a download error, so verify the interpreter was installed.
+    context
+        .python_find()
+        .args(["3.12", "--managed-python"])
+        .assert()
+        .success();
 }
 
 #[test]
-fn python_pin_rm() {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
+fn python_pin_rm() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let local_version = context.temp_dir.child(PYTHON_VERSION_FILENAME);
+    let global_version = context
+        .user_config_dir
+        .child("uv")
+        .child(PYTHON_VERSION_FILENAME);
 
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
     exit_code: 2 (failure)
@@ -823,13 +764,13 @@ fn python_pin_rm() {
     error: No Python version file found
     ");
 
-    // Create and remove a local pin
-    context.python_pin().arg("3.12").assert().success();
+    local_version.write_str("3.11\n")?;
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Removed Python version file at `.python-version`
     ");
+    assert_path_missing(&local_version);
 
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm").arg("--global"), @"
     exit_code: 2 (failure)
@@ -837,34 +778,25 @@ fn python_pin_rm() {
     error: No global Python pin found
     ");
 
-    // Global does not detect the local pin
-    context.python_pin().arg("3.12").assert().success();
+    // Global removal does not detect a local pin.
+    local_version.write_str("3.11\n")?;
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm").arg("--global"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: No global Python pin found
     ");
 
-    context
-        .python_pin()
-        .arg("3.12")
-        .arg("--global")
-        .assert()
-        .success();
+    global_version.write_str("3.12\n")?;
 
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm").arg("--global"), @"
     exit_code: 0 (success)
     ----- stdout -----
     Removed global Python pin at `[UV_USER_CONFIG_DIR]/.python-version`
     ");
+    assert_path_missing(&global_version);
+    assert_eq!(context.read(&local_version), "3.11\n");
 
-    // Add the global pin again
-    context
-        .python_pin()
-        .arg("3.12")
-        .arg("--global")
-        .assert()
-        .success();
+    global_version.write_str("3.12\n")?;
 
     // Remove the local pin
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
@@ -872,6 +804,8 @@ fn python_pin_rm() {
     ----- stdout -----
     Removed Python version file at `.python-version`
     ");
+    assert_path_missing(&local_version);
+    assert_eq!(context.read(&global_version), "3.12\n");
 
     // The global pin should not be removed without `--global`
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
@@ -879,6 +813,7 @@ fn python_pin_rm() {
     ----- stderr -----
     error: No Python version file found; use `--rm --global` to remove the global pin
     ");
+    Ok(())
 }
 
 #[test]
@@ -897,7 +832,7 @@ fn python_pin_rm_versions() -> Result<()> {
     ----- stdout -----
     Removed Python version file at `.python-versions`
     ");
-    assert!(!local_versions.exists());
+    assert_path_missing(&local_versions);
 
     uv_snapshot!(context.filters(), context.python_pin().arg("--rm"), @"
     exit_code: 2 (failure)
@@ -914,7 +849,7 @@ fn python_pin_rm_versions() -> Result<()> {
     ----- stdout -----
     Removed global Python pin at `[UV_USER_CONFIG_DIR]/.python-versions`
     ");
-    assert!(!global_versions.exists());
+    assert_path_missing(&global_versions);
 
     Ok(())
 }

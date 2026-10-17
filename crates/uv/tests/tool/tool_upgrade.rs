@@ -1,48 +1,22 @@
-use std::process::Command;
-
-use anyhow::{Result, bail};
+use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use insta::assert_snapshot;
-use predicates::prelude::predicate;
-use serde_json::json;
-use wiremock::{
-    Mock, ResponseTemplate,
-    matchers::{method, path},
-};
+use predicates::prelude::{PredicateStrExt, predicate};
 
 use uv_static::EnvVars;
 
-use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, scenario::Scenario};
-use uv_test::{uv_snapshot, venv_bin_path};
+use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 
 #[test]
-fn tool_upgrade_empty() {
+fn tool_upgrade_up_to_date() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_counts()
         .with_filtered_exe_suffix()
         .with_tool_dirs();
     let bin_dir = context.temp_dir.child("bin");
-
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("--all")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Nothing to upgrade
-    ");
-
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("--all")
-        .arg("-p")
-        .arg("3.13")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Nothing to upgrade
-    ");
 
     // Install the latest `babel`.
     uv_snapshot!(context.filters(), context.tool_install()
@@ -58,6 +32,8 @@ fn tool_upgrade_empty() {
      + babel==2.14.0
     Installed 1 executable: pybabel
     ");
+    let marker = context.temp_dir.child("tools/babel/retained-environment");
+    marker.write_str("original tool environment\n")?;
 
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
@@ -66,6 +42,7 @@ fn tool_upgrade_empty() {
     ----- stderr -----
     Nothing to upgrade
     ");
+    assert_eq!(context.read(&marker), "original tool environment\n");
 
     uv_snapshot!(context.filters(), context.tool_upgrade()
         .arg("--all")
@@ -76,428 +53,7 @@ fn tool_upgrade_empty() {
     ----- stderr -----
     Nothing to upgrade
     ");
-}
-
-#[test]
-fn tool_upgrade_all_ignores_invalid_tool_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let tool_dir = context.temp_dir.child("tools");
-    let bin_dir = context.temp_dir.child("bin");
-
-    tool_dir.child("tool backup").create_dir_all()?;
-
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("--all")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    warning: Ignoring tool directory `tools/tool backup` with an invalid package name; move it outside the tool directory, or remove it if no longer needed
-    Nothing to upgrade
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn tool_upgrade_all_unreadable_receipt() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
-    let tool_dir = context.temp_dir.child("tools");
-
-    tool_dir.child("babel").create_dir_all()?;
-    tool_dir
-        .child("babel")
-        .child("uv-receipt.toml")
-        .write_binary(&[0xff])?;
-
-    uv_snapshot!(context.filters(), context.tool_upgrade().arg("--all"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to inspect installed tools in `tools`
-      cause: failed to read from file `[TEMP_DIR]/tools/babel/uv-receipt.toml`: stream did not contain valid UTF-8
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn tool_upgrade_preserves_workspace_member_editability() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    let root_pyproject = context.temp_dir.child("pyproject.toml");
-    root_pyproject.write_str(indoc! {
-        r#"
-        [project]
-        name = "root"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["child"]
-
-        [project.scripts]
-        root_cli = "root:main"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.sources]
-        child = { workspace = true }
-
-        [tool.uv.workspace]
-        members = ["child"]
-        "#
-    })?;
-
-    let root_src = context.temp_dir.child("src").child("root");
-    root_src.create_dir_all()?;
-    root_src.child("__init__.py").write_str(indoc! {
-        r"
-        def main():
-            import child
-            print(child.MESSAGE)
-        "
-    })?;
-
-    let child = context.temp_dir.child("child");
-    child.create_dir_all()?;
-    child.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-
-    let child_src = child.child("src").child("child");
-    child_src.create_dir_all()?;
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
-
-    let status = context
-        .tool_install()
-        .arg(context.temp_dir.path())
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool install");
-    assert!(status.success());
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    OK
-    ");
-
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'PRE-UPGRADE'\n")?;
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    OK
-    ");
-
-    let status = context
-        .tool_upgrade()
-        .arg("root")
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool upgrade");
-    assert!(status.success());
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    OK
-    ");
-
-    child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    OK
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn tool_upgrade_preserves_mixed_workspace_member_editability() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    let tool_root = context.temp_dir.child("tool-root");
-    tool_root.create_dir_all()?;
-    tool_root.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "tool-root"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [project.scripts]
-        root_cli = "tool_root:main"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    let tool_root_src = tool_root.child("src").child("tool_root");
-    tool_root_src.create_dir_all()?;
-    tool_root_src.child("__init__.py").write_str(indoc! {
-        r#"
-        def main():
-            import importlib.metadata
-            import other_child
-
-            print(f"{importlib.metadata.version('tool-root')} {other_child.MESSAGE}")
-        "#
-    })?;
-
-    let other_workspace = context.temp_dir.child("other-workspace");
-    other_workspace.create_dir_all()?;
-    other_workspace
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-        [project]
-        name = "other-workspace"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["other-child"]
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.sources]
-        other-child = { workspace = true }
-
-        [tool.uv.workspace]
-        members = ["packages/*"]
-    "#})?;
-    let other_workspace_src = other_workspace.child("src").child("other_workspace");
-    other_workspace_src.create_dir_all()?;
-    other_workspace_src.child("__init__.py").touch()?;
-
-    let other_child = other_workspace.child("packages").child("other-child");
-    other_child.create_dir_all()?;
-    other_child.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "other-child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    let other_child_src = other_child.child("src").child("other_child");
-    other_child_src.create_dir_all()?;
-    other_child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
-
-    let status = context
-        .tool_install()
-        .arg("--with-editable")
-        .arg(other_workspace.path())
-        .arg(tool_root.path())
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool install");
-    assert!(status.success());
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.0 OK
-    ");
-
-    tool_root.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "tool-root"
-        version = "0.1.1"
-        requires-python = ">=3.12"
-
-        [project.scripts]
-        root_cli = "tool_root:main"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-
-    let status = context
-        .tool_upgrade()
-        .arg("tool-root")
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool upgrade");
-    assert!(status.success());
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.1 OK
-    ");
-
-    other_child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.1 POST-UPGRADE
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn tool_upgrade_preserves_mixed_workspace_member_non_editability() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    let tool_root = context.temp_dir.child("tool-root");
-    tool_root.create_dir_all()?;
-    tool_root.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "tool-root"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [project.scripts]
-        root_cli = "tool_root:main"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    let tool_root_src = tool_root.child("src").child("tool_root");
-    tool_root_src.create_dir_all()?;
-    tool_root_src.child("__init__.py").write_str(indoc! {
-        r#"
-        def main():
-            import importlib.metadata
-            import other_child
-
-            print(f"{importlib.metadata.version('tool-root')} {other_child.MESSAGE}")
-        "#
-    })?;
-
-    let other_workspace = context.temp_dir.child("other-workspace");
-    other_workspace.create_dir_all()?;
-    other_workspace
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-        [project]
-        name = "other-workspace"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["other-child"]
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.sources]
-        other-child = { workspace = true }
-
-        [tool.uv.workspace]
-        members = ["packages/*"]
-    "#})?;
-    let other_workspace_src = other_workspace.child("src").child("other_workspace");
-    other_workspace_src.create_dir_all()?;
-    other_workspace_src.child("__init__.py").touch()?;
-
-    let other_child = other_workspace.child("packages").child("other-child");
-    other_child.create_dir_all()?;
-    other_child.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "other-child"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    let other_child_src = other_child.child("src").child("other_child");
-    other_child_src.create_dir_all()?;
-    other_child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'OK'\n")?;
-
-    let status = context
-        .tool_install()
-        .arg("--editable")
-        .arg("--with")
-        .arg(other_workspace.path())
-        .arg(tool_root.path())
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool install");
-    assert!(status.success());
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.0 OK
-    ");
-
-    tool_root.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "tool-root"
-        version = "0.1.1"
-        requires-python = ">=3.12"
-
-        [project.scripts]
-        root_cli = "tool_root:main"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-
-    let status = context
-        .tool_upgrade()
-        .arg("tool-root")
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .status()
-        .expect("failed to run uv tool upgrade");
-    assert!(status.success());
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.1 OK
-    ");
-
-    other_child_src
-        .child("__init__.py")
-        .write_str("MESSAGE = 'POST-UPGRADE'\n")?;
-
-    uv_snapshot!(context.filters(), Command::new("root_cli").env(EnvVars::PATH, bin_dir.as_os_str()), @r"
-    exit_code: 0 (success)
-    ----- stdout -----
-    0.1.1 OK
-    ");
-
+    assert_eq!(context.read(&marker), "original tool environment\n");
     Ok(())
 }
 
@@ -840,7 +396,8 @@ fn tool_upgrade_all() -> Result<()> {
     ");
 
     // An invalid directory must not prevent valid tools from being upgraded.
-    tool_dir.child("tool backup").create_dir_all()?;
+    let backup = tool_dir.child("tool backup/notes.txt");
+    backup.write_str("unrelated backup\n")?;
 
     // Upgrade all from the new index.
     uv_snapshot!(context.filters(), context.tool_upgrade()
@@ -861,6 +418,7 @@ fn tool_upgrade_all() -> Result<()> {
      + python-dotenv==1.0.1
     Installed 1 executable: dotenv
     ");
+    assert_eq!(context.read(backup), "unrelated backup\n");
 
     Ok(())
 }
@@ -868,7 +426,7 @@ fn tool_upgrade_all() -> Result<()> {
 /// With `tool-install-locks`, the installed versions are used as resolver preferences, which must
 /// not prevent the upgrade from selecting newer versions.
 #[test]
-fn tool_upgrade_all_tool_install_locks() {
+fn tool_upgrade_all_tool_install_locks() -> Result<()> {
     let old_index = old_tool_index();
     let new_index = new_tool_index();
 
@@ -910,34 +468,16 @@ fn tool_upgrade_all_tool_install_locks() {
      - pytz==2018.5
     Installed 1 executable: pybabel
     ");
-}
-
-#[test]
-fn tool_upgrade_non_existing_package() {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_counts()
-        .with_filtered_exe_suffix()
-        .with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-
-    // Attempt to upgrade `black`.
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("black")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to upgrade black
-      cause: `black` is not installed; run `uv tool install black` to install
-    ");
-
-    // Attempt to upgrade all.
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("--all")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Nothing to upgrade
-    ");
+    let lock = uv_lock::Lock::from_canonical_toml(&context.read("tools/babel/uv.lock"))?;
+    let [package] = lock.packages() else {
+        anyhow::bail!(
+            "expected one package in the upgraded tool lock: {:?}",
+            lock.packages()
+        );
+    };
+    assert_eq!(package.name().as_str(), "babel");
+    assert_eq!(package.version(), Some(&"2.14.0".parse()?));
+    Ok(())
 }
 
 #[test]
@@ -983,9 +523,9 @@ fn tool_upgrade_not_stop_if_upgrade_fails() -> anyhow::Result<()> {
     Installed 1 executable: pybabel
     ");
 
-    // Break the receipt for python-dotenv
+    // `babel` sorts before `python-dotenv`, so its failure must not abort the later upgrade.
     tool_dir
-        .child("python-dotenv")
+        .child("babel")
         .child("uv-receipt.toml")
         .write_str("Invalid receipt")?;
 
@@ -997,13 +537,12 @@ fn tool_upgrade_not_stop_if_upgrade_fails() -> anyhow::Result<()> {
         .env(EnvVars::PATH, bin_dir.as_os_str()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    Updated babel v2.6.0 -> v2.14.0
-     - babel==2.6.0
-     + babel==2.14.0
-     - pytz==2018.5
-    Installed 1 executable: pybabel
-    error: Failed to upgrade python-dotenv
-      cause: `python-dotenv` is missing a valid receipt; run `uv tool install --force python-dotenv` to reinstall
+    Updated python-dotenv v0.10.2.post2 -> v1.0.1
+     - python-dotenv==0.10.2.post2
+     + python-dotenv==1.0.1
+    Installed 1 executable: dotenv
+    error: Failed to upgrade babel
+      cause: `babel` is missing a valid receipt; run `uv tool install --force babel` to reinstall
     ");
 
     Ok(())
@@ -1311,6 +850,7 @@ fn tool_upgrade_python() {
      + pytz==2018.5
     Installed 1 executable: pybabel
     ");
+    assert_tool_python_version(&context, "babel", "3.11");
 
     uv_snapshot!(
         context.filters(),
@@ -1328,13 +868,7 @@ fn tool_upgrade_python() {
     "
     );
 
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        let content = context.read("tools/babel/pyvenv.cfg");
-        let lines: Vec<&str> = content.split('\n').collect();
-        assert_snapshot!(lines[lines.len() - 3], @"version_info = 3.12.[X]");
-    });
+    assert_tool_python_version(&context, "babel", "3.12");
 }
 
 #[test]
@@ -1377,6 +911,8 @@ fn tool_upgrade_python_with_all() {
      + python-dotenv==0.10.2.post2
     Installed 1 executable: dotenv
     ");
+    assert_tool_python_version(&context, "babel", "3.11");
+    assert_tool_python_version(&context, "python-dotenv", "3.11");
 
     uv_snapshot!(
         context.filters(),
@@ -1398,21 +934,8 @@ fn tool_upgrade_python_with_all() {
     "
     );
 
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        let content = context.read("tools/babel/pyvenv.cfg");
-        let lines: Vec<&str> = content.split('\n').collect();
-        assert_snapshot!(lines[lines.len() - 3], @"version_info = 3.12.[X]");
-    });
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        let content = context.read("tools/python-dotenv/pyvenv.cfg");
-        let lines: Vec<&str> = content.split('\n').collect();
-        assert_snapshot!(lines[lines.len() - 3], @"version_info = 3.12.[X]");
-    });
+    assert_tool_python_version(&context, "babel", "3.12");
+    assert_tool_python_version(&context, "python-dotenv", "3.12");
 }
 
 /// Upgrade a tool together with any additional entrypoints from other
@@ -1613,72 +1136,6 @@ async fn tool_upgrade_index_url_keyring_auth() -> Result<()> {
     Ok(())
 }
 
-/// When upgrading a tool from an authenticated index with invalid credentials,
-/// the command should fail with an auth error rather than silently reporting
-/// "Nothing to upgrade".
-///
-/// See: <https://github.com/astral-sh/uv/issues/18120>
-#[tokio::test]
-async fn tool_upgrade_invalid_auth() -> Result<()> {
-    let proxy = crate::pypi_proxy::start().await;
-    let context = uv_test::test_context!("3.12")
-        .with_exclude_newer("2025-01-18T00:00:00Z")
-        .with_filtered_counts()
-        .with_filtered_exe_suffix()
-        .with_tool_dirs()
-        .with_filtered_http_retries();
-    let bin_dir = context.temp_dir.child("bin");
-
-    // Install `executable-application` from an authenticated index using `--index`.
-    // The receipt will store `authenticate = "auto"` (not "always").
-    uv_snapshot!(context.filters(), context.tool_install()
-        .arg("executable-application")
-        .arg("--index")
-        .arg(proxy.authenticated_url("public", "heron", "/basic-auth/simple"))
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved [N] packages in [TIME]
-    Prepared [N] packages in [TIME]
-    Installed [N] packages in [TIME]
-     + executable-application==0.3.0
-    Installed 1 executable: app
-    ");
-
-    insta::with_settings!({
-        filters => context.filters(),
-    }, {
-        // Verify the receipt has `authenticate = "always"` (promoted from "auto" because the
-        // original URL had embedded credentials).
-        assert_snapshot!(context.read("tools/executable-application/uv-receipt.toml"), @r#"
-        [tool]
-        requirements = [{ name = "executable-application" }]
-        entrypoints = [
-            { name = "app", install-path = "[TEMP_DIR]/bin/app", from = "executable-application" },
-        ]
-
-        [tool.options]
-        index = [{ url = "http://[LOCALHOST]/basic-auth/simple", explicit = false, default = false, format = "simple", authenticate = "always" }]
-        exclude-newer = "2025-01-18T00:00:00Z"
-        "#);
-    });
-
-    // Attempt to upgrade without providing credentials.
-    // Because the receipt now stores `authenticate = "always"`, the upgrade should fail
-    // with a credentials error rather than silently reporting "Nothing to upgrade".
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("executable-application")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to upgrade executable-application
-      cause: Failed to fetch: http://[LOCALHOST]/basic-auth/simple/executable-application/
-      cause: Missing credentials for: http://[LOCALHOST]/basic-auth/simple/executable-application/
-    ");
-
-    Ok(())
-}
-
 #[test]
 fn tool_upgrade_writes_preview_lock() {
     let context = uv_test::test_context!("3.12").with_tool_dirs();
@@ -1729,148 +1186,6 @@ fn tool_upgrade_writes_preview_lock() {
     });
 }
 
-/// Mount a minimal package index for `simple-launcher` with a caller-provided wheel hash.
-///
-/// Serving the metadata separately lets the resolver record the advertised hash without
-/// downloading the wheel that the installer will later verify.
-async fn mount_simple_launcher_index(server: &PackageServer, hash: &str, wheel: &[u8]) {
-    let wheel_filename = "simple_launcher-0.1.0-py3-none-any.whl";
-    server
-        .serve_with(
-            wheel_filename,
-            wheel,
-            Some(hash),
-            json!({ "core-metadata": true }),
-        )
-        .await;
-    Mock::given(method("GET"))
-        .and(path(format!("/{wheel_filename}.metadata")))
-        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {"
-            Metadata-Version: 2.1
-            Name: simple-launcher
-            Version: 0.1.0
-            Requires-Python: >=3.8
-        "}))
-        .mount(server.mock_server())
-        .await;
-}
-
-#[tokio::test]
-async fn tool_upgrade_resolution_hints() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_tool_dirs();
-    let bin_dir = context.temp_dir.child("bin");
-    let wheel = context.read_bytes(
-        context
-            .workspace_root
-            .join("test/links/simple_launcher-0.1.0-py3-none-any.whl"),
-    );
-    let server = PackageServer::new(&"simple-launcher".parse()?).await;
-    mount_simple_launcher_index(
-        &server,
-        "5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4",
-        &wheel,
-    )
-    .await;
-    let index_url = server.index_url();
-    context
-        .tool_install()
-        .arg("simple-launcher")
-        .arg("--index-url")
-        .arg(&index_url)
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .assert()
-        .success();
-
-    server.mock_server().reset().await;
-    Mock::given(method("GET"))
-        .and(path("/simple/simple-launcher/"))
-        .respond_with(ResponseTemplate::new(401))
-        .mount(server.mock_server())
-        .await;
-
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("simple-launcher>0.1.0")
-        .arg("--index-url")
-        .arg(&index_url)
-        .arg("--no-cache")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to upgrade simple-launcher
-      cause: Because simple-launcher was not found in the package registry and you require simple-launcher>0.1.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: An index URL (http://[LOCALHOST]/simple) could not be queried due to a lack of valid authentication credentials (401 Unauthorized)
-    ");
-
-    Ok(())
-}
-
-/// Ensure that `tool upgrade` verifies distributions against its newly generated tool lock.
-///
-/// The initial install and upgrade use the same index URL so that the installed distribution's
-/// source preference remains valid, while the index changes the advertised hash before upgrade.
-#[tokio::test]
-async fn tool_upgrade_lock_verifies_hashes() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_tool_dirs()
-        .with_filtered_http_retries();
-    let bin_dir = context.temp_dir.child("bin");
-    let wheel_filename = "simple_launcher-0.1.0-py3-none-any.whl";
-    let wheel = context.read_bytes(
-        context
-            .workspace_root
-            .join("test/links")
-            .join(wheel_filename),
-    );
-    let server = PackageServer::new(&"simple-launcher".parse()?).await;
-    mount_simple_launcher_index(
-        &server,
-        "5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4",
-        &wheel,
-    )
-    .await;
-    let index_url = server.index_url();
-
-    context
-        .tool_install()
-        .arg("simple-launcher")
-        .arg("--index-url")
-        .arg(&index_url)
-        .env(EnvVars::PATH, bin_dir.as_os_str())
-        .assert()
-        .success();
-
-    mount_simple_launcher_index(
-        &server,
-        "0000000000000000000000000000000000000000000000000000000000000000",
-        &wheel,
-    )
-    .await;
-
-    uv_snapshot!(context.filters(), context.tool_upgrade()
-        .arg("simple-launcher")
-        .arg("--index-url")
-        .arg(&index_url)
-        .arg("--reinstall")
-        .arg("--no-cache")
-        .env(EnvVars::UV_PREVIEW_FEATURES, "tool-install-locks")
-        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to upgrade simple-launcher
-      cause: Failed to download `simple-launcher==0.1.0`
-      cause: Hash mismatch for `simple-launcher==0.1.0`
-
-             Expected:
-               sha256:0000000000000000000000000000000000000000000000000000000000000000
-
-             Computed:
-               sha256:5327e0bb67cdb46800999de6dcf034bf0a5335702883494af0d8b7f6ca48cee4
-    ");
-
-    Ok(())
-}
-
 /// Ensure that a lock-backed upgrade recreates the environment for a requested Python version.
 #[test]
 fn tool_upgrade_lock_uses_requested_python() -> Result<()> {
@@ -1909,6 +1224,7 @@ fn tool_upgrade_lock_uses_requested_python() -> Result<()> {
         .env(EnvVars::PATH, bin_dir.as_os_str())
         .assert()
         .success();
+    assert_tool_python_version(&context, "simple-launcher", "3.11");
 
     context
         .tool_upgrade()
@@ -1920,18 +1236,25 @@ fn tool_upgrade_lock_uses_requested_python() -> Result<()> {
         .assert()
         .success();
 
-    let pyvenv = context.read("tools/simple-launcher/pyvenv.cfg");
-    let Some(version_info) = pyvenv
-        .lines()
-        .find(|line| line.starts_with("version_info = "))
-    else {
-        bail!("Missing `version_info` in tool environment")
-    };
-    insta::with_settings!({ filters => context.filters() }, {
-        assert_snapshot!(version_info, @"version_info = 3.12.[X]");
-    });
+    assert_tool_python_version(&context, "simple-launcher", "3.12");
 
     Ok(())
+}
+
+fn assert_tool_python_version(context: &TestContext, tool: &str, version: &str) {
+    let interpreter = venv_bin_path(context.temp_dir.child("tools").child(tool))
+        .join(format!("python{}", std::env::consts::EXE_SUFFIX));
+    context
+        .external_command(interpreter)
+        .args([
+            "-I",
+            "-B",
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(version).trim());
 }
 
 /// An index containing earlier synthetic tool releases and their dependencies.

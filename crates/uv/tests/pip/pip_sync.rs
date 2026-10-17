@@ -1,104 +1,23 @@
 use std::env::consts::EXE_SUFFIX;
+use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use fs_err as fs;
 use indoc::{formatdoc, indoc};
-use predicates::Predicate;
+use sha2::{Digest, Sha256};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_fs::Simplified;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+use uv_test::archive::generate_source_archive;
 use uv_test::find_links::FindLinksServer;
 use uv_test::packse::PackseServer;
-use uv_test::{copy_dir_ignore, download_to_disk, site_packages_path, uv_snapshot};
-
-#[test]
-fn missing_requirements_txt() {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: File not found: requirements.txt
-    ");
-
-    requirements_txt.assert(predicates::path::missing());
-}
-
-/// `--cert` is forwarded to the HTTP client rather than silently ignored.
-#[test]
-fn cert() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_missing_file_error();
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig==2.0.0")?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--cert")
-        .arg("ca-bundle.pem"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to read certificate file `ca-bundle.pem`
-      cause: [OS ERROR 2]
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn missing_venv() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_virtualenv_bin()
-        .with_filtered_python_names();
-
-    let requirements = context.temp_dir.child("requirements.txt");
-    requirements.write_str("anyio")?;
-    fs::remove_dir_all(&context.venv)?;
-
-    uv_snapshot!(context.filters(), context.pip_sync().arg("requirements.txt"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to inspect Python interpreter from active virtual environment at `.venv/[BIN]/[PYTHON]`
-      cause: Python interpreter not found at `[VENV]/[BIN]/[PYTHON]`
-    ");
-
-    assert!(predicates::path::missing().eval(&context.venv));
-
-    // If not "active", we hint to create one
-    uv_snapshot!(context.filters(), context.pip_sync().arg("requirements.txt").env_remove(EnvVars::VIRTUAL_ENV), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No virtual environment found; run `uv venv` to create an environment, or pass `--system` to install into a non-virtual environment
-    ");
-
-    assert!(predicates::path::missing().eval(&context.venv));
-
-    Ok(())
-}
-
-#[test]
-fn missing_system() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]);
-    let requirements = context.temp_dir.child("requirements.txt");
-    requirements.write_str("anyio")?;
-
-    uv_snapshot!(context.filters(), context.pip_sync().arg("requirements.txt").arg("--system"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: No system Python installation found
-    ");
-
-    Ok(())
-}
+use uv_test::{TestContext, copy_dir_ignore, download_to_disk, uv_snapshot, venv_bin_path};
 
 /// Install a package into a virtual environment using the default link semantics. (On macOS,
 /// this using `clone` semantics.)
@@ -145,6 +64,41 @@ fn install() -> Result<()> {
     Ok(())
 }
 
+/// Compare the imported module with the corresponding unpacked cache entry.
+fn assert_markupsafe_link_mode(
+    context: &uv_test::TestContext,
+    expected: &'static str,
+) -> Result<()> {
+    let cached = context
+        .cache_files(uv_cache::CacheBucket::Archive)?
+        .into_iter()
+        .find(|path| path.ends_with("markupsafe/__init__.py"))
+        .context("missing cached MarkupSafe module")?;
+    context
+        .python_command()
+        .arg("-c")
+        .arg(indoc! {r#"
+            import sys
+            from pathlib import Path
+            import markupsafe
+            from markupsafe import Markup
+
+            installed = Path(markupsafe.__file__)
+            same_file = installed.samefile(sys.argv[1])
+            if installed.is_symlink():
+                assert same_file, f"symlink does not target the cached module: {installed}"
+                mode = "symlink"
+            else:
+                mode = "hardlink" if same_file else "copy"
+            print(mode, end="")
+        "#})
+        .arg(cached)
+        .assert()
+        .success()
+        .stdout(expected);
+    Ok(())
+}
+
 /// Install a package into a virtual environment using copy semantics.
 #[test]
 fn install_copy() -> Result<()> {
@@ -167,9 +121,7 @@ fn install_copy() -> Result<()> {
     "
     );
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    assert_markupsafe_link_mode(&context, "copy")?;
 
     // Removing the cache shouldn't invalidate the virtual environment.
     fs::remove_dir_all(context.cache_dir.path())?;
@@ -203,9 +155,7 @@ fn install_hardlink() -> Result<()> {
     "
     );
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    assert_markupsafe_link_mode(&context, "hardlink")?;
 
     // Removing the cache shouldn't invalidate the virtual environment.
     fs::remove_dir_all(context.cache_dir.path())?;
@@ -332,9 +282,7 @@ fn install_symlink() -> Result<()> {
     "
     );
 
-    context
-        .assert_command("from markupsafe import Markup")
-        .success();
+    assert_markupsafe_link_mode(&context, "symlink")?;
 
     // Removing the cache _should_ invalidate the virtual environment.
     fs::remove_dir_all(context.cache_dir.path())?;
@@ -440,15 +388,6 @@ fn pip_sync_empty() -> Result<()> {
     requirements_txt.touch()?;
 
     uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    warning: Requirements file `requirements.txt` does not contain any dependencies
-    No requirements found (hint: use `--allow-empty-requirements` to clear the environment)
-    "
-    );
-
-    uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
         .arg("--allow-empty-requirements"), @"
     exit_code: 0 (success)
@@ -467,8 +406,18 @@ fn pip_sync_empty() -> Result<()> {
         .assert()
         .success();
 
-    // Now, syncing should remove the package.
+    // An empty requirements file must not clear the environment without explicit opt-in.
     requirements_txt.write_str("")?;
+    uv_snapshot!(context.pip_sync()
+        .arg("requirements.txt"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: Requirements file `requirements.txt` does not contain any dependencies
+    No requirements found (hint: use `--allow-empty-requirements` to clear the environment)
+    "
+    );
+    context.assert_command("import iniconfig").success();
+
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
         .arg("--allow-empty-requirements"), @"
@@ -480,6 +429,7 @@ fn pip_sync_empty() -> Result<()> {
      - iniconfig==2.0.0
     "
     );
+    context.assert_not_installed("iniconfig");
 
     Ok(())
 }
@@ -543,8 +493,8 @@ fn add_remove() -> Result<()> {
         .arg("--strict")
         .assert()
         .success();
+    context.assert_command("import iniconfig").success();
 
-    let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("tomli==2.0.1")?;
 
     uv_snapshot!(context.pip_sync()
@@ -562,7 +512,7 @@ fn add_remove() -> Result<()> {
     );
 
     context.assert_command("import tomli").success();
-    context.assert_command("import markupsafe").failure();
+    context.assert_not_installed("iniconfig");
 
     Ok(())
 }
@@ -809,33 +759,6 @@ fn install_sdist_url() -> Result<()> {
     Ok(())
 }
 
-/// Attempt to install a direct URL source distribution with a non-PEP 625-compliant
-/// archive format (e.g., `.tar.bz2`). This should hard-error.
-#[test]
-fn reject_sdist_archive_type_bz2() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(&format!(
-        "bz2 @ {}",
-        context
-            .workspace_root
-            .join("test/links/bz2-1.0.0.tar.bz2")
-            .display()
-    ))?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Source distribution `[WORKSPACE]/test/links/bz2-1.0.0.tar.bz2` has a non-PEP 625-compliant filename; only `.tar.gz` and `.zip` archives are accepted
-    "
-    );
-
-    Ok(())
-}
-
 /// Attempt to re-install a package into a virtual environment from a URL. The second install
 /// should be a no-op.
 #[test]
@@ -901,44 +824,6 @@ fn install_url_then_install_version() -> Result<()> {
     Ok(())
 }
 
-/// Install a package via a registry version, then via a direct URL version. The second install
-/// should remove the registry-based version.
-#[test]
-fn install_version_then_install_url() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("werkzeug==2.0.0")?;
-
-    context
-        .pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        .assert()
-        .success();
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("werkzeug @ https://files.pythonhosted.org/packages/ff/1d/960bb4017c68674a1cb099534840f18d3def3ce44aed12b5ed8b78e0153e/Werkzeug-2.0.0-py3-none-any.whl")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - werkzeug==2.0.0
-     + werkzeug==2.0.0 (from https://files.pythonhosted.org/packages/ff/1d/960bb4017c68674a1cb099534840f18d3def3ce44aed12b5ed8b78e0153e/Werkzeug-2.0.0-py3-none-any.whl)
-    "
-    );
-
-    context.assert_command("import werkzeug").success();
-
-    Ok(())
-}
-
 /// Test that we select the last 3.8 compatible numpy version instead of trying to compile an
 /// incompatible sdist <https://github.com/astral-sh/uv/issues/388>
 #[cfg(feature = "test-python-eol")]
@@ -962,443 +847,6 @@ fn install_numpy_py38() -> Result<()> {
     );
 
     context.assert_command("import numpy").success();
-
-    Ok(())
-}
-
-/// Attempt to install a package without using a remote index.
-#[test]
-fn install_no_index() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig==2.0.0")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--no-index")
-        .arg("--strict"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because iniconfig was not found in the provided package locations and you require iniconfig==2.0.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
-    "
-    );
-
-    context.assert_command("import iniconfig").failure();
-
-    Ok(())
-}
-
-/// Attempt to install a package without using a remote index
-/// after a previous successful installation.
-#[test]
-fn install_no_index_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig==2.0.0")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    "
-    );
-
-    context.assert_command("import iniconfig").success();
-
-    context.pip_uninstall().arg("iniconfig").assert().success();
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--no-index")
-        .arg("--strict"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because iniconfig was not found in the provided package locations and you require iniconfig==2.0.0, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because index lookups were disabled and no additional package locations were provided (try: `--find-links <uri>`)
-    "
-    );
-
-    context.assert_command("import iniconfig").failure();
-
-    Ok(())
-}
-
-#[test]
-fn warn_on_yanked() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // This version is yanked.
-    let requirements_in = context.temp_dir.child("requirements.txt");
-    requirements_in.write_str("colorama==0.4.2")?;
-
-    uv_snapshot!(context.filters(), windows_filters=false, context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @r#"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + colorama==0.4.2
-    warning: `colorama==0.4.2` is yanked (reason: "Bad build, missing files, will not install")
-    "#
-    );
-
-    Ok(())
-}
-
-#[test]
-fn warn_on_yanked_dry_run() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // This version is yanked.
-    let requirements_in = context.temp_dir.child("requirements.txt");
-    requirements_in.write_str("colorama==0.4.2")?;
-
-    uv_snapshot!(context.filters(), windows_filters=false, context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--dry-run")
-        .arg("--strict"), @r#"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Would download 1 package
-    Would install 1 package
-     + colorama==0.4.2
-    warning: `colorama==0.4.2` is yanked (reason: "Bad build, missing files, will not install")
-    "#
-    );
-
-    Ok(())
-}
-
-#[test]
-fn json() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig==2.0.0")?;
-
-    context.pip_install().arg("idna==3.6").assert().success();
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--check")
-        .arg("--output-format=json")
-        .arg("--quiet"), @r#"
-    exit_code: 1 (failure)
-    ----- stdout -----
-    {
-      "schema": {
-        "version": "preview"
-      },
-      "changes": [
-        {
-          "name": "idna",
-          "version": "3.6",
-          "action": "uninstalled"
-        },
-        {
-          "name": "iniconfig",
-          "version": "2.0.0",
-          "action": "installed"
-        }
-      ],
-      "dry_run": true
-    }
-    "#);
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--dry-run")
-        .arg("--output-format=json"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    {
-      "schema": {
-        "version": "preview"
-      },
-      "changes": [
-        {
-          "name": "idna",
-          "version": "3.6",
-          "action": "uninstalled"
-        },
-        {
-          "name": "iniconfig",
-          "version": "2.0.0",
-          "action": "installed"
-        }
-      ],
-      "dry_run": true
-    }
-
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Would download 1 package
-    Would uninstall 1 package
-    Would install 1 package
-     - idna==3.6
-     + iniconfig==2.0.0
-    "#);
-
-    context
-        .pip_freeze()
-        .assert()
-        .success()
-        .stdout("idna==3.6\n");
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--output-format=json")
-        .arg("--quiet"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    {
-      "schema": {
-        "version": "preview"
-      },
-      "changes": [
-        {
-          "name": "idna",
-          "version": "3.6",
-          "action": "uninstalled"
-        },
-        {
-          "name": "iniconfig",
-          "version": "2.0.0",
-          "action": "installed"
-        }
-      ],
-      "dry_run": false
-    }
-    "#);
-
-    context
-        .pip_freeze()
-        .assert()
-        .success()
-        .stdout("iniconfig==2.0.0\n");
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--output-format=json")
-        .arg("--quiet"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    {
-      "schema": {
-        "version": "preview"
-      },
-      "changes": [],
-      "dry_run": false
-    }
-    "#);
-
-    requirements_txt.write_str("")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--output-format=json"), @r#"
-    exit_code: 0 (success)
-    ----- stdout -----
-    {
-      "schema": {
-        "version": "preview"
-      },
-      "changes": [],
-      "dry_run": false
-    }
-
-    ----- stderr -----
-    warning: Requirements file `requirements.txt` does not contain any dependencies
-    No requirements found (hint: use `--allow-empty-requirements` to clear the environment)
-    "#);
-
-    Ok(())
-}
-
-#[test]
-fn check_sync() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("iniconfig==2.0.0")?;
-
-    uv_snapshot!(context.pip_sync().arg("requirements.txt").arg("--check"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Would download 1 package
-    Would install 1 package
-     + iniconfig==2.0.0
-    ");
-
-    // Checking must leave the environment unchanged.
-    uv_snapshot!(context.pip_sync().arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
-
-    uv_snapshot!(context.pip_sync().arg("requirements.txt").arg("--check").arg("--offline"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Checked 1 package in [TIME]
-    Would make no changes
-    ");
-
-    // Sync also checks for packages that would be removed.
-    requirements_txt.write_str("")?;
-    uv_snapshot!(context.pip_sync().arg("requirements.txt").arg("--allow-empty-requirements").arg("--check"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    warning: Requirements file `requirements.txt` does not contain any dependencies
-    Resolved in [TIME]
-    Would uninstall 1 package
-     - iniconfig==2.0.0
-    ");
-
-    context.assert_command("import iniconfig").success();
-
-    Ok(())
-}
-
-/// Resolve a local wheel.
-#[test]
-fn install_local_wheel() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Download a wheel.
-    let archive = context.temp_dir.child("tomli-2.0.1-py3-none-any.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/97/75/10a9ebee3fd790d20926a90a2547f0bf78f371b2f13aa822c759680ca7b9/tomli-2.0.1-py3-none-any.whl",
-        &archive,
-    );
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(&format!(
-        "tomli @ {}",
-        SafeUrl::from_file_path(archive.path()).unwrap()
-    ))?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tomli==2.0.1 (from file://[TEMP_DIR]/tomli-2.0.1-py3-none-any.whl)
-    "
-    );
-
-    context.assert_command("import tomli").success();
-
-    // Create a new virtual environment.
-    context.reset_venv();
-
-    // Reinstall. The wheel should come from the cache, so there shouldn't be a "download".
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tomli==2.0.1 (from file://[TEMP_DIR]/tomli-2.0.1-py3-none-any.whl)
-    "
-    );
-
-    context.assert_command("import tomli").success();
-
-    // Create a new virtual environment.
-    context.reset_venv();
-
-    // "Modify" the wheel.
-    // The `filetime` crate works on Windows unlike the std.
-    filetime::set_file_mtime(&archive, filetime::FileTime::now()).unwrap();
-
-    // Reinstall. The wheel should be "downloaded" again.
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tomli==2.0.1 (from file://[TEMP_DIR]/tomli-2.0.1-py3-none-any.whl)
-    "
-    );
-
-    context.assert_command("import tomli").success();
-
-    // "Modify" the wheel.
-    filetime::set_file_mtime(&archive, filetime::FileTime::now()).unwrap();
-
-    // Reinstall into the same virtual environment. The wheel should be reinstalled.
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     ~ tomli==2.0.1 (from file://[TEMP_DIR]/tomli-2.0.1-py3-none-any.whl)
-    "
-    );
-
-    // Reinstall into the same virtual environment. The wheel should _not_ be reinstalled.
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Checked 1 package in [TIME]
-    "
-    );
-
-    context.assert_command("import tomli").success();
-
-    // Reinstall without the package name.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(&format!(
-        "{}",
-        SafeUrl::from_file_path(archive.path()).unwrap()
-    ))?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Checked 1 package in [TIME]
-    "
-    );
-
-    context.assert_command("import tomli").success();
 
     Ok(())
 }
@@ -1440,85 +888,6 @@ fn install_unnamed_wheel_url_rejects_stream_separator() -> Result<()> {
     ----- stderr -----
     error: The wheel filename `pkg-1.0-py3-none-target:stream.whl` is invalid: Tag components must contain only ASCII letters, digits, underscores, and periods
     "#
-    );
-
-    Ok(())
-}
-
-/// Install a wheel whose actual version doesn't match the version encoded in the filename.
-#[test]
-fn mismatched_version() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Download a wheel.
-    let archive = context.temp_dir.child("tomli-3.7.2-py3-none-any.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/97/75/10a9ebee3fd790d20926a90a2547f0bf78f371b2f13aa822c759680ca7b9/tomli-2.0.1-py3-none-any.whl",
-        &archive,
-    );
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(&format!(
-        "tomli @ {}",
-        SafeUrl::from_file_path(archive.path()).unwrap()
-    ))?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    error: Failed to install: tomli-3.7.2-py3-none-any.whl (tomli==3.7.2 (from file://[TEMP_DIR]/tomli-3.7.2-py3-none-any.whl))
-      cause: Wheel version does not match filename (2.0.1 != 3.7.2), which indicates a malformed wheel. If this is intentional, set `UV_SKIP_WHEEL_FILENAME_CHECK=1`.
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        .env(EnvVars::UV_SKIP_WHEEL_FILENAME_CHECK, "1"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tomli==3.7.2 (from file://[TEMP_DIR]/tomli-3.7.2-py3-none-any.whl)
-    "
-    );
-
-    Ok(())
-}
-
-/// Install a wheel whose actual name doesn't match the name encoded in the filename.
-#[test]
-fn mismatched_name() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Download a wheel.
-    let archive = context.temp_dir.child("foo-2.0.1-py3-none-any.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/97/75/10a9ebee3fd790d20926a90a2547f0bf78f371b2f13aa822c759680ca7b9/tomli-2.0.1-py3-none-any.whl",
-        &archive,
-    );
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(&format!(
-        "foo @ {}",
-        SafeUrl::from_file_path(archive.path()).unwrap()
-    ))?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because foo has an invalid package format and you require foo, we can conclude that your requirements are unsatisfiable.
-
-    hint: The structure of `foo` was invalid
-      Caused by: The .dist-info directory `tomli-2.0.1` does not start with the normalized package name: foo
-    "
     );
 
     Ok(())
@@ -1597,88 +966,13 @@ fn install_build_system_no_backend() -> Result<()> {
     Ok(())
 }
 
-/// Check that we show the right messages on cached, direct URL source distribution installs.
-#[test]
-fn install_url_source_dist_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_file_counts()
-        .with_filtered_sizes_and_units();
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("source_distribution @ https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
-    "
-    );
-
-    context
-        .assert_command("import source_distribution")
-        .success();
-
-    // Re-run the installation in a new virtual environment.
-    context.reset_venv();
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
-    "
-    );
-
-    context
-        .assert_command("import source_distribution")
-        .success();
-
-    // Clear the cache, then re-run the installation in a new virtual environment.
-    context.reset_venv();
-
-    uv_snapshot!(
-        context.filters(),
-        context.clean().arg("source_distribution"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Removed [N] files ([SIZE])
-    "
-    );
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.1 (from https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz)
-    "
-    );
-
-    context
-        .assert_command("import source_distribution")
-        .success();
-
-    Ok(())
-}
-
 /// Check that we show the right messages on cached, Git source distribution installs.
 #[test]
 #[cfg(feature = "test-git")]
 fn install_git_source_dist_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_file_counts()
+        .with_filtered_sizes_and_units();
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("uv-public-pypackage @ git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389")?;
@@ -1718,14 +1012,14 @@ fn install_git_source_dist_cached() -> Result<()> {
         .assert_command("import uv_public_pypackage")
         .success();
 
-    // Clear the cache, then re-run the installation in a new virtual environment.
+    // Remove the package's cached build, then re-run the installation in a new environment.
     context.reset_venv();
 
     uv_snapshot!(context.filters(), context.clean()
-        .arg("werkzeug"), @"
+        .arg("uv-public-pypackage"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    No cache entries found
+    Removed [N] files ([SIZE])
     "
     );
 
@@ -1736,6 +1030,7 @@ fn install_git_source_dist_cached() -> Result<()> {
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
      + uv-public-pypackage==0.1.0 (from git+https://github.com/astral-test/uv-public-pypackage@b270df1a2fb5d012294e9aaf05e7e0bab1e6a389)
     "
@@ -1744,328 +1039,6 @@ fn install_git_source_dist_cached() -> Result<()> {
     context
         .assert_command("import uv_public_pypackage")
         .success();
-
-    Ok(())
-}
-
-/// Check that we show the right messages on cached, registry source distribution installs.
-#[test]
-fn install_registry_source_dist_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_exclude_newer("2025-01-29T00:00:00Z")
-        .with_filtered_file_counts()
-        .with_filtered_sizes_and_units();
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("source_distribution==0.0.1")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.1
-    "
-    );
-
-    context
-        .assert_command("import source_distribution")
-        .success();
-
-    // Re-run the installation in a new virtual environment.
-    context.reset_venv();
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.1
-    "
-    );
-
-    context
-        .assert_command("import source_distribution")
-        .success();
-
-    // Clear the cache, then re-run the installation in a new virtual environment.
-    context.reset_venv();
-
-    uv_snapshot!(context.filters(), context.clean()
-        .arg("source_distribution"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Removed [N] files ([SIZE])
-    "
-    );
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.1
-    "
-    );
-
-    context
-        .assert_command("import source_distribution")
-        .success();
-
-    Ok(())
-}
-
-/// Check that we show the right messages on cached, local source distribution installs.
-#[test]
-fn install_path_source_dist_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_file_counts()
-        .with_filtered_sizes_and_units();
-
-    // Download a source distribution.
-    let archive = context.temp_dir.child("source_distribution-0.0.1.tar.gz");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/10/1f/57aa4cce1b1abf6b433106676e15f9fa2c92ed2bd4cf77c3b50a9e9ac773/source_distribution-0.0.1.tar.gz",
-        &archive,
-    );
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(&format!(
-        "source-distribution @ {}",
-        SafeUrl::from_file_path(archive.path()).unwrap()
-    ))?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.1 (from file://[TEMP_DIR]/source_distribution-0.0.1.tar.gz)
-    "
-    );
-
-    context
-        .assert_command("import source_distribution")
-        .success();
-
-    // Re-run the installation in a new virtual environment.
-    context.reset_venv();
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.1 (from file://[TEMP_DIR]/source_distribution-0.0.1.tar.gz)
-    "
-    );
-
-    context
-        .assert_command("import source_distribution")
-        .success();
-
-    // Clear the cache, then re-run the installation in a new virtual environment.
-    context.reset_venv();
-
-    uv_snapshot!(
-        context.filters(),
-        context.clean().arg("source-distribution"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Removed [N] files ([SIZE])
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + source-distribution==0.0.1 (from file://[TEMP_DIR]/source_distribution-0.0.1.tar.gz)
-    "
-    );
-
-    context
-        .assert_command("import source_distribution")
-        .success();
-
-    Ok(())
-}
-
-/// Check that we show the right messages on cached, local source distribution installs.
-#[test]
-fn install_path_built_dist_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_file_counts()
-        .with_filtered_sizes_and_units();
-
-    // Download a wheel.
-    let archive = context.temp_dir.child("tomli-2.0.1-py3-none-any.whl");
-    download_to_disk(
-        "https://files.pythonhosted.org/packages/97/75/10a9ebee3fd790d20926a90a2547f0bf78f371b2f13aa822c759680ca7b9/tomli-2.0.1-py3-none-any.whl",
-        &archive,
-    );
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    let url = SafeUrl::from_file_path(archive.path()).unwrap();
-    requirements_txt.write_str(&format!("tomli @ {url}"))?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tomli==2.0.1 (from file://[TEMP_DIR]/tomli-2.0.1-py3-none-any.whl)
-    "
-    );
-
-    context.assert_command("import tomli").success();
-
-    // Re-run the installation in a new virtual environment.
-    context.reset_venv();
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tomli==2.0.1 (from file://[TEMP_DIR]/tomli-2.0.1-py3-none-any.whl)
-    "
-    );
-
-    context.assert_command("import tomli").success();
-
-    // Clear the cache, then re-run the installation in a new virtual environment.
-    context.reset_venv();
-
-    uv_snapshot!(
-        context.filters(),
-        context.clean().arg("tomli"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Removed [N] files ([SIZE])
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tomli==2.0.1 (from file://[TEMP_DIR]/tomli-2.0.1-py3-none-any.whl)
-    "
-    );
-
-    context.assert_command("import tomli").success();
-
-    Ok(())
-}
-
-/// Check that we show the right messages on cached, direct URL built distribution installs.
-#[test]
-fn install_url_built_dist_cached() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_file_counts()
-        .with_filtered_sizes_and_units();
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("tqdm @ https://files.pythonhosted.org/packages/00/e5/f12a80907d0884e6dff9c16d0c0114d81b8cd07dc3ae54c5e962cc83037e/tqdm-4.66.1-py3-none-any.whl")?;
-
-    let context_filters = if cfg!(windows) {
-        [("warning: The package `tqdm` requires `colorama ; sys_platform == 'win32'`, but it's not installed\n", "")]
-            .into_iter()
-            .chain(context.filters())
-            .collect()
-    } else {
-        context.filters()
-    };
-    uv_snapshot!(context_filters, context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tqdm==4.66.1 (from https://files.pythonhosted.org/packages/00/e5/f12a80907d0884e6dff9c16d0c0114d81b8cd07dc3ae54c5e962cc83037e/tqdm-4.66.1-py3-none-any.whl)
-    "
-    );
-
-    context.assert_command("import tqdm").success();
-
-    // Re-run the installation in a new virtual environment.
-    context.reset_venv();
-
-    uv_snapshot!(context_filters, context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tqdm==4.66.1 (from https://files.pythonhosted.org/packages/00/e5/f12a80907d0884e6dff9c16d0c0114d81b8cd07dc3ae54c5e962cc83037e/tqdm-4.66.1-py3-none-any.whl)
-    "
-    );
-
-    context.assert_command("import tqdm").success();
-
-    // Clear the cache, then re-run the installation in a new virtual environment.
-    context.reset_venv();
-
-    uv_snapshot!(
-        context_filters,
-        context.clean().arg("tqdm"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Removed [N] files ([SIZE])
-    "
-    );
-
-    uv_snapshot!(context_filters, context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tqdm==4.66.1 (from https://files.pythonhosted.org/packages/00/e5/f12a80907d0884e6dff9c16d0c0114d81b8cd07dc3ae54c5e962cc83037e/tqdm-4.66.1-py3-none-any.whl)
-    "
-    );
-
-    context.assert_command("import tqdm").success();
 
     Ok(())
 }
@@ -2114,98 +1087,6 @@ fn duplicate_package_disjoint() -> Result<()> {
     Ok(())
 }
 
-/// Verify that we can force reinstall of packages.
-#[test]
-fn reinstall() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + tomli==2.0.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-    context.assert_command("import tomli").success();
-
-    // Re-run the installation with `--reinstall`.
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--reinstall")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Uninstalled 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     ~ markupsafe==2.1.3
-     ~ tomli==2.0.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-    context.assert_command("import tomli").success();
-
-    Ok(())
-}
-
-/// Verify that we can force reinstall of selective packages.
-#[test]
-fn reinstall_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + tomli==2.0.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-    context.assert_command("import tomli").success();
-
-    // Re-run the installation with `--reinstall`.
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--reinstall-package")
-        .arg("tomli")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     ~ tomli==2.0.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-    context.assert_command("import tomli").success();
-
-    Ok(())
-}
-
 /// Verify that we can force reinstall of Git dependencies.
 #[test]
 #[cfg(feature = "test-git")]
@@ -2250,105 +1131,6 @@ fn reinstall_git() -> Result<()> {
     context
         .assert_command("import uv_public_pypackage")
         .success();
-
-    Ok(())
-}
-
-/// Verify that we can force refresh of cached data.
-#[test]
-fn refresh() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + tomli==2.0.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-    context.assert_command("import tomli").success();
-
-    // Re-run the installation into with `--refresh`. Ensure that we resolve and download the
-    // latest versions of the packages.
-    context.reset_venv();
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--refresh")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + tomli==2.0.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-    context.assert_command("import tomli").success();
-
-    Ok(())
-}
-
-/// Verify that we can force refresh of selective packages.
-#[test]
-fn refresh_package() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--strict"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 2 packages in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + tomli==2.0.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-    context.assert_command("import tomli").success();
-
-    // Re-run the installation into with `--refresh`. Ensure that we resolve and download the
-    // latest versions of the packages.
-    context.reset_venv();
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--refresh-package")
-        .arg("tomli")
-        .arg("--strict")
-        , @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 2 packages in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 2 packages in [TIME]
-     + markupsafe==2.1.3
-     + tomli==2.0.1
-    "
-    );
-
-    context.assert_command("import markupsafe").success();
-    context.assert_command("import tomli").success();
 
     Ok(())
 }
@@ -2476,15 +1258,16 @@ fn sync_editable() -> Result<()> {
     "
     );
 
-    // Modify the `pyproject.toml` file.
-    let pyproject_toml = poetry_editable.path().join("pyproject.toml");
+    // Updating metadata without changing the version must also trigger a rebuild.
     let pyproject_toml_contents = context.read("poetry_editable/pyproject.toml");
     fs_err::write(
         &pyproject_toml,
-        pyproject_toml_contents.replace("0.1.0", "0.1.1"),
+        pyproject_toml_contents.replace(
+            "description = \"\"",
+            "description = \"Updated editable metadata\"",
+        ),
     )?;
 
-    // Reinstall the editable package. This will trigger a rebuild and reinstall.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg(requirements_txt.path()), @"
     exit_code: 0 (success)
@@ -2496,6 +1279,12 @@ fn sync_editable() -> Result<()> {
      ~ poetry-editable==0.1.1 (from file://[TEMP_DIR]/poetry_editable)
     "
     );
+    context
+        .assert_command(
+            "from importlib.metadata import metadata; print(metadata('poetry-editable')['Summary'])",
+        )
+        .success()
+        .stdout(predicates::str::contains("Updated editable metadata"));
 
     Ok(())
 }
@@ -2601,6 +1390,7 @@ fn sync_editable_and_registry() -> Result<()> {
     Ok(())
 }
 
+/// Switching installation modes must change where Python imports the package from.
 #[test]
 fn sync_editable_and_local() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -2610,6 +1400,20 @@ fn sync_editable_and_local() -> Result<()> {
         context.workspace_root.join("test/packages/black_editable"),
         context.temp_dir.join("black_editable"),
     )?;
+    let source_module = context.temp_dir.join("black_editable/black/__init__.py");
+    let installed_module = context.site_packages().join("black/__init__.py");
+    let assert_import_origin = |expected: &Path| {
+        context
+            .python_command()
+            .args([
+                "-I",
+                "-c",
+                "import black, os, sys; assert os.path.samefile(black.__file__, sys.argv[1]), black.__file__",
+            ])
+            .arg(expected)
+            .assert()
+            .success();
+    };
 
     // Install the editable version of Black.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -2628,9 +1432,9 @@ fn sync_editable_and_local() -> Result<()> {
      + black==0.1.0 (from file://[TEMP_DIR]/black_editable)
     "
     );
+    assert_import_origin(&source_module);
 
     // Install the non-editable version of Black. This should replace the editable version.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc::indoc! {r"
         black @ file:./black_editable
         "
@@ -2647,9 +1451,9 @@ fn sync_editable_and_local() -> Result<()> {
      ~ black==0.1.0 (from file://[TEMP_DIR]/black_editable)
     "
     );
+    assert_import_origin(&installed_module);
 
     // Reinstall the editable version of Black. This should replace the non-editable version.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str(indoc::indoc! {r"
         -e file:./black_editable
         "
@@ -2665,6 +1469,7 @@ fn sync_editable_and_local() -> Result<()> {
      ~ black==0.1.0 (from file://[TEMP_DIR]/black_editable)
     "
     );
+    assert_import_origin(&source_module);
 
     Ok(())
 }
@@ -2749,147 +1554,89 @@ fn find_links() -> Result<()> {
     Ok(())
 }
 
-/// Sync using `--find-links` with `--no-index`, which should accept the local wheel.
-#[test]
-fn find_links_no_index_match() -> Result<()> {
+/// A second installation reuses the cached `--find-links` wheel without downloading it again.
+#[tokio::test]
+async fn find_links_wheel_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    let filename = "ok-1.0.0-py3-none-any.whl";
+    Mock::given(method("GET"))
+        .and(path("/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(r#"<a href="/{filename}">{filename}</a>"#),
+            "text/html",
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(fs::read(
+            context.workspace_root.join("test/links").join(filename),
+        )?))
+        .expect(1)
+        .mount(&server)
+        .await;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        tqdm==1000.0.0
-    "})?;
+    requirements_txt.write_str("ok==1.0.0")?;
+
+    // Populate the wheel cache.
+    uv_snapshot!(context.filters(), context.pip_sync()
+        .arg("requirements.txt")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    "
+    );
+
+    context.pip_uninstall().arg("ok").assert().success();
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--no-index")
         .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/")), @"
+        .arg(server.uri()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + tqdm==1000.0.0
+     + ok==1.0.0
     "
     );
 
+    context.assert_installed("ok", "1.0.0");
     Ok(())
 }
 
-/// Sync using `--find-links` with `--offline`, which should accept the local wheel.
-#[test]
-fn find_links_offline_match() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        tqdm==1000.0.0
-    "})?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--offline")
-        .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/")), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tqdm==1000.0.0
-    "
-    );
-
-    Ok(())
-}
-
-/// Sync using `--find-links` with `--offline`, which should fail to find `numpy`.
-#[test]
-fn find_links_offline_no_match() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        numpy
-        tqdm==1000.0.0
-    "})?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--offline")
-        .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/")), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because numpy was not found in the cache and you require numpy, we can conclude that your requirements are unsatisfiable.
-
-    hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
-    "
-    );
-
-    Ok(())
-}
-
-/// Sync using `--find-links` with a local directory. Ensure that cached wheels are reused.
-#[test]
-fn find_links_wheel_cache() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        tqdm==1000.0.0
-    "})?;
-
-    // Install `tqdm`.
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/")), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tqdm==1000.0.0
-    "
-    );
-
-    // Reinstall `tqdm` with `--reinstall`. Ensure that the wheel is reused.
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--reinstall")
-        .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/")), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     ~ tqdm==1000.0.0
-    "
-    );
-
-    Ok(())
-}
-
-/// Sync using `--find-links` with a local directory. Ensure that cached source distributions are
-/// reused.
+/// Reuse a wheel built from a local `--find-links` source distribution.
 #[test]
 fn find_links_source_cache() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let build_index = PackseServer::empty();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let sdist = "tqdm-999.0.0.tar.gz";
+    fs::copy(
+        context.workspace_root.join("test/links").join(sdist),
+        links.child(sdist),
+    )?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(indoc! {r"
-        tqdm==999.0.0
-    "})?;
+    requirements_txt.write_str("tqdm==999.0.0")?;
 
-    // Install `tqdm`.
+    // Build and cache the source distribution's wheel.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/")), @"
+        .arg(links.path())
+        .arg("--index-url")
+        .arg(build_index.index_url()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
@@ -2899,19 +1646,22 @@ fn find_links_source_cache() -> Result<()> {
     "
     );
 
-    // Reinstall `tqdm` with `--reinstall`. Ensure that the wheel is reused.
+    context.pip_uninstall().arg("tqdm").assert().success();
+    context.assert_not_installed("hatchling");
+
+    // Building without isolation would require `hatchling` in the target environment. With only
+    // the source archive available in `links`, installation therefore requires the cached wheel.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
-        .arg("--reinstall")
+        .arg("--no-build-isolation")
+        .arg("--no-index")
         .arg("--find-links")
-        .arg(context.workspace_root.join("test/links/")), @"
+        .arg(links.path()), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     ~ tqdm==999.0.0
+     + tqdm==999.0.0
     "
     );
 
@@ -3102,29 +1852,7 @@ fn repeat_requirement_incompatible() -> Result<()> {
     Ok(())
 }
 
-/// Don't preserve the mtime from .tar.gz files, it may be the unix epoch (1970-01-01), while Python's zip
-/// implementation can't handle files with an mtime older than 1980.
-/// See also <https://github.com/alexcrichton/tar-rs/issues/349>.
-#[test]
-fn tar_dont_preserve_mtime() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("tomli @ https://files.pythonhosted.org/packages/c0/3f/d7af728f075fb08564c5949a9c95e44352e23dee646869fa104a3b2060a3/tomli-2.0.1.tar.gz")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + tomli==2.0.1 (from https://files.pythonhosted.org/packages/c0/3f/d7af728f075fb08564c5949a9c95e44352e23dee646869fa104a3b2060a3/tomli-2.0.1.tar.gz)
-    ");
-
-    Ok(())
-}
-
-/// Avoid creating a file with 000 permissions
+/// Installed files must remain owner-readable even if the archive records restrictive modes.
 #[test]
 fn set_read_permissions() -> Result<()> {
     let context = uv_test::test_context!("3.12");
@@ -3141,46 +1869,82 @@ fn set_read_permissions() -> Result<()> {
      + databricks==0.2
     ");
 
+    context
+        .assert_command(indoc! {r#"
+            import stat
+            from importlib.metadata import distribution
+
+            files = [entry.locate() for entry in distribution("databricks").files or ()]
+            files = [path for path in files if path.is_file()]
+            assert files, "no installed files were found"
+            unreadable = [str(path) for path in files if not path.stat().st_mode & stat.S_IRUSR]
+            assert not unreadable, f"installed files without owner read permission: {unreadable}"
+        "#})
+        .success();
+
     Ok(())
 }
 
-/// Test special case to generate versioned pip launchers.
-/// <https://github.com/pypa/pip/blob/3898741e29b7279e7bffe044ecfbe20f6a438b1e/src/pip/_internal/operations/install/wheel.py#L283>
-/// <https://github.com/astral-sh/uv/issues/1593>
+/// Generate the versioned pip launcher for the target interpreter.
+/// See <https://github.com/astral-sh/uv/issues/1593>.
+/// pip creates versioned launchers during wheel installation:
+/// <https://github.com/pypa/pip/blob/3898741e29b7279e7bffe044ecfbe20f6a438b1e/src/pip/_internal/operations/install/wheel.py#L283>.
+/// pip 24.0 entry points: <https://inspector.pypi.io/project/pip/24.0/packages/8a/6a/19e9fe04fca059ccf770861c7d5721ab4c2aebc539889e97c7977528a53b/pip-24.0-py3-none-any.whl/pip-24.0.dist-info/entry_points.txt>.
 #[test]
 fn pip_entrypoints() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("pip==24.0")?;
 
-    for pip_requirement in [
-        // Test compatibility with launchers in 24.0
-        // https://inspector.pypi.io/project/pip/24.0/packages/8a/6a/19e9fe04fca059ccf770861c7d5721ab4c2aebc539889e97c7977528a53b/pip-24.0-py3-none-any.whl/pip-24.0.dist-info/entry_points.txt
-        "pip==24.0",
-        // Test compatibility with launcher changes from https://github.com/pypa/pip/pull/12536 released in 24.1b1
-        // See https://github.com/astral-sh/uv/pull/1982
-        "pip==24.1b1",
-    ] {
-        let requirements_txt = context.temp_dir.child("requirements.txt");
-        requirements_txt.write_str(pip_requirement)?;
+    uv_snapshot!(context.pip_sync().arg("requirements.txt").arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + pip==24.0
+    ");
 
-        context
-            .pip_sync()
-            .arg("requirements.txt")
-            .arg("--strict")
-            .output()
-            .expect("Failed to install pip");
+    let bin_dir = ChildPath::new(venv_bin_path(&context.venv));
+    bin_dir
+        .child(format!("pip3.10{EXE_SUFFIX}"))
+        .assert(predicates::path::missing());
+    bin_dir
+        .child(format!("pip3.12{EXE_SUFFIX}"))
+        .assert(predicates::path::is_file());
 
-        let bin_dir = context.venv.join(if cfg!(unix) {
-            "bin"
-        } else if cfg!(windows) {
-            "Scripts"
-        } else {
-            unimplemented!("Only Windows and Unix are supported")
-        });
-        ChildPath::new(bin_dir.join(format!("pip3.10{EXE_SUFFIX}")))
-            .assert(predicates::path::missing());
-        ChildPath::new(bin_dir.join(format!("pip3.12{EXE_SUFFIX}")))
-            .assert(predicates::path::exists());
-    }
+    Ok(())
+}
+
+/// pip changed its launcher entry points in 24.1b1: <https://github.com/pypa/pip/pull/12536>.
+/// See <https://github.com/astral-sh/uv/pull/1982>.
+#[test]
+fn pip_entrypoints_24_1() -> Result<()> {
+    // The default test cutoff predates pip's changed entry-point format.
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2025-01-01T00:00:00Z");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("pip==24.1b1")?;
+
+    uv_snapshot!(context.pip_sync().arg("requirements.txt").arg("--strict"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + pip==24.1b1
+    ");
+
+    let bin_dir = ChildPath::new(venv_bin_path(&context.venv));
+    bin_dir
+        .child(format!("pip3.10{EXE_SUFFIX}"))
+        .assert(predicates::path::missing());
+    bin_dir
+        .child(format!("pip3.12{EXE_SUFFIX}"))
+        .assert(predicates::path::is_file());
 
     Ok(())
 }
@@ -3188,6 +1952,7 @@ fn pip_entrypoints() -> Result<()> {
 #[test]
 fn invalidate_on_change() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let inspect_requirements = "from importlib.metadata import requires; print([''.join(r.split()) for r in requires('example')])";
 
     // Create an editable package.
     let editable_dir = context.temp_dir.child("editable");
@@ -3218,6 +1983,10 @@ requires-python = ">=3.8"
      + example==0.0.0 (from file://[TEMP_DIR]/editable)
     "
     );
+    context
+        .assert_command(inspect_requirements)
+        .success()
+        .stdout(predicates::str::contains("['anyio==4.0.0']"));
 
     // Installing again should be a no-op.
     uv_snapshot!(context.filters(), context.pip_sync()
@@ -3253,6 +2022,10 @@ requires-python = ">=3.8"
      ~ example==0.0.0 (from file://[TEMP_DIR]/editable)
     "
     );
+    context
+        .assert_command(inspect_requirements)
+        .success()
+        .stdout(predicates::str::contains("['anyio==3.7.1']"));
 
     Ok(())
 }
@@ -3279,14 +2052,9 @@ fn compile() -> Result<()> {
     "
     );
 
-    assert!(
-        context
-            .site_packages()
-            .join("markupsafe")
-            .join("__pycache__")
-            .join("__init__.cpython-312.pyc")
-            .exists()
-    );
+    ChildPath::new(context.site_packages())
+        .child("markupsafe/__pycache__/__init__.cpython-312.pyc")
+        .assert(predicates::path::is_file());
 
     context.assert_command("import markupsafe").success();
 
@@ -3313,6 +2081,10 @@ fn recompile() -> Result<()> {
     "
     );
 
+    let bytecode = ChildPath::new(context.site_packages())
+        .child("markupsafe/__pycache__/__init__.cpython-312.pyc");
+    bytecode.assert(predicates::path::missing());
+
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
         .arg("--compile")
@@ -3324,14 +2096,7 @@ fn recompile() -> Result<()> {
     "
     );
 
-    assert!(
-        context
-            .site_packages()
-            .join("markupsafe")
-            .join("__pycache__")
-            .join("__init__.cpython-312.pyc")
-            .exists()
-    );
+    bytecode.assert(predicates::path::is_file());
 
     context.assert_command("import markupsafe").success();
 
@@ -3919,6 +2684,11 @@ fn require_hashes_wheel_url() -> Result<()> {
     Ok(())
 }
 
+fn assert_archive_bucket_missing(context: &uv_test::TestContext) {
+    let cache = uv_cache::Cache::from_path(context.cache_dir.path());
+    uv_test::assert_path_missing(cache.bucket(uv_cache::CacheBucket::Archive));
+}
+
 /// Include the _wrong_ hash for a built distribution specified as a direct URL dependency.
 #[test]
 fn require_hashes_wheel_url_mismatch() -> Result<()> {
@@ -3946,10 +2716,7 @@ fn require_hashes_wheel_url_mismatch() -> Result<()> {
     );
 
     // A rejected wheel must not be published to the archive cache.
-    context
-        .cache_dir
-        .child("archive-v0")
-        .assert(predicates::path::missing());
+    assert_archive_bucket_missing(&context);
 
     Ok(())
 }
@@ -3998,71 +2765,6 @@ fn require_hashes_source_tree() -> Result<()> {
     ----- stderr -----
     error: Failed to build `black @ file://[WORKSPACE]/test/packages/black_editable`
       cause: Hash-checking is not supported for local directories: black @ file://[WORKSPACE]/test/packages/black_editable
-    "
-    );
-
-    Ok(())
-}
-
-/// Include the hash for _just_ the wheel with `--only-binary`.
-#[test]
-fn require_hashes_re_download() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio==4.0.0")?;
-
-    // Install without `--require-hashes`.
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + anyio==4.0.0
-    "
-    );
-
-    // Reinstall with `--require-hashes`, and the wrong hash.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("anyio==4.0.0 --hash=sha256:afdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f")?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--reinstall")
-        .arg("--require-hashes"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    error: Failed to download `anyio==4.0.0`
-      cause: Hash mismatch for `anyio==4.0.0`
-
-             Expected:
-               sha256:afdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
-
-             Computed:
-               sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
-    "
-    );
-
-    // Reinstall with `--require-hashes`, and the right hash.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--reinstall")
-        .arg("--require-hashes"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     ~ anyio==4.0.0
     "
     );
 
@@ -4210,10 +2912,7 @@ fn require_hashes_wheel_path_mismatch() -> Result<()> {
     );
 
     // A rejected wheel must not be published to the archive cache.
-    context
-        .cache_dir
-        .child("archive-v0")
-        .assert(predicates::path::missing());
+    assert_archive_bucket_missing(&context);
 
     Ok(())
 }
@@ -4624,8 +3323,26 @@ fn require_hashes_at_least_one() -> Result<()> {
 #[test]
 fn require_hashes_find_links_no_hash() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-    let server = FindLinksServer::new(&context.workspace_root.join("test/links"));
-    let index = PackseServer::empty();
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let wheel = "basic_package-0.1.0-py3-none-any.whl";
+    fs::copy(
+        context.workspace_root.join("test/links").join(wheel),
+        links.child(wheel),
+    )?;
+    let source_built = context.temp_dir.child("source-built");
+    let source = generate_source_archive(
+        &"basic-package".parse()?,
+        &"0.1.0".parse()?,
+        "",
+        Some(source_built.path()),
+    )?;
+    let source_hash = hex::encode(Sha256::digest(&source));
+    links
+        .child("basic_package-0.1.0.tar.gz")
+        .write_binary(&source)?;
+    let server = FindLinksServer::new(links.path());
+    let context = context.with_filter((source_hash.clone(), "[SOURCE_SHA256]"));
 
     // First, use the correct hash.
     let requirements_txt = context.temp_dir.child("requirements.txt");
@@ -4637,8 +3354,7 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
         .arg("requirements.txt")
         .arg("--reinstall")
         .arg("--require-hashes")
-        .arg("--index-url")
-        .arg(index.index_url())
+        .arg("--no-index")
         .arg("--find-links")
         .arg(server.url()), @"
     exit_code: 0 (success)
@@ -4660,8 +3376,7 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
         .arg("requirements.txt")
         .arg("--reinstall")
         .arg("--require-hashes")
-        .arg("--index-url")
-        .arg(index.index_url())
+        .arg("--no-index")
         .arg("--find-links")
         .arg(server.url()), @"
     exit_code: 1 (failure)
@@ -4680,17 +3395,13 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
 
     // Third, use the hash from the source distribution. This will actually fail, when it _could_
     // succeed, but pip has the same behavior.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "basic-package==0.1.0 --hash=sha256:af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4",
-    )?;
+    requirements_txt.write_str(&format!("basic-package==0.1.0 --hash=sha256:{source_hash}"))?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--reinstall")
         .arg("--require-hashes")
-        .arg("--index-url")
-        .arg(index.index_url())
+        .arg("--no-index")
         .arg("--find-links")
         .arg(server.url()), @"
     exit_code: 1 (failure)
@@ -4700,18 +3411,15 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
       cause: Hash mismatch for `basic-package==0.1.0`
 
              Expected:
-               sha256:af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4
+               sha256:[SOURCE_SHA256]
 
              Computed:
                sha256:7b6229db79b5800e4e98a351b5628c1c8a944533a2d428aeeaa7275a30d4ea82
     "
     );
 
-    // Fourth, use the hash from the source distribution, and disable wheels. This should succeed.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "basic-package==0.1.0 --hash=sha256:af478ff91ec60856c99a540b8df13d756513bebb65bc301fb27e0d1f974532b4",
-    )?;
+    // Disabling wheels makes the same source hash usable.
+    source_built.assert(predicates::path::missing());
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt")
@@ -4719,201 +3427,123 @@ fn require_hashes_find_links_no_hash() -> Result<()> {
         .arg(":all:")
         .arg("--reinstall")
         .arg("--require-hashes")
-        .arg("--index-url")
-        .arg(index.index_url())
+        .arg("--no-index")
         .arg("--find-links")
         .arg(server.url()), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    error: Failed to download and build `basic-package==0.1.0`
-      cause: Failed to resolve requirements from `build-system.requires`
-      cause: No solution found when resolving: `uv-build>=0.8.3, <0.9.0`
-      cause: Because uv-build was not found in the package registry and you require uv-build>=0.8.3,<0.9.0, we can conclude that your requirements are unsatisfiable.
-    "
-    );
-
-    Ok(())
-}
-
-/// Using `--find-links`, and the registry serves us a correct hash.
-#[test]
-fn require_hashes_find_links_valid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--require-hashes")
-        .arg("--find-links")
-        .arg("https://raw.githubusercontent.com/astral-test/astral-test-hash/main/valid-hash/simple-html/example-a-961b4c22/index.html"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + example-a-961b4c22==1.0.0
-    "
-    );
-
-    Ok(())
-}
-
-/// Using `--find-links`, and the registry serves us an incorrect hash.
-#[test]
-fn require_hashes_find_links_invalid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-
-    // First, request some other hash.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "example-a-961b4c22==1.0.0 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--reinstall")
-        .arg("--require-hashes")
-        .arg("--find-links")
-        .arg("https://raw.githubusercontent.com/astral-test/astral-test-hash/main/invalid-hash/simple-html/example-a-961b4c22/index.html"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    error: Failed to download `example-a-961b4c22==1.0.0`
-      cause: Hash mismatch for `example-a-961b4c22==1.0.0`
-
-             Expected:
-               sha256:0000000000000000000000000000000000000000000000000000000000000000
-
-             Computed:
-               sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e
-    "
-    );
-
-    // Second, request the invalid hash, that the registry _thinks_ is correct. We should reject it.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:8838f9d005ff0432b258ba648d9cabb1cbdf06ac29d14f788b02edae544032ea")?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--reinstall")
-        .arg("--require-hashes")
-        .arg("--find-links")
-        .arg("https://raw.githubusercontent.com/astral-test/astral-test-hash/main/invalid-hash/simple-html/example-a-961b4c22/index.html"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    error: Failed to download `example-a-961b4c22==1.0.0`
-      cause: Hash mismatch for `example-a-961b4c22==1.0.0`
-
-             Expected:
-               sha256:8838f9d005ff0432b258ba648d9cabb1cbdf06ac29d14f788b02edae544032ea
-
-             Computed:
-               sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e
-    "
-    );
-
-    // Third, request the correct hash, that the registry _thinks_ is correct. We should accept
-    // it, since it's already cached under this hash.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--reinstall")
-        .arg("--require-hashes")
-        .arg("--find-links")
-        .arg("https://raw.githubusercontent.com/astral-test/astral-test-hash/main/invalid-hash/simple-html/example-a-961b4c22/index.html"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + example-a-961b4c22==1.0.0
-    "
-    );
-
-    // Fourth, request the correct hash, that the registry _thinks_ is correct, but without the
-    // cache. We _should_ accept it, but we currently don't.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt")
-        .arg("--refresh")
-        .arg("--reinstall")
-        .arg("--require-hashes")
-        .arg("--find-links")
-        .arg("https://raw.githubusercontent.com/astral-test/astral-test-hash/main/invalid-hash/simple-html/example-a-961b4c22/index.html"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Uninstalled 1 package in [TIME]
     Installed 1 package in [TIME]
-     ~ example-a-961b4c22==1.0.0
+     ~ basic-package==0.1.0
     "
     );
+    source_built.assert(predicates::path::exists());
 
-    // Finally, request the correct hash, along with the incorrect hash for the source distribution.
-    // Resolution will fail, since the incorrect hash matches the registry's hash.
+    Ok(())
+}
+
+/// A flat index advertises the same hash as the requirement and the downloaded wheel.
+#[tokio::test]
+async fn require_hashes_find_links_valid_hash() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let fixture = RegistryHashFixture::new(&context);
+    let requirement = fixture.hashed_requirement();
+    let hash = fixture.sha256.clone();
+    let server = fixture.serve(Some(&hash)).await;
+
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e --hash=sha256:a3cf07a05aac526131a2e8b6e4375ee6c6eaac8add05b88035e960ac6cd999ee")?;
+    requirements_txt.write_str(&requirement)?;
 
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
-        .arg("--refresh")
-        .arg("--reinstall")
         .arg("--require-hashes")
+        .arg("--no-index")
         .arg("--find-links")
-        .arg("https://raw.githubusercontent.com/astral-test/astral-test-hash/main/invalid-hash/simple-html/example-a-961b4c22/index.html"), @"
-    exit_code: 1 (failure)
+        .arg(format!("{}{}", server.uri(), RegistryHashFixture::PAGE_PATH)), @"
+    exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    error: Failed to download and build `example-a-961b4c22==1.0.0`
-      cause: Hash mismatch for `example-a-961b4c22==1.0.0`
-
-             Expected:
-               sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e
-               sha256:a3cf07a05aac526131a2e8b6e4375ee6c6eaac8add05b88035e960ac6cd999ee
-
-             Computed:
-               sha256:294e788dbe500fdc39e8b88e82652ab67409a1dc9dd06543d0fe0ae31b713eb3
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tqdm==1000.0.0
     "
     );
 
     Ok(())
 }
 
+/// A wheel-backed HTML index with a configurable SHA-256 fragment.
+struct RegistryHashFixture {
+    wheel: Vec<u8>,
+    sha256: String,
+}
+
+impl RegistryHashFixture {
+    const FILENAME: &str = "tqdm-1000.0.0-py3-none-any.whl";
+    const PAGE_PATH: &str = "/simple/tqdm/";
+    const REQUIREMENT: &str = "tqdm==1000.0.0";
+
+    fn new(context: &uv_test::TestContext) -> Self {
+        let wheel = context.read_bytes(
+            context
+                .workspace_root
+                .join("test/links")
+                .join(Self::FILENAME),
+        );
+        let sha256 = hex::encode(Sha256::digest(&wheel));
+        Self { wheel, sha256 }
+    }
+
+    fn hashed_requirement(&self) -> String {
+        format!("{} --hash=sha256:{}", Self::REQUIREMENT, self.sha256)
+    }
+
+    async fn serve(self, advertised_hash: Option<&str>) -> MockServer {
+        let server = MockServer::start().await;
+        let fragment = advertised_hash.map_or_else(String::new, |hash| format!("#sha256={hash}"));
+        let filename = Self::FILENAME;
+        Mock::given(method("GET"))
+            .and(path(Self::PAGE_PATH))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                format!(r#"<a href="/{filename}{fragment}">{filename}</a>"#),
+                "text/html",
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/{filename}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(self.wheel))
+            .mount(&server)
+            .await;
+        server
+    }
+}
+
 /// Using `--index-url`, but the registry doesn't provide us with a hash.
-#[test]
-fn require_hashes_registry_no_hash() -> Result<()> {
+#[tokio::test]
+async fn require_hashes_registry_no_hash() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let fixture = RegistryHashFixture::new(&context);
+    let requirement = fixture.hashed_requirement();
+    let server = fixture.serve(None).await;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
+    requirements_txt.write_str(&requirement)?;
 
     uv_snapshot!(context.pip_sync()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("requirements.txt")
         .arg("--require-hashes")
         .arg("--index-url")
-        .arg("https://astral-test.github.io/astral-test-hash/no-hash/simple-html/"), @"
+        .arg(format!("{}/simple/", server.uri())), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + example-a-961b4c22==1.0.0
+     + tqdm==1000.0.0
     "
     );
 
@@ -4921,24 +3551,29 @@ fn require_hashes_registry_no_hash() -> Result<()> {
 }
 
 /// Using `--index-url`, and the registry serves us a correct hash.
-#[test]
-fn require_hashes_registry_valid_hash() -> Result<()> {
+#[tokio::test]
+async fn require_hashes_registry_valid_hash() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let fixture = RegistryHashFixture::new(&context);
+    let requirement = fixture.hashed_requirement();
+    let hash = fixture.sha256.clone();
+    let server = fixture.serve(Some(&hash)).await;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
+    requirements_txt.write_str(&requirement)?;
 
     uv_snapshot!(context.pip_sync()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("requirements.txt")
         .arg("--require-hashes")
-        .arg("--find-links")
-        .arg("https://astral-test.github.io/astral-test-hash/valid-hash/simple-html/"), @"
-    exit_code: 1 (failure)
+        .arg("--index-url")
+        .arg(format!("{}/simple/", server.uri())), @"
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because example-a-961b4c22 was not found in the package registry and you require example-a-961b4c22==1.0.0, we can conclude that your requirements are unsatisfiable.
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + tqdm==1000.0.0
     "
     );
 
@@ -4946,172 +3581,47 @@ fn require_hashes_registry_valid_hash() -> Result<()> {
 }
 
 /// Verify the index's wheel hash even when no explicit hash policy is requested.
-#[test]
-fn index_wheel_hash_mismatch() -> Result<()> {
+#[tokio::test]
+async fn index_wheel_hash_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_http_retries();
+    let fixture = RegistryHashFixture::new(&context);
+    let computed_hash = fixture.sha256.clone();
+    let index_hash = "0".repeat(64);
+    assert_ne!(
+        index_hash, computed_hash,
+        "the index must advertise a wrong hash"
+    );
+    let context = context
+        .with_filter((computed_hash, "[WHEEL_SHA256]"))
+        .with_filter((index_hash.clone(), "[INDEX_SHA256]"));
+
+    let server = fixture.serve(Some(&index_hash)).await;
+
     context
         .temp_dir
         .child("requirements.txt")
-        .write_str("example-a-961b4c22==1.0.0")?;
+        .write_str(RegistryHashFixture::REQUIREMENT)?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
         .env_remove(EnvVars::UV_EXCLUDE_NEWER)
         .arg("requirements.txt")
         .arg("--only-binary=:all:")
         .arg("--index-url")
-        .arg("https://astral-test.github.io/astral-test-hash/invalid-hash/simple-html/"), @"
+        .arg(format!("{}/simple/", server.uri())), @"
     exit_code: 1 (failure)
     ----- stderr -----
     Resolved 1 package in [TIME]
-    error: Failed to download `example-a-961b4c22==1.0.0`
-      cause: Hash mismatch for `example-a-961b4c22==1.0.0`
+    error: Failed to download `tqdm==1000.0.0`
+      cause: Hash mismatch for `tqdm==1000.0.0`
 
              Expected:
-               sha256:8838f9d005ff0432b258ba648d9cabb1cbdf06ac29d14f788b02edae544032ea
+               sha256:[INDEX_SHA256]
 
              Computed:
-               sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e
+               sha256:[WHEEL_SHA256]
     ");
 
-    context
-        .cache_dir
-        .child("archive-v0")
-        .assert(predicates::path::missing());
-    Ok(())
-}
-
-/// Using `--index-url`, and the registry serves us an incorrect hash.
-#[test]
-fn require_hashes_registry_invalid_hash() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-
-    // First, request some other hash.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str(
-        "example-a-961b4c22==1.0.0 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    )?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("requirements.txt")
-        .arg("--reinstall")
-        .arg("--require-hashes")
-        .arg("--index-url")
-        .arg("https://astral-test.github.io/astral-test-hash/invalid-hash/simple-html/"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    error: Failed to download `example-a-961b4c22==1.0.0`
-      cause: Hash mismatch for `example-a-961b4c22==1.0.0`
-
-             Expected:
-               sha256:0000000000000000000000000000000000000000000000000000000000000000
-
-             Computed:
-               sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e
-    "
-    );
-
-    // Second, request the invalid hash, that the registry _thinks_ is correct. We should reject it.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:8838f9d005ff0432b258ba648d9cabb1cbdf06ac29d14f788b02edae544032ea")?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("requirements.txt")
-        .arg("--reinstall")
-        .arg("--require-hashes")
-        .arg("--index-url")
-        .arg("https://astral-test.github.io/astral-test-hash/invalid-hash/simple-html/"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    error: Failed to download `example-a-961b4c22==1.0.0`
-      cause: Hash mismatch for `example-a-961b4c22==1.0.0`
-
-             Expected:
-               sha256:8838f9d005ff0432b258ba648d9cabb1cbdf06ac29d14f788b02edae544032ea
-
-             Computed:
-               sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e
-    "
-    );
-
-    // Third, request the correct hash despite the registry's incorrect hash. The explicit policy
-    // takes precedence, and the rejected downloads must not have populated the cache.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
-
-    uv_snapshot!(context.pip_sync()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("requirements.txt")
-        .arg("--reinstall")
-        .arg("--require-hashes")
-        .arg("--index-url")
-        .arg("https://astral-test.github.io/astral-test-hash/invalid-hash/simple-html/"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + example-a-961b4c22==1.0.0
-    "
-    );
-
-    // The explicit policy must also take precedence when refreshing the cache.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e")?;
-
-    uv_snapshot!(context.pip_sync()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("requirements.txt")
-        .arg("--refresh")
-        .arg("--reinstall")
-        .arg("--require-hashes")
-        .arg("--index-url")
-        .arg("https://astral-test.github.io/astral-test-hash/invalid-hash/simple-html/"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     ~ example-a-961b4c22==1.0.0
-    "
-    );
-
-    // Finally, request the correct hash, along with the incorrect hash for the source distribution.
-    // Resolution will fail, since the incorrect hash matches the registry's hash.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt
-        .write_str("example-a-961b4c22==1.0.0 --hash=sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e --hash=sha256:a3cf07a05aac526131a2e8b6e4375ee6c6eaac8add05b88035e960ac6cd999ee")?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .env_remove(EnvVars::UV_EXCLUDE_NEWER)
-        .arg("requirements.txt")
-        .arg("--refresh")
-        .arg("--reinstall")
-        .arg("--require-hashes")
-        .arg("--index-url")
-        .arg("https://astral-test.github.io/astral-test-hash/invalid-hash/simple-html/"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    error: Failed to download and build `example-a-961b4c22==1.0.0`
-      cause: Hash mismatch for `example-a-961b4c22==1.0.0`
-
-             Expected:
-               sha256:5d69f0b590514103234f0c3526563856f04d044d8d0ea1073a843ae429b3187e
-               sha256:a3cf07a05aac526131a2e8b6e4375ee6c6eaac8add05b88035e960ac6cd999ee
-
-             Computed:
-               sha256:294e788dbe500fdc39e8b88e82652ab67409a1dc9dd06543d0fe0ae31b713eb3
-    "
-    );
-
+    assert_archive_bucket_missing(&context);
     Ok(())
 }
 
@@ -5202,7 +3712,8 @@ fn require_hashes_url_malformed() -> Result<()> {
 
     uv_snapshot!(context.pip_sync()
         .arg("requirements.txt")
-        .arg("--require-hashes"), @"
+        .arg("--require-hashes")
+        .arg("--offline"), @"
     exit_code: 2 (failure)
     ----- stderr -----
     error: Invalid hash digest length (expected 64 hexadecimal characters, found 3)
@@ -5284,23 +3795,21 @@ fn target_built_distribution() -> Result<()> {
      + iniconfig==2.0.0
     ");
 
-    // Ensure that the package is present in the target directory.
-    assert!(context.temp_dir.child("target").child("iniconfig").is_dir());
+    let target = context.temp_dir.child("target");
+    target.child("iniconfig").assert(predicates::path::is_dir());
 
-    // Ensure that we can't import the package.
-    context.assert_command("import iniconfig").failure();
+    context.assert_not_installed("iniconfig");
 
     // Ensure that we can import the package by augmenting the `PYTHONPATH`.
     context
         .python_command()
         .arg("-c")
         .arg("import iniconfig")
-        .env(EnvVars::PYTHONPATH, context.temp_dir.child("target").path())
+        .env(EnvVars::PYTHONPATH, target.path())
         .assert()
         .success();
 
-    // Upgrade it.
-    let requirements_in = context.temp_dir.child("requirements.in");
+    // Replace it with an older version.
     requirements_in.write_str("iniconfig==1.1.1")?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
@@ -5317,9 +3826,14 @@ fn target_built_distribution() -> Result<()> {
      - iniconfig==2.0.0
      + iniconfig==1.1.1
     ");
+    target
+        .child("iniconfig-2.0.0.dist-info")
+        .assert(predicates::path::missing());
+    target
+        .child("iniconfig-1.1.1.dist-info")
+        .assert(predicates::path::is_dir());
 
     // Remove it, and replace with `flask`, which includes a binary.
-    let requirements_in = context.temp_dir.child("requirements.in");
     requirements_in.write_str("flask")?;
 
     uv_snapshot!(context.filters(), context.pip_sync()
@@ -5336,15 +3850,16 @@ fn target_built_distribution() -> Result<()> {
      + flask==3.0.2
      - iniconfig==1.1.1
     ");
-    // Ensure that the binary is present in the target directory.
-    assert!(
-        context
-            .temp_dir
-            .child("target")
-            .child("bin")
-            .child(format!("flask{EXE_SUFFIX}"))
-            .is_file()
-    );
+    target
+        .child("iniconfig")
+        .assert(predicates::path::missing());
+    target
+        .child("iniconfig-1.1.1.dist-info")
+        .assert(predicates::path::missing());
+    target
+        .child("bin")
+        .child(format!("flask{EXE_SUFFIX}"))
+        .assert(predicates::path::is_file());
 
     Ok(())
 }
@@ -5376,21 +3891,19 @@ fn target_source_distribution() -> Result<()> {
      + iniconfig==2.0.0
     ");
 
-    // Ensure that the build requirements are not present in the target directory.
-    assert!(!context.temp_dir.child("target").child("hatchling").is_dir());
-
-    // Ensure that the package is present in the target directory.
-    assert!(context.temp_dir.child("target").child("iniconfig").is_dir());
-
-    // Ensure that we can't import the package.
-    context.assert_command("import iniconfig").failure();
+    let target = context.temp_dir.child("target");
+    assert_target_distributions(&context, target.path(), "iniconfig==2.0.0\n");
+    target
+        .child("hatchling")
+        .assert(predicates::path::missing());
+    context.assert_not_installed("iniconfig");
 
     // Ensure that we can import the package by augmenting the `PYTHONPATH`.
     context
         .python_command()
         .arg("-c")
         .arg("import iniconfig")
-        .env(EnvVars::PYTHONPATH, context.temp_dir.child("target").path())
+        .env(EnvVars::PYTHONPATH, target.path())
         .assert()
         .success();
 
@@ -5440,145 +3953,52 @@ fn target_no_build_isolation() -> Result<()> {
      + wheel==0.43.0
     ");
 
-    // Ensure that the build requirements are not present in the target directory.
-    assert!(!context.temp_dir.child("target").child("flit_core").is_dir());
-
-    // Ensure that the package is present in the target directory.
-    assert!(context.temp_dir.child("target").child("wheel").is_dir());
-
-    // Ensure that we can't import the package.
-    context.assert_command("import wheel").failure();
+    let target = context.temp_dir.child("target");
+    assert_target_distributions(&context, target.path(), "wheel==0.43.0\n");
+    target
+        .child("flit_core")
+        .assert(predicates::path::missing());
+    context.assert_not_installed("wheel");
+    context
+        .assert_command(
+            "from importlib.metadata import version; print(version('flit-core'), end='')",
+        )
+        .success()
+        .stdout("3.9.0");
 
     // Ensure that we can import the package by augmenting the `PYTHONPATH`.
     context
         .python_command()
         .arg("-c")
         .arg("import wheel")
-        .env(EnvVars::PYTHONPATH, context.temp_dir.child("target").path())
+        .env(EnvVars::PYTHONPATH, target.path())
         .assert()
         .success();
 
     Ok(())
 }
 
-/// Sync to a `--target` directory without a virtual environment.
-#[test]
-fn target_system() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
-
-    // Install `iniconfig` to the target directory.
-    let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("iniconfig==2.0.0")?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.in")
-        .arg("--target")
-        .arg("target"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
-
-    // Ensure that the package is present in the target directory.
-    assert!(context.temp_dir.child("target").child("iniconfig").is_dir());
-
-    Ok(())
-}
-
-/// Sync to a `--prefix` directory.
-#[test]
-fn prefix() -> Result<()> {
-    let context = uv_test::test_context!("3.12")
-        .with_filtered_python_names()
-        .with_filtered_virtualenv_bin()
-        .with_filtered_exe_suffix();
-
-    // Install `iniconfig` to the prefix directory.
-    let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("iniconfig==2.0.0")?;
-
-    let prefix = context.temp_dir.child("prefix");
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.in")
-        .arg("--prefix")
-        .arg(prefix.path()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0
-    ");
-
-    // Ensure that we can't import the package.
-    context.assert_command("import iniconfig").failure();
-
-    // Ensure that we can import the package by augmenting the `PYTHONPATH`.
+fn assert_target_distributions(context: &TestContext, target: &Path, expected: &'static str) {
     context
         .python_command()
         .arg("-c")
-        .arg("import iniconfig")
-        .env(
-            EnvVars::PYTHONPATH,
-            site_packages_path(&context.temp_dir.join("prefix"), "python3.12"),
-        )
+        .arg(indoc! {r#"
+            from importlib.metadata import distributions
+            import sys
+
+            installed = sorted(f'{dist.metadata["Name"]}=={dist.version}' for dist in distributions(path=[sys.argv[1]]))
+            print('\n'.join(installed))
+        "#})
+        .arg(target)
         .assert()
-        .success();
-
-    // Upgrade it.
-    let requirements_in = context.temp_dir.child("requirements.in");
-    requirements_in.write_str("iniconfig==1.1.1")?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("requirements.in")
-        .arg("--prefix")
-        .arg(prefix.path()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: .venv/[BIN]/[PYTHON]
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Uninstalled 1 package in [TIME]
-    Installed 1 package in [TIME]
-     - iniconfig==2.0.0
-     + iniconfig==1.1.1
-    ");
-
-    Ok(())
-}
-
-/// Ensure that we install packages with markers on them.
-#[test]
-fn preserve_markers() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio ; python_version > '3.7'")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + anyio==4.3.0
-    "
-    );
-
-    Ok(())
+        .success()
+        .stdout(expected);
 }
 
 /// Include a `build_constraints.txt` file with an incompatible constraint.
 #[test]
 fn incompatible_build_constraint() -> Result<()> {
-    let context = uv_test::test_context!("3.9");
+    let context = uv_test::test_context!("3.12");
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("requests==1.2")?;
 
@@ -5603,6 +4023,7 @@ fn incompatible_build_constraint() -> Result<()> {
 }
 
 /// Include a `build_constraints.txt` file with a compatible constraint.
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn compatible_build_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -5642,6 +4063,7 @@ fn compatible_build_constraint() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "test-python-eol")]
 #[test]
 fn sync_seed() -> Result<()> {
     let context = uv_test::test_context!("3.9");
@@ -5660,8 +4082,9 @@ fn sync_seed() -> Result<()> {
      + pip==24.0
     "
     );
+    context.assert_installed("pip", "24.0");
 
-    // Syncing should remove the seed packages.
+    // A manually installed `pip` is not a seed package and must be removed.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
@@ -5674,6 +4097,7 @@ fn sync_seed() -> Result<()> {
      + requests==1.2.0
     "
     );
+    context.assert_not_installed("pip");
 
     // Re-create the environment with seed packages.
     uv_snapshot!(context.filters(), context.venv().arg("--clear")
@@ -5689,7 +4113,7 @@ fn sync_seed() -> Result<()> {
     "
     );
 
-    // Syncing should retain the seed packages.
+    // Packages recorded as seeds when the environment was created must be retained.
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("requirements.txt"), @"
     exit_code: 0 (success)
@@ -5699,78 +4123,15 @@ fn sync_seed() -> Result<()> {
      + requests==1.2.0
     "
     );
+    context
+        .assert_command(indoc! {r#"
+            from importlib.metadata import version
 
-    Ok(())
-}
-
-/// Sanitize zip files during extraction.
-#[test]
-fn sanitize() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    // Install a zip file that includes a path that extends outside the parent.
-    let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("payload-package @ https://github.com/astral-sh/sanitize-wheel-test/raw/bc59283d5b4b136a191792e32baa51b477fdf65e/payload_package-0.1.0-py3-none-any.whl")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + payload-package==0.1.0 (from https://github.com/astral-sh/sanitize-wheel-test/raw/bc59283d5b4b136a191792e32baa51b477fdf65e/payload_package-0.1.0-py3-none-any.whl)
-    "
-    );
-
-    // There should be no `payload` file in the root.
-    if let Some(parent) = context.temp_dir.parent() {
-        assert!(!parent.join("payload").exists());
-    }
-
-    Ok(())
-}
-
-/// Allow semicolons attached to markers, as long as they're preceded by a space.
-#[test]
-fn semicolon_trailing_space() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements = context.temp_dir.child("requirements.txt");
-    requirements.write_str("iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl; python_version > '3.10'")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + iniconfig==2.0.0 (from https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl)
-    "
-    );
-
-    Ok(())
-}
-
-/// Treat a semicolon that's not whitespace-separated as a part of the URL.
-#[test]
-fn semicolon_no_space() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let requirements = context.temp_dir.child("requirements.txt");
-    requirements.write_str("iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl;python_version > '3.10'")?;
-
-    uv_snapshot!(context.pip_sync()
-        .arg("requirements.txt"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Couldn't parse requirement in `requirements.txt` at position 0
-      cause: Expected direct URL (`https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl;python_version%20%3E%20'3.10'`) to end in a supported file extension: `.whl`, `.tar.gz`, `.zip`, `.tar.bz2`, `.tar.lz`, `.tar.lzma`, `.tar.xz`, `.tar.zst`, `.tar`, `.tbz`, `.tgz`, `.tlz`, or `.txz`
-             iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl;python_version > '3.10'
-                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    "
-    );
+            for name in ("pip", "setuptools", "wheel"):
+                print(f"{name}=={version(name)}")
+        "#})
+        .success()
+        .stdout("pip==24.0\nsetuptools==69.2.0\nwheel==0.43.0\n");
 
     Ok(())
 }
@@ -6234,321 +4595,6 @@ fn pep_751_validates_archive_size() -> Result<()> {
 }
 
 #[test]
-fn pep_751_validates_remote_archive_size() -> Result<()> {
-    let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "a"
-        version = "1.0.0"
-        archive = {{ url = "{wheel_url}", size = 1, hashes = {{ sha256 = "f936eedc194aa91ca01a4c6c9981136ca6c75ce6df47e3951b12522881dce809" }} }}
-        "#,
-        wheel_url = server.file_url("a-1.0.0-py3-none-any.whl"),
-    })?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("--preview")
-        .arg("pylock.toml"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
-      cause: Size mismatch for `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`: expected 1 bytes, but downloaded 921 bytes
-    ");
-
-    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "a"
-        version = "1.0.0"
-        wheels = [{{ url = "{wheel_url}", size = 1, hashes = {{ sha256 = "f936eedc194aa91ca01a4c6c9981136ca6c75ce6df47e3951b12522881dce809" }} }}]
-        "#,
-        wheel_url = server.file_url("a-1.0.0-py3-none-any.whl"),
-    })?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("--preview")
-        .arg("pylock.toml"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to download `a==1.0.0`
-      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes
-    ");
-
-    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "a"
-        version = "1.0.0"
-        sdist = {{ url = "{sdist_url}", size = 1, hashes = {{ sha256 = "3d2b4c28a4e112f3a1cef1db4dc5efa33fcbbcc38bc11ccc80321097db86c097" }} }}
-        "#,
-        sdist_url = server.file_url("a-1.0.0.tar.gz"),
-    })?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("--preview")
-        .arg("pylock.toml"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to download and build `a==1.0.0`
-      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_validates_cached_remote_archive_size() -> Result<()> {
-    let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-    let wheel_url = server.file_url("a-1.0.0-py3-none-any.whl");
-
-    context
-        .pip_install()
-        .arg(format!("a @ {wheel_url}"))
-        .assert()
-        .success();
-
-    context.reset_venv();
-
-    let pylock = formatdoc! {
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "a"
-        version = "1.0.0"
-        archive = {{ url = "{wheel_url}", size = 921, hashes = {{ sha256 = "f936eedc194aa91ca01a4c6c9981136ca6c75ce6df47e3951b12522881dce809" }} }}
-        "#,
-    };
-    context.temp_dir.child("pylock.toml").write_str(&pylock)?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("pylock.toml"), @r#"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Installed 1 package in [TIME]
-     + a==1.0.0 (from http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl)
-    "#);
-
-    context.reset_venv();
-
-    context
-        .temp_dir
-        .child("pylock.toml")
-        .write_str(&pylock.replace("size = 921", "size = 1"))?;
-
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("pylock.toml"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to download `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`
-      cause: Size mismatch for `a @ http://[LOCALHOST]/files/a-1.0.0-py3-none-any.whl`: expected 1 bytes, but downloaded 921 bytes
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_validates_cached_registry_wheel_size() -> Result<()> {
-    let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-    let pylock = formatdoc! {
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "a"
-        version = "1.0.0"
-        index = "{index}"
-        wheels = [{{ url = "{wheel_url}", size = 921, hashes = {{ sha256 = "f936eedc194aa91ca01a4c6c9981136ca6c75ce6df47e3951b12522881dce809" }} }}]
-        "#,
-        index = server.index_url(),
-        wheel_url = server.file_url("a-1.0.0-py3-none-any.whl"),
-    };
-    context.temp_dir.child("pylock.toml").write_str(&pylock)?;
-    context
-        .pip_sync()
-        .arg("--preview")
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    context.reset_venv();
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("--preview")
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("--offline")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Installed 1 package in [TIME]
-     + a==1.0.0
-    ");
-
-    context.reset_venv();
-    context
-        .temp_dir
-        .child("pylock.toml")
-        .write_str(&pylock.replace("size = 921", "size = 1"))?;
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("--preview")
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("--offline")
-        .arg("pylock.toml"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to download `a==1.0.0`
-      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 921 bytes
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_validates_cached_registry_sdist_size() -> Result<()> {
-    let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-    let (_, hash) = server
-        .files()
-        .find(|(filename, _)| *filename == "a-1.0.0.tar.gz")
-        .expect("source distribution");
-    let pylock = formatdoc! {
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "a"
-        version = "1.0.0"
-        index = "{index}"
-        sdist = {{ url = "{sdist_url}", size = 607, hashes = {{ sha256 = "{hash}" }} }}
-        "#,
-        index = server.index_url(),
-        sdist_url = server.file_url("a-1.0.0.tar.gz"),
-    };
-    context.temp_dir.child("pylock.toml").write_str(&pylock)?;
-    context
-        .pip_sync()
-        .arg("--preview")
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    context.reset_venv();
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("--preview")
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("--offline")
-        .arg("pylock.toml"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Installed 1 package in [TIME]
-     + a==1.0.0
-    ");
-
-    context.reset_venv();
-    context
-        .temp_dir
-        .child("pylock.toml")
-        .write_str(&pylock.replace("size = 607", "size = 1"))?;
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("--preview")
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("--offline")
-        .arg("pylock.toml"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to download and build `a==1.0.0`
-      cause: Size mismatch for `a==1.0.0`: expected 1 bytes, but downloaded 607 bytes
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn pep_751_validates_cached_url_sdist_size() -> Result<()> {
-    let server = PackseServer::new("simple/single-package.toml");
-    let context = uv_test::test_context!("3.12").with_filtered_http_retries();
-    let (_, hash) = server
-        .files()
-        .find(|(filename, _)| *filename == "a-1.0.0.tar.gz")
-        .expect("source distribution");
-    let pylock = formatdoc! {
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "a"
-        version = "1.0.0"
-        archive = {{ url = "{sdist_url}", size = 607, hashes = {{ sha256 = "{hash}" }} }}
-        "#,
-        sdist_url = server.file_url("a-1.0.0.tar.gz"),
-    };
-    context.temp_dir.child("pylock.toml").write_str(&pylock)?;
-    context
-        .pip_sync()
-        .arg("--preview")
-        .arg("--index-url")
-        .arg(server.index_url())
-        .arg("pylock.toml")
-        .assert()
-        .success();
-
-    context.reset_venv();
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("pylock.toml"), @r#"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Installed 1 package in [TIME]
-     + a==1.0.0 (from http://[LOCALHOST]/files/a-1.0.0.tar.gz)
-    "#);
-
-    context.reset_venv();
-    context
-        .temp_dir
-        .child("pylock.toml")
-        .write_str(&pylock.replace("size = 607", "size = 1"))?;
-    uv_snapshot!(context.filters(), context.pip_sync()
-        .arg("--preview")
-        .arg("--offline")
-        .arg("pylock.toml"), @r#"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to download and build `a @ http://[LOCALHOST]/files/a-1.0.0.tar.gz`
-      cause: Size mismatch for `a @ http://[LOCALHOST]/files/a-1.0.0.tar.gz`: expected 1 bytes, but downloaded 607 bytes
-    "#);
-
-    Ok(())
-}
-
-#[test]
 fn pep_751_require_hashes_directory() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -6602,54 +4648,46 @@ fn pep_751_require_hashes_directory() -> Result<()> {
 #[tokio::test]
 async fn pep_751_remote() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
     let server = MockServer::start().await;
+    let filename = "ok-1.0.0-py3-none-any.whl";
+    let wheel = context.read_bytes(context.workspace_root.join("test/links").join(filename));
+    let sha256 = hex::encode(Sha256::digest(&wheel));
+
+    Mock::given(method("GET"))
+        .and(path(format!("/{filename}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1)
+        .mount(&server)
+        .await;
     Mock::given(method("GET"))
         .and(path("/pylock.toml"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {r#"
+        .respond_with(ResponseTemplate::new(200).set_body_string(formatdoc! {r#"
             lock-version = "1.0"
             created-by = "uv"
-            requires-python = ">=3.12"
 
             [[packages]]
-            name = "anyio"
-            version = "4.3.0"
-            sdist = { url = "https://files.pythonhosted.org/packages/db/4d/3970183622f0330d3c23d9b8a5f52e365e50381fd484d08e3285104333d3/anyio-4.3.0.tar.gz", upload-time = 2024-02-19T08:36:28Z, size = 159642, hashes = { sha256 = "f75253795a87df48568485fd18cdd2a3fa5c4f7c5be8e5e36637733fce06fed6" } }
-            wheels = [{ url = "https://files.pythonhosted.org/packages/14/fd/2f20c40b45e4fb4324834aea24bd4afdf1143390242c0b33774da0e2e34f/anyio-4.3.0-py3-none-any.whl", upload-time = 2024-02-19T08:36:26Z, size = 85584, hashes = { sha256 = "048e05d0f6caeed70d731f3db756d35dcc1f35747c8c403364a8332c630441b8" } }]
-            dependencies = [
-                { name = "idna" },
-                { name = "sniffio" },
-            ]
-
-            [[packages]]
-            name = "idna"
-            version = "3.6"
-            sdist = { url = "https://files.pythonhosted.org/packages/bf/3f/ea4b9117521a1e9c50344b909be7886dd00a519552724809bb1f486986c2/idna-3.6.tar.gz", upload-time = 2023-11-25T15:40:54Z, size = 175426, hashes = { sha256 = "9ecdbbd083b06798ae1e86adcbfe8ab1479cf864e4ee30fe4e46a003d12491ca" } }
-            wheels = [{ url = "https://files.pythonhosted.org/packages/c2/e7/a82b05cf63a603df6e68d59ae6a68bf5064484a0718ea5033660af4b54a9/idna-3.6-py3-none-any.whl", upload-time = 2023-11-25T15:40:52Z, size = 61567, hashes = { sha256 = "c05567e9c24a6b9faaa835c4821bad0590fbb9d5779e7caa6e1cc4978e7eb24f" } }]
-
-            [[packages]]
-            name = "sniffio"
-            version = "1.3.1"
-            sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", upload-time = 2024-02-25T23:20:04Z, size = 20372, hashes = { sha256 = "f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc" } }
-            wheels = [{ url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", upload-time = 2024-02-25T23:20:01Z, size = 10235, hashes = { sha256 = "2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2" } }]
-        "#}))
+            name = "ok"
+            version = "1.0.0"
+            wheels = [{{ url = "{server_url}/{filename}", hashes = {{ sha256 = "{sha256}" }} }}]
+            "#,
+            server_url = server.uri(),
+        }))
+        .expect(1)
         .mount(&server)
         .await;
 
-    let pylock_url = format!("{}/pylock.toml", server.uri());
-
     uv_snapshot!(context.filters(), context.pip_sync()
         .arg("--preview")
-        .arg(&pylock_url), @"
+        .arg("--no-index")
+        .arg(format!("{}/pylock.toml", server.uri())), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Prepared 3 packages in [TIME]
-    Installed 3 packages in [TIME]
-     + anyio==4.3.0
-     + idna==3.6
-     + sniffio==1.3.1
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
     "
     );
+    context.assert_command("import ok").success();
 
     Ok(())
 }

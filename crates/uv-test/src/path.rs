@@ -1,7 +1,8 @@
+use std::borrow::Cow;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use uv_fs::Simplified;
+use uv_fs::{Simplified, verbatim_path};
 
 /// Assert that no filesystem entry exists at `path`.
 ///
@@ -27,7 +28,8 @@ pub fn assert_path_missing(path: impl AsRef<Path>) {
 
 /// Assert that a symlink or junction stores the expected target path.
 ///
-/// Targets are compared without canonicalizing them or checking whether they exist.
+/// Absolute Windows targets are compared using the same extended-length path representation.
+/// Relative targets remain relative, and neither target is canonicalized or checked for existence.
 #[track_caller]
 pub fn assert_link_target(path: impl AsRef<Path>, expected: impl AsRef<Path>) {
     let path = path.as_ref();
@@ -36,16 +38,26 @@ pub fn assert_link_target(path: impl AsRef<Path>, expected: impl AsRef<Path>) {
         Err(error) => panic!("Could not read link `{}`: {error}", path.user_display()),
     };
     assert_eq!(
-        target,
-        expected.as_ref(),
+        comparable_link_target(&target),
+        comparable_link_target(expected.as_ref()),
         "Unexpected target for link `{}`",
         path.user_display()
     );
 }
 
+fn comparable_link_target(target: &Path) -> Cow<'_, Path> {
+    if target.is_absolute() {
+        verbatim_path(target)
+    } else {
+        Cow::Borrowed(target)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use assert_fs::prelude::*;
+    #[cfg(windows)]
+    use uv_fs::{Simplified, verbatim_path};
 
     use super::{assert_link_target, assert_path_missing};
 
@@ -117,6 +129,20 @@ mod tests {
 
         assert_link_target(link, target);
 
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn accepts_equivalent_windows_target_representations() -> anyhow::Result<()> {
+        let directory = assert_fs::TempDir::new()?;
+        let target = directory.child("target");
+        target.create_dir_all()?;
+        let link = directory.child("link");
+        uv_fs::create_symlink(&target, &link)?;
+
+        assert_link_target(&link, target.path().simplified());
+        assert_link_target(&link, verbatim_path(target.path()));
         Ok(())
     }
 

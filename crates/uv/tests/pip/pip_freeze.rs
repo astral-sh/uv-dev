@@ -2,13 +2,30 @@ use anyhow::{Result, anyhow};
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
+use indoc::indoc;
 
 use uv_redacted::SafeUrl;
+use uv_test::packse::PackseServer;
+use uv_test::packse::scenario::{Package, PackageMetadata, Scenario};
 use uv_test::uv_snapshot;
+
+fn package_index() -> Result<PackseServer> {
+    let mut scenario = Scenario::empty();
+    for (name, version) in [("markupsafe", "2.1.3"), ("tomli", "2.0.1")] {
+        scenario.packages.insert(
+            name.parse()?,
+            Package {
+                versions: [(version.parse()?, PackageMetadata::wheel_only())].into(),
+            },
+        );
+    }
+    Ok(PackseServer::from_scenario(&scenario))
+}
 
 #[test]
 fn freeze_many() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -17,6 +34,8 @@ fn freeze_many() -> Result<()> {
     context
         .pip_sync()
         .arg(requirements_txt.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -37,40 +56,17 @@ fn freeze_many() -> Result<()> {
 #[test]
 #[cfg(unix)]
 fn freeze_duplicate() -> Result<()> {
-    use uv_fs::copy_dir_all;
+    let context = uv_test::test_context!("3.12");
+    let site_packages = ChildPath::new(context.site_packages());
+    for version in ["21.3.1", "22.1.1"] {
+        let dist_info = site_packages.child(format!("pip-{version}.dist-info"));
+        dist_info.create_dir_all()?;
+        dist_info.child("METADATA").write_str(&format!(
+            "Metadata-Version: 2.1\nName: pip\nVersion: {version}\n"
+        ))?;
+    }
 
-    // Sync a version of `pip` into a virtual environment.
-    let context1 = uv_test::test_context!("3.12");
-    let requirements_txt = context1.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==21.3.1")?;
-
-    // Run `pip sync`.
-    context1
-        .pip_sync()
-        .arg(requirements_txt.path())
-        .assert()
-        .success();
-
-    // Sync a different version of `pip` into a virtual environment.
-    let context2 = uv_test::test_context!("3.12");
-    let requirements_txt = context2.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("pip==22.1.1")?;
-
-    // Run `pip sync`.
-    context2
-        .pip_sync()
-        .arg(requirements_txt.path())
-        .assert()
-        .success();
-
-    // Copy the virtual environment to a new location.
-    copy_dir_all(
-        context2.site_packages().join("pip-22.1.1.dist-info"),
-        context1.site_packages().join("pip-22.1.1.dist-info"),
-    )?;
-
-    // Run `pip freeze`.
-    uv_snapshot!(context1.filters(), context1.pip_freeze().arg("--strict"), @"
+    uv_snapshot!(context.filters(), context.pip_freeze().arg("--strict"), @"
     exit_code: 0 (success)
     ----- stdout -----
     pip==21.3.1
@@ -90,24 +86,41 @@ fn freeze_duplicate() -> Result<()> {
 #[test]
 fn freeze_url() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "freeze-direct-url"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.anyio.versions."4.3.0"]
+        sdist = false
+        requires = ["idna>=2.8", "sniffio>=1.1"]
+        [packages.iniconfig.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
-    requirements_txt.write_str("anyio\niniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl")?;
+    requirements_txt.write_str(&format!(
+        "anyio\niniconfig @ {}\n",
+        index.file_url("iniconfig-2.0.0-py3-none-any.whl")
+    ))?;
 
     // Run `pip sync`.
     context
         .pip_sync()
         .arg(requirements_txt.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
     // Run `pip freeze`.
-    uv_snapshot!(context.pip_freeze()
+    uv_snapshot!(context.filters(), context.pip_freeze()
         .arg("--strict"), @"
     exit_code: 0 (success)
     ----- stdout -----
     anyio==4.3.0
-    iniconfig @ https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl
+    iniconfig @ http://[LOCALHOST]/files/iniconfig-2.0.0-py3-none-any.whl
 
     ----- stderr -----
     warning: The package `anyio` requires `idna>=2.8`, but it's not installed
@@ -190,6 +203,7 @@ fn freeze_direct_archive_hash_roundtrip() -> Result<()> {
         .arg(requirements_txt.path())
         .arg("--no-deps")
         .arg("--require-hashes")
+        .arg("--offline")
         .assert()
         .success();
 
@@ -203,6 +217,7 @@ fn freeze_direct_archive_hash_roundtrip() -> Result<()> {
         .arg(requirements_txt.path())
         .arg("--no-deps")
         .arg("--require-hashes")
+        .arg("--offline")
         .arg("--reinstall"), @"
     exit_code: 1 (failure)
     ----- stderr -----
@@ -217,10 +232,13 @@ fn freeze_direct_archive_hash_roundtrip() -> Result<()> {
                sha256:79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f
     ");
 
+    context.assert_installed("ok", "1.0.0");
+
     Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-pypi")]
 fn freeze_with_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -275,40 +293,10 @@ fn freeze_with_editable() -> Result<()> {
 #[test]
 fn freeze_with_egg_info() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let site_packages = ChildPath::new(context.site_packages());
-
-    // Manually create an `.egg-info` directory.
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .create_dir_all()?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("top_level.txt")
-        .write_str("zstd")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("SOURCES.txt")
-        .write_str("")?;
-    site_packages
+    ChildPath::new(context.site_packages())
         .child("zstandard-0.22.0-py3.12.egg-info")
         .child("PKG-INFO")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("dependency_links.txt")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0-py3.12.egg-info")
-        .child("entry_points.txt")
-        .write_str("")?;
-
-    // Manually create the package directory.
-    site_packages.child("zstd").create_dir_all()?;
-    site_packages
-        .child("zstd")
-        .child("__init__.py")
-        .write_str("")?;
+        .touch()?;
 
     // Run `pip freeze`.
     uv_snapshot!(context.filters(), context.pip_freeze(), @"
@@ -325,40 +313,10 @@ fn freeze_with_egg_info() -> Result<()> {
 #[test]
 fn freeze_with_egg_info_no_py() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let site_packages = ChildPath::new(context.site_packages());
-
-    // Manually create an `.egg-info` directory.
-    site_packages
-        .child("zstandard-0.22.0.egg-info")
-        .create_dir_all()?;
-    site_packages
-        .child("zstandard-0.22.0.egg-info")
-        .child("top_level.txt")
-        .write_str("zstd")?;
-    site_packages
-        .child("zstandard-0.22.0.egg-info")
-        .child("SOURCES.txt")
-        .write_str("")?;
-    site_packages
+    ChildPath::new(context.site_packages())
         .child("zstandard-0.22.0.egg-info")
         .child("PKG-INFO")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0.egg-info")
-        .child("dependency_links.txt")
-        .write_str("")?;
-    site_packages
-        .child("zstandard-0.22.0.egg-info")
-        .child("entry_points.txt")
-        .write_str("")?;
-
-    // Manually create the package directory.
-    site_packages.child("zstd").create_dir_all()?;
-    site_packages
-        .child("zstd")
-        .child("__init__.py")
-        .write_str("")?;
+        .touch()?;
 
     // Run `pip freeze`.
     uv_snapshot!(context.filters(), context.pip_freeze(), @"
@@ -442,6 +400,7 @@ Version: 0.22.0
 #[test]
 fn freeze_path() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -454,6 +413,8 @@ fn freeze_path() -> Result<()> {
         .arg(requirements_txt.path())
         .arg("--target")
         .arg(target.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -473,32 +434,22 @@ fn freeze_path() -> Result<()> {
 #[test]
 fn freeze_multiple_paths() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let requirements_txt1 = context.temp_dir.child("requirements1.txt");
-    requirements_txt1.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
-
-    let requirements_txt2 = context.temp_dir.child("requirements2.txt");
-    requirements_txt2.write_str("MarkupSafe==2.1.3\nrequests==2.31.0")?;
-
-    let target1 = context.temp_dir.child("install-path1");
-    let target2 = context.temp_dir.child("install-path2");
-
-    // Run `pip sync`.
-    for (target, requirements_txt) in [
-        (target1.path(), requirements_txt1),
-        (target2.path(), requirements_txt2),
+    let first_target = context.temp_dir.child("install-path1");
+    let second_target = context.temp_dir.child("install-path2");
+    for (target, name, version) in [
+        (&first_target, "markupsafe", "2.1.3"),
+        (&first_target, "tomli", "2.0.1"),
+        (&second_target, "markupsafe", "2.1.3"),
+        (&second_target, "requests", "2.31.0"),
     ] {
-        context
-            .pip_sync()
-            .arg(requirements_txt.path())
-            .arg("--target")
-            .arg(target)
-            .assert()
-            .success();
+        target
+            .child(format!("{name}-{version}.dist-info/METADATA"))
+            .write_str(&format!(
+                "Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
+            ))?;
     }
 
-    // Run `pip freeze`.
-    uv_snapshot!(context.filters(), context.pip_freeze().arg("--path").arg(target1.path()).arg("--path").arg(target2.path()), @"
+    uv_snapshot!(context.filters(), context.pip_freeze().arg("--path").arg(first_target.path()).arg("--path").arg(second_target.path()), @"
     exit_code: 0 (success)
     ----- stdout -----
     markupsafe==2.1.3
@@ -509,28 +460,34 @@ fn freeze_multiple_paths() -> Result<()> {
     Ok(())
 }
 
-// We follow pip in just ignoring nonexistent paths
+/// A nonexistent search path does not prevent distributions in another path from being listed.
 #[test]
-fn freeze_nonexistent_path() {
+fn freeze_nonexistent_path() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let nonexistent_dir = context.temp_dir.child("nonexistent");
+    let existing_dir = context.temp_dir.child("existing");
+    existing_dir
+        .child("example-1.0.0.dist-info/METADATA")
+        .write_str("Metadata-Version: 2.1\nName: example\nVersion: 1.0.0\n")?;
+    nonexistent_dir.assert(predicates::path::missing());
 
-    let nonexistent_dir = {
-        let dir = context.temp_dir.child("blahblah");
-        assert!(!dir.exists());
-        dir
-    };
-
-    // Run `pip freeze`.
     uv_snapshot!(context.filters(), context.pip_freeze()
         .arg("--path")
-        .arg(nonexistent_dir.path()), @"
+        .arg(nonexistent_dir.path())
+        .arg("--path")
+        .arg(existing_dir.path()), @"
     exit_code: 0 (success)
+    ----- stdout -----
+    example==1.0.0
     ");
+
+    Ok(())
 }
 
 #[test]
 fn freeze_with_quiet_flag() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -539,6 +496,8 @@ fn freeze_with_quiet_flag() -> Result<()> {
     context
         .pip_sync()
         .arg(requirements_txt.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -557,6 +516,7 @@ fn freeze_with_quiet_flag() -> Result<()> {
 #[test]
 fn freeze_target() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -570,6 +530,8 @@ fn freeze_target() -> Result<()> {
         .arg("requirements.txt")
         .arg("--target")
         .arg(target.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -596,6 +558,7 @@ fn freeze_target() -> Result<()> {
 #[test]
 fn freeze_prefix() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let requirements_txt = context.temp_dir.child("requirements.txt");
     requirements_txt.write_str("MarkupSafe==2.1.3\ntomli==2.0.1")?;
@@ -609,6 +572,8 @@ fn freeze_prefix() -> Result<()> {
         .arg("requirements.txt")
         .arg("--prefix")
         .arg(prefix.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -633,8 +598,9 @@ fn freeze_prefix() -> Result<()> {
 }
 
 #[test]
-fn freeze_exclude() {
+fn freeze_exclude() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let index = package_index()?;
 
     let prefix = context.temp_dir.child("prefix");
 
@@ -645,6 +611,8 @@ fn freeze_exclude() {
         .arg("tomli")
         .arg("--prefix")
         .arg(prefix.path())
+        .arg("--default-index")
+        .arg(index.index_url())
         .assert()
         .success();
 
@@ -661,4 +629,6 @@ fn freeze_exclude() {
     exit_code: 0 (success)
     "
     );
+
+    Ok(())
 }

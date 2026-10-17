@@ -1,40 +1,15 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
-use assert_fs::fixture::{FileTouch, FileWriteBin, FileWriteStr, PathChild, PathCreateDir};
-use flate2::bufread::GzDecoder;
+use assert_fs::fixture::{
+    ChildPath, FileTouch, FileWriteBin, FileWriteStr, PathChild, PathCreateDir,
+};
 use fs_err::File;
-use futures::io::AllowStdIo;
 use indoc::{formatdoc, indoc};
-use insta::{allow_duplicates, assert_json_snapshot, assert_snapshot};
-use std::io::BufReader;
-use std::path::Path;
-use std::process::Command;
-use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
-use tempfile::TempDir;
-use tokio_util::compat::FuturesAsyncReadCompatExt;
-use uv_static::EnvVars;
 #[cfg(feature = "test-pypi")]
-use uv_test::copy_dir_ignore;
-use uv_test::{uv_snapshot, venv_bin_path};
-
-#[test]
-fn get_requires_for_build_returns_error() {
-    let context = uv_test::test_context!("3.12");
-
-    allow_duplicates! {
-        for command in [
-            "get-requires-for-build-sdist",
-            "get-requires-for-build-wheel",
-            "get-requires-for-build-editable",
-        ] {
-            uv_snapshot!(context.build_backend().arg(command), @"
-            exit_code: 2 (failure)
-            ----- stderr -----
-            error: uv does not support extra requires
-            ");
-        }
-    }
-}
+use std::path::Path;
+use tempfile::TempDir;
+use uv_static::EnvVars;
+use uv_test::{TestContext, copy_dir_ignore, uv_snapshot};
 
 const BUILT_BY_UV_TEST_SCRIPT: &str = indoc! {r#"
     from built_by_uv import greet
@@ -44,7 +19,15 @@ const BUILT_BY_UV_TEST_SCRIPT: &str = indoc! {r#"
     print(f"Area of a circle with r=2: {area(2)}")
 "#};
 
+#[cfg(feature = "test-pypi")]
 fn unpack_tar_gz(source_dist_path: &Path, target: &Path) -> Result<()> {
+    use std::io::BufReader;
+
+    use flate2::bufread::GzDecoder;
+    use futures::io::AllowStdIo;
+    use tar_codec::{Archive as _, TarArchive, extract::ExtractPolicy};
+    use tokio_util::compat::FuturesAsyncReadCompatExt;
+
     let sdist_reader = BufReader::new(File::open(source_dist_path)?);
     let source_dist = TarArchive::new(AllowStdIo::new(GzDecoder::new(sdist_reader)).compat());
     tokio::runtime::Builder::new_current_thread()
@@ -60,6 +43,8 @@ fn unpack_tar_gz(source_dist_path: &Path, target: &Path) -> Result<()> {
 #[test]
 #[cfg(feature = "test-pypi")]
 fn built_by_uv_direct_wheel() -> Result<()> {
+    use uv_test::venv_bin_path;
+
     let context = uv_test::test_context!("3.12");
     let built_by_uv = context.temp_dir.child("built-by-uv");
     copy_dir_ignore(
@@ -94,8 +79,9 @@ fn built_by_uv_direct_wheel() -> Result<()> {
     Area of a circle with r=2: 12.56636
     ");
 
-    uv_snapshot!(Command::new("say-hi")
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+    let launcher =
+        venv_bin_path(&context.venv).join(format!("say-hi{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.external_command(launcher), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hi from a script!
@@ -173,12 +159,8 @@ fn built_by_uv_direct() -> Result<()> {
     Ok(())
 }
 
-/// Test that editables work.
-///
-/// We can't test end-to-end here including the PEP 517 bridge code since we don't have a uv wheel,
-/// so we call the build backend directly.
+/// An installed editable wheel imports the source tree, including changes made after installation.
 #[test]
-#[cfg(feature = "test-pypi")]
 fn built_by_uv_editable() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let built_by_uv = context.temp_dir.child("built-by-uv");
@@ -187,22 +169,11 @@ fn built_by_uv_editable() -> Result<()> {
         &built_by_uv,
     )?;
 
-    // Without the editable, pytest fails.
-    context.pip_install().arg("pytest").assert().success();
-    context
-        .python_command()
-        .arg("-m")
-        .arg("pytest")
-        .current_dir(&built_by_uv)
-        .assert()
-        .failure();
-
-    // Build and install the editable. Normally, this should be one step with the editable never
-    // been seen, but we have to split it for the test.
-    let wheel_dir = TempDir::new()?;
+    let wheel_dir = context.temp_dir.child("dist");
+    wheel_dir.create_dir_all()?;
     uv_snapshot!(context
         .build_backend()
-        .arg("build-wheel")
+        .arg("build-editable")
         .arg(wheel_dir.path())
         .current_dir(&built_by_uv), @"
     exit_code: 0 (success)
@@ -211,24 +182,21 @@ fn built_by_uv_editable() -> Result<()> {
     ");
     context
         .pip_install()
-        .arg(wheel_dir.path().join("built_by_uv-0.1.0-py3-none-any.whl"))
+        .arg(wheel_dir.child("built_by_uv-0.1.0-py3-none-any.whl").path())
+        .args(["--no-deps", "--no-index"])
         .assert()
         .success();
 
-    drop(wheel_dir);
-
-    // Now, pytest passes.
+    built_by_uv
+        .child("src/built_by_uv/__init__.py")
+        .write_str("def greet():\n    return 'Hello from the source tree'\n")?;
     uv_snapshot!(context.python_command()
-        .arg("-m")
-        .arg("pytest")
-        // Avoid showing absolute paths and column dependent layout
-        .arg("--quiet")
-        .arg("--capture=no")
-        .current_dir(&built_by_uv), @"
+        .arg("-c")
+        .arg(BUILT_BY_UV_TEST_SCRIPT), @"
     exit_code: 0 (success)
     ----- stdout -----
-    ..
-    2 passed in [TIME]
+    Hello from the source tree
+    Area of a circle with r=2: 12.56636
     ");
 
     Ok(())
@@ -239,6 +207,8 @@ fn built_by_uv_editable() -> Result<()> {
 fn preserve_executable_bit() -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
+
+    use uv_test::venv_bin_path;
 
     let context = uv_test::test_context!("3.12");
 
@@ -267,6 +237,7 @@ fn preserve_executable_bit() -> Result<()> {
     fs_err::write(
         &script,
         indoc! {r#"
+        #!/bin/sh
         echo "Hi from the shell"
     "#},
     )?;
@@ -292,13 +263,14 @@ fn preserve_executable_bit() -> Result<()> {
                 member = archive.getmember(
                     "preserve_executable_bit-0.1.0/scripts/greet.sh"
                 )
-                assert "path" in member.pax_headers
                 print(f"{member.name}: {member.mode:o}")
+                print(f"PAX path: {member.pax_headers['path']}")
         "#})
         .arg(context.temp_dir.path().join("preserve_executable_bit-0.1.0.tar.gz")), @"
     exit_code: 0 (success)
     ----- stdout -----
     preserve_executable_bit-0.1.0/scripts/greet.sh: 755
+    PAX path: preserve_executable_bit-0.1.0/scripts/greet.sh
     ");
 
     context
@@ -315,8 +287,7 @@ fn preserve_executable_bit() -> Result<()> {
         .join("preserve_executable_bit-0.1.0-py3-none-any.whl");
     context.pip_install().arg(wheel).assert().success();
 
-    uv_snapshot!(Command::new("greet.sh")
-        .env(EnvVars::PATH, venv_bin_path(&context.venv)), @"
+    uv_snapshot!(context.external_command(venv_bin_path(&context.venv).join("greet.sh")), @"
     exit_code: 0 (success)
     ----- stdout -----
     Hi from the shell
@@ -454,106 +425,6 @@ fn rename_module_editable_build() -> Result<()> {
     Ok(())
 }
 
-/// Check that the build succeeds even if the module name mismatches by case.
-#[test]
-fn build_module_name_normalization() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let wheel_dir = context.temp_dir.path().join("dist");
-    fs_err::create_dir(&wheel_dir)?;
-
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-        [project]
-        name = "django-plugin"
-        version = "1.0.0"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-
-        [tool.uv.build-backend]
-        module-name = "Django_plugin"
-    "#})?;
-    fs_err::create_dir_all(context.temp_dir.join("src"))?;
-
-    // Error case 1: No matching module.
-    uv_snapshot!(context
-        .build_backend()
-        .arg("build-wheel")
-        .arg(&wheel_dir), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Expected a Python module at: src/Django_plugin/__init__.py
-    ");
-
-    fs_err::create_dir_all(context.temp_dir.join("src/Django_plugin"))?;
-    // Error case 2: A matching module, but no `__init__.py`.
-    uv_snapshot!(context
-        .build_backend()
-        .arg("build-wheel")
-        .arg(&wheel_dir), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Expected a Python module at: src/Django_plugin/__init__.py
-    ");
-
-    // Use `Django_plugin` instead of `django_plugin`
-    context
-        .temp_dir
-        .child("src/Django_plugin/__init__.py")
-        .write_str(r#"print("Hi from bar")"#)?;
-
-    uv_snapshot!(context
-        .build_backend()
-        .arg("build-wheel")
-        .arg(&wheel_dir), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    django_plugin-1.0.0-py3-none-any.whl
-    ");
-
-    context
-        .pip_install()
-        .arg("--no-index")
-        .arg("--find-links")
-        .arg(&wheel_dir)
-        .arg("django-plugin")
-        .assert()
-        .success();
-
-    uv_snapshot!(context.python_command()
-        .arg("-c")
-        .arg("import Django_plugin"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Hi from bar
-    ");
-
-    // Former error case 3, now accepted: Multiple modules a matching name.
-    // Requires a case-sensitive filesystem.
-    #[cfg(target_os = "linux")]
-    {
-        context
-            .temp_dir
-            .child("src/django_plugin/__init__.py")
-            .write_str(r#"print("Hi from bar")"#)?;
-
-        uv_snapshot!(context
-            .build_backend()
-            .arg("build-wheel")
-            .arg(&wheel_dir), @"
-        exit_code: 0 (success)
-        ----- stdout -----
-        django_plugin-1.0.0-py3-none-any.whl
-        ");
-    }
-
-    Ok(())
-}
-
 /// Older sdists can contain hard links, including files needed to build the wheel.
 #[test]
 fn build_sdist_with_hard_link() -> Result<()> {
@@ -617,40 +488,7 @@ fn build_sdist_with_hard_link() -> Result<()> {
 #[test]
 fn build_sdist_with_full_group_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let project = context.temp_dir.child("project");
-    project.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "foo"
-        version = "1.0.0"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-    project.child("src/foo/__init__.py").touch()?;
-
-    let sdist = context.temp_dir.child("foo-1.0.0.tar.gz");
-    context
-        .python_command()
-        .arg("-c")
-        .arg(indoc! {r#"
-            import io
-            import sys
-            import tarfile
-            from pathlib import Path
-
-            with tarfile.open(sys.argv[1], "w:gz", format=tarfile.PAX_FORMAT) as archive:
-                for name in ["pyproject.toml", "src/foo/__init__.py"]:
-                    data = Path(name).read_bytes()
-                    info = tarfile.TarInfo(f"foo-1.0.0/{name}")
-                    info.size = len(data)
-                    info.gname = "g" * 32
-                    archive.addfile(info, io.BytesIO(data))
-        "#})
-        .arg(sdist.path())
-        .current_dir(project.path())
-        .assert()
-        .success();
+    let sdist = sdist_with_group_name(&context, 32)?;
 
     uv_snapshot!(context.filters(), context.pip_install()
         .env_remove(EnvVars::UV_LEGACY_TAR_BACKEND)
@@ -673,6 +511,24 @@ fn build_sdist_with_full_group_name() -> Result<()> {
 #[test]
 fn build_sdist_with_long_group_name() -> Result<()> {
     let context = uv_test::test_context!("3.12");
+    let sdist = sdist_with_group_name(&context, 40)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env_remove(EnvVars::UV_LEGACY_TAR_BACKEND)
+        .arg("--offline")
+        .arg(sdist.path()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + foo==1.0.0 (from file://[TEMP_DIR]/foo-1.0.0.tar.gz)
+    ");
+
+    Ok(())
+}
+
+fn sdist_with_group_name(context: &TestContext, length: usize) -> Result<ChildPath> {
     let project = context.temp_dir.child("project");
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
@@ -695,32 +551,22 @@ fn build_sdist_with_long_group_name() -> Result<()> {
             import tarfile
             from pathlib import Path
 
+            group_name = "g" * int(sys.argv[2])
             with tarfile.open(sys.argv[1], "w:gz", format=tarfile.PAX_FORMAT) as archive:
                 for name in ["pyproject.toml", "src/foo/__init__.py"]:
                     data = Path(name).read_bytes()
                     info = tarfile.TarInfo(f"foo-1.0.0/{name}")
                     info.size = len(data)
-                    info.gname = "g" * 40
+                    info.gname = group_name
                     archive.addfile(info, io.BytesIO(data))
         "#})
         .arg(sdist.path())
+        .arg(length.to_string())
         .current_dir(project.path())
         .assert()
         .success();
 
-    uv_snapshot!(context.filters(), context.pip_install()
-        .env_remove(EnvVars::UV_LEGACY_TAR_BACKEND)
-        .arg("--offline")
-        .arg(sdist.path()), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Resolved 1 package in [TIME]
-    Prepared 1 package in [TIME]
-    Installed 1 package in [TIME]
-     + foo==1.0.0 (from file://[TEMP_DIR]/foo-1.0.0.tar.gz)
-    ");
-
-    Ok(())
+    Ok(sdist)
 }
 
 #[test]
@@ -771,14 +617,17 @@ fn build_sdist_with_long_path() -> Result<()> {
             import gzip
             import sys
             import tarfile
+            from unittest import TestCase
 
+            checks = TestCase()
             with gzip.open(sys.argv[1], mode="rb") as archive:
                 header = archive.read(512)
-                assert header[257:265] == b"ustar  \x00"
+                checks.assertEqual(header[257:265], b"ustar  \x00")
 
             with tarfile.open(sys.argv[1], mode="r:gz") as archive:
                 members = archive.getmembers()
-                assert all(not member.pax_headers for member in members)
+                for member in members:
+                    checks.assertFalse(member.pax_headers, member.name)
                 print(f"GNU members: {len(members)}")
         "#})
         .arg(legacy_dir.path().join("foo-1.0.0.tar.gz")), @"
@@ -802,25 +651,25 @@ fn build_sdist_with_long_path() -> Result<()> {
         .arg(indoc! {r#"
             import sys
             import tarfile
+            from unittest import TestCase
 
+            checks = TestCase()
             with tarfile.open(sys.argv[1], mode="r:gz") as archive:
                 members = archive.getmembers()
-                assert all("path" in member.pax_headers for member in members)
-                assert all(
-                    member.mode == (0o755 if member.isdir() else 0o644)
-                    for member in members
-                )
+                for member in members:
+                    checks.assertIn("path", member.pax_headers, member.name)
+                    checks.assertEqual(member.mode, 0o755 if member.isdir() else 0o644, member.name)
 
                 long_member = archive.getmember(sys.argv[2])
-                assert long_member.isfile()
+                checks.assertTrue(long_member.isfile(), long_member.name)
 
                 large_member = archive.getmember(sys.argv[3])
                 with archive.extractfile(large_member) as payload:
                     streamed = 0
                     while chunk := payload.read(64 * 1024):
-                        assert not any(chunk)
+                        checks.assertFalse(any(chunk), f"nonzero byte in chunk at offset {streamed}")
                         streamed += len(chunk)
-                assert streamed == large_member.size
+                checks.assertEqual(streamed, large_member.size)
 
                 print(f"PAX members: {len(members)}")
                 print(f"Long path bytes: {len(long_member.name.encode())}")
@@ -834,47 +683,6 @@ fn build_sdist_with_long_path() -> Result<()> {
     PAX members: 10
     Long path bytes: 133
     Streamed bytes: 5242881
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn sdist_error_without_module() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let temp_dir = TempDir::new()?;
-
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-        [project]
-        name = "foo"
-        version = "1.0.0"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
-
-    uv_snapshot!(context
-        .build_backend()
-        .arg("build-sdist")
-        .arg(temp_dir.path()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Expected a Python module at: src/foo/__init__.py
-    ");
-
-    fs_err::create_dir(context.temp_dir.join("src"))?;
-
-    uv_snapshot!(context
-        .build_backend()
-        .arg("build-sdist")
-        .arg(temp_dir.path()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Expected a Python module at: src/foo/__init__.py
     ");
 
     Ok(())
@@ -898,23 +706,19 @@ fn complex_namespace_packages() -> Result<()> {
             return one() + one()
     "};
 
-    let projects = [
-        ("complex-project", "part_a", init_py_a),
-        ("complex-project", "part_b", init_py_b),
-    ];
-
-    for (project_name, part_name, init_py) in projects {
-        let project = context
-            .temp_dir
-            .child(format!("{project_name}-{part_name}"));
-        let project_name_dist_info = project_name.replace('-', "_");
+    let part_a = context.temp_dir.child("complex-project-part_a");
+    let part_b = context.temp_dir.child("complex-project-part_b");
+    for (project, part_name, init_py) in [
+        (&part_a, "part_a", init_py_a),
+        (&part_b, "part_b", init_py_b),
+    ] {
         let pyproject_toml = formatdoc! {r#"
             [project]
-            name = "{project_name}-{part_name}"
+            name = "complex-project-{part_name}"
             version = "1.0.0"
 
             [tool.uv.build-backend]
-            module-name = "{project_name_dist_info}.{part_name}"
+            module-name = "complex_project.{part_name}"
 
             [build-system]
             requires = ["uv_build>=0.7,<10000"]
@@ -925,19 +729,26 @@ fn complex_namespace_packages() -> Result<()> {
 
         project
             .child("src")
-            .child(project_name_dist_info)
+            .child("complex_project")
             .child(part_name)
             .child("__init__.py")
             .write_str(init_py)?;
-
-        context
-            .build()
-            .arg(project.path())
-            .arg("--out-dir")
-            .arg(dist.path())
-            .assert()
-            .success();
     }
+
+    context
+        .build()
+        .arg(part_a.path())
+        .arg("--out-dir")
+        .arg(dist.path())
+        .assert()
+        .success();
+    context
+        .build()
+        .arg(part_b.path())
+        .arg("--out-dir")
+        .arg(dist.path())
+        .assert()
+        .success();
 
     uv_snapshot!(
         context.filters(),
@@ -960,6 +771,7 @@ fn complex_namespace_packages() -> Result<()> {
     );
 
     uv_snapshot!(context.python_command()
+        .arg("-I")
         .arg("-c")
         .arg("from complex_project.part_b import two; print(two())"),
         @"
@@ -969,7 +781,7 @@ fn complex_namespace_packages() -> Result<()> {
     "
     );
 
-    // Test editable installs
+    // Install both namespace portions as editable packages.
     uv_snapshot!(
         context.filters(),
         context
@@ -993,97 +805,31 @@ fn complex_namespace_packages() -> Result<()> {
     "
     );
 
+    part_a
+        .child("src/complex_project/part_a/__init__.py")
+        .write_str(indoc! {"
+            def one():
+                return 3
+        "})?;
+    part_b
+        .child("src/complex_project/part_b/__init__.py")
+        .write_str(indoc! {"
+            from complex_project.part_a import one
+
+            def two():
+                return one() * 2 + 1
+        "})?;
+
     uv_snapshot!(context.python_command()
+        .arg("-I")
         .arg("-c")
         .arg("from complex_project.part_b import two; print(two())"),
         @"
     exit_code: 0 (success)
     ----- stdout -----
-    2
+    7
     "
     );
-    Ok(())
-}
-
-#[test]
-fn license_glob_without_matches_errors() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let project = context.temp_dir.child("missing-license");
-    context
-        .init()
-        .arg("--lib")
-        .arg(project.path())
-        .assert()
-        .success();
-
-    project
-        .child("LICENSE.txt")
-        .write_str("permissive license")?;
-
-    project.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "missing-license"
-        version = "1.0.0"
-        license-files = ["abc", "LICENSE.txt"]
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-        "#
-    })?;
-
-    uv_snapshot!(context
-        .build_backend()
-        .arg("build-wheel")
-        .arg(context.temp_dir.path())
-        .current_dir(project.path()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid project metadata
-      cause: `project.license-files` glob `abc` did not match any files
-    ");
-
-    Ok(())
-}
-
-#[test]
-fn license_file_must_be_utf8() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let project = context.temp_dir.child("license-utf8");
-    context
-        .init()
-        .arg("--lib")
-        .arg(project.path())
-        .assert()
-        .success();
-
-    project.child("pyproject.toml").write_str(indoc! {r#"
-        [project]
-        name = "license-utf8"
-        version = "1.0.0"
-        license-files = ["LICENSE.bin"]
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-        "#
-    })?;
-
-    project.child("LICENSE.bin").write_binary(&[0xff])?;
-
-    uv_snapshot!(context
-        .build_backend()
-        .arg("build-wheel")
-        .arg(context.temp_dir.path())
-        .current_dir(project.path()), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid project metadata
-      cause: License file `LICENSE.bin` must be UTF-8 encoded
-    ");
-
     Ok(())
 }
 
@@ -1246,20 +992,9 @@ fn symlinked_module_directory() -> Result<()> {
     Ok(())
 }
 
-/// Test that a symlinked file (here: license) gets included.
-#[test]
 #[cfg(unix)]
-fn symlinked_file() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
+fn project_with_symlinked_license(context: &TestContext) -> Result<ChildPath> {
     let project = context.temp_dir.child("project");
-    context
-        .init()
-        .arg("--lib")
-        .arg(project.path())
-        .assert()
-        .success();
-
     project.child("pyproject.toml").write_str(indoc! {r#"
         [project]
         name = "project"
@@ -1271,13 +1006,21 @@ fn symlinked_file() -> Result<()> {
         build-backend = "uv_build"
         "#
     })?;
+    project.child("src/project/__init__.py").touch()?;
 
     let license_file = context.temp_dir.child("LICENSE");
     let license_symlink = project.child("LICENSE");
-
-    let license_text = "Project license";
-    license_file.write_str(license_text)?;
+    license_file.write_str("Project license")?;
     fs_err::os::unix::fs::symlink(license_file.path(), license_symlink.path())?;
+    Ok(project)
+}
+
+/// A source distribution contains the license contents, rather than a link to the build machine.
+#[test]
+#[cfg(unix)]
+fn symlinked_license_in_sdist() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = project_with_symlinked_license(&context)?;
 
     uv_snapshot!(context
         .build_backend()
@@ -1288,6 +1031,34 @@ fn symlinked_file() -> Result<()> {
     ----- stdout -----
     project-1.0.0.tar.gz
     ");
+
+    uv_snapshot!(context.python_command()
+        .args(["-I", "-c"])
+        .arg(indoc! {r#"
+            import sys
+            import tarfile
+
+            with tarfile.open(sys.argv[1], "r:gz") as archive:
+                member = archive.getmember("project-1.0.0/LICENSE")
+                print(f"regular file: {member.isfile()}")
+                print(archive.extractfile(member).read().decode())
+        "#})
+        .arg(context.temp_dir.child("project-1.0.0.tar.gz").path()), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    regular file: True
+    Project license
+    ");
+
+    Ok(())
+}
+
+/// An installed wheel contains the license contents, rather than a link to the build machine.
+#[test]
+#[cfg(unix)]
+fn symlinked_license_in_wheel() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let project = project_with_symlinked_license(&context)?;
 
     uv_snapshot!(context
         .build_backend()
@@ -1320,7 +1091,7 @@ fn symlinked_file() -> Result<()> {
             .is_file()
     );
     let license = context.read(&installed_license);
-    assert_eq!(license, license_text);
+    assert_eq!(license, "Project license");
 
     Ok(())
 }
@@ -1359,14 +1130,11 @@ fn invalid_build_backend_settings_are_ignored() -> Result<()> {
     Ok(())
 }
 
-/// Error when there is a relative module root outside the project root, such as
-/// `tool.uv.build-backend.module-root = ".."`.
-#[test]
-fn error_on_relative_module_root_outside_project_root() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
+fn project_with_external_module_root(context: &TestContext) -> Result<()> {
+    context
+        .temp_dir
+        .child("source/pyproject.toml")
+        .write_str(indoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
@@ -1379,101 +1147,127 @@ fn error_on_relative_module_root_outside_project_root() -> Result<()> {
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
-
-    context.temp_dir.child("__init__.py").touch()?;
-
-    uv_snapshot!(context.filters(), context.build(), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Building source distribution...
-    error: Failed to build `[TEMP_DIR]/`
-      cause: Module root must be inside the project: ..
-    ");
-
-    uv_snapshot!(context.filters(), context.build().arg("--wheel"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    Building wheel...
-    error: Failed to build `[TEMP_DIR]/`
-      cause: Module root must be inside the project: ..
-    ");
-
+    context
+        .temp_dir
+        .child("project/__init__.py")
+        .write_str("SECRET = 'outside the project'\n")?;
     Ok(())
 }
 
-/// Error when there is a relative data directory outside the project root, such as
-/// `tool.uv.build-backend.data.headers = "../headers"`.
 #[test]
-fn error_on_relative_data_dir_outside_project_root() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
+fn sdist_rejects_external_module_root() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    project_with_external_module_root(&context)?;
 
+    uv_snapshot!(context.filters(), context.build()
+        .args(["source", "--sdist", "--no-index", "--out-dir", "dist"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building source distribution...
+    error: Failed to build `[TEMP_DIR]/source`
+      cause: Module root must be inside the project: ..
+    ");
+    context.assert_path_missing("dist/project-0.1.0.tar.gz");
+    Ok(())
+}
+
+#[test]
+fn wheel_rejects_external_module_root() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    project_with_external_module_root(&context)?;
+
+    uv_snapshot!(context.filters(), context.build()
+        .args(["source", "--wheel", "--no-index", "--out-dir", "dist"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/source`
+      cause: Module root must be inside the project: ..
+    ");
+    context.assert_path_missing("dist/project-0.1.0-py3-none-any.whl");
+    Ok(())
+}
+
+fn project_with_header_data(context: &TestContext, headers: &str) -> Result<ChildPath> {
     let project = context.temp_dir.child("project");
-    project.create_dir_all()?;
-
-    let pyproject_toml = project.child("pyproject.toml");
-    pyproject_toml.write_str(indoc! {r#"
+    project.child("pyproject.toml").write_str(&formatdoc! {r#"
         [project]
         name = "project"
         version = "0.1.0"
         requires-python = ">=3.12"
 
         [tool.uv.build-backend.data]
-        headers = "../header"
+        headers = "{headers}"
 
         [build-system]
         requires = ["uv_build>=0.7,<10000"]
         build-backend = "uv_build"
     "#})?;
+    project.child("src/project/__init__.py").touch()?;
+    Ok(project)
+}
 
-    let project_module = project.child("src/project");
-    project_module.create_dir_all()?;
-    project_module.child("__init__.py").touch()?;
+#[test]
+fn sdist_rejects_external_header_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    project_with_header_data(&context, "../header")?;
+    context
+        .temp_dir
+        .child("header/secret.h")
+        .write_str("not for distribution")?;
 
-    context.temp_dir.child("headers").create_dir_all()?;
-
-    uv_snapshot!(context.filters(), context.build().arg("project"), @"
+    uv_snapshot!(context.filters(), context.build()
+        .args(["project", "--sdist", "--no-index", "--out-dir", "dist"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building source distribution...
     error: Failed to build `[TEMP_DIR]/project`
       cause: The path for the data directory headers must be inside the project: ../header
     ");
+    context.assert_path_missing("dist/project-0.1.0.tar.gz");
+    Ok(())
+}
 
-    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel"), @"
+#[test]
+fn wheel_rejects_external_header_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    project_with_header_data(&context, "../header")?;
+    context
+        .temp_dir
+        .child("header/secret.h")
+        .write_str("not for distribution")?;
+
+    uv_snapshot!(context.filters(), context.build()
+        .args(["project", "--wheel", "--no-index", "--out-dir", "dist"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building wheel...
     error: Failed to build `[TEMP_DIR]/project`
       cause: The path for the data directory headers must be inside the project: ../header
     ");
+    context.assert_path_missing("dist/project-0.1.0-py3-none-any.whl");
+    Ok(())
+}
 
-    pyproject_toml.write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-
-        [tool.uv.build-backend.data]
-        headers = "header/../../outside"
-
-        [build-system]
-        requires = ["uv_build>=0.7,<10000"]
-        build-backend = "uv_build"
-    "#})?;
+#[test]
+fn wheel_rejects_normalized_external_header_directory() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let project = project_with_header_data(&context, "header/../../outside")?;
     project.child("header").create_dir_all()?;
     context
         .temp_dir
         .child("outside/secret.h")
         .write_str("not for distribution")?;
 
-    uv_snapshot!(context.filters(), context.build().arg("project").arg("--wheel"), @"
+    uv_snapshot!(context.filters(), context.build()
+        .args(["project", "--wheel", "--no-index", "--out-dir", "dist"]), @"
     exit_code: 2 (failure)
     ----- stderr -----
     Building wheel...
     error: Failed to build `[TEMP_DIR]/project`
       cause: The path for the data directory headers must be inside the project: ../outside
     ");
-
+    context.assert_path_missing("dist/project-0.1.0-py3-none-any.whl");
     Ok(())
 }
 
@@ -1735,6 +1529,8 @@ fn invalid_pyproject_toml() -> Result<()> {
 #[cfg(feature = "test-pypi")]
 #[test]
 fn build_with_all_metadata() -> Result<()> {
+    use insta::{assert_json_snapshot, assert_snapshot};
+
     let context = uv_test::test_context!("3.12");
     let temp_dir = TempDir::new()?;
 

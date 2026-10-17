@@ -158,8 +158,7 @@ fn format_missing_pyproject_toml() -> Result<()> {
 fn format_missing_project_in_pyproject_toml() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
 
-    // Create an empty pyproject.toml with no [project] section
-    context.temp_dir.child("pyproject.toml");
+    context.temp_dir.child("pyproject.toml").touch()?;
 
     // Create an unformatted Python file
     let main_py = context.temp_dir.child("main.py");
@@ -260,16 +259,26 @@ fn format_from_project_root() -> Result<()> {
     Ok(())
 }
 
+/// `--no-project` runs from the current directory instead of the discovered project root.
 #[test]
 fn format_no_project() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
 
-    let main_py = context.temp_dir.child("main.py");
-    main_py.write_str(indoc! {r"
-        x    = 1
-    "})?;
+    let unformatted = "x    = 1\n";
+    context.temp_dir.child("main.py").write_str(unformatted)?;
+    let nested = context.temp_dir.child("nested");
+    nested.child("main.py").write_str(unformatted)?;
 
-    uv_snapshot!(context.filters(), context.format().arg("--no-project"), @"
+    uv_snapshot!(context.filters(), context.format().current_dir(&nested).arg("--no-project"), @"
     exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
@@ -278,9 +287,8 @@ fn format_no_project() -> Result<()> {
     warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
     ");
 
-    // Check that the file was formatted
-    let formatted_content = context.read("main.py");
-    assert_snapshot!(formatted_content, @"x = 1");
+    assert_snapshot!(context.read("nested/main.py"), @"x = 1");
+    assert_eq!(context.read("main.py"), unformatted);
 
     Ok(())
 }
@@ -459,29 +467,26 @@ fn format_with_ruff_args() -> Result<()> {
         dependencies = []
     "#})?;
 
-    // Create a Python file with a long line
+    // This call fits the default line length but wraps at the forwarded limit.
     let main_py = context.temp_dir.child("main.py");
-    main_py.write_str(indoc! {r#"
-        def hello():
-            print("This is a very long line that should normally be wrapped by the formatter but we will configure it to have a longer line length")
-    "#})?;
+    main_py.write_str("result = combine(first_argument, second_argument, third_argument)\n")?;
 
-    // Run format with custom line length
-    uv_snapshot!(context.filters(), context.format().arg("--").arg("main.py").arg("--line-length").arg("200"), @"
+    uv_snapshot!(context.filters(), context.format().arg("--").arg("main.py").arg("--line-length").arg("40"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    1 file left unchanged
+    1 file reformatted
 
     ----- stderr -----
     warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
     ");
 
-    // Check that the line wasn't wrapped (since we set a long line length)
-    let formatted_content = context.read("main.py");
-    assert_snapshot!(formatted_content, @r#"
-    def hello():
-        print("This is a very long line that should normally be wrapped by the formatter but we will configure it to have a longer line length")
-    "#);
+    assert_snapshot!(context.read("main.py"), @"
+    result = combine(
+        first_argument,
+        second_argument,
+        third_argument,
+    )
+    ");
 
     Ok(())
 }
@@ -547,17 +552,14 @@ fn format_version_option() -> Result<()> {
         x    = 1
     "})?;
 
-    // Run format with specific Ruff version
-    // TODO(zanieb): It'd be nice to assert on the version used here somehow? Maybe we should emit
-    // the version we're using to stderr? Alas there's not a way to get the Ruff version from the
-    // format command :)
-    uv_snapshot!(context.filters(), context.format().arg("--version").arg("0.8.2"), @"
+    uv_snapshot!(context.filters(), context.format().arg("--version").arg("0.8.2").arg("--show-version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
     ----- stderr -----
     warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
+    ruff 0.8.2
     ");
 
     Ok(())
@@ -581,15 +583,15 @@ fn format_version_constraints() -> Result<()> {
         x    = 1
     "})?;
 
-    // Run format with version constraints - should find the latest version matching >=0.8.0
-    uv_snapshot!(context.filters(), context.format().arg("--version").arg(">=0.8.0").arg("--show-version"), @"
+    // The upper bound excludes the default version and leaves multiple matching releases.
+    uv_snapshot!(context.filters(), context.format().arg("--version").arg(">=0.8.0,<0.8.3").arg("--show-version"), @"
     exit_code: 0 (success)
     ----- stdout -----
     1 file reformatted
 
     ----- stderr -----
     warning: `uv format` is experimental and may change without warning. Pass `--preview-features format-command` to disable this warning.
-    ruff 0.15.1
+    ruff 0.8.2
     ");
 
     Ok(())

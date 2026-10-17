@@ -816,19 +816,21 @@ fn minimum_libc_direct_url() -> Result<()> {
         .to_string_lossy();
     let dependency = format!("demo @ {}/{filename}", server.url());
     let pyproject_toml = context.temp_dir.child("pyproject.toml");
-    pyproject_toml.write_str(&formatdoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["{dependency}"]
+    let write_project = |family: &str, version: &str| {
+        pyproject_toml.write_str(&formatdoc! {r#"
+            [project]
+            name = "project"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["{dependency}"]
 
-        [tool.uv]
-        no-index = true
-        find-links = ["links"]
-        required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
-        minimum-libc-version = {{ glibc = "2.31" }}
-    "#})?;
+            [tool.uv]
+            no-index = true
+            required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+            minimum-libc-version = {{ {family} = "{version}" }}
+        "#})
+    };
+    write_project("glibc", "2.31")?;
 
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
@@ -841,18 +843,7 @@ fn minimum_libc_direct_url() -> Result<()> {
     assert!(!context.temp_dir.child("uv.lock").exists());
 
     // Raising the glibc baseline admits the direct wheel.
-    pyproject_toml.write_str(&formatdoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["{dependency}"]
-
-        [tool.uv]
-        no-index = true
-        required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
-        minimum-libc-version = {{ glibc = "2.34" }}
-    "#})?;
+    write_project("glibc", "2.34")?;
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 0 (success)
     ----- stderr -----
@@ -861,18 +852,7 @@ fn minimum_libc_direct_url() -> Result<()> {
     ");
 
     // Retaining the glibc wheel is not enough to satisfy a musl baseline.
-    pyproject_toml.write_str(&formatdoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-        requires-python = ">=3.12"
-        dependencies = ["{dependency}"]
-
-        [tool.uv]
-        no-index = true
-        required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
-        minimum-libc-version = {{ musl = "1.2" }}
-    "#})?;
+    write_project("musl", "1.2")?;
     uv_snapshot!(context.filters(), context.lock(), @"
     exit_code: 1 (failure)
     ----- stderr -----

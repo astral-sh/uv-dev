@@ -1,11 +1,12 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use uv_platform::{Arch, Os};
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 
 use anyhow::Result;
+#[cfg(any(feature = "test-python", feature = "test-python-managed"))]
+use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::indoc;
 use uv_test::uv_snapshot;
@@ -13,6 +14,9 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
 };
+
+#[cfg(feature = "test-python")]
+use super::fixtures::interpreter_platform;
 
 #[test]
 fn python_list_default_arch() {
@@ -56,17 +60,23 @@ fn python_list_default_arch() {
 }
 
 #[test]
+fn python_list_without_interpreters() {
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    uv_snapshot!(context.filters(), context.python_list(), @"
+    exit_code: 0 (success)
+    ");
+}
+
+#[test]
+#[cfg(feature = "test-python")]
 fn python_list() {
-    let mut context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
         .with_filtered_python_keys()
         .with_collapsed_whitespace();
 
-    uv_snapshot!(context.filters(), context.python_list().env(EnvVars::UV_PYTHON_SEARCH_PATH, ""), @"
-    exit_code: 0 (success)
-    ");
-
-    // We show all interpreters
+    // Listings are ordered by version, not by the search path.
     uv_snapshot!(context.filters(), context.python_list(), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -74,45 +84,26 @@ fn python_list() {
     cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
     ");
 
-    // Request Python 3.12
     uv_snapshot!(context.filters(), context.python_list().arg("3.12"), @"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
     ");
 
-    // Request Python 3.11
-    uv_snapshot!(context.filters(), context.python_list().arg("3.11"), @"
+    uv_snapshot!(context.filters(), context.python_list().arg("pypy"), @"
     exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
     ");
+}
 
-    // Request CPython
-    uv_snapshot!(context.filters(), context.python_list().arg("cpython"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
-    cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
-    ");
-
-    // Request CPython 3.12
-    uv_snapshot!(context.filters(), context.python_list().arg("cpython@3.12"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
-    ");
-
-    // Request CPython 3.12 via partial key syntax
-    uv_snapshot!(context.filters(), context.python_list().arg("cpython-3.12"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
-    ");
-
-    // Request CPython 3.12 for the current platform
-    let os = Os::from_env();
-    let arch = Arch::from_env();
+#[test]
+#[cfg(feature = "test-python")]
+fn python_list_filters_installed_interpreter_architecture() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_filtered_python_symlinks()
+        .with_filtered_python_keys()
+        .with_collapsed_whitespace();
+    let (_, python) = &context.python_versions[0];
+    let (os, arch) = interpreter_platform(&context, python)?;
 
     uv_snapshot!(context.filters(), context.python_list().arg(format!("cpython-3.12-{os}-{arch}")), @"
     exit_code: 0 (success)
@@ -120,32 +111,22 @@ fn python_list() {
     cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
     ");
 
-    // Request PyPy (which should be missing)
-    uv_snapshot!(context.filters(), context.python_list().arg("pypy"), @"
+    let different_arch = if arch == "aarch64".parse()? {
+        "x86_64"
+    } else {
+        "aarch64"
+    };
+    uv_snapshot!(context.filters(), context.python_list().arg(format!("cpython-3.12-{os}-{different_arch}")), @"
     exit_code: 0 (success)
     ");
-
-    // Swap the order of the Python versions
-    context.python_versions.reverse();
-
-    uv_snapshot!(context.filters(), context.python_list(), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
-    cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
-    ");
-
-    // Request Python 3.11
-    uv_snapshot!(context.filters(), context.python_list().arg("3.11"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
-    ");
+    Ok(())
 }
 
 #[test]
 fn python_list_unknown_managed_implementation() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_managed_python_dirs()
+        .with_env(EnvVars::RUST_LOG, "uv_python_managed=warn");
     let installation = context
         .temp_dir
         .join("managed")
@@ -155,11 +136,16 @@ fn python_list_unknown_managed_implementation() -> Result<()> {
     uv_snapshot!(context.filters(), context.python_list()
         .arg("--only-installed"), @"
     exit_code: 0 (success)
+    ----- stderr -----
+    WARN Ignoring malformed managed Python entry:
+        Unknown Python implementation `unknown`
     ");
 
     uv_snapshot!(context.filters(), context.python_upgrade().arg("--offline"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    WARN Ignoring malformed managed Python entry:
+        Unknown Python implementation `unknown`
     There are no installed versions to upgrade
     ");
 
@@ -213,7 +199,7 @@ fn python_list_warns_on_noncritical_explicit_path_errors() -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "test-python"))]
 #[test]
 fn python_list_warns_on_non_native_search_path_interpreters() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"])
@@ -294,18 +280,18 @@ fn python_list_warns_on_non_native_search_path_interpreters() -> Result<()> {
 }
 
 #[test]
-fn python_list_pin() {
+#[cfg(feature = "test-python")]
+fn python_list_pin() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
         .with_filtered_python_keys()
         .with_collapsed_whitespace();
 
-    // Pin to a version
-    uv_snapshot!(context.filters(), context.python_pin().arg("3.12"), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    Pinned `.python-version` to `3.12`
-    ");
+    // Pin the older interpreter so accidentally prioritizing it would change the listing order.
+    context
+        .temp_dir
+        .child(".python-version")
+        .write_str("3.11\n")?;
 
     // The pin should not affect the listing
     uv_snapshot!(context.filters(), context.python_list(), @"
@@ -322,9 +308,12 @@ fn python_list_pin() {
     cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
     cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
     ");
+
+    Ok(())
 }
 
 #[test]
+#[cfg(feature = "test-python")]
 fn python_list_venv() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
@@ -334,20 +323,28 @@ fn python_list_venv() {
         .with_filtered_virtualenv_bin()
         .with_collapsed_whitespace();
 
-    // Create a virtual environment
-    uv_snapshot!(context.filters(), context.venv().arg("--python").arg("3.12").arg("-q"), @"
-    exit_code: 0 (success)
-    ");
+    context.venv().args(["--python", "3.12"]).assert().success();
+    // Otherwise, both omission checks could pass because the environment is unusable.
+    context
+        .external_command(context.interpreter())
+        .args([
+            "-I",
+            "-c",
+            "import sys; print(sys.prefix != sys.base_prefix, end='')",
+        ])
+        .assert()
+        .success()
+        .stdout("True");
 
-    // We should not display the virtual environment
-    uv_snapshot!(context.filters(), context.python_list(), @"
+    // An active virtual environment is omitted from the listing.
+    uv_snapshot!(context.filters(), context.python_list().env(EnvVars::VIRTUAL_ENV, context.venv.path()), @"
     exit_code: 0 (success)
     ----- stdout -----
     cpython-3.12.[X]-[PLATFORM] [PYTHON-3.12]
     cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
     ");
 
-    // Same if the `VIRTUAL_ENV` is not set
+    // A discovered but inactive virtual environment is also omitted.
     uv_snapshot!(context.filters(), context.python_list(), @"
     exit_code: 0 (success)
     ----- stdout -----
@@ -356,72 +353,33 @@ fn python_list_venv() {
     ");
 }
 
-#[cfg(unix)]
 #[test]
-fn python_list_unsupported_version() {
-    let context = uv_test::test_context_with_versions!(&["3.12"])
-        .with_filtered_python_symlinks()
-        .with_filtered_python_keys();
+#[cfg(feature = "test-python")]
+fn python_list_no_matching_version() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
 
-    // Request a low version
-    uv_snapshot!(context.filters(), context.python_list().arg("3.5"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: Python <3.6 is not supported but 3.5 was requested.
-    ");
-
-    // Request a low version with a patch
-    uv_snapshot!(context.filters(), context.python_list().arg("3.5.9"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: Python <3.6 is not supported but 3.5.9 was requested.
-    ");
-
-    // Request a really low version
-    uv_snapshot!(context.filters(), context.python_list().arg("2.6"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: Python <3.6 is not supported but 2.6 was requested.
-    ");
-
-    // Request a really low version with a patch
-    uv_snapshot!(context.filters(), context.python_list().arg("2.6.8"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: Python <3.6 is not supported but 2.6.8 was requested.
-    ");
-
-    // Request a future version
-    uv_snapshot!(context.filters(), context.python_list().arg("4.2"), @"
-    exit_code: 0 (success)
-    ");
-
-    // Request a low version with a range
-    uv_snapshot!(context.filters(), context.python_list().arg("<3.0"), @"
-    exit_code: 0 (success)
-    ");
-
-    // Request free-threaded Python on unsupported version
-    uv_snapshot!(context.filters(), context.python_list().arg("3.12t"), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Invalid version request: Python <3.13 does not support free-threading but 3.12+freethreaded was requested.
-    ");
+    uv_snapshot!(context.filters(), context.python_list().arg("4.2"), @"exit_code: 0 (success)");
 }
 
 #[test]
+#[cfg(feature = "test-python")]
+fn python_list_range_below_supported_versions() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+
+    uv_snapshot!(context.filters(), context.python_list().arg("<3.0"), @"exit_code: 0 (success)");
+}
+
+#[test]
+#[cfg(feature = "test-python")]
 fn python_list_duplicate_path_entries() {
     let context = uv_test::test_context_with_versions!(&["3.11", "3.12"])
         .with_filtered_python_symlinks()
         .with_filtered_python_keys()
         .with_collapsed_whitespace();
 
-    // Construct a `PATH` with all entries duplicated
-    let path = std::env::join_paths(
-        std::env::split_paths(&context.python_path())
-            .chain(std::env::split_paths(&context.python_path())),
-    )
-    .unwrap();
+    let directories = std::env::split_paths(&context.python_path()).collect::<Vec<_>>();
+    // Duplicate every interpreter search directory.
+    let path = std::env::join_paths(directories.iter().chain(&directories)).unwrap();
 
     uv_snapshot!(context.filters(), context.python_list().env(EnvVars::UV_PYTHON_SEARCH_PATH, &path), @"
     exit_code: 0 (success)
@@ -432,15 +390,17 @@ fn python_list_duplicate_path_entries() {
 
     #[cfg(unix)]
     {
-        // Construct a `PATH` with symlinks
-        let path = std::env::join_paths(std::env::split_paths(&context.python_path()).chain(
-            std::env::split_paths(&context.python_path()).map(|path| {
-                let dst = format!("{}-link", path.display());
-                fs_err::os::unix::fs::symlink(&path, &dst).unwrap();
-                std::path::PathBuf::from(dst)
-            }),
-        ))
-        .unwrap();
+        let links = directories
+            .iter()
+            .map(|directory| {
+                let mut link = directory.as_os_str().to_owned();
+                link.push("-link");
+                let link = std::path::PathBuf::from(link);
+                fs_err::os::unix::fs::symlink(directory, &link).unwrap();
+                link
+            })
+            .collect::<Vec<_>>();
+        let path = std::env::join_paths(directories.iter().chain(&links)).unwrap();
 
         uv_snapshot!(context.filters(), context.python_list().env(EnvVars::UV_PYTHON_SEARCH_PATH, &path), @"
         exit_code: 0 (success)
@@ -449,16 +409,8 @@ fn python_list_duplicate_path_entries() {
         cpython-3.11.[X]-[PLATFORM] [PYTHON-3.11]
         ");
 
-        // Reverse the order so the symlinks are first
-        let path = std::env::join_paths(
-            {
-                let mut paths = std::env::split_paths(&path).collect::<Vec<_>>();
-                paths.reverse();
-                paths
-            }
-            .iter(),
-        )
-        .unwrap();
+        // Put the aliases first without also changing the order of Python versions.
+        let path = std::env::join_paths(links.iter().chain(&directories)).unwrap();
 
         uv_snapshot!(context.filters(), context.python_list().env(EnvVars::UV_PYTHON_SEARCH_PATH, &path), @"
         exit_code: 0 (success)
@@ -471,57 +423,36 @@ fn python_list_duplicate_path_entries() {
 
 #[test]
 fn python_list_downloads() {
-    let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_python_keys()
-        .with_filtered_latest_python_versions();
+    let context = uv_test::test_context_with_versions!(&[]).with_filtered_latest_python_versions();
 
-    // We do not test showing all interpreters — as it differs per platform
-    // Instead, we choose a Python version where our available distributions are stable
-
-    // Test the default display, which requires reverting the test context disabling Python downloads
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    // These implementations are available on Windows x86-64 even when the host platform differs.
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("any-3.10-windows-x86_64-none")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM]    <download available>
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
+    cpython-3.10.[LATEST]-windows-x86_64-none    <download available>
+    pypy-3.10.16-windows-x86_64-none       <download available>
+    graalpy-3.10.0-windows-x86_64-none     <download available>
     ");
 
-    // Show patch versions.
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").arg("--all-versions").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    // Bound the request so newly released patches do not change the expected historical list.
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("any->=3.10.16,<=3.10.18-windows-x86_64-none")
+        .arg("--all-versions")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM]    <download available>
-    cpython-3.10.21-[PLATFORM]    <download available>
-    cpython-3.10.20-[PLATFORM]    <download available>
-    cpython-3.10.19-[PLATFORM]    <download available>
-    cpython-3.10.18-[PLATFORM]    <download available>
-    cpython-3.10.17-[PLATFORM]    <download available>
-    cpython-3.10.16-[PLATFORM]    <download available>
-    cpython-3.10.15-[PLATFORM]    <download available>
-    cpython-3.10.14-[PLATFORM]    <download available>
-    cpython-3.10.13-[PLATFORM]    <download available>
-    cpython-3.10.12-[PLATFORM]    <download available>
-    cpython-3.10.11-[PLATFORM]    <download available>
-    cpython-3.10.9-[PLATFORM]     <download available>
-    cpython-3.10.8-[PLATFORM]     <download available>
-    cpython-3.10.7-[PLATFORM]     <download available>
-    cpython-3.10.6-[PLATFORM]     <download available>
-    cpython-3.10.5-[PLATFORM]     <download available>
-    cpython-3.10.4-[PLATFORM]     <download available>
-    cpython-3.10.3-[PLATFORM]     <download available>
-    cpython-3.10.2-[PLATFORM]     <download available>
-    cpython-3.10.0-[PLATFORM]     <download available>
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
+    cpython-3.10.18-windows-x86_64-none    <download available>
+    cpython-3.10.17-windows-x86_64-none    <download available>
+    cpython-3.10.16-windows-x86_64-none    <download available>
+    pypy-3.10.16-windows-x86_64-none       <download available>
     ");
 }
 
 #[test]
 #[cfg(feature = "test-python-managed")]
 fn python_list_downloads_installed() {
-    use assert_cmd::assert::OutputAssertExt;
-
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_python_install_bin()
@@ -529,23 +460,23 @@ fn python_list_downloads_installed() {
         .with_managed_python_dirs()
         .with_filtered_latest_python_versions();
 
-    // We do not test showing all interpreters - as it differs per platform
-    // Instead, we choose a Python version where our available distributions are stable
+    // Keep a second CPython minor uninstalled so unrelated downloads remain visible without
+    // depending on PyPy or GraalPy availability for the host platform.
+    let request = "cpython->=3.10,<3.12";
 
     // First, the download is shown as available
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
+    cpython-3.11.[LATEST]-[PLATFORM]    <download available>
     cpython-3.10.[LATEST]-[PLATFORM]    <download available>
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
     ");
 
     // TODO(zanieb): It'd be nice to test `--show-urls` here too but we need special filtering for
     // the URL
 
     // But not if `--only-installed` is used
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").arg("--only-installed").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).arg("--only-installed").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ");
 
@@ -553,35 +484,32 @@ fn python_list_downloads_installed() {
     context.python_install().arg("3.10").assert().success();
 
     // Then, it should be listed as installed instead of available
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
+    cpython-3.11.[LATEST]-[PLATFORM]    <download available>
     cpython-3.10.[LATEST]-[PLATFORM]    managed/cpython-3.10-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
     ");
 
     // But, the display should be reverted if `--only-downloads` is used
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").arg("--only-downloads").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).arg("--only-downloads").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
+    cpython-3.11.[LATEST]-[PLATFORM]    <download available>
     cpython-3.10.[LATEST]-[PLATFORM]    <download available>
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
     ");
 
     // And should not be shown if `--no-managed-python` is used
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").arg("--no-managed-python").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).arg("--no-managed-python").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ");
 
     // When `--managed-python` is used, managed installations should still be shown
-    uv_snapshot!(context.filters(), context.python_list().arg("3.10").arg("--managed-python").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    uv_snapshot!(context.filters(), context.python_list().arg(request).arg("--managed-python").env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
+    cpython-3.11.[LATEST]-[PLATFORM]    <download available>
     cpython-3.10.[LATEST]-[PLATFORM]    managed/cpython-3.10-[PLATFORM]/[INSTALL-BIN]/[PYTHON]
-    pypy-3.10.16-[PLATFORM]       <download available>
-    graalpy-3.10.0-[PLATFORM]     <download available>
     ");
 }
 
@@ -590,8 +518,6 @@ fn python_list_downloads_installed() {
 #[test]
 #[cfg(all(unix, feature = "test-python-managed"))]
 fn python_list_managed_symlinks() {
-    use assert_cmd::assert::OutputAssertExt;
-
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_python_install_bin()
@@ -629,6 +555,7 @@ fn python_list_managed_symlinks() {
 }
 
 #[tokio::test]
+#[cfg(feature = "test-python")]
 async fn python_list_only_installed_skips_download_metadata() {
     let context = uv_test::test_context_with_versions!(&["3.12"])
         .with_filtered_python_symlinks()
@@ -636,8 +563,7 @@ async fn python_list_only_installed_skips_download_metadata() {
         .with_collapsed_whitespace();
     let server = MockServer::start().await;
 
-    Mock::given(method("GET"))
-        .and(path("/"))
+    Mock::given(wiremock::matchers::any())
         .respond_with(ResponseTemplate::new(200).set_body_raw("{", "application/json"))
         .expect(0)
         .mount(&server)
@@ -775,111 +701,95 @@ async fn python_list_remote_python_downloads_json_url() -> Result<()> {
 #[test]
 fn python_list_with_mirrors() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[])
-        .with_filtered_python_keys()
         .with_collapsed_whitespace()
         .with_filtered_latest_python_versions()
-        // Add filters to normalize file paths in URLs
+        // Normalize build-specific archive paths while preserving the mirror host and artifact family.
         .with_filter((
-            r"(https://mirror\.example\.com/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
+            r"/[^/\s]+/(cpython|graalpy)-[^/\s]+\.(?:tar\.[a-z0-9]+|zip)\b",
+            "/[RELEASE]/$1-[ARCHIVE]",
         ))
-        .with_filter((
-            r"(https://python-mirror\.example\.com/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://pypy-mirror\.example\.com/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://graalpy-mirror\.example\.com/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://pyodide-mirror\.example\.com/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://github\.com/astral-sh/python-build-standalone/releases/download/).*"
-                .to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://releases\.astral\.sh/github/python-build-standalone/releases/download/).*"
-                .to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://downloads\.python\.org/pypy/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://github\.com/oracle/graalpython/releases/download/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ))
-        .with_filter((
-            r"(https://github\.com/pyodide/pyodide/releases/download/).*".to_string(),
-            "$1[FILE-PATH]".to_string(),
-        ));
+        .with_filter((r"/pypy[^/\s]+\.(?:tar\.[a-z0-9]+|zip)\b", "/pypy[ARCHIVE]"));
 
-    // Test with UV_PYTHON_INSTALL_MIRROR environment variable - verify mirror URL is used
+    // All three implementations have downloads for this target regardless of the host platform.
+    let windows_implementations = "any-3.10-windows-x86_64-none";
+
     uv_snapshot!(context.filters(), context.python_list()
-        .arg("cpython@3.10.19")
+        .arg(windows_implementations)
         .arg("--show-urls")
-        .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://mirror.example.com")
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.19-[PLATFORM] https://mirror.example.com/[FILE-PATH]
+    cpython-3.10.[LATEST]-windows-x86_64-none https://releases.astral.sh/github/python-build-standalone/releases/download/[RELEASE]/cpython-[ARCHIVE]
+    pypy-3.10.16-windows-x86_64-none https://downloads.python.org/pypy/pypy[ARCHIVE]
+    graalpy-3.10.0-windows-x86_64-none https://github.com/oracle/graalpython/releases/download/[RELEASE]/graalpy-[ARCHIVE]
     ");
 
-    // Test with UV_PYPY_INSTALL_MIRROR environment variable - verify PyPy mirror URL is used
+    // Environment variables route each implementation to its own mirror.
     uv_snapshot!(context.filters(), context.python_list()
-        .arg("pypy@3.10")
-        .arg("--show-urls")
-        .env(EnvVars::UV_PYPY_INSTALL_MIRROR, "https://pypy-mirror.example.com")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    pypy-3.10.16-[PLATFORM] https://pypy-mirror.example.com/[FILE-PATH]
-    ");
-
-    // Test with UV_GRAALPY_INSTALL_MIRROR environment variable.
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg("graalpy@3.10")
-        .arg("--show-urls")
-        .env(EnvVars::UV_GRAALPY_INSTALL_MIRROR, "https://graalpy-mirror.example.com")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[FILE-PATH]
-    ");
-
-    // Test with UV_PYODIDE_INSTALL_MIRROR environment variable.
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg("pyodide@3.13")
-        .arg("--show-urls")
-        .env(EnvVars::UV_PYODIDE_INSTALL_MIRROR, "https://pyodide-mirror.example.com")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[FILE-PATH]
-    ");
-
-    // Test with all mirror environment variables set.
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg("3.10")
+        .arg(windows_implementations)
         .arg("--show-urls")
         .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://python-mirror.example.com")
         .env(EnvVars::UV_PYPY_INSTALL_MIRROR, "https://pypy-mirror.example.com")
         .env(EnvVars::UV_GRAALPY_INSTALL_MIRROR, "https://graalpy-mirror.example.com")
-        .env(EnvVars::UV_PYODIDE_INSTALL_MIRROR, "https://pyodide-mirror.example.com")
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM] https://python-mirror.example.com/[FILE-PATH]
-    pypy-3.10.16-[PLATFORM] https://pypy-mirror.example.com/[FILE-PATH]
-    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[FILE-PATH]
+    cpython-3.10.[LATEST]-windows-x86_64-none https://python-mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
+    pypy-3.10.16-windows-x86_64-none https://pypy-mirror.example.com/pypy[ARCHIVE]
+    graalpy-3.10.0-windows-x86_64-none https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
+    ");
+
+    context.temp_dir.child("uv.toml").write_str(indoc! {r#"
+        python-install-mirror = "https://python-mirror.example.com"
+        pypy-install-mirror = "https://pypy-mirror.example.com"
+        graalpy-install-mirror = "https://graalpy-mirror.example.com"
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg(windows_implementations)
+        .arg("--show-urls")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.10.[LATEST]-windows-x86_64-none https://python-mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
+    pypy-3.10.16-windows-x86_64-none https://pypy-mirror.example.com/pypy[ARCHIVE]
+    graalpy-3.10.0-windows-x86_64-none https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
+    ");
+
+    // An environment override affects only its corresponding configured mirror.
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg(windows_implementations)
+        .arg("--show-urls")
+        .env(EnvVars::UV_PYPY_INSTALL_MIRROR, "https://mirror.example.com")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    cpython-3.10.[LATEST]-windows-x86_64-none https://python-mirror.example.com/[RELEASE]/cpython-[ARCHIVE]
+    pypy-3.10.16-windows-x86_64-none https://mirror.example.com/pypy[ARCHIVE]
+    graalpy-3.10.0-windows-x86_64-none https://graalpy-mirror.example.com/[RELEASE]/graalpy-[ARCHIVE]
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn python_list_pyodide_mirror() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_collapsed_whitespace()
+        .with_filter((
+            r"/[^/\s]+/xbuildenv-[^/\s]+\.(?:tar\.[a-z0-9]+|zip)\b",
+            "/[RELEASE]/xbuildenv-[ARCHIVE]",
+        ));
+
+    // The CPython mirror does not change the default Pyodide URL.
+    uv_snapshot!(context.filters(), context.python_list()
+        .arg("pyodide@3.13")
+        .arg("--show-urls")
+        .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://python-mirror.example.com")
+        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    pyodide-3.13.2-emscripten-wasm32-musl https://github.com/pyodide/pyodide/releases/download/[RELEASE]/xbuildenv-[ARCHIVE]
     ");
 
     // Pyodide uses its own mirror when the CPython mirror is also set.
@@ -891,49 +801,13 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[FILE-PATH]
-    ");
-
-    // Test without mirrors - verify the default Astral mirror URL is used for CPython
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg("3.10")
-        .arg("--show-urls")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM] https://releases.astral.sh/github/python-build-standalone/releases/download/[FILE-PATH]
-    pypy-3.10.16-[PLATFORM] https://downloads.python.org/pypy/[FILE-PATH]
-    graalpy-3.10.0-[PLATFORM] https://github.com/oracle/graalpython/releases/download/[FILE-PATH]
-    ");
-
-    // The CPython mirror does not change the default Pyodide URL.
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg("pyodide@3.13")
-        .arg("--show-urls")
-        .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, "https://python-mirror.example.com")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://github.com/pyodide/pyodide/releases/download/[FILE-PATH]
+    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[RELEASE]/xbuildenv-[ARCHIVE]
     ");
 
     context.temp_dir.child("uv.toml").write_str(indoc! {r#"
         python-install-mirror = "https://python-mirror.example.com"
-        pypy-install-mirror = "https://pypy-mirror.example.com"
-        graalpy-install-mirror = "https://graalpy-mirror.example.com"
         pyodide-install-mirror = "https://pyodide-mirror.example.com"
     "#})?;
-
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg("3.10")
-        .arg("--show-urls")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM] https://python-mirror.example.com/[FILE-PATH]
-    pypy-3.10.16-[PLATFORM] https://pypy-mirror.example.com/[FILE-PATH]
-    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[FILE-PATH]
-    ");
 
     uv_snapshot!(context.filters(), context.python_list()
         .arg("pyodide@3.13")
@@ -941,20 +815,7 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[FILE-PATH]
-    ");
-
-    // Each environment variable overrides only its corresponding configured mirror.
-    uv_snapshot!(context.filters(), context.python_list()
-        .arg("3.10")
-        .arg("--show-urls")
-        .env(EnvVars::UV_PYPY_INSTALL_MIRROR, "https://mirror.example.com")
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
-    exit_code: 0 (success)
-    ----- stdout -----
-    cpython-3.10.[LATEST]-[PLATFORM] https://python-mirror.example.com/[FILE-PATH]
-    pypy-3.10.16-[PLATFORM] https://mirror.example.com/[FILE-PATH]
-    graalpy-3.10.0-[PLATFORM] https://graalpy-mirror.example.com/[FILE-PATH]
+    pyodide-3.13.2-emscripten-wasm32-musl https://pyodide-mirror.example.com/[RELEASE]/xbuildenv-[ARCHIVE]
     ");
 
     uv_snapshot!(context.filters(), context.python_list()
@@ -964,7 +825,7 @@ fn python_list_with_mirrors() -> Result<()> {
         .env_remove(EnvVars::UV_PYTHON_DOWNLOADS), @"
     exit_code: 0 (success)
     ----- stdout -----
-    pyodide-3.13.2-emscripten-wasm32-musl https://mirror.example.com/[FILE-PATH]
+    pyodide-3.13.2-emscripten-wasm32-musl https://mirror.example.com/[RELEASE]/xbuildenv-[ARCHIVE]
     ");
 
     Ok(())

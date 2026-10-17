@@ -14,6 +14,7 @@ use flate2::write::GzEncoder;
 use futures::executor::block_on;
 use futures::io::AllowStdIo;
 use indoc::formatdoc;
+use itertools::{Itertools, iproduct};
 use sha2::{Digest, Sha256};
 use tar_codec::{ArchiveBuilder as _, EntryMetadata, TarEncoder};
 use tokio_util::compat::FuturesAsyncWriteCompatExt;
@@ -91,15 +92,7 @@ pub fn generate_wheel_with_files(
             format!("{dist_info}/METADATA"),
             build_metadata(name, version, requires, extras, requires_python),
         ),
-        (
-            format!("{dist_info}/WHEEL"),
-            format!(
-                "Wheel-Version: 1.0\n\
-                 Generator: uv-test\n\
-                 Root-Is-Purelib: true\n\
-                 Tag: {tag}\n"
-            ),
-        ),
+        (format!("{dist_info}/WHEEL"), build_wheel_metadata(tag)),
     ];
     entries.extend(
         files
@@ -115,26 +108,50 @@ pub fn generate_wheel_with_files(
     let record = build_record(&dist_info, &entries);
     let record_entry =
         ZipEntryBuilder::new(format!("{dist_info}/RECORD").into(), ZipCompression::Stored);
-    block_on(zip.write_entry_whole(record_entry, record.as_bytes()))
-        .expect("failed to write `RECORD` file");
+    block_on(zip.write_entry_whole(record_entry, &record)).expect("failed to write `RECORD` file");
 
     let bytes = block_on(zip.close()).expect("failed to finish in-memory wheel");
     let filename = format!("{normalized}-{version}-{tag}.whl");
     (filename, bytes)
 }
 
+/// Build the wheel metadata, expanding compressed filename tags into individual headers.
+fn build_wheel_metadata(tag: &str) -> String {
+    let mut metadata =
+        String::from("Wheel-Version: 1.0\nGenerator: uv-test\nRoot-Is-Purelib: true\n");
+    if let Some((python, abi, platform)) = tag.split('-').collect_tuple() {
+        for (python, abi, platform) in
+            iproduct!(python.split('.'), abi.split('.'), platform.split('.'))
+        {
+            writeln!(metadata, "Tag: {python}-{abi}-{platform}")
+                .expect("writing wheel metadata into a string should succeed");
+        }
+    } else {
+        // Tests can deliberately request malformed tags.
+        writeln!(metadata, "Tag: {tag}")
+            .expect("writing wheel metadata into a string should succeed");
+    }
+    metadata
+}
+
 /// Build the `RECORD` metadata for a generated wheel.
-fn build_record(dist_info: &str, entries: &[(String, String)]) -> String {
-    let mut record = String::new();
+fn build_record(dist_info: &str, entries: &[(String, String)]) -> Vec<u8> {
+    let mut record = csv::WriterBuilder::new()
+        .terminator(csv::Terminator::Any(b'\n'))
+        .from_writer(Vec::new());
     for (path, contents) in entries {
         let contents = contents.as_bytes();
-        let hash = base64.encode(Sha256::digest(contents));
-        writeln!(&mut record, "{path},sha256={hash},{}", contents.len())
-            .expect("writing RECORD metadata into a string should succeed");
+        let hash = format!("sha256={}", base64.encode(Sha256::digest(contents)));
+        record
+            .write_record([path, &hash, &contents.len().to_string()])
+            .expect("writing RECORD metadata into memory should succeed");
     }
-    writeln!(&mut record, "{dist_info}/RECORD,,")
-        .expect("writing RECORD metadata into a string should succeed");
     record
+        .write_record([&format!("{dist_info}/RECORD"), "", ""])
+        .expect("writing RECORD metadata into memory should succeed");
+    record
+        .into_inner()
+        .expect("finishing RECORD metadata in memory should succeed")
 }
 
 /// Generate a source distribution (`.tar.gz`) as an in-memory tarball.
@@ -254,10 +271,7 @@ fn build_pyproject_toml(
         "dependencies = []\n".to_string()
     } else {
         let mut dependencies = String::from("dependencies = [\n");
-        for requirement in requires {
-            writeln!(&mut dependencies, "    \"{requirement}\",")
-                .expect("writing dependencies into a string should succeed");
-        }
+        append_toml_requirements(&mut dependencies, requires);
         dependencies.push_str("]\n");
         dependencies
     };
@@ -271,10 +285,7 @@ fn build_pyproject_toml(
         for (extra_name, extra_requirements) in extras {
             writeln!(&mut optional_dependencies, "{extra_name} = [")
                 .expect("writing optional dependencies into a string should succeed");
-            for requirement in extra_requirements {
-                writeln!(&mut optional_dependencies, "    \"{requirement}\",")
-                    .expect("writing optional dependencies into a string should succeed");
-            }
+            append_toml_requirements(&mut optional_dependencies, extra_requirements);
             optional_dependencies.push_str("]\n");
         }
         optional_dependencies
@@ -311,6 +322,14 @@ fn build_pyproject_toml(
     }
 }
 
+fn append_toml_requirements(output: &mut String, requirements: &[Requirement]) {
+    for requirement in requirements {
+        let value = toml::Value::String(requirement.to_string());
+        writeln!(output, "    {value},")
+            .expect("writing requirements into a string should succeed");
+    }
+}
+
 /// Add a file entry to a tar archive from a byte slice.
 fn add_tar_file<W>(tar: &mut tar_codec::Builder<TarEncoder<W>>, path: &str, data: &[u8])
 where
@@ -332,10 +351,32 @@ mod tests {
     use std::io::Cursor;
     use std::str::FromStr;
 
+    use async_zip::base::read::mem::ZipFileReader;
     use tar_codec::{Archive as _, Member, TarArchive};
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     use super::*;
+
+    fn read_wheel_entry(archive: &ZipFileReader, path: &str) -> String {
+        let index = archive
+            .file()
+            .entries()
+            .iter()
+            .position(|entry| entry.filename().as_str().is_ok_and(|name| name == path))
+            .expect("wheel entry should exist");
+        block_on(async {
+            let mut reader = archive
+                .reader_with_entry(index)
+                .await
+                .expect("wheel entry should be readable");
+            let mut contents = String::new();
+            reader
+                .read_to_string_checked(&mut contents)
+                .await
+                .expect("wheel entry should be valid UTF-8");
+            contents
+        })
+    }
 
     #[test]
     fn generate_simple_wheel() {
@@ -353,8 +394,7 @@ mod tests {
         );
         assert_eq!(filename, "my_package-1.0.0-py3-none-any.whl");
 
-        let archive = block_on(async_zip::base::read::mem::ZipFileReader::new(bytes))
-            .expect("wheel should be a valid zip");
+        let archive = block_on(ZipFileReader::new(bytes)).expect("wheel should be a valid zip");
         let names: Vec<_> = archive
             .file()
             .entries()
@@ -371,34 +411,61 @@ mod tests {
         assert!(names.contains(&"my_package-1.0.0.dist-info/WHEEL"));
         assert!(names.contains(&"my_package-1.0.0.dist-info/RECORD"));
 
-        let record_index = archive
-            .file()
-            .entries()
-            .iter()
-            .position(|entry| {
-                entry
-                    .filename()
-                    .as_str()
-                    .is_ok_and(|name| name == "my_package-1.0.0.dist-info/RECORD")
-            })
-            .expect("wheel RECORD should exist");
-        let mut record = String::new();
-        block_on(async {
-            let mut reader = archive
-                .reader_with_entry(record_index)
-                .await
-                .expect("wheel RECORD should be readable");
-            reader
-                .read_to_string_checked(&mut record)
-                .await
-                .expect("wheel RECORD should be valid UTF-8");
-        });
+        let record = read_wheel_entry(&archive, "my_package-1.0.0.dist-info/RECORD");
         insta::assert_snapshot!(record, @"
         my_package/__init__.py,sha256=J-j-u0itpEFT6irdmWmixQqYMadNl1X91TxUmoiLHMI,22
         my_package-1.0.0.dist-info/METADATA,sha256=5SmEsY5VDieqZOfjFTk5WyL4HQZueAVyhthkJaH2xC4,102
         my_package-1.0.0.dist-info/WHEEL,sha256=ujr00BDMtYYidJ71ulklWmNFpiGqy5NyjK1fX-JwFO4,78
         my_package-1.0.0.dist-info/RECORD,,
         ");
+    }
+
+    #[test]
+    fn generated_wheel_expands_compressed_tags() {
+        let (_, bytes) = generate_wheel(
+            &PackageName::from_str("example").expect("valid package name"),
+            &Version::from_str("1.0.0").expect("valid version"),
+            &[],
+            &BTreeMap::new(),
+            None,
+            "cp311.cp312-abi3.none-manylinux_2_17_x86_64.win_amd64",
+            &[],
+        );
+        let archive = block_on(ZipFileReader::new(bytes)).expect("wheel should be a valid zip");
+        let metadata = read_wheel_entry(&archive, "example-1.0.0.dist-info/WHEEL");
+        insta::assert_snapshot!(metadata, @"
+        Wheel-Version: 1.0
+        Generator: uv-test
+        Root-Is-Purelib: true
+        Tag: cp311-abi3-manylinux_2_17_x86_64
+        Tag: cp311-abi3-win_amd64
+        Tag: cp311-none-manylinux_2_17_x86_64
+        Tag: cp311-none-win_amd64
+        Tag: cp312-abi3-manylinux_2_17_x86_64
+        Tag: cp312-abi3-win_amd64
+        Tag: cp312-none-manylinux_2_17_x86_64
+        Tag: cp312-none-win_amd64
+        ");
+    }
+
+    #[test]
+    fn record_encodes_special_characters_in_paths() {
+        let path = r#"my_package/data,"quoted".txt"#;
+        let record = build_record(
+            "my_package-1.0.0.dist-info",
+            &[(path.into(), "data".into())],
+        );
+        let mut reader = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(record.as_slice());
+        let row = reader
+            .records()
+            .next()
+            .expect("the file must be recorded")
+            .expect("the file record must be valid CSV");
+
+        assert_eq!(row.len(), 3);
+        assert_eq!(row.get(0), Some(path));
     }
 
     #[test]
@@ -436,6 +503,35 @@ mod tests {
         assert!(names.contains(&"my_package-1.0.0/pyproject.toml".to_string()));
         assert!(names.contains(&"my_package-1.0.0/PKG-INFO".to_string()));
         assert!(names.contains(&"my_package-1.0.0/src/my_package/__init__.py".to_string()));
+    }
+
+    #[test]
+    fn sdist_dependencies_round_trip_through_toml() {
+        let requirement = Requirement::from_str(r#"dep; os_name == 'alpha"beta\gamma'"#)
+            .expect("valid requirement");
+        let extras = BTreeMap::from([(
+            ExtraName::from_str("dev").expect("valid extra name"),
+            vec![requirement.clone()],
+        )]);
+        let pyproject = build_pyproject_toml(
+            &PackageName::from_str("pkg").expect("valid package name"),
+            &Version::from_str("1.0.0").expect("valid version"),
+            std::slice::from_ref(&requirement),
+            &extras,
+            None,
+            &[],
+        );
+        let pyproject: toml::Value = toml::from_str(&pyproject).expect("valid pyproject TOML");
+        let expected = requirement.to_string();
+
+        assert_eq!(
+            pyproject["project"]["dependencies"][0].as_str(),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            pyproject["project"]["optional-dependencies"]["dev"][0].as_str(),
+            Some(expected.as_str())
+        );
     }
 
     #[test]

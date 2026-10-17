@@ -3472,6 +3472,20 @@ fn index_priority() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn assert_matching_index_settings(named: &str, explicit: &str, index: &str, case: &str) {
+    assert!(
+        explicit.starts_with("exit_code: 0 (success)\n----- stdout -----\nGlobalSettings {"),
+        "{case}: expected successful settings output, got:\n{explicit}"
+    );
+    assert!(
+        explicit.contains(index),
+        "{case}: expected index {index:?} in settings, got:\n{explicit}"
+    );
+    assert_eq!(named, explicit, "{case}");
+}
+
+type SettingsCommand = (&'static str, fn(&TestContext) -> Command);
+
 /// Named index arguments must resolve identically to their explicit CLI spellings.
 #[test]
 #[cfg_attr(
@@ -3517,18 +3531,18 @@ fn index_by_name() -> anyhow::Result<()> {
         );
 
         // Selecting a name must match spelling out its URL with the same CLI role.
-        assert_eq!(named, explicit, "{argument}");
+        assert_matching_index_settings(&named, &explicit, "example.invalid", argument);
     }
 
-    let commands: [fn(&TestContext) -> Command; 5] = [
-        TestContext::lock,
-        TestContext::sync,
-        TestContext::upgrade,
-        TestContext::venv,
-        TestContext::pip_list,
+    let commands: [SettingsCommand; 5] = [
+        ("lock", TestContext::lock),
+        ("sync", TestContext::sync),
+        ("upgrade", TestContext::upgrade),
+        ("venv", TestContext::venv),
+        ("pip list", TestContext::pip_list),
     ];
 
-    for command in commands {
+    for (name, command) in commands {
         for argument in ["--index", "--default-index"] {
             let named = capture_uv_snapshot!(
                 context.filters(),
@@ -3549,7 +3563,12 @@ fn index_by_name() -> anyhow::Result<()> {
                     .arg("index-by-name")
             );
 
-            assert_eq!(named, explicit, "{argument}");
+            assert_matching_index_settings(
+                &named,
+                &explicit,
+                "example.invalid",
+                &format!("uv {name} {argument}"),
+            );
         }
     }
 
@@ -3659,7 +3678,7 @@ fn index_by_name_with_matching_path() -> anyhow::Result<()> {
     );
 
     // With preview, the configured name takes precedence over the existing path.
-    assert_eq!(named, explicit);
+    assert_matching_index_settings(&named, &explicit, "example.invalid", "--index");
 
     Ok(())
 }
@@ -3737,13 +3756,13 @@ fn tool_index_by_name() -> anyhow::Result<()> {
         default = true
     "#})?;
 
-    let tools: [fn(&TestContext) -> Command; 3] = [
-        TestContext::tool_run,
-        TestContext::tool_install,
-        TestContext::tool_upgrade,
+    let tools: [SettingsCommand; 3] = [
+        ("run", TestContext::tool_run),
+        ("install", TestContext::tool_install),
+        ("upgrade", TestContext::tool_upgrade),
     ];
 
-    for tool in tools {
+    for (name, tool) in tools {
         let show_settings = || {
             let mut command = add_shared_args(tool(&context));
             command
@@ -3771,7 +3790,12 @@ fn tool_index_by_name() -> anyhow::Result<()> {
                     .arg("iniconfig")
             );
 
-            assert_eq!(named, explicit, "{argument}");
+            assert_matching_index_settings(
+                &named,
+                &explicit,
+                "example.invalid",
+                &format!("uv tool {name} {argument}"),
+            );
         }
     }
 
@@ -3832,7 +3856,12 @@ fn index_by_name_with_directory() -> anyhow::Result<()> {
         );
 
         // Resolving the configured name must preserve its original configuration directory.
-        assert_eq!(named, explicit, "{argument}");
+        assert_matching_index_settings(
+            &named,
+            &explicit,
+            "configuration/configured-index",
+            argument,
+        );
     }
 
     Ok(())
@@ -4898,23 +4927,27 @@ fn run_pep723_script_preview_features() -> anyhow::Result<()> {
 )]
 fn offline_env_false_overrides_config() -> anyhow::Result<()> {
     let context = uv_test::test_context!("3.12");
-
-    let baseline = capture_uv_snapshot!(
-        context.filters(),
-        add_shared_args(context.version()).arg("--show-settings")
+    let mut command = add_shared_args(context.version());
+    command
+        .arg("--show-settings")
+        .env_remove(EnvVars::UV_OFFLINE);
+    let baseline = capture_uv_snapshot!(context.filters(), &mut command);
+    assert!(
+        baseline.starts_with("exit_code: 0 (success)\n"),
+        "{baseline}"
     );
+    assert!(baseline.contains("connectivity: Online,"), "{baseline}");
 
     let config = context.temp_dir.child("uv.toml");
     config.write_str("offline = true\n")?;
+    command
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("connectivity: Offline,"));
 
     assert_eq!(
         baseline,
-        capture_uv_snapshot!(
-            context.filters(),
-            add_shared_args(context.version())
-                .arg("--show-settings")
-                .env(EnvVars::UV_OFFLINE, "0")
-        )
+        capture_uv_snapshot!(context.filters(), command.env(EnvVars::UV_OFFLINE, "0"))
     );
 
     Ok(())
@@ -4977,16 +5010,15 @@ fn system_certs_env_overrides_native_tls() {
         .env(EnvVars::UV_SYSTEM_CERTS, "0")
         .env_remove(EnvVars::UV_NATIVE_TLS);
     let baseline = capture_uv_snapshot!(context.filters(), &mut command);
+    assert!(
+        baseline.starts_with("exit_code: 0 (success)\n"),
+        "{baseline}"
+    );
+    assert!(baseline.contains("system_certs: false,"), "{baseline}");
+    assert!(!baseline.contains("----- stderr -----"), "{baseline}");
 
-    for native_tls in ["1", "invalid"] {
-        assert_eq!(
-            baseline,
-            capture_uv_snapshot!(
-                context.filters(),
-                command.env(EnvVars::UV_NATIVE_TLS, native_tls)
-            )
-        );
-    }
+    diff_uv_snapshot!(context.filters(), &baseline, command.env(EnvVars::UV_NATIVE_TLS, "1"), @"");
+    diff_uv_snapshot!(context.filters(), &baseline, command.env(EnvVars::UV_NATIVE_TLS, "invalid"), @"");
 }
 
 #[test]

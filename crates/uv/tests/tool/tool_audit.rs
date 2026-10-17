@@ -8,6 +8,7 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
+use uv_test::audit::CleanAuditService;
 use uv_test::{TestContext, uv_snapshot};
 
 fn install_tool(context: &TestContext, name: &str, locked: bool) {
@@ -25,22 +26,13 @@ fn install_tool(context: &TestContext, name: &str, locked: bool) {
     command.assert().success();
 }
 
-async fn mount_clean_service(server: &MockServer) {
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{ "vulns": [] }]
-        })))
-        .mount(server)
-        .await;
-}
-
 async fn mount_vulnerable_service(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/v1/querybatch"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "results": [{ "vulns": [{ "id": "PYSEC-2026-0001" }] }]
         })))
+        .expect(1..)
         .mount(server)
         .await;
 
@@ -68,6 +60,7 @@ async fn mount_vulnerable_service(server: &MockServer) {
                 "url": "https://example.com/advisory/PYSEC-2026-0001"
             }]
         })))
+        .expect(1..)
         .mount(server)
         .await;
 }
@@ -362,8 +355,7 @@ async fn tool_audit_one_tool() {
     let context = uv_test::test_context!("3.12").with_tool_dirs();
     install_tool(&context, "simple-launcher", true);
 
-    let server = MockServer::start().await;
-    mount_clean_service(&server).await;
+    let server = CleanAuditService::start().await;
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("simple-launcher")
@@ -384,8 +376,7 @@ async fn tool_audit_all_tools() {
     install_tool(&context, "simple-launcher", true);
     install_tool(&context, "basic-app", true);
 
-    let server = MockServer::start().await;
-    mount_clean_service(&server).await;
+    let server = CleanAuditService::start().await;
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
@@ -408,8 +399,7 @@ async fn tool_audit_multiple_tools() {
     install_tool(&context, "simple-launcher", true);
     install_tool(&context, "basic-app", true);
 
-    let server = MockServer::start().await;
-    mount_clean_service(&server).await;
+    let server = CleanAuditService::start().await;
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("simple-launcher")
@@ -433,8 +423,7 @@ async fn tool_audit_mixed_lockfiles() {
     install_tool(&context, "simple-launcher", true);
     install_tool(&context, "basic-app", false);
 
-    let server = MockServer::start().await;
-    mount_clean_service(&server).await;
+    let server = CleanAuditService::start().await;
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
@@ -468,14 +457,7 @@ async fn tool_audit_shared_dependencies() {
         .success();
     install_tool(&context, "basic-app", true);
 
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/v1/querybatch"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "results": [{ "vulns": [] }, { "vulns": [] }]
-        })))
-        .mount(&server)
-        .await;
+    let server = CleanAuditService::start().await;
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
@@ -490,6 +472,13 @@ async fn tool_audit_shared_dependencies() {
     Auditing `simple-launcher`
     Found no known vulnerabilities and no adverse project statuses in 2 packages
     ");
+
+    server
+        .assert_queries(&[
+            &[("basic-app", "0.1.0")],
+            &[("simple-launcher", "0.1.0"), ("basic-app", "0.1.0")],
+        ])
+        .await;
 }
 
 #[tokio::test]
@@ -588,8 +577,7 @@ async fn tool_audit_json() {
     let context = uv_test::test_context!("3.12").with_tool_dirs();
     install_tool(&context, "simple-launcher", true);
 
-    let server = MockServer::start().await;
-    mount_clean_service(&server).await;
+    let server = CleanAuditService::start().await;
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
@@ -626,8 +614,7 @@ async fn tool_audit_json_preview_warning() {
     let context = uv_test::test_context!("3.12").with_tool_dirs();
     install_tool(&context, "simple-launcher", true);
 
-    let server = MockServer::start().await;
-    mount_clean_service(&server).await;
+    let server = CleanAuditService::start().await;
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
@@ -668,8 +655,7 @@ async fn tool_audit_json_all_tools() {
     install_tool(&context, "simple-launcher", true);
     install_tool(&context, "basic-app", true);
 
-    let server = MockServer::start().await;
-    mount_clean_service(&server).await;
+    let server = CleanAuditService::start().await;
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
@@ -718,8 +704,7 @@ async fn tool_audit_sarif() {
         .with_tool_dirs();
     install_tool(&context, "simple-launcher", true);
 
-    let server = MockServer::start().await;
-    mount_clean_service(&server).await;
+    let server = CleanAuditService::start().await;
 
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("--all")
@@ -806,8 +791,7 @@ async fn tool_audit_sarif_all_tools() -> Result<()> {
     install_tool(&context, "simple-launcher", true);
     install_tool(&context, "basic-app", true);
 
-    let server = MockServer::start().await;
-    mount_clean_service(&server).await;
+    let server = CleanAuditService::start().await;
 
     let output = context
         .tool_audit()
@@ -817,20 +801,21 @@ async fn tool_audit_sarif_all_tools() -> Result<()> {
         .arg("--service-url")
         .arg(server.uri())
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .output()?;
-    assert_eq!(output.status.code(), Some(0));
+        .assert()
+        .success();
 
-    let report: Value = serde_json::from_slice(&output.stdout)?;
-    let runs = report["runs"].as_array().map(|runs| {
-        runs.iter()
-            .map(|run| {
-                json!({
-                    "automation_id": run["automationDetails"]["id"],
-                    "results": run["results"],
-                })
+    let report: Value = serde_json::from_slice(&output.get_output().stdout)?;
+    let runs = report["runs"]
+        .as_array()
+        .expect("SARIF runs should be an array")
+        .iter()
+        .map(|run| {
+            json!({
+                "automation_id": run["automationDetails"]["id"],
+                "results": run["results"],
             })
-            .collect::<Vec<_>>()
-    });
+        })
+        .collect::<Vec<_>>();
     assert_json_snapshot!(runs, @r#"
     [
       {
@@ -863,10 +848,10 @@ async fn tool_audit_sarif_vulnerability_location() -> Result<()> {
         .arg("--service-url")
         .arg(server.uri())
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
-        .output()?;
-    assert_eq!(output.status.code(), Some(1));
+        .assert()
+        .code(1);
 
-    let report: Value = serde_json::from_slice(&output.stdout)?;
+    let report: Value = serde_json::from_slice(&output.get_output().stdout)?;
     assert_json_snapshot!(json!({
         "automation_id": report["runs"][0]["automationDetails"]["id"],
         "artifact": report["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
@@ -937,7 +922,7 @@ async fn tool_audit_persisted_index_and_project_status() -> Result<()> {
         .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
         .mount(&server)
         .await;
-    mount_clean_service(&server).await;
+    let audit_service = CleanAuditService::start().await;
 
     context
         .tool_install()
@@ -951,7 +936,7 @@ async fn tool_audit_persisted_index_and_project_status() -> Result<()> {
     uv_snapshot!(context.filters(), context.tool_audit()
         .arg("simple-launcher")
         .arg("--service-url")
-        .arg(server.uri())
+        .arg(audit_service.uri())
         .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
         , @"
     exit_code: 0 (success)

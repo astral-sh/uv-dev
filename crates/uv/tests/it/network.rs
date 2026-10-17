@@ -1,25 +1,17 @@
-use std::convert::Infallible;
-use std::future::ready;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild};
+use assert_fs::fixture::{FileWriteStr, PathChild};
 use bytes::Bytes;
 use http::StatusCode;
 use http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, RANGE};
-use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, StreamBody};
-use hyper::body::Frame;
-use hyper::service::service_fn;
-use hyper_util::rt::TokioIo;
+use http_body_util::BodyExt;
 use indoc::formatdoc;
-use insta::{allow_duplicates, assert_snapshot};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio_stream::wrappers::ReceiverStream;
 use wiremock::matchers::{any, method};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -28,28 +20,32 @@ use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::{TestContext, uv_snapshot};
 
-/// Creates a CONNECT tunnel proxy that forwards connections to the target.
-///
-/// Returns the proxy address. The proxy runs in a background thread.
-fn start_connect_tunnel_proxy() -> std::net::SocketAddr {
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
+use super::network_fixtures::{
+    StreamingResponse, StreamingServerGuard, connection_reset, delayed_body, http_error_server,
+    io_error_server, streaming_server, time_out_response,
+};
 
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+const BUILD_TAG_WHEEL: &str = "build_tag-1.0.0-1-py2.py3-none-any.whl";
+
+/// Create a CONNECT proxy on the test runtime, which owns the listener and connection tasks.
+#[cfg(feature = "test-pypi")]
+async fn start_connect_tunnel_proxy() -> (std::net::SocketAddr, Arc<AtomicUsize>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let proxy_connections = Arc::clone(&connections);
 
-    // Spawn a real OS thread for the proxy server
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut client) = stream else { break };
-
-            // Handle each connection in its own thread
-            std::thread::spawn(move || {
-                // Read the CONNECT request
-                let mut buf = vec![0u8; 4096];
+    tokio::spawn(async move {
+        while let Ok((mut client, _)) = listener.accept().await {
+            let proxy_connections = Arc::clone(&proxy_connections);
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
                 let mut total_read = 0;
                 loop {
-                    let n = match client.read(&mut buf[total_read..]) {
+                    let n = match client.read(&mut buf[total_read..]).await {
                         Ok(0) | Err(_) => return,
                         Ok(n) => n,
                     };
@@ -63,193 +59,91 @@ fn start_connect_tunnel_proxy() -> std::net::SocketAddr {
                 }
 
                 let request = String::from_utf8_lossy(&buf[..total_read]);
-
-                // Parse "CONNECT host:port HTTP/1.1\r\n"
                 let Some(target_addr) = request
                     .lines()
                     .next()
                     .and_then(|line| line.strip_prefix("CONNECT "))
                     .and_then(|s| s.split_whitespace().next())
-                    .map(ToString::to_string)
                 else {
                     return;
                 };
-
-                // Connect to the target
-                let Ok(mut target) = TcpStream::connect(&target_addr) else {
+                let Ok(mut target) = TcpStream::connect(target_addr).await else {
                     return;
                 };
-
-                // Send 200 Connection Established
                 if client
                     .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .await
                     .is_err()
                 {
                     return;
                 }
-
-                // Bidirectionally forward data using two threads
-                let mut client_read = client.try_clone().unwrap();
-                let mut target_write = target.try_clone().unwrap();
-
-                let c2t =
-                    std::thread::spawn(move || std::io::copy(&mut client_read, &mut target_write));
-
-                let _ = std::io::copy(&mut target, &mut client);
-                let _ = c2t.join();
+                proxy_connections.fetch_add(1, Ordering::Relaxed);
+                let _ = tokio::io::copy_bidirectional(&mut client, &mut target).await;
             });
         }
     });
 
-    addr
+    (addr, connections)
 }
 
-/// Creates a mock that serves a Simple API index page for iniconfig.
-async fn mock_simple_api(server: &MockServer) {
-    // Simple API response for iniconfig pointing to the real PyPI wheel.
-    // Uses upload-time before EXCLUDE_NEWER (2024-03-25) so the package is available.
+/// Serve a local package through the same host as the requested index.
+async fn mock_build_tag_index(context: &TestContext, server: &MockServer) {
+    use wiremock::matchers::path;
+
+    let wheel = context.read_bytes(
+        context
+            .workspace_root
+            .join("test/links")
+            .join(BUILD_TAG_WHEEL),
+    );
+    let hash = hex::encode(Sha256::digest(&wheel));
     let body = json!({
-        "name": "iniconfig",
+        "name": "build-tag",
         "files": [{
-            "filename": "iniconfig-2.0.0-py3-none-any.whl",
-            "url": "https://files.pythonhosted.org/packages/ef/a6/62565a6e1cf69e10f5727360368e451d4b7f58beeac6173dc9db836a5b46/iniconfig-2.0.0-py3-none-any.whl",
-            "hashes": {
-                "sha256": "b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"
-            },
-            "requires-python": ">=3.8",
+            "filename": BUILD_TAG_WHEEL,
+            "url": format!("/{BUILD_TAG_WHEEL}"),
+            "hashes": { "sha256": hash },
             "upload-time": "2024-01-01T00:00:00Z"
         }]
     });
-
-    // Serve the simple index for iniconfig - use any() matcher since HTTP proxy
-    // requests may have the full URL in the path
-    Mock::given(any())
+    Mock::given(method("GET"))
+        .and(path("/build-tag/"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_raw(body.to_string(), "application/vnd.pypi.simple.v1+json"),
         )
+        .expect(1..)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/{BUILD_TAG_WHEEL}")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(wheel))
+        .expect(1..)
         .mount(server)
         .await;
 }
 
-fn connection_reset(_request: &wiremock::Request) -> io::Error {
-    io::Error::new(io::ErrorKind::ConnectionReset, "Connection reset by peer")
-}
-
-/// Returns true if the mock server has received any requests.
-async fn has_received_requests(server: &MockServer) -> bool {
-    !server.received_requests().await.unwrap().is_empty()
-}
-
-/// Answers with a retryable HTTP status 500.
-async fn http_error_server() -> (MockServer, String) {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(StatusCode::INTERNAL_SERVER_ERROR))
-        .mount(&server)
-        .await;
-
-    let mock_server_uri = server.uri();
-    (server, mock_server_uri)
-}
-
-/// Answers with a retryable connection reset IO error.
-async fn io_error_server() -> (MockServer, String) {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .respond_with_err(connection_reset)
-        .mount(&server)
-        .await;
-
-    let mock_server_uri = server.uri();
-    (server, mock_server_uri)
-}
-
-/// Answers with a retryable HTTP status 500 for 2 times, then with a retryable connection reset
-/// IO error.
-///
-/// Tests different errors paths inside uv, which retries 3 times by default, for a total for 4
-/// requests.
+/// Return two connection resets followed by two HTTP 500 responses across the initial request
+/// and three retries.
 async fn mixed_error_server() -> (MockServer, String) {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
         .respond_with_err(connection_reset)
         .up_to_n_times(2)
+        .expect(2)
         .mount(&server)
         .await;
 
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(StatusCode::INTERNAL_SERVER_ERROR))
         .up_to_n_times(2)
+        .expect(2)
         .mount(&server)
         .await;
 
     let mock_server_uri = server.uri();
     (server, mock_server_uri)
-}
-
-type StreamingResponse = hyper::Response<BoxBody<Bytes, Infallible>>;
-
-/// Emit some bytes, then wait before ending the response body.
-fn delayed_body(bytes: Bytes, delay: Duration) -> BoxBody<Bytes, Infallible> {
-    let (tx, rx) = tokio::sync::mpsc::channel(1);
-    tokio::spawn(async move {
-        let _ = tx.send(Ok(Frame::data(bytes))).await;
-        tokio::time::sleep(delay).await;
-    });
-    StreamBody::new(ReceiverStream::new(rx)).boxed()
-}
-
-fn time_out_response(
-    _request: hyper::Request<hyper::body::Incoming>,
-) -> Result<StreamingResponse, http::Error> {
-    hyper::Response::builder()
-        .header("Content-Type", "text/html")
-        .body(delayed_body(Bytes::new(), Duration::from_mins(1)))
-}
-
-/// Run a streaming HTTP server on its own runtime so test subprocesses cannot starve it.
-/// Dropping the guard shuts down the runtime and all connection tasks.
-fn streaming_server<F>(handler: F) -> (String, impl Drop)
-where
-    F: Fn(hyper::Request<hyper::body::Incoming>) -> Result<StreamingResponse, http::Error>
-        + Send
-        + Sync
-        + 'static,
-{
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let server = format!("http://{}", listener.local_addr().unwrap());
-    let handler = Arc::new(handler);
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async move {
-            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-            tokio::select! {
-                () = async {
-                    while let Ok((stream, _)) = listener.accept().await {
-                        let handler = handler.clone();
-                        tokio::spawn(async move {
-                            let _ = hyper_util::server::conn::auto::Builder::new(
-                                hyper_util::rt::TokioExecutor::new(),
-                            )
-                            .serve_connection(TokioIo::new(stream), service_fn(move |request| {
-                                ready(handler(request))
-                            }))
-                            .await;
-                        });
-                    }
-                } => {}
-                _ = shutdown_rx => {}
-            }
-        });
-    });
-    (server, shutdown_tx)
 }
 
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
@@ -529,91 +423,6 @@ async fn direct_url_mixed_error() {
     ");
 }
 
-fn write_python_downloads_json(context: &TestContext, mock_server_uri: &String) -> ChildPath {
-    let python_downloads_json = context.temp_dir.child("python_downloads.json");
-    let interpreter = json!({
-        "cpython-3.10.0-darwin-aarch64-none": {
-            "arch": {
-                "family": "aarch64",
-                "variant": null
-            },
-            "libc": "none",
-            "major": 3,
-            "minor": 10,
-            "name": "cpython",
-            "os": "darwin",
-            "patch": 0,
-            "prerelease": "",
-            "sha256": null,
-            "url": format!("{mock_server_uri}/astral-sh/python-build-standalone/releases/download/20211017/cpython-3.10.0-aarch64-apple-darwin-pgo%2Blto-20211017T1616.tar.zst"),
-            "variant": null
-        }
-    });
-    python_downloads_json
-        .write_str(&serde_json::to_string(&interpreter).unwrap())
-        .unwrap();
-    python_downloads_json
-}
-
-/// Check the Python install error message when the server returns HTTP status 500, a retryable
-/// error.
-#[tokio::test]
-async fn python_install_http_500() {
-    let context = uv_test::test_context!("3.12")
-        .without_python_download_cache()
-        .with_filtered_python_keys()
-        .with_filtered_exe_suffix()
-        .with_managed_python_dirs();
-
-    let (_server_drop_guard, mock_server_uri) = http_error_server().await;
-
-    let python_downloads_json = write_python_downloads_json(&context, &mock_server_uri);
-
-    uv_snapshot!(context.filters(), context
-        .python_install()
-        .arg("cpython-3.10.0-darwin-aarch64-none")
-        .arg("--python-downloads-json-url")
-        .arg(python_downloads_json.path())
-        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to install cpython-3.10.0-[PLATFORM]
-      cause: Request failed after 3 retries in [TIME]
-      cause: Failed to download `http://[LOCALHOST]/astral-sh/python-build-standalone/releases/download/20211017/cpython-3.10.0-[PLATFORM]-pgo%2Blto-20211017T1616.tar.zst`
-      cause: HTTP status server error (500 Internal Server Error) for url (http://[LOCALHOST]/astral-sh/python-build-standalone/releases/download/20211017/cpython-3.10.0-[PLATFORM]-pgo%2Blto-20211017T1616.tar.zst)
-    ");
-}
-
-/// Check the Python install error message when the server returns a retryable IO error.
-#[tokio::test]
-async fn python_install_io_error() {
-    let context = uv_test::test_context!("3.12")
-        .without_python_download_cache()
-        .with_filtered_python_keys()
-        .with_filtered_exe_suffix()
-        .with_managed_python_dirs();
-
-    let (_server_drop_guard, mock_server_uri) = io_error_server().await;
-
-    let python_downloads_json = write_python_downloads_json(&context, &mock_server_uri);
-
-    uv_snapshot!(context.filters(), context
-        .python_install()
-        .arg("cpython-3.10.0-darwin-aarch64-none")
-        .arg("--python-downloads-json-url")
-        .arg(python_downloads_json.path())
-        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true"), @"
-    exit_code: 1 (failure)
-    ----- stderr -----
-    error: Failed to install cpython-3.10.0-[PLATFORM]
-      cause: Request failed after 3 retries in [TIME]
-      cause: Failed to download `http://[LOCALHOST]/astral-sh/python-build-standalone/releases/download/20211017/cpython-3.10.0-[PLATFORM]-pgo%2Blto-20211017T1616.tar.zst`
-      cause: error sending request for url (http://[LOCALHOST]/astral-sh/python-build-standalone/releases/download/20211017/cpython-3.10.0-[PLATFORM]-pgo%2Blto-20211017T1616.tar.zst)
-      cause: client error (SendRequest)
-      cause: connection closed before message completed
-    ");
-}
-
 #[tokio::test]
 async fn install_http_retries() {
     let context = uv_test::test_context!("3.12");
@@ -750,106 +559,20 @@ async fn rfc9457_problem_details_license_violation() {
     ");
 }
 
-/// Test that invalid proxy URL in uv.toml produces a helpful error message.
-#[tokio::test]
-async fn proxy_invalid_url_in_uv_toml() {
-    let context = uv_test::test_context!("3.12");
-
-    let uv_toml = context.temp_dir.child("uv.toml");
-    uv_toml
-        .write_str(indoc::indoc! {r#"
-            http-proxy = "ftp://proxy.example.com:8080"
-        "#})
-        .unwrap();
-
-    uv_snapshot!(context.filters(), context
-        .pip_install()
-        .arg("iniconfig")
-        .env_remove(EnvVars::HTTP_PROXY)
-        .env_remove(EnvVars::HTTPS_PROXY), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to parse: uv.toml
-      cause: TOML parse error at line 1, column 14
-               |
-             1 | http-proxy = "ftp://proxy.example.com:8080"
-               |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-             invalid proxy URL scheme `ftp` in `ftp://proxy.example.com:8080/`: expected http, https, socks5, or socks5h
-    "#);
-}
-
-/// Test that invalid proxy URL (not a URL) in uv.toml produces a helpful error message.
-#[tokio::test]
-async fn proxy_invalid_url_not_a_url_in_uv_toml() {
-    let context = uv_test::test_context!("3.12");
-
-    let uv_toml = context.temp_dir.child("uv.toml");
-    uv_toml
-        .write_str(indoc::indoc! {r#"
-            http-proxy = "not a valid url"
-        "#})
-        .unwrap();
-
-    uv_snapshot!(context.filters(), context
-        .pip_install()
-        .arg("iniconfig")
-        .env_remove(EnvVars::HTTP_PROXY)
-        .env_remove(EnvVars::HTTPS_PROXY), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to parse: uv.toml
-      cause: TOML parse error at line 1, column 14
-               |
-             1 | http-proxy = "not a valid url"
-               |              ^^^^^^^^^^^^^^^^^
-             invalid proxy URL: invalid international domain name
-    "#);
-}
-
-/// Test that a SOCKS proxy URL without a host produces a configuration error.
-#[test]
-fn proxy_url_without_host() -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-
-    context
-        .temp_dir
-        .child("proxy.toml")
-        .write_str("http-proxy = \"socks5:foo\"\n")?;
-    context.temp_dir.child("requirements.in").write_str("")?;
-
-    uv_snapshot!(context.filters(), context
-        .pip_compile()
-        .arg("requirements.in")
-        .arg("--offline")
-        .arg("--config-file")
-        .arg("proxy.toml"), @r#"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Failed to parse: proxy.toml
-      cause: TOML parse error at line 1, column 14
-               |
-             1 | http-proxy = "socks5:foo"
-               |              ^^^^^^^^^^^^
-             invalid proxy URL: empty host
-    "#);
-
-    Ok(())
-}
-
 /// Test that valid proxy URL in uv.toml routes requests through the proxy.
-#[cfg(feature = "test-pypi")]
 #[tokio::test]
 async fn proxy_valid_url_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
 
     let target_server = MockServer::start().await;
     Mock::given(any())
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&target_server)
         .await;
 
     let proxy_server = MockServer::start().await;
-    mock_simple_api(&proxy_server).await;
+    mock_build_tag_index(&context, &proxy_server).await;
 
     let target_uri = target_server.uri();
     let proxy_uri = proxy_server.uri();
@@ -865,7 +588,7 @@ async fn proxy_valid_url_in_uv_toml() {
 
     uv_snapshot!(context.filters(), context
         .pip_install()
-        .arg("iniconfig")
+        .arg("build-tag")
         .arg("--index-url")
         .arg(&target_uri)
         .arg("--config-file")
@@ -879,26 +602,17 @@ async fn proxy_valid_url_in_uv_toml() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + build-tag==1.0.0
     ");
-
-    assert!(
-        has_received_requests(&proxy_server).await,
-        "Proxy should have received the request"
-    );
-    assert!(
-        !has_received_requests(&target_server).await,
-        "Target should NOT have been called directly when proxy is configured"
-    );
 }
 
 /// Test that https-proxy in uv.toml routes HTTPS requests through a CONNECT tunnel proxy.
 #[cfg(feature = "test-pypi")]
-#[test]
-fn proxy_https_proxy_in_uv_toml() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn proxy_https_proxy_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
 
-    let proxy_addr = start_connect_tunnel_proxy();
+    let (proxy_addr, connections) = start_connect_tunnel_proxy().await;
     let proxy_uri = format!("http://{proxy_addr}");
 
     let context = context.with_filter((proxy_uri.clone(), "[PROXY]"));
@@ -924,20 +638,24 @@ fn proxy_https_proxy_in_uv_toml() {
     Installed 1 package in [TIME]
      + iniconfig==2.0.0
     ");
+    assert!(
+        connections.load(Ordering::Relaxed) > 0,
+        "the configured HTTPS proxy should establish a CONNECT tunnel"
+    );
 }
 
 /// Test that no-proxy in uv.toml bypasses the proxy for specified hosts.
-#[cfg(feature = "test-pypi")]
 #[tokio::test]
 async fn proxy_no_proxy_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
 
     let target_server = MockServer::start().await;
-    mock_simple_api(&target_server).await;
+    mock_build_tag_index(&context, &target_server).await;
 
     let proxy_server = MockServer::start().await;
     Mock::given(any())
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&proxy_server)
         .await;
 
@@ -964,7 +682,7 @@ no-proxy = ["{target_host}"]
 
     uv_snapshot!(context.filters(), context
         .pip_install()
-        .arg("iniconfig")
+        .arg("build-tag")
         .arg("--index-url")
         .arg(&target_uri)
         .arg("--config-file")
@@ -978,33 +696,24 @@ no-proxy = ["{target_host}"]
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + build-tag==1.0.0
     ");
-
-    assert!(
-        has_received_requests(&target_server).await,
-        "Target should have received the request directly when in no-proxy list"
-    );
-    assert!(
-        !has_received_requests(&proxy_server).await,
-        "Proxy should NOT have received requests when target is in no-proxy list"
-    );
 }
 
 /// Test that proxy URLs without a scheme in uv.toml default to http://.
-#[cfg(feature = "test-pypi")]
 #[tokio::test]
 async fn proxy_schemeless_url_in_uv_toml() {
     let context = uv_test::test_context!("3.12");
 
     let target_server = MockServer::start().await;
     Mock::given(any())
-        .respond_with(ResponseTemplate::new(200))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&target_server)
         .await;
 
     let proxy_server = MockServer::start().await;
-    mock_simple_api(&proxy_server).await;
+    mock_build_tag_index(&context, &proxy_server).await;
 
     let target_uri = target_server.uri();
     let proxy_uri = proxy_server.uri();
@@ -1026,7 +735,7 @@ async fn proxy_schemeless_url_in_uv_toml() {
 
     uv_snapshot!(context.filters(), context
         .pip_install()
-        .arg("iniconfig")
+        .arg("build-tag")
         .arg("--index-url")
         .arg(&target_uri)
         .arg("--config-file")
@@ -1040,33 +749,54 @@ async fn proxy_schemeless_url_in_uv_toml() {
     Resolved 1 package in [TIME]
     Prepared 1 package in [TIME]
     Installed 1 package in [TIME]
-     + iniconfig==2.0.0
+     + build-tag==1.0.0
     ");
-
-    assert!(
-        has_received_requests(&proxy_server).await,
-        "Proxy should have received the request even with schemeless URL"
-    );
-    assert!(
-        !has_received_requests(&target_server).await,
-        "Target should NOT have been called directly when proxy is configured"
-    );
 }
 
-#[test]
-fn connect_timeout_index() {
+/// Keep an accepted socket open without completing the TLS handshake.
+struct StalledTlsServer {
+    address: std::net::SocketAddr,
+    connection: tokio::task::JoinHandle<(tokio::net::TcpStream, Instant)>,
+}
+
+impl StalledTlsServer {
+    async fn start() -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        // The task result retains the socket until the assertion, keeping the handshake stalled.
+        let connection = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            (socket, Instant::now())
+        });
+        Self {
+            address,
+            connection,
+        }
+    }
+
+    async fn assert_connect_timeout(self) {
+        let (_socket, connected_at) = tokio::time::timeout(Duration::from_secs(3), self.connection)
+            .await
+            .expect("uv should connect to the TLS server")
+            .expect("TLS server task should complete");
+        let elapsed = connected_at.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "one-second connect timeout took {elapsed:?} after accepting the connection"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_timeout_index() {
     let context = uv_test::test_context!("3.12");
 
-    // Create a server that never responds, causing a timeout for our requests.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let server = listener.local_addr().unwrap().to_string();
-
-    let start = Instant::now();
+    let server = StalledTlsServer::start().await;
     uv_snapshot!(context.filters(), context
         .pip_install()
         .arg("tqdm")
         .arg("--index-url")
-        .arg(format!("https://{server}"))
+        .arg(format!("https://{}", server.address))
         .env(EnvVars::UV_HTTP_CONNECT_TIMEOUT, "1")
         .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
     exit_code: 2 (failure)
@@ -1077,26 +807,17 @@ fn connect_timeout_index() {
       cause: operation timed out
     ");
 
-    // Assumption: There's less than 2s overhead for this test and startup.
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed < Duration::from_secs(3),
-        "Test with 1s connect timeout took too long"
-    );
+    server.assert_connect_timeout().await;
 }
 
-#[test]
-fn connect_timeout_stream() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_timeout_stream() {
     let context = uv_test::test_context!("3.12");
 
-    // Create a server that never responds, causing a timeout for our requests.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let server = listener.local_addr().unwrap().to_string();
-
-    let start = Instant::now();
+    let server = StalledTlsServer::start().await;
     uv_snapshot!(context.filters(), context
         .pip_install()
-        .arg(format!("https://{server}/tqdm-0.1-py3-none-any.whl"))
+        .arg(format!("https://{}/tqdm-0.1-py3-none-any.whl", server.address))
         .env(EnvVars::UV_HTTP_CONNECT_TIMEOUT, "1")
         .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
     exit_code: 2 (failure)
@@ -1108,12 +829,7 @@ fn connect_timeout_stream() {
       cause: operation timed out
     ");
 
-    // Assumption: There's less than 2s overhead for this test and startup.
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed < Duration::from_secs(3),
-        "Test with 1s connect timeout took too long"
-    );
+    server.assert_connect_timeout().await;
 }
 
 #[tokio::test]
@@ -1132,28 +848,6 @@ async fn retry_read_timeout_index() {
     error: Request failed after 1 retry in [TIME]
       cause: Failed to fetch: http://[LOCALHOST]/tqdm/
       cause: error decoding response body for url (http://[LOCALHOST]/tqdm/)
-      cause: request or response body error
-      cause: operation timed out
-    ");
-}
-
-#[tokio::test]
-async fn retry_read_timeout_python_downloads_json() {
-    let context = uv_test::test_context!("3.12").with_fast_http_retry();
-
-    let (server, _guard) = streaming_server(time_out_response);
-
-    uv_snapshot!(context.filters(), context
-        .python_list()
-        .env_remove(EnvVars::UV_PYTHON_DOWNLOADS)
-        .arg("--python-downloads-json-url")
-        .arg(&server), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: Error while fetching remote python downloads json from `http://[LOCALHOST]/`
-      cause: Request failed after 1 retry in [TIME]
-      cause: Failed to download `http://[LOCALHOST]/`
-      cause: error decoding response body for url (http://[LOCALHOST]/)
       cause: request or response body error
       cause: operation timed out
     ");
@@ -1313,120 +1007,83 @@ fn wheel_response(
     ))
 }
 
+struct WheelServer {
+    url: String,
+    _guard: StreamingServerGuard,
+    requests: Arc<DownloadRequests>,
+    hash: String,
+    size: usize,
+}
+
+impl WheelServer {
+    fn write_lockfile(&self, context: &TestContext, declared_size: usize) -> Result<()> {
+        context
+            .temp_dir
+            .child("pylock.toml")
+            .write_str(&formatdoc! {
+                r#"
+            lock-version = "1.0"
+            created-by = "uv"
+
+            [[packages]]
+            name = "build-tag"
+            version = "1.0.0"
+            archive = {{ url = "{url}", size = {declared_size}, hashes = {{ sha256 = "{hash}" }} }}
+            "#,
+                url = self.url,
+                hash = self.hash,
+            })?;
+        Ok(())
+    }
+}
+
 fn wheel_server(
     context: &TestContext,
     range_response: RangeResponse,
     retries: usize,
-) -> (String, impl Drop, Arc<DownloadRequests>, String) {
+) -> WheelServer {
     let fixtures = context.workspace_root.join("test/links");
-    let wheel =
-        Bytes::from(context.read_bytes(fixtures.join("build_tag-1.0.0-1-py2.py3-none-any.whl")));
+    let wheel = Bytes::from(context.read_bytes(fixtures.join(BUILD_TAG_WHEEL)));
     let hash = hex::encode(Sha256::digest(&wheel));
+    let size = wheel.len();
     let requests = Arc::new(DownloadRequests::default());
     let server_requests = requests.clone();
-    let (server, guard) = streaming_server(move |request| {
+    let (url, guard) = streaming_server(move |request| {
         wheel_response(&request, &wheel, range_response, retries, &server_requests)
     });
-    (server, guard, requests, hash)
+    WheelServer {
+        url: format!("{url}/{BUILD_TAG_WHEEL}"),
+        _guard: guard,
+        requests,
+        hash,
+        size,
+    }
 }
 
-fn assert_wheel_download(
-    range_response: RangeResponse,
-    retries: usize,
-    full_requests: usize,
-    resumed_requests: usize,
-) -> Result<()> {
-    let context = uv_test::test_context!("3.12");
-    let (server, _guard, requests, hash) = wheel_server(&context, range_response, retries);
-    write_wheel_lockfile(&context, &server, 932, &hash)?;
-    allow_duplicates! {
-        uv_snapshot!(context.filters(), context
-            .pip_sync()
-            .arg("--preview")
-            .arg("pylock.toml")
-            .env(EnvVars::UV_HTTP_RETRIES, retries.to_string())
-            .env(EnvVars::UV_HTTP_TIMEOUT, "1")
-            .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
-            .env(EnvVars::RUST_LOG, "warn"), @"
-        exit_code: 0 (success)
-        ----- stderr -----
-        WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
-        Prepared 1 package in [TIME]
-        Installed 1 package in [TIME]
-         + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
-        ");
-    }
-    assert_eq!(requests.full.load(Ordering::Relaxed), full_requests);
-    assert_eq!(requests.resumed.load(Ordering::Relaxed), resumed_requests);
-
+fn assert_build_tag_installed(context: &TestContext) {
     let site_packages = context.site_packages();
     assert_eq!(
         context.read(site_packages.join("build_tag/__init__.py")),
         "def main():\n    print(\"1\")\n",
     );
-    let metadata = context.read(site_packages.join("build_tag-1.0.0.dist-info/METADATA"));
-    let wheel = context.read(site_packages.join("build_tag-1.0.0.dist-info/WHEEL"));
-    allow_duplicates! {
-        assert_snapshot!(metadata, @"
-        Metadata-Version: 2.3
-        Name: build-tag
-        Version: 1.0.0
-        ");
-        assert_snapshot!(wheel, @"
-        Wheel-Version: 1.0
-        Generator: hatchling 1.26.3
-        Root-Is-Purelib: true
-        Tag: py2-none-any
-        Tag: py3-none-any
-        ");
-    }
-    Ok(())
-}
-
-fn assert_wheel_download_timeout(
-    range_response: RangeResponse,
-    retries: usize,
-    full_requests: usize,
-    resumed_requests: usize,
-) {
-    let context = uv_test::test_context!("3.12");
-    let (server, _guard, requests, _) = wheel_server(&context, range_response, retries);
-
-    let wheel_url = format!("{server}/build_tag-1.0.0-1-py2.py3-none-any.whl");
-    allow_duplicates! {
-        uv_snapshot!(context.filters(), context
-            .pip_install()
-            .arg(format!("build-tag @ {wheel_url}"))
-            .env(EnvVars::UV_HTTP_RETRIES, retries.to_string())
-            .env(EnvVars::UV_HTTP_TIMEOUT, "1")
-            .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
-            .env(EnvVars::RUST_LOG, "warn"), @"
-        exit_code: 2 (failure)
-        ----- stderr -----
-        Resolved 1 package in [TIME]
-        WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
-        error: Failed to download `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`
-          cause: Failed to write to the distribution cache
-          cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
-        ");
-    }
-    assert_eq!(requests.full.load(Ordering::Relaxed), full_requests);
-    assert_eq!(requests.resumed.load(Ordering::Relaxed), resumed_requests);
-}
-
-fn write_wheel_lockfile(context: &TestContext, server: &str, size: u64, hash: &str) -> Result<()> {
-    context.temp_dir.child("pylock.toml").write_str(&formatdoc! {
-        r#"
-        lock-version = "1.0"
-        created-by = "uv"
-
-        [[packages]]
-        name = "build-tag"
-        version = "1.0.0"
-        archive = {{ url = "{server}/build_tag-1.0.0-1-py2.py3-none-any.whl", size = {size}, hashes = {{ sha256 = "{hash}" }} }}
-        "#,
-    })?;
-    Ok(())
+    assert_eq!(
+        context.read(site_packages.join("build_tag-1.0.0.dist-info/METADATA")),
+        indoc::indoc! {"
+            Metadata-Version: 2.3
+            Name: build-tag
+            Version: 1.0.0
+        "},
+    );
+    assert_eq!(
+        context.read(site_packages.join("build_tag-1.0.0.dist-info/WHEEL")),
+        indoc::indoc! {"
+            Wheel-Version: 1.0
+            Generator: hatchling 1.26.3
+            Root-Is-Purelib: true
+            Tag: py2-none-any
+            Tag: py3-none-any
+        "},
+    );
 }
 
 /// Metadata errors from HTTP range requests must redact URL passwords and `sig` query values.
@@ -1434,14 +1091,17 @@ fn write_wheel_lockfile(context: &TestContext, server: &str, size: u64, hash: &s
 #[test]
 fn remote_wheel_metadata_error_redacts_url() {
     let context = uv_test::test_context!("3.12");
-    let (server, _guard, _, _) = wheel_server(&context, RangeResponse::Supported, 0);
-    let server = server.replacen("http://", "http://user:password@", 1);
+    let server = wheel_server(&context, RangeResponse::Supported, 0);
+    let url = server
+        .url
+        .replace(BUILD_TAG_WHEEL, "tqdm-1.0.0-py3-none-any.whl")
+        .replacen("http://", "http://user:password@", 1);
 
     // The served wheel contains `build_tag` metadata, which does not match the requested name.
     uv_snapshot!(context.filters(), context
         .pip_install()
         .arg("--no-index")
-        .arg(format!("tqdm @ {server}/tqdm-1.0.0-py3-none-any.whl?sig=signature&keep=value")), @"
+        .arg(format!("tqdm @ {url}?sig=signature&keep=value")), @"
     exit_code: 1 (failure)
     ----- stderr -----
     error: Failed to download `tqdm @ http://user:****@[LOCALHOST]/tqdm-1.0.0-py3-none-any.whl?sig=****&keep=value`
@@ -1453,8 +1113,8 @@ fn remote_wheel_metadata_error_redacts_url() {
 #[test]
 fn direct_url_content_length_mismatch() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (server, _guard, requests, hash) = wheel_server(&context, RangeResponse::NotAdvertised, 1);
-    write_wheel_lockfile(&context, &server, 1, &hash)?;
+    let server = wheel_server(&context, RangeResponse::NotAdvertised, 1);
+    server.write_lockfile(&context, 1)?;
 
     uv_snapshot!(context.filters(), context
         .pip_sync()
@@ -1471,50 +1131,200 @@ fn direct_url_content_length_mismatch() -> Result<()> {
       cause: Content-Length mismatch for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`: expected 1 bytes, but the server advertised 932 bytes
     ");
     // The first fallback response fails on its headers without consuming a full-download retry.
-    assert_eq!(requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
     Ok(())
 }
 
 #[test]
 fn direct_url_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::Supported, 1, 3, 1)
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Supported, 1);
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 1);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
 fn direct_url_partial_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::Limited { known_length: true }, 1, 3, 2)
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Limited { known_length: true }, 1);
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 2);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
 fn direct_url_partial_range_resume_unknown_length() -> Result<()> {
-    assert_wheel_download(
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(
+        &context,
         RangeResponse::Limited {
             known_length: false,
         },
         1,
-        3,
-        2,
-    )
+    );
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 2);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
 fn direct_url_ignored_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::Ignored, 1, 3, 1)
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Ignored, 1);
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 1);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
 fn direct_url_no_range_resume() -> Result<()> {
-    assert_wheel_download(RangeResponse::NotAdvertised, 1, 4, 0)
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::NotAdvertised, 1);
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 4);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 0);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
 fn direct_url_unsatisfiable_range_retries_in_full() -> Result<()> {
-    assert_wheel_download(RangeResponse::Unsatisfiable, 2, 5, 1)
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Unsatisfiable, 2);
+    server.write_lockfile(&context, server.size)?;
+
+    uv_snapshot!(context.filters(), context
+        .pip_sync()
+        .arg("--preview")
+        .arg("pylock.toml")
+        .env(EnvVars::UV_HTTP_RETRIES, "2")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + build-tag==1.0.0 (from http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl)
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 5);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 1);
+    assert_build_tag_installed(&context);
+    Ok(())
 }
 
 #[test]
 fn direct_url_unsatisfiable_range_does_not_bypass_retry() {
-    assert_wheel_download_timeout(RangeResponse::Unsatisfiable, 1, 3, 1);
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Unsatisfiable, 1);
+
+    uv_snapshot!(context.filters(), context
+        .pip_install()
+        .arg(format!("build-tag @ {}", server.url))
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    error: Failed to download `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`
+      cause: Failed to write to the distribution cache
+      cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 1);
 }
 
 /// An invalid continuation response does not bypass regular retry handling.
@@ -1522,13 +1332,11 @@ fn direct_url_unsatisfiable_range_does_not_bypass_retry() {
 fn direct_url_invalid_range_does_not_bypass_retry() {
     let context = uv_test::test_context!("3.12");
 
-    let (server, _guard, requests, _) =
-        wheel_server(&context, RangeResponse::InvalidContentRange, 1);
+    let server = wheel_server(&context, RangeResponse::InvalidContentRange, 1);
 
-    let wheel_url = format!("{server}/build_tag-1.0.0-1-py2.py3-none-any.whl");
     uv_snapshot!(context.filters(), context
         .pip_install()
-        .arg(format!("build-tag @ {wheel_url}"))
+        .arg(format!("build-tag @ {}", server.url))
         .env(EnvVars::UV_HTTP_RETRIES, "1")
         .env(EnvVars::UV_HTTP_TIMEOUT, "1")
         .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
@@ -1542,20 +1350,19 @@ fn direct_url_invalid_range_does_not_bypass_retry() {
       cause: Failed to write to the distribution cache
       cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
     ");
-    assert_eq!(requests.full.load(Ordering::Relaxed), 3);
-    assert_eq!(requests.resumed.load(Ordering::Relaxed), 1);
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 1);
 }
 
 /// A complete HTTP body with the wrong range length fails without retrying the full download.
 #[test]
 fn direct_url_range_size_mismatch() {
     let context = uv_test::test_context!("3.12");
-    let (server, _guard, requests, _) = wheel_server(&context, RangeResponse::ShortBody, 1);
+    let server = wheel_server(&context, RangeResponse::ShortBody, 1);
 
-    let wheel_url = format!("{server}/build_tag-1.0.0-1-py2.py3-none-any.whl");
     uv_snapshot!(context.filters(), context
         .pip_install()
-        .arg(format!("build-tag @ {wheel_url}"))
+        .arg(format!("build-tag @ {}", server.url))
         .env(EnvVars::UV_HTTP_RETRIES, "1")
         .env(EnvVars::UV_HTTP_TIMEOUT, "1")
         .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
@@ -1568,20 +1375,77 @@ fn direct_url_range_size_mismatch() {
       cause: Range response size mismatch for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`: expected 466 bytes from Content-Range, but received 465 bytes
     ");
     // Two streaming attempts precede the download fallback; the range mismatch ends the attempt.
-    assert_eq!(requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
 }
 
 #[test]
 fn direct_url_range_resume_disabled() {
-    assert_wheel_download_timeout(RangeResponse::Supported, 0, 2, 0);
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Supported, 0);
+
+    uv_snapshot!(context.filters(), context
+        .pip_install()
+        .arg(format!("build-tag @ {}", server.url))
+        .env(EnvVars::UV_HTTP_RETRIES, "0")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    error: Failed to download `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`
+      cause: Failed to write to the distribution cache
+      cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 2);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 0);
 }
 
 #[test]
 fn direct_url_range_resume_retry_limit() {
-    assert_wheel_download_timeout(RangeResponse::Interrupted, 2, 4, 2);
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::Interrupted, 2);
+
+    uv_snapshot!(context.filters(), context
+        .pip_install()
+        .arg(format!("build-tag @ {}", server.url))
+        .env(EnvVars::UV_HTTP_RETRIES, "2")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    error: Failed to download `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`
+      cause: Failed to write to the distribution cache
+      cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 4);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 2);
 }
 
 #[test]
 fn direct_url_range_resume_success_does_not_reset_retries() {
-    assert_wheel_download_timeout(RangeResponse::LimitedThenInterrupted, 1, 3, 2);
+    let context = uv_test::test_context!("3.12");
+    let server = wheel_server(&context, RangeResponse::LimitedThenInterrupted, 1);
+
+    uv_snapshot!(context.filters(), context
+        .pip_install()
+        .arg(format!("build-tag @ {}", server.url))
+        .env(EnvVars::UV_HTTP_RETRIES, "1")
+        .env(EnvVars::UV_HTTP_TIMEOUT, "1")
+        .env(EnvVars::UV_INTERNAL__TEST_NO_HTTP_RETRY_DELAY, "true")
+        .env(EnvVars::RUST_LOG, "warn"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    WARN Streaming failed for `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`; downloading wheel to disk (I/O operation failed during extraction)
+    error: Failed to download `build-tag @ http://[LOCALHOST]/build_tag-1.0.0-1-py2.py3-none-any.whl`
+      cause: Failed to write to the distribution cache
+      cause: Failed to download distribution due to network timeout. Try increasing UV_HTTP_TIMEOUT (current value: [TIME]).
+    ");
+    assert_eq!(server.requests.full.load(Ordering::Relaxed), 3);
+    assert_eq!(server.requests.resumed.load(Ordering::Relaxed), 2);
 }
