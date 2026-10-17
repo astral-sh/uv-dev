@@ -209,7 +209,11 @@ async fn seed_prefix(cache: &Cache, url: &SafeUrl) -> Result<()> {
 
 #[tokio::test]
 async fn exact_lookup_persists_and_reuses_a_complete_record_prefix() -> Result<()> {
-    let full = format!("{FIRST}{SECOND}");
+    let preferred_record = concat!(
+        r#"{"version":"3.13.2","artifacts":[{"platform":"x86_64-unknown-linux-gnu","variant":"custom-build+install_only","url":"https://example.com/a-unoptimized.tar.gz"},{"platform":"x86_64-unknown-linux-gnu","variant":"pgo+lto+custom-build+install_only","url":"https://example.com/z-optimized.tar.gz"},{"platform":"x86_64-unknown-linux-gnu","variant":"pgo+lto+install_only","url":"https://example.com/a-optimized.tar.gz"}]}"#,
+        "\n"
+    );
+    let full = format!("{preferred_record}{SECOND}");
     let server = MetadataServer::start(vec![Exchange {
         method: "GET",
         range: None,
@@ -224,17 +228,36 @@ async fn exact_lookup_persists_and_reuses_a_complete_record_prefix() -> Result<(
         .await?
         .context("matching download")?;
     assert_eq!(first.key().version().to_string(), "3.13.2");
+    assert_eq!(
+        first.url().as_ref(),
+        "https://example.com/z-optimized.tar.gz"
+    );
+    assert_eq!(
+        first.variants.names,
+        [
+            LenientArtifactVariantName::Unknown("custom-build".to_owned()),
+            LenientArtifactVariantName::Known(ArtifactVariantName::Lto),
+            LenientArtifactVariantName::Known(ArtifactVariantName::Pgo),
+        ]
+    );
     let (content, meta) = read_versions_cache_content(&cache, &server.url)
         .await
         .context("cached prefix")?;
-    assert_eq!(content, FIRST.as_bytes());
-    assert_eq!(meta.content_length, FIRST.len() as u64);
+    assert_eq!(content, preferred_record.as_bytes());
+    assert_eq!(meta.content_length, preferred_record.len() as u64);
     assert_eq!(meta.representation_length, Some(full.len() as u64));
     assert!(!meta.complete);
     assert_eq!(meta.etag.as_deref(), Some("\"v1\""));
 
     assert_eq!(
         fetch_ndjson_find_cached(&client, &server.url, &cache, &request).await?,
+        Some(first.clone())
+    );
+    let offline_client = BaseClientBuilder::default()
+        .connectivity(Connectivity::Offline)
+        .build()?;
+    assert_eq!(
+        fetch_ndjson_find_cached(&offline_client, &server.url, &cache, &request).await?,
         Some(first)
     );
     server.finish()?;

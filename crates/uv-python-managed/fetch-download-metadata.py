@@ -55,7 +55,7 @@ import logging
 import os
 import re
 from collections.abc import Generator, Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar, NamedTuple, Self
@@ -70,6 +70,22 @@ logger = logging.getLogger(__name__)
 # The date at which the default CPython musl builds became dynamically linked
 # instead of statically.
 CPYTHON_MUSL_STATIC_RELEASE_END = 20250311
+
+ARCHIVE_FLAVORS = frozenset({"full", "install_only", "install_only_stripped"})
+LEGACY_ARCHIVE_FLAVORS = frozenset({"shared-pgo", "shared-noopt", "static-noopt"})
+COMPOUND_VARIANTS = {
+    "shared-freethreaded": ("shared", "freethreaded"),
+    "shared-noopt": ("shared", "noopt"),
+    "shared-pgo": ("shared", "pgo"),
+    "static-noopt": ("static", "noopt"),
+}
+DEFAULT_FLAVOR_PREFERENCES = (
+    "install_only_stripped",
+    "install_only",
+    "shared-pgo",
+    "shared-noopt",
+    "static-noopt",
+)
 
 
 def batched(iterable: Iterable, n: int) -> Generator[tuple, None, None]:
@@ -152,17 +168,38 @@ class Variant(StrEnum):
     FREETHREADED_DEBUG = "freethreaded+debug"
 
     @classmethod
-    def from_build_options(
-        cls: type["Variant"], build_options: list[str]
-    ) -> "Variant | None":
-        if "debug" in build_options and "freethreaded" in build_options:
+    def from_names(cls: type["Variant"], names: tuple[str, ...]) -> "Variant | None":
+        if "debug" in names and "freethreaded" in names:
             return cls.FREETHREADED_DEBUG
-        elif "debug" in build_options:
+        elif "debug" in names:
             return cls.DEBUG
-        elif "freethreaded" in build_options:
+        elif "freethreaded" in names:
             return cls.FREETHREADED
         else:
             return None
+
+
+@dataclass(frozen=True)
+class ArtifactVariants:
+    names: tuple[str, ...]
+    flavor: str | None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "names", tuple(sorted(set(self.names) - {""})))
+
+    @classmethod
+    def parse(cls, value: str, platform_names: Iterable[str] = ()) -> Self:
+        parts = [part for part in value.split("+") if part]
+        if parts and parts[-1] in ARCHIVE_FLAVORS:
+            flavor = parts.pop()
+        elif value in LEGACY_ARCHIVE_FLAVORS:
+            flavor = value
+        else:
+            flavor = None
+        names = list(platform_names)
+        for part in parts:
+            names.extend(COMPOUND_VARIANTS.get(part, (part,)))
+        return cls(tuple(names), flavor)
 
 
 @dataclass
@@ -170,20 +207,50 @@ class PythonDownload:
     release: int
     version: Version
     triple: PlatformTriple
-    flavor: str
     implementation: ImplementationName
     filename: str
     url: str
     build: str
+    artifact_variants: ArtifactVariants
     sha256: str | None = None
-    build_options: list[str] = field(default_factory=list)
-    variant: Variant | None = None
+
+    @property
+    def variant(self) -> Variant | None:
+        return Variant.from_names(self.artifact_variants.names)
 
     def key(self) -> str:
         if self.variant:
             return f"{self.implementation}-{self.version}+{self.variant}-{self.triple.platform}-{self.triple.arch}-{self.triple.libc}"
         else:
             return f"{self.implementation}-{self.version}-{self.triple.platform}-{self.triple.arch}-{self.triple.libc}"
+
+
+def is_compatible_download(
+    download: PythonDownload, *, pbs_release: int | None = None
+) -> bool:
+    if "static" in download.artifact_variants.names:
+        return False
+    if {"gil", "freethreaded"}.issubset(download.artifact_variants.names):
+        return False
+    return not (
+        pbs_release is not None
+        and pbs_release < CPYTHON_MUSL_STATIC_RELEASE_END
+        and download.triple.libc == "musl"
+    )
+
+
+def default_preference(download: PythonDownload) -> tuple[int, int]:
+    flavor_name = download.artifact_variants.flavor
+    try:
+        flavor = (
+            DEFAULT_FLAVOR_PREFERENCES.index(flavor_name)
+            if flavor_name is not None
+            else len(DEFAULT_FLAVOR_PREFERENCES) + 1
+        )
+    except ValueError:
+        flavor = len(DEFAULT_FLAVOR_PREFERENCES) + 1
+    names = download.artifact_variants.names
+    return flavor, -int("pgo" in names) - int("lto" in names)
 
 
 class Finder:
@@ -199,21 +266,11 @@ class CPythonFinder(Finder):
 
     NDJSON_URL = "https://releases.astral.sh/github/versions/main/v1/python-build-standalone.ndjson"
 
-    FLAVOR_PREFERENCES: ClassVar[list[str]] = [
-        "install_only_stripped",
-        "install_only",
-        "shared-pgo",
-        "shared-noopt",
-        "static-noopt",
-    ]
     # Normalized mappings to match the Rust types
     ARCH_MAP: ClassVar[dict[str, str]] = {
         "ppc64": "powerpc64",
         "ppc64le": "powerpc64le",
     }
-    # Terminal flavor keywords used as the last component of an NDJSON variant string.
-    # All preceding "+" components are treated as build options.
-    KNOWN_FLAVORS = frozenset({"full", "install_only", "install_only_stripped"})
 
     def __init__(self, client: httpx.AsyncClient):
         self.client = client
@@ -239,15 +296,12 @@ class CPythonFinder(Finder):
                 version = Version.from_str(version_str)
                 release = int(date_str)
 
-                # Sort artifacts to ensure deterministic results
-                for artifact in sorted(record["artifacts"], key=lambda a: a["url"]):
+                # Catalog order breaks ties between equally preferred artifacts.
+                for artifact in record["artifacts"]:
                     download = self._parse_ndjson_artifact(version, release, artifact)
                     if download is None:
                         continue
-                    if (
-                        download.release < CPYTHON_MUSL_STATIC_RELEASE_END
-                        and download.triple.libc == "musl"
-                    ):
+                    if not is_compatible_download(download, pbs_release=release):
                         continue
                     logger.debug("Found %s (%s)", download.key(), download.filename)
                     downloads_by_version.setdefault(download.version, []).append(
@@ -262,18 +316,17 @@ class CPythonFinder(Finder):
                 tuple[PythonDownload, tuple[int, int]],
             ] = {}
             for download in version_downloads:
-                priority = self._get_priority(download)
+                priority = default_preference(download)
                 existing = selected.get((download.triple.key(), download.variant))
                 if existing:
                     existing_download, existing_priority = existing
-                    # Skip if we have a flavor with higher priority already (indicated by a smaller value)
                     if priority >= existing_priority:
                         logger.debug(
                             "Skipping %s (%s): lower priority than %s (%s)",
                             download.key(),
-                            download.flavor,
+                            download.artifact_variants.flavor,
                             existing_download.key(),
-                            existing_download.flavor,
+                            existing_download.artifact_variants.flavor,
                         )
                         continue
                 selected[(download.triple.key(), download.variant)] = (
@@ -297,61 +350,36 @@ class CPythonFinder(Finder):
         platform_str = artifact["platform"]
         variant_str = artifact["variant"]
 
-        # On macOS, some builds encode build options as platform suffixes
-        # rather than variant components (e.g. "aarch64-apple-darwin-debug",
-        # "aarch64-apple-darwin-freethreaded"). Strip them and promote to
-        # build options.
+        # Build options can occur in both platform suffixes and the variant field.
         platform_build_options: list[str] = []
-        for suffix in ("-debug", "-freethreaded"):
-            if platform_str.endswith(suffix):
-                platform_str = platform_str[: -len(suffix)]
-                platform_build_options.append(suffix.lstrip("-"))
+        while "-" in platform_str:
+            prefix, _, option = platform_str.rpartition("-")
+            if option not in {"static", "shared", "debug", "freethreaded"}:
+                break
+            platform_str = prefix
+            platform_build_options.append(option)
 
-        flavor, variant_build_options = self._parse_variant(variant_str)
-        build_options = platform_build_options + variant_build_options
-
-        # Skip static builds (not supported)
-        if "static" in build_options:
-            logger.debug("Skipping %s: static unsupported", filename)
+        if len(platform_str.split("-")) > 4:
+            logger.debug("Skipping %s: unsupported platform suffix", filename)
             return None
 
         triple = self._normalize_triple(platform_str)
         if triple is None:
             return None
 
-        variant = Variant.from_build_options(build_options)
-
         return PythonDownload(
             release=release,
             version=version,
             triple=triple,
-            flavor=flavor,
             implementation=self.implementation,
             filename=filename,
             url=url,
             build=str(release),
-            build_options=build_options,
-            variant=variant,
+            artifact_variants=ArtifactVariants.parse(
+                variant_str, platform_build_options
+            ),
             sha256=sha256,
         )
-
-    def _parse_variant(self, variant_str: str) -> tuple[str, list[str]]:
-        """Split an NDJSON variant string into (flavor, build_options).
-
-        The variant field uses "+" as separator. The last component is the
-        flavor when it is a known terminal keyword; everything preceding it
-        is a build option that may affect priority or variant classification.
-        Examples:
-          "install_only_stripped"   → ("install_only_stripped", [])
-          "pgo+lto+full"            → ("full", ["pgo", "lto"])
-          "freethreaded+debug+full" → ("full", ["freethreaded", "debug"])
-          "static-noopt+full"       → ("full", ["static-noopt"])
-        """
-        parts = variant_str.split("+")
-        if parts[-1] in self.KNOWN_FLAVORS:
-            return parts[-1], parts[:-1]
-        # Whole string is itself a flavor (e.g. "install_only_stripped" has no "+")
-        return variant_str, []
 
     def _normalize_triple(self, triple: str) -> PlatformTriple | None:
         pieces = triple.split("-")
@@ -378,31 +406,6 @@ class CPythonFinder(Finder):
 
     def _normalize_os(self, os: str) -> str:
         return os
-
-    def _get_priority(self, download: PythonDownload) -> tuple[int, int]:
-        """
-        Returns the priority of a download, a lower score is better.
-        """
-        flavor_priority = self._flavor_priority(download.flavor)
-        build_option_priority = self._build_option_priority(download.build_options)
-        return (flavor_priority, build_option_priority)
-
-    def _flavor_priority(self, flavor: str) -> int:
-        try:
-            priority = self.FLAVOR_PREFERENCES.index(flavor)
-        except ValueError:
-            priority = len(self.FLAVOR_PREFERENCES) + 1
-        return priority
-
-    def _build_option_priority(self, build_options: list[str]) -> int:
-        # Prefer optimized builds
-        return -1 * sum(
-            (
-                "lto" in build_options,
-                "pgo" in build_options,
-                "static" not in build_options,
-            )
-        )
 
 
 class PyPyFinder(Finder):
@@ -481,11 +484,11 @@ class PyPyFinder(Finder):
                         arch=arch,
                         libc=libc,
                     ),
-                    flavor="",
                     implementation=self.implementation,
                     filename=file["filename"],
                     url=file["download_url"],
                     build=pypy_version,
+                    artifact_variants=ArtifactVariants((), "install_only"),
                 )
                 # Only keep the latest pypy version of each arch/platform
                 if (python_version, arch, platform) not in results:
@@ -580,11 +583,11 @@ class PyodideFinder(Finder):
                 release=0,
                 version=python_version,
                 triple=self.TRIPLE,
-                flavor=pyodide_version,
                 implementation=self.implementation,
                 filename=asset["name"],
                 url=url,
                 build=pyodide_version,
+                artifact_variants=ArtifactVariants((), "install_only"),
             )
 
             # Only keep latest Pyodide version of each Python version
@@ -684,11 +687,11 @@ class GraalPyFinder(Finder):
                         arch=arch,
                         libc=libc,
                     ),
-                    flavor=graalpy_version,
                     implementation=self.implementation,
                     filename=asset["name"],
                     url=url,
                     build=graalpy_version,
+                    artifact_variants=ArtifactVariants((), "install_only"),
                     sha256=sha256,
                 )
                 # Only keep the latest GraalPy version of each arch/platform
@@ -785,6 +788,7 @@ def filter_cpython_versions(downloads: list[PythonDownload]) -> list[PythonDownl
 
 def render(downloads: list[PythonDownload], *, prune: bool = False) -> None:
     """Render `download-metadata.json`."""
+    downloads = [download for download in downloads if is_compatible_download(download)]
     if prune:
         downloads = filter_cpython_versions(downloads)
 
@@ -828,12 +832,18 @@ def render(downloads: list[PythonDownload], *, prune: bool = False) -> None:
             logger.info(
                 "Skipping unsupported version %s%s",
                 key,
-                f" ({download.flavor})" if download.flavor else "",
+                f" ({download.artifact_variants.flavor})"
+                if download.artifact_variants.flavor
+                else "",
             )
             continue
 
         logger.info(
-            "Selected %s%s", key, f" ({download.flavor})" if download.flavor else ""
+            "Selected %s%s",
+            key,
+            f" ({download.artifact_variants.flavor})"
+            if download.artifact_variants.flavor
+            else "",
         )
         results[key] = {
             "name": download.implementation,

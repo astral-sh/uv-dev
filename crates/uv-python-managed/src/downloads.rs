@@ -215,6 +215,70 @@ pub struct ManagedPythonDownload {
     url: Cow<'static, str>,
     sha256: Option<Digest<32>>,
     build: Option<Arc<str>>,
+    variants: ArtifactVariants,
+}
+
+/// Artifact variant names and archive flavor, independent of the download provider.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Hash)]
+struct ArtifactVariants {
+    names: Vec<LenientArtifactVariantName>,
+    flavor: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+enum ArtifactVariantName {
+    Debug,
+    Freethreaded,
+    Gil,
+    Lto,
+    Noopt,
+    Pgo,
+    Shared,
+    Static,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+enum LenientArtifactVariantName {
+    Known(ArtifactVariantName),
+    Unknown(String),
+}
+
+impl From<&str> for LenientArtifactVariantName {
+    fn from(name: &str) -> Self {
+        let name = match name {
+            "debug" => ArtifactVariantName::Debug,
+            "freethreaded" => ArtifactVariantName::Freethreaded,
+            "gil" => ArtifactVariantName::Gil,
+            "lto" => ArtifactVariantName::Lto,
+            "noopt" => ArtifactVariantName::Noopt,
+            "pgo" => ArtifactVariantName::Pgo,
+            "shared" => ArtifactVariantName::Shared,
+            "static" => ArtifactVariantName::Static,
+            name => return Self::Unknown(name.to_owned()),
+        };
+        Self::Known(name)
+    }
+}
+
+impl ArtifactVariants {
+    fn contains(&self, name: ArtifactVariantName) -> bool {
+        self.names
+            .contains(&LenientArtifactVariantName::Known(name))
+    }
+
+    /// Project the interpreter properties that participate in installation keys.
+    fn python_variant(&self) -> PythonVariant {
+        // `gil` constrains interpreter requests; GIL-enabled artifacts map to `Default` or `Debug` keys.
+        match (
+            self.contains(ArtifactVariantName::Debug),
+            self.contains(ArtifactVariantName::Freethreaded),
+        ) {
+            (true, true) => PythonVariant::FreethreadedDebug,
+            (false, true) => PythonVariant::Freethreaded,
+            (true, false) => PythonVariant::Debug,
+            (false, false) => PythonVariant::Default,
+        }
+    }
 }
 
 const BUILTIN_PYTHON_DOWNLOADS_ZSTD: &[u8] =
@@ -1978,6 +2042,7 @@ fn parse_json_downloads(
                 url,
                 sha256,
                 build,
+                variants: ArtifactVariants::default(),
             })
         })
         .sorted_by(|a, b| Ord::cmp(&b.key, &a.key))
@@ -2030,25 +2095,22 @@ fn parse_ndjson_version_info(version_info: NdjsonPythonVersionInfo) -> Vec<Manag
         }
     };
 
-    let release = build.and_then(|value| value.parse::<u64>().ok());
+    let pbs_release = build.and_then(|value| value.parse::<u64>().ok());
     let build: Option<Arc<str>> = build.map(Arc::from);
 
-    let mut artifacts = version_info.artifacts;
-    // Match the built-in metadata generator's deterministic tie-breaker when two artifacts have
-    // the same platform, variant, and priority.
-    artifacts.sort_by(|a, b| a.url.cmp(&b.url));
-
     let mut selected = BTreeMap::new();
-    for artifact in artifacts {
-        let Some((download, priority)) =
-            parse_ndjson_artifact(&version, build.clone(), release, artifact)
-        else {
+    for artifact in version_info.artifacts {
+        let Some(download) = parse_ndjson_artifact(&version, build.clone(), artifact) else {
             continue;
         };
+        if !artifact_is_compatible(&download, pbs_release) {
+            continue;
+        }
+        let priority = artifact_priority(&download.variants);
         let key = (download.key().platform().clone(), *download.key().variant());
 
-        // Collapse duplicate artifacts for the same platform and variant to
-        // the preferred flavor/build-option combination.
+        // Choose the default artifact for each platform and interpreter variant before visiting
+        // the record, so an exact request can stop without overlooking a preferred artifact.
         if let Some((existing_download, existing_priority)) = selected.get(&key)
             && priority >= *existing_priority
         {
@@ -2071,41 +2133,50 @@ fn parse_ndjson_version_info(version_info: NdjsonPythonVersionInfo) -> Vec<Manag
 fn parse_ndjson_artifact(
     version: &PythonVersion,
     build: Option<Arc<str>>,
-    release: Option<u64>,
     artifact: NdjsonPythonArtifact,
-) -> Option<(ManagedPythonDownload, (usize, i8))> {
-    let (platform, mut build_options) = parse_ndjson_platform(&artifact.platform)?;
-    let (flavor, variant_build_options) = parse_ndjson_artifact_variant(&artifact.variant);
-    build_options.extend(variant_build_options);
+) -> Option<ManagedPythonDownload> {
+    let (platform, platform_variants) = parse_ndjson_platform(&artifact.platform)?;
+    let variants = parse_artifact_variants(&artifact.variant, platform_variants);
 
-    if build_options.contains(&"static") {
+    Some(ManagedPythonDownload {
+        key: PythonInstallationKey::new_from_version(
+            LenientImplementationName::Known(ImplementationName::CPython),
+            version,
+            platform,
+            variants.python_variant(),
+        ),
+        url: Cow::Owned(artifact.url),
+        sha256: artifact.sha256,
+        build,
+        variants,
+    })
+}
+
+fn artifact_is_compatible(download: &ManagedPythonDownload, pbs_release: Option<u64>) -> bool {
+    if download.variants.contains(ArtifactVariantName::Static) {
         debug!("Skipping NDJSON artifact: static builds are unsupported");
-        return None;
+        return false;
     }
 
-    if release.is_some_and(|release| release < CPYTHON_MUSL_STATIC_RELEASE_END)
-        && matches!(platform.libc, Libc::Some(target_lexicon::Environment::Musl))
+    if download.variants.contains(ArtifactVariantName::Gil)
+        && download
+            .variants
+            .contains(ArtifactVariantName::Freethreaded)
     {
-        return None;
+        debug!("Skipping NDJSON artifact: conflicting interpreter variants");
+        return false;
     }
 
-    let variant = python_variant_from_ndjson_build_options(&build_options);
-    let priority = ndjson_artifact_priority(flavor, &build_options);
+    if pbs_release.is_some_and(|release| release < CPYTHON_MUSL_STATIC_RELEASE_END)
+        && matches!(
+            download.key().platform().libc,
+            Libc::Some(target_lexicon::Environment::Musl)
+        )
+    {
+        return false;
+    }
 
-    Some((
-        ManagedPythonDownload {
-            key: PythonInstallationKey::new_from_version(
-                LenientImplementationName::Known(ImplementationName::CPython),
-                version,
-                platform,
-                variant,
-            ),
-            url: Cow::Owned(artifact.url),
-            sha256: artifact.sha256,
-            build,
-        },
-        priority,
-    ))
+    true
 }
 
 fn parse_ndjson_platform(platform: &str) -> Option<(Platform, Vec<&str>)> {
@@ -2136,7 +2207,7 @@ fn parse_ndjson_platform(platform: &str) -> Option<(Platform, Vec<&str>)> {
     Some((platform, build_options))
 }
 
-fn parse_ndjson_artifact_variant(variant: &str) -> (&str, Vec<&str>) {
+fn parse_artifact_variants(variant: &str, platform_variants: Vec<&str>) -> ArtifactVariants {
     let mut parts = Vec::new();
     for part in variant.split('+') {
         match part {
@@ -2144,43 +2215,46 @@ fn parse_ndjson_artifact_variant(variant: &str) -> (&str, Vec<&str>) {
             "shared-noopt" => parts.extend(["shared", "noopt"]),
             "shared-pgo" => parts.extend(["shared", "pgo"]),
             "static-noopt" => parts.extend(["static", "noopt"]),
+            "" => {}
             part => parts.push(part),
         }
     }
-    if parts
+    let flavor = if parts
         .last()
         .is_some_and(|flavor| NDJSON_KNOWN_FLAVORS.contains(flavor))
-        && let Some(flavor) = parts.pop()
     {
-        (flavor, parts)
+        parts.pop()
+    } else if matches!(variant, "shared-pgo" | "shared-noopt" | "static-noopt") {
+        // These historical archive flavors also encode ordinary variant names.
+        Some(variant)
     } else {
-        (variant, Vec::new())
+        None
+    };
+    parts.extend(platform_variants);
+    parts.sort_unstable();
+    parts.dedup();
+
+    ArtifactVariants {
+        names: parts
+            .into_iter()
+            .map(LenientArtifactVariantName::from)
+            .collect(),
+        flavor: flavor.map(str::to_owned),
     }
 }
 
-fn python_variant_from_ndjson_build_options(build_options: &[&str]) -> PythonVariant {
-    let debug = build_options.contains(&"debug");
-    let freethreaded = build_options.contains(&"freethreaded");
-
-    match (debug, freethreaded) {
-        (true, true) => PythonVariant::FreethreadedDebug,
-        (true, false) => PythonVariant::Debug,
-        (false, true) => PythonVariant::Freethreaded,
-        (false, false) => PythonVariant::default(),
-    }
-}
-
-fn ndjson_artifact_priority(flavor: &str, build_options: &[&str]) -> (usize, i8) {
+/// Prefer `install_only_stripped` and `install_only` flavors, then `pgo` and `lto` within a flavor.
+/// Other variant names do not affect priority.
+fn artifact_priority(variants: &ArtifactVariants) -> (usize, i8) {
     let flavor_priority = NDJSON_FLAVOR_PREFERENCES
         .iter()
-        .position(|preference| *preference == flavor)
+        .position(|preference| Some(*preference) == variants.flavor.as_deref())
         .unwrap_or(NDJSON_FLAVOR_PREFERENCES.len() + 1);
 
-    let build_option_priority = -i8::from(build_options.contains(&"lto"))
-        - i8::from(build_options.contains(&"pgo"))
-        - i8::from(!build_options.contains(&"static"));
+    let optimization_priority = -i8::from(variants.contains(ArtifactVariantName::Lto))
+        - i8::from(variants.contains(ArtifactVariantName::Pgo));
 
-    (flavor_priority, build_option_priority)
+    (flavor_priority, optimization_priority)
 }
 
 fn parse_ndjson_line(
@@ -2776,7 +2850,7 @@ mod tests {
     fn parse_ndjson_bytes_find_prefers_version_over_publication_order() -> anyhow::Result<()> {
         let ndjson = br#"{"version":"3.13.9+20261015","artifacts":[{"url":"https://example.com/rebuilt.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
 {"version":"3.14.1+20261013","artifacts":[{"url":"https://example.com/preferred.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
-{"version":"3.14.1+20261014","artifacts":[{"url":"https://example.com/previous.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"install_only"}]}
+{"version":"3.14.1+20261014","artifacts":[{"url":"https://example.com/previous.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"pgo+lto+install_only"}]}
 "#;
         let request = PythonDownloadRequest::from_str("cpython-3-linux-x86_64-gnu")?;
         let download = parse_ndjson_bytes_find("versions.ndjson", ndjson, &request)?
@@ -2866,8 +2940,68 @@ mod tests {
     }
 
     #[test]
+    fn parse_ndjson_bytes_retains_arbitrary_variant_names() -> anyhow::Result<()> {
+        let ndjson = br#"{"version":"3.15.0","artifacts":[{"url":"https://example.com/python.tar.gz","platform":"x86_64-unknown-linux-gnu-debug","variant":"shared-freethreaded+pgo+pgo+custom-build"}]}"#;
+        let downloads = parse_ndjson_bytes("versions.ndjson", ndjson)?;
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(
+            downloads[0].key().to_string(),
+            "cpython-3.15.0+freethreaded+debug-linux-x86_64-gnu"
+        );
+        assert_eq!(
+            downloads[0].variants.names,
+            [
+                LenientArtifactVariantName::Unknown("custom-build".to_owned()),
+                LenientArtifactVariantName::Known(ArtifactVariantName::Debug),
+                LenientArtifactVariantName::Known(ArtifactVariantName::Freethreaded),
+                LenientArtifactVariantName::Known(ArtifactVariantName::Pgo),
+                LenientArtifactVariantName::Known(ArtifactVariantName::Shared),
+            ]
+        );
+        assert_eq!(downloads[0].variants.flavor, None);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_artifact_variants_retains_legacy_flavors() {
+        let legacy = parse_artifact_variants("shared-pgo", Vec::new());
+        assert_eq!(
+            legacy.names,
+            [
+                LenientArtifactVariantName::Known(ArtifactVariantName::Pgo),
+                LenientArtifactVariantName::Known(ArtifactVariantName::Shared),
+            ]
+        );
+        assert_eq!(legacy.flavor.as_deref(), Some("shared-pgo"));
+
+        let modern = parse_artifact_variants("shared-pgo+custom-build+install_only", Vec::new());
+        assert_eq!(
+            modern.names,
+            [
+                LenientArtifactVariantName::Unknown("custom-build".to_owned()),
+                LenientArtifactVariantName::Known(ArtifactVariantName::Pgo),
+                LenientArtifactVariantName::Known(ArtifactVariantName::Shared),
+            ]
+        );
+        assert_eq!(modern.flavor.as_deref(), Some("install_only"));
+        assert!(artifact_priority(&modern) < artifact_priority(&legacy));
+    }
+
+    #[test]
+    fn parse_ndjson_bytes_normalizes_gil_installation_variants() -> anyhow::Result<()> {
+        let ndjson = br#"{"version":"3.15.0","artifacts":[{"url":"https://example.com/gil.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"gil+custom-build"},{"url":"https://example.com/debug.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"gil+debug+custom-build"},{"url":"https://example.com/conflicting.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"gil+freethreaded+install_only"}]}"#;
+        let downloads = parse_ndjson_bytes("versions.ndjson", ndjson)?;
+        assert_eq!(downloads.len(), 2);
+        assert_eq!(*downloads[0].key().variant(), PythonVariant::Default);
+        assert_eq!(*downloads[1].key().variant(), PythonVariant::Debug);
+        assert!(downloads[0].variants.contains(ArtifactVariantName::Gil));
+        assert!(downloads[1].variants.contains(ArtifactVariantName::Gil));
+        Ok(())
+    }
+
+    #[test]
     fn parse_ndjson_bytes_skips_compound_static_variant_tokens() {
-        let ndjson = br#"{"version":"3.12.13","artifacts":[{"url":"https://example.com/cpython-3.12.13-x86_64-unknown-linux-musl-static-noopt-full.tar.zst","platform":"x86_64-unknown-linux-musl","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"static-noopt+full"}]}
+        let ndjson = br#"{"version":"3.12.13","artifacts":[{"url":"https://example.com/cpython-3.12.13-x86_64-unknown-linux-musl-static-noopt-full.tar.zst","platform":"x86_64-unknown-linux-musl","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"static-noopt+full"},{"url":"https://example.com/static.tar.gz","platform":"x86_64-unknown-linux-gnu","variant":"static+custom-build"}]}
 "#;
 
         let downloads = parse_ndjson_bytes("test.ndjson", ndjson).expect("NDJSON should parse");
@@ -3502,6 +3636,7 @@ mod tests {
             url: Cow::Borrowed(url),
             sha256: Some(Digest::from_bytes([0xab; 32])),
             build: Some(Arc::from("20240713")),
+            variants: ArtifactVariants::default(),
         }
     }
 
