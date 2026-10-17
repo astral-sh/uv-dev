@@ -1,9 +1,24 @@
+use std::collections::BTreeMap;
+use std::convert::Infallible;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::PathChild;
+use bytes::Bytes;
 use fs_err as fs;
+use http::header::{CONTENT_TYPE, USER_AGENT};
+use http_body_util::Full;
+use hyper::service::service_fn;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use insta::assert_snapshot;
+use serde_json::json;
+use uv_normalize::PackageName;
+use uv_pep440::Version;
 use uv_static::EnvVars;
+use uv_test::packse::generate_wheel;
 use uv_test::uv_snapshot;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -181,6 +196,162 @@ async fn tool_list_outdated_respects_configured_index() -> Result<()> {
     - blackd
     ");
 
+    Ok(())
+}
+
+#[test]
+fn tool_list_outdated_reuses_connections_per_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.13"])
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let address = listener.local_addr()?;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = std::thread::spawn({
+        let connections = Arc::clone(&connections);
+        let requests = Arc::clone(&requests);
+        move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test server runtime");
+            runtime.block_on(async move {
+                let listener =
+                    tokio::net::TcpListener::from_std(listener).expect("test server listener");
+                let serve =
+                    async {
+                        while let Ok((stream, _)) = listener.accept().await {
+                            let connection = connections.fetch_add(1, Ordering::SeqCst);
+                            let requests = Arc::clone(&requests);
+                            tokio::spawn(async move {
+                                let _ = hyper_util::server::conn::auto::Builder::new(
+                                    TokioExecutor::new(),
+                                )
+                                .serve_connection(
+                                    TokioIo::new(stream),
+                                    service_fn(
+                                        move |request: hyper::Request<hyper::body::Incoming>| {
+                                            let requests = Arc::clone(&requests);
+                                            async move {
+                                                let path = request.uri().path().to_owned();
+                                                let user_agent = request
+                                                    .headers()
+                                                    .get(USER_AGENT)
+                                                    .and_then(|value| value.to_str().ok())
+                                                    .unwrap_or_default()
+                                                    .to_owned();
+                                                requests
+                                                    .lock()
+                                                    .expect("request record mutex")
+                                                    .push((path.clone(), connection, user_agent));
+                                                let name = path
+                                                    .trim_end_matches('/')
+                                                    .rsplit('/')
+                                                    .next()
+                                                    .unwrap_or_default();
+                                                let filename = format!(
+                                                    "{}-2.0.0-py3-none-any.whl",
+                                                    name.replace('-', "_")
+                                                );
+                                                let body = json!({
+                                                    "meta": { "api-version": "1.1" },
+                                                    "name": name,
+                                                    "files": [{
+                                                        "filename": filename,
+                                                        "url": filename,
+                                                        "hashes": {},
+                                                        "upload-time": "2024-03-24T00:00:00Z"
+                                                    }]
+                                                });
+                                                Ok::<_, Infallible>(
+                                                    hyper::Response::builder()
+                                                        .header(
+                                                            CONTENT_TYPE,
+                                                            "application/vnd.pypi.simple.v1+json",
+                                                        )
+                                                        .body(Full::new(Bytes::from(
+                                                            body.to_string(),
+                                                        )))
+                                                        .expect("valid Simple API response"),
+                                                )
+                                            }
+                                        },
+                                    ),
+                                )
+                                .await;
+                            });
+                        }
+                    };
+                tokio::select! {
+                    () = serve => {}
+                    _ = shutdown_rx => {}
+                }
+            });
+        }
+    });
+
+    for (name, python, index) in [
+        ("tool-a", "3.12", "first"),
+        ("tool-b", "3.12", "second"),
+        ("tool-c", "3.13", "third"),
+    ] {
+        let (filename, wheel) = generate_wheel(
+            &PackageName::from_str(name)?,
+            &Version::from_str("1.0.0")?,
+            &[],
+            &BTreeMap::new(),
+            None,
+            "py3-none-any",
+            &[name.to_owned()],
+        );
+        let path = context.temp_dir.child(filename);
+        fs::write(&path, wheel)?;
+        context
+            .tool_install()
+            .arg(path.as_os_str())
+            .arg("--python")
+            .arg(python)
+            .arg("--default-index")
+            .arg(format!("http://{address}/{index}"))
+            .assert()
+            .success();
+    }
+
+    uv_snapshot!(context.filters(), context.tool_list()
+        .arg("--outdated")
+        .env(EnvVars::UV_CONCURRENT_DOWNLOADS, "1"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    tool-a v1.0.0 [latest: 2.0.0]
+    - tool-a
+    tool-b v1.0.0 [latest: 2.0.0]
+    - tool-b
+    tool-c v1.0.0 [latest: 2.0.0]
+    - tool-c
+    ");
+
+    drop(shutdown_tx);
+    server.join().expect("test server thread");
+    let requests = requests.lock().expect("request record mutex");
+    assert_eq!(requests.len(), 3);
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    assert_eq!(requests[0].0, "/first/tool-a/");
+    assert_eq!(requests[1].0, "/second/tool-b/");
+    assert_eq!(requests[2].0, "/third/tool-c/");
+    assert_eq!(requests[0].1, requests[1].1);
+    assert_ne!(requests[0].1, requests[2].1);
+    for (request, version) in requests.iter().zip(["3.12.", "3.12.", "3.13."]) {
+        let (_, linehaul) = request.2.split_once(' ').expect("LineHaul user agent");
+        let linehaul: serde_json::Value = serde_json::from_str(linehaul)?;
+        assert!(
+            linehaul["python"]
+                .as_str()
+                .is_some_and(|value| value.starts_with(version))
+        );
+    }
     Ok(())
 }
 
