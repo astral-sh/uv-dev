@@ -64,6 +64,8 @@ jobs:
             printf 'Checking %s\n' "$script" >&2
             uv check --script "$script" --locked
           done
+      - name: "Test scripts"
+        run: uv run --only-group check --python 3.14 python -m unittest discover -s scripts/tests
 
   shellcheck:
     timeout-minutes: 10
