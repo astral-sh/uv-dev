@@ -14,6 +14,7 @@ use tracing::{debug, instrument};
 use walkdir::WalkDir;
 
 use uv_configuration::Concurrency;
+use uv_distribution_types::CachedDist;
 use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_warnings::warn_user;
@@ -25,6 +26,31 @@ const DEFAULT_COMPILE_TIMEOUT: Duration = Duration::from_mins(1);
 type WorkerOutcome = std::thread::Result<Result<(), CompileError>>;
 type WorkerHandle = oneshot::Receiver<WorkerOutcome>;
 
+/// A failure to identify Python files owned by an installed distribution.
+#[derive(Debug, Error)]
+pub enum SourceFilesError {
+    #[error("Failed to locate installed distribution for bytecode compilation: {distribution}")]
+    LocateDistribution {
+        distribution: Box<CachedDist>,
+        #[source]
+        source: uv_install_wheel::Error,
+    },
+    #[error("Invalid installed distribution path: {}", _0.user_display())]
+    InvalidDistributionPath(PathBuf),
+    #[error("Failed to read `{}`", path.user_display())]
+    ReadRecord {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("Failed to read `{}`", path.user_display())]
+    ParseRecord {
+        path: PathBuf,
+        #[source]
+        source: uv_install_wheel::Error,
+    },
+}
+
 #[derive(Debug, Error)]
 pub enum CompileError {
     #[error("Failed to list files in `site-packages`")]
@@ -32,7 +58,7 @@ pub enum CompileError {
     #[error("Failed to send task to worker")]
     WorkerDisappeared(SendError<PathBuf>),
     #[error("Failed to identify Python source files")]
-    SourceFiles(#[source] anyhow::Error),
+    SourceFiles(#[source] Box<SourceFilesError>),
     #[error("The task executor is broken, did some other task panic?")]
     Join,
     #[error("Failed to start Python interpreter to run compile script")]
@@ -251,7 +277,7 @@ pub async fn compile_tree(
 /// or communicate with the Python workers are returned.
 #[instrument(skip(files, python_executable))]
 pub async fn compile_files(
-    files: impl IntoIterator<Item = anyhow::Result<PathBuf>>,
+    files: impl IntoIterator<Item = Result<PathBuf, SourceFilesError>>,
     python_executable: &Path,
     concurrency: &Concurrency,
     cache: &Path,
@@ -259,7 +285,7 @@ pub async fn compile_files(
     let mut files = files.into_iter();
     let mut initial_files = Vec::with_capacity(concurrency.installs);
     for file in files.by_ref().take(concurrency.installs) {
-        initial_files.push(file.map_err(CompileError::SourceFiles)?);
+        initial_files.push(file.map_err(|error| CompileError::SourceFiles(Box::new(error)))?);
     }
     if initial_files.is_empty() {
         return Ok(0);
@@ -308,7 +334,7 @@ pub async fn compile_files(
 
     wait_for_workers(worker_handles, send_error).await?;
     if let Some(source_error) = source_error {
-        return Err(CompileError::SourceFiles(source_error));
+        return Err(CompileError::SourceFiles(Box::new(source_error)));
     }
 
     Ok(source_files)
@@ -528,4 +554,49 @@ async fn worker_main_loop(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::path::Path;
+
+    use uv_configuration::Concurrency;
+
+    use super::{CompileError, SourceFilesError, compile_files};
+
+    #[tokio::test]
+    async fn source_discovery_error_precedes_worker_startup() -> io::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let record = directory.path().join("RECORD");
+        let cache = directory.path().join("missing-cache");
+        let error = compile_files(
+            [Err(SourceFilesError::ReadRecord {
+                path: record.clone(),
+                source: io::Error::from(io::ErrorKind::PermissionDenied),
+            })],
+            Path::new("missing-python"),
+            &Concurrency::new(1, 1, 1, 1),
+            &cache,
+        )
+        .await
+        .expect_err("source discovery must fail before worker setup");
+        let CompileError::SourceFiles(discovery_error) = &error else {
+            return Err(io::Error::other(format!(
+                "unexpected compilation error: {error}"
+            )));
+        };
+        assert!(matches!(
+            discovery_error.as_ref(),
+            SourceFilesError::ReadRecord { path, source }
+                if path == &record && source.kind() == io::ErrorKind::PermissionDenied
+        ));
+        let source = std::error::Error::source(&error)
+            .and_then(std::error::Error::source)
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .expect("the I/O cause should remain in the error chain");
+        assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!cache.exists());
+        Ok(())
+    }
 }
