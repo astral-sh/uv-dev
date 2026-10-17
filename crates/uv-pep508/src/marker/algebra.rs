@@ -64,7 +64,8 @@ use crate::marker::lowering::{
 };
 use crate::marker::tree::ContainerOperator;
 use crate::{
-    ExtraOperator, MarkerExpression, MarkerOperator, MarkerValueString, MarkerValueVersion,
+    ExtraOperator, MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerValueString,
+    MarkerValueVersion, MarkerWarningKind, Reporter, TracingReporter,
 };
 
 /// The global node interner.
@@ -746,6 +747,70 @@ impl InternerGuard<'_> {
         }
     }
 
+    /// Evaluates all non-`extra` nodes in this tree for the given environment.
+    ///
+    /// PEP 751 list expressions are evaluated with empty `extras` and `dependency_groups`.
+    pub(crate) fn only_extras_for_environment(
+        &mut self,
+        i: NodeId,
+        env: &MarkerEnvironment,
+    ) -> NodeId {
+        let mut cache = FxHashMap::default();
+        self.only_extras_for_environment_cached(i, env, &mut cache)
+    }
+
+    fn only_extras_for_environment_cached(
+        &mut self,
+        i: NodeId,
+        env: &MarkerEnvironment,
+        cache: &mut FxHashMap<NodeId, NodeId>,
+    ) -> NodeId {
+        if matches!(i, NodeId::TRUE | NodeId::FALSE) {
+            return i;
+        }
+        if let Some(&cached) = cache.get(&i) {
+            return cached;
+        }
+
+        let node = self.shared.node(i);
+        let result = if let Some(child) = node.environment_child(i, env, &mut TracingReporter) {
+            self.only_extras_for_environment_cached(child, env, cache)
+        } else {
+            match (&node.var, &node.children) {
+                (
+                    Variable::List(CanonicalMarkerListPair::Arbitrary { .. }),
+                    Edges::Boolean { .. },
+                ) => NodeId::FALSE,
+                (
+                    Variable::List(
+                        CanonicalMarkerListPair::Extras(_)
+                        | CanonicalMarkerListPair::DependencyGroup(_),
+                    ),
+                    Edges::Boolean { low, .. },
+                ) => self.only_extras_for_environment_cached(low.negate(i), env, cache),
+                (Variable::Extra(_), children) => {
+                    let children = children.map(i, |child| {
+                        self.only_extras_for_environment_cached(child, env, cache)
+                    });
+                    self.create_node(node.var.clone(), children)
+                }
+                (
+                    Variable::Version(_)
+                    | Variable::VersionString(_)
+                    | Variable::String(_)
+                    | Variable::In { .. }
+                    | Variable::Contains { .. },
+                    _,
+                )
+                | (Variable::List(_), Edges::Version { .. } | Edges::String { .. }) => {
+                    NodeId::FALSE
+                }
+            }
+        };
+        cache.insert(i, result);
+        result
+    }
+
     /// Simplify this tree by *assuming* that the Python version range provided
     /// is true and that the complement of it is false.
     ///
@@ -1240,6 +1305,92 @@ pub(crate) struct Node {
 }
 
 impl Node {
+    /// Select an environment-dependent child, retaining complemented-edge semantics.
+    ///
+    /// Extras and PEP 751 lists are evaluated by the caller's activation context.
+    pub(crate) fn environment_child(
+        &self,
+        id: NodeId,
+        env: &MarkerEnvironment,
+        reporter: &mut impl Reporter,
+    ) -> Option<NodeId> {
+        let child = match (&self.var, &self.children) {
+            (Variable::Version(key), Edges::Version { edges }) => edges
+                .iter()
+                .find_map(|(range, child)| {
+                    range
+                        .contains(env.get_version(*key))
+                        .then_some(child.negate(id))
+                })
+                .unwrap_or(NodeId::FALSE),
+            (Variable::VersionString(key), Edges::Version { edges }) => {
+                let Ok(version) = env.get_string(*key).parse::<Version>() else {
+                    return Some(NodeId::FALSE);
+                };
+                edges
+                    .iter()
+                    .find_map(|(range, child)| range.contains(&version).then_some(child.negate(id)))
+                    .unwrap_or(NodeId::FALSE)
+            }
+            (Variable::String(key), Edges::String { edges }) => {
+                let value = env.get_string(*key);
+                edges
+                    .iter()
+                    .find_map(|(range, child)| {
+                        if matches!(
+                            key,
+                            CanonicalMarkerValueString::PlatformRelease
+                                | CanonicalMarkerValueString::PlatformVersion
+                        ) && range.as_singleton().is_none()
+                            && let Some((start, end)) = range.bounding_range()
+                        {
+                            if let Bound::Included(bound) | Bound::Excluded(bound) = start {
+                                reporter.report(
+                                    MarkerWarningKind::LexicographicComparison,
+                                    format!("Comparing {value} and {bound} lexicographically"),
+                                );
+                            }
+                            if let Bound::Included(bound) | Bound::Excluded(bound) = end {
+                                reporter.report(
+                                    MarkerWarningKind::LexicographicComparison,
+                                    format!("Comparing {value} and {bound} lexicographically"),
+                                );
+                            }
+                        }
+                        range.contains(value).then_some(child.negate(id))
+                    })
+                    .unwrap_or(NodeId::FALSE)
+            }
+            (Variable::In { key, value }, Edges::Boolean { high, low }) => {
+                if value.contains(env.get_string(*key)) {
+                    high
+                } else {
+                    low
+                }
+                .negate(id)
+            }
+            (Variable::Contains { key, value }, Edges::Boolean { high, low }) => {
+                if env.get_string(*key).contains(value.as_str()) {
+                    high
+                } else {
+                    low
+                }
+                .negate(id)
+            }
+            (Variable::Extra(_) | Variable::List(_), _) => return None,
+            (
+                Variable::Version(_) | Variable::VersionString(_),
+                Edges::String { .. } | Edges::Boolean { .. },
+            )
+            | (Variable::String(_), Edges::Version { .. } | Edges::Boolean { .. })
+            | (
+                Variable::In { .. } | Variable::Contains { .. },
+                Edges::Version { .. } | Edges::String { .. },
+            ) => NodeId::FALSE,
+        };
+        Some(child)
+    }
+
     /// Return the complement of this node, flipping all children IDs.
     fn not(self) -> Self {
         Self {
