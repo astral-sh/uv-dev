@@ -1296,7 +1296,7 @@ fn install_local_wheel() -> Result<()> {
         SafeUrl::from_file_path(archive.path()).unwrap()
     ))?;
 
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.prepared_filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
@@ -1314,7 +1314,7 @@ fn install_local_wheel() -> Result<()> {
     context.reset_venv();
 
     // Reinstall. The wheel should come from the cache, so there shouldn't be a "download".
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.prepared_filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict")
         , @"
@@ -1336,7 +1336,7 @@ fn install_local_wheel() -> Result<()> {
     filetime::set_file_mtime(&archive, filetime::FileTime::now()).unwrap();
 
     // Reinstall. The wheel should be "downloaded" again.
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.prepared_filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict")
         , @"
@@ -1355,7 +1355,7 @@ fn install_local_wheel() -> Result<()> {
     filetime::set_file_mtime(&archive, filetime::FileTime::now()).unwrap();
 
     // Reinstall into the same virtual environment. The wheel should be reinstalled.
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.prepared_filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
@@ -1369,7 +1369,7 @@ fn install_local_wheel() -> Result<()> {
     );
 
     // Reinstall into the same virtual environment. The wheel should _not_ be reinstalled.
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.prepared_filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
@@ -1388,7 +1388,7 @@ fn install_local_wheel() -> Result<()> {
         SafeUrl::from_file_path(archive.path()).unwrap()
     ))?;
 
-    uv_snapshot!(context.filters(), context.pip_sync()
+    uv_snapshot!(context.prepared_filters(), context.pip_sync()
         .arg("requirements.txt")
         .arg("--strict"), @"
     exit_code: 0 (success)
