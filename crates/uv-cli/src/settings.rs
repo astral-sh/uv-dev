@@ -48,7 +48,7 @@ use uv_settings::{
     ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
     ResolverSettings, resolve_build_hash_checking, resolve_prerelease,
 };
-use uv_static::EnvVars;
+use uv_static::{EnvVars, parse_boolish_environment_variable};
 use uv_torch::{AmdGpuArchitecture, TorchMode};
 use uv_warnings::warn_user_once;
 use uv_workspace::pyproject::{DependencyType, ExtraBuildDependencies, OverrideDependency};
@@ -1686,6 +1686,7 @@ pub struct PythonFindSettings {
     pub request: Option<String>,
     pub show_version: bool,
     pub resolve_links: bool,
+    pub build_isolation: BuildIsolation,
     pub no_project: bool,
     pub system: bool,
     pub python_downloads_json_url: Option<String>,
@@ -1705,9 +1706,32 @@ impl PythonFindSettings {
             no_project,
             system,
             no_system,
-            script: _,
+            script,
             python_downloads_json_url,
         } = args;
+
+        let build_isolation = if script.is_some() {
+            // A false environment value leaves the CLI boolean flag unset, so filesystem
+            // settings still apply. Only the enabled flag overrides configured build isolation.
+            BuildIsolation::from_args(
+                parse_boolish_environment_variable(EnvVars::UV_NO_BUILD_ISOLATION)?
+                    .filter(|enabled| *enabled),
+                Vec::new(),
+            )
+            .combine(filesystem.as_ref().and_then(|filesystem| {
+                BuildIsolation::from_args(
+                    filesystem.top_level.no_build_isolation,
+                    filesystem
+                        .top_level
+                        .no_build_isolation_package
+                        .clone()
+                        .unwrap_or_default(),
+                )
+            }))
+            .unwrap_or_default()
+        } else {
+            BuildIsolation::default()
+        };
 
         let filesystem_install_mirrors = filesystem
             .map(|fs| fs.install_mirrors.clone())
@@ -1732,6 +1756,7 @@ impl PythonFindSettings {
             request,
             show_version,
             resolve_links,
+            build_isolation,
             no_project,
             system: flag(system, no_system, "system")?.unwrap_or_default(),
             python_downloads_json_url,

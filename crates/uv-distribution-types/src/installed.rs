@@ -10,8 +10,8 @@ use tracing::warn;
 
 use uv_cache_info::CacheInfo;
 use uv_distribution_filename::{EggInfoFilename, ExpandedTags};
-use uv_fs::Simplified;
-use uv_install_wheel::WheelFile;
+use uv_fs::{Simplified, normalize_path};
+use uv_install_wheel::{WheelFile, read_record};
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pypi_types::{DirectUrl, DirectUrlError, MetadataError, read_direct_url_json};
@@ -46,6 +46,9 @@ pub enum InstalledDistError {
 
     #[error(transparent)]
     ExpandedTagParse(#[from] uv_distribution_filename::ExpandedTagError),
+
+    #[error("Installed distribution has no site-packages directory: {}", _0.user_display())]
+    InvalidDistInfoPath(PathBuf),
 
     #[error("Invalid `.egg-link` path: {}", _0.user_display())]
     InvalidEggLinkPath(PathBuf),
@@ -480,6 +483,28 @@ impl InstalledDist {
 
         let _ = self.tags_cache.set(tags);
         Ok(self.tags_cache.get().expect("tags should be set").as_ref())
+    }
+
+    /// Read the installed paths recorded for this distribution.
+    ///
+    /// Paths are resolved against the directory containing the `.dist-info` directory and
+    /// normalized. Legacy installation formats without a `RECORD` return no files.
+    pub fn read_files(&self) -> Result<Vec<PathBuf>, InstalledDistError> {
+        let directory = match &self.kind {
+            InstalledDistKind::Registry(dist) => &dist.path,
+            InstalledDistKind::Url(dist) => &dist.path,
+            InstalledDistKind::EggInfoFile(_)
+            | InstalledDistKind::EggInfoDirectory(_)
+            | InstalledDistKind::LegacyEditable(_) => return Ok(Vec::new()),
+        };
+        let site_packages = directory
+            .parent()
+            .ok_or_else(|| InstalledDistError::InvalidDistInfoPath(directory.to_path_buf()))?;
+        let record = read_record(fs::File::open(directory.join("RECORD"))?)?;
+        Ok(record
+            .into_iter()
+            .map(|entry| normalize_path(site_packages.join(entry.path)).into_owned())
+            .collect())
     }
 
     /// Return true if the distribution is editable.

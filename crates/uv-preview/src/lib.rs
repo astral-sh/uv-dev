@@ -463,6 +463,9 @@ pub enum PreviewFeature {
     /// Enables experimental support for [wheel variants](https://peps.python.org/pep-0825/).
     /// Variant wheels are not yet selectable.
     WheelVariants,
+    /// Shares content-addressed dependency environments between PEP 723 scripts while retaining
+    /// a distinct, mutable virtual environment for each script.
+    SharedScriptEnvironments,
 }
 
 impl Display for PreviewFeature {

@@ -1969,6 +1969,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     (&script).into(),
                     args.show_version,
                     args.resolve_links,
+                    args.build_isolation,
                     // TODO(zsol): is this the right thing to do here?
                     &client_builder.subcommand(vec!["python".to_owned(), "find".to_owned()]),
                     globals.python_preference,
@@ -1976,6 +1977,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     globals.python_downloads,
                     config_discovery,
                     &cache,
+                    globals.preview,
                     printer,
                 )
                 .await
