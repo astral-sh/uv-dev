@@ -22,6 +22,37 @@ $ # Running a `bash` script that requires the project to be available
 $ uv run bash scripts/foo.sh
 ```
 
+## Running from outside a project
+
+For local scripts without inline metadata, `uv run` normally discovers the project from the script's
+directory. To select a project explicitly when running a command from another directory, use
+[`--project`](../../reference/cli.md#uv-run--project):
+
+```console
+$ uv run --project /path/to/project /path/to/project/task.py
+```
+
+This selects the project environment without changing the working directory. Other command-line
+arguments, including relative paths, are still resolved from the current working directory.
+
+Scripts with inline metadata still run in an isolated environment, as described in
+[Running scripts](#running-scripts).
+
+To change the working directory as well, use
+[`--directory`](../../reference/cli.md#uv-run--directory):
+
+```console
+$ uv run --directory /path/to/project task.py
+```
+
+Scheduled commands, such as `cron` jobs, may use a different `PATH` from your interactive shell. Use
+an absolute path to `uv` if it is not on that `PATH`. For example, to run a project's script every
+hour:
+
+```crontab
+0 * * * * /home/ferris/.local/bin/uv run --directory /home/ferris/projects/foo task.py
+```
+
 ## Requesting additional dependencies
 
 Additional dependencies or different versions of dependencies can be requested per invocation.
