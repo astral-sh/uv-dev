@@ -306,6 +306,11 @@ mod tests {
         macOS, Credential Manager on Windows, or the Secret Service API on Linux. uv only retrieves
         credentials that it has stored itself, rather than credentials saved by other applications.
 
+        ### `nested-workspaces` {#nested-workspaces}
+
+        Independently locked child workspaces can prefer versions from their parent workspace's
+        lockfile while retaining their own resolution, settings, and Python requirement.
+
         ### `package-conflicts` {#package-conflicts}
 
         Workspace members can declare [conflicting
