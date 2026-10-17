@@ -5059,6 +5059,9 @@ fn add_lower_bound_local() -> Result<()> {
         revision = 5
         requires-python = ">=3.12"
 
+        [options]
+        index-strategy = "first-index"
+
         [[package]]
         name = "a"
         version = "1.2.3+foo"
@@ -9910,6 +9913,7 @@ fn add_warn_index_url() -> Result<()> {
     exit_code: 1 (failure)
     ----- stderr -----
     warning: Indexes specified via `--extra-index-url` will not be persisted to the `pyproject.toml` file; use `--index` instead.
+    Ignoring existing lockfile because its index strategy is unknown
     error: Failed to add dependencies
       cause: No solution found when resolving dependencies
       cause: Because only idna==2.7 is available and your project depends on idna>=3.6, we can conclude that your project's requirements are unsatisfiable.
@@ -10101,6 +10105,7 @@ fn add_index() -> Result<()> {
     uv_snapshot!(context.filters(), context.add().arg("jinja2").arg("--index").arg("pytorch=https://astral-sh.github.io/pytorch-mirror/whl/cu121"), @"
     exit_code: 0 (success)
     ----- stderr -----
+    Ignoring existing lockfile because its index strategy is unknown
     Resolved 4 packages in [TIME]
     Prepared 2 packages in [TIME]
     Installed 2 packages in [TIME]
@@ -10152,6 +10157,7 @@ fn add_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -10261,6 +10267,7 @@ fn add_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -10378,6 +10385,7 @@ fn add_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -10504,6 +10512,7 @@ fn add_index() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -10993,6 +11002,7 @@ fn add_index_with_trailing_slash() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2025-01-30T00:00:00Z"
 
         [manifest]
@@ -12931,6 +12941,7 @@ fn multiple_index_cli() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -13036,6 +13047,7 @@ fn repeated_index_cli_environment_variable() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -13136,6 +13148,7 @@ fn repeated_index_cli_environment_variable_newline() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -13240,6 +13253,7 @@ fn repeated_index_cli() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
@@ -13344,6 +13358,7 @@ fn repeated_index_cli_reversed() -> Result<()> {
         requires-python = ">=3.12"
 
         [options]
+        index-strategy = "first-index"
         exclude-newer = "2024-03-25T00:00:00Z"
 
         [[package]]
