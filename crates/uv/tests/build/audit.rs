@@ -360,6 +360,74 @@ async fn audit_vulnerability_found() {
     ");
 }
 
+/// Advisory URLs are redacted when they include credentials.
+#[tokio::test]
+async fn audit_vulnerability_advisory_url_redacts_credentials() {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+    "#})
+        .unwrap();
+
+    context.lock().assert().success();
+
+    let server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/querybatch"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{"vulns": [{"id": "PYSEC-2023-0001"}]}]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/v1/vulns/PYSEC-2023-0001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "PYSEC-2023-0001",
+            "modified": "2026-01-01T00:00:00Z",
+            "summary": "A test vulnerability in iniconfig",
+            "references": [{
+                "type": "ADVISORY",
+                "url": "https://username:password@example.com/advisory/PYSEC-2023-0001"
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .audit()
+        .arg("--frozen")
+        .arg("--preview-features")
+        .arg("audit")
+        .arg("--service-url")
+        .arg(server.uri()), @"
+    exit_code: 1 (failure)
+    ----- stdout -----
+
+    Vulnerabilities:
+
+    iniconfig 2.0.0 has 1 known vulnerability:
+
+    - PYSEC-2023-0001: A test vulnerability in iniconfig
+
+      No fix versions available
+
+      Advisory information: https://username:****@example.com/advisory/PYSEC-2023-0001
+
+
+    ----- stderr -----
+    Found 1 known vulnerability and no adverse project statuses in 1 package
+    ");
+}
+
 /// Audit a project when OSV returns a malformed vulnerability record.
 #[tokio::test]
 async fn audit_malformed_vulnerability_record() {
@@ -2494,7 +2562,7 @@ async fn audit_json_vulnerability_and_project_status() {
             }],
             "references": [{
                 "type": "ADVISORY",
-                "url": "https://example.com/advisory/PYSEC-2023-0001"
+                "url": "https://username:password@example.com/advisory/PYSEC-2023-0001"
             }]
         })))
         .mount(&server)
@@ -2531,7 +2599,7 @@ async fn audit_json_vulnerability_and_project_status() {
           "aliases": [],
           "summary": "A test vulnerability in iniconfig",
           "description": null,
-          "link": "https://example.com/advisory/PYSEC-2023-0001",
+          "link": "https://username:****@example.com/advisory/PYSEC-2023-0001",
           "fix_versions": [
             "2.1.0"
           ],
@@ -2592,7 +2660,7 @@ async fn audit_sarif_vulnerability_and_project_status() -> Result<()> {
             }],
             "references": [{
                 "type": "ADVISORY",
-                "url": "https://example.com/advisory/PYSEC-2023-0001"
+                "url": "https://username:password@example.com/advisory/PYSEC-2023-0001"
             }]
         })))
         .mount(&server)
@@ -2708,7 +2776,7 @@ async fn audit_sarif_vulnerability_and_project_status() -> Result<()> {
                   "help": {
                     "text": "A longer description of the test vulnerability."
                   },
-                  "helpUri": "https://example.com/advisory/PYSEC-2023-0001",
+                  "helpUri": "https://username:****@example.com/advisory/PYSEC-2023-0001",
                   "id": "OSV-2023-0001",
                   "name": "PYSEC-2023-0001",
                   "properties": {

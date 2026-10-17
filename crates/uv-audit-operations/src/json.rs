@@ -163,10 +163,7 @@ impl From<&uv_audit::Vulnerability> for Vulnerability {
                 .collect(),
             summary: vulnerability.summary.clone(),
             description: vulnerability.description.clone(),
-            link: vulnerability
-                .link
-                .as_ref()
-                .map(|link| link.as_str().to_string()),
+            link: vulnerability.link.as_ref().map(ToString::to_string),
             fix_versions: vulnerability
                 .fix_versions
                 .iter()

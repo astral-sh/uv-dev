@@ -198,10 +198,7 @@ impl ReportingDescriptor {
 
         Self {
             help,
-            help_uri: vulnerability
-                .link
-                .as_ref()
-                .map(|link| link.as_str().to_string()),
+            help_uri: vulnerability.link.as_ref().map(ToString::to_string),
             name: Some(name),
             id,
             properties: Some(PropertyBag {
