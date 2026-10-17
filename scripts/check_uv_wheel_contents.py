@@ -8,9 +8,9 @@
 # ///
 """Check that uv and uv_build wheels contain exactly the expected files"""
 
-import re
 import sys
 from argparse import ArgumentParser
+from collections import Counter
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -44,26 +44,30 @@ uv_build_expected = {
 
 
 def check_uv_wheel(uv_wheel: Path) -> None:
+    windows = "-win" in uv_wheel.name
     if uv_wheel.name.startswith("uv-"):
         expected = uv_expected
         # Windows wheels contain uvw, the windowed launcher.
-        if "-win" in uv_wheel.name:
+        if windows:
             expected = expected | {"uv-VERSION.data/scripts/uvw"}
     elif uv_wheel.name.startswith("uv_build-"):
         expected = uv_build_expected
     else:
         raise RuntimeError(f"Unknown wheel filename: {uv_wheel.name}")
 
-    with ZipFile(uv_wheel) as wheel:
-        files = wheel.namelist()
-    # Escape the version and remove the Windows exe extension.
-    actual = {
-        re.sub(r"^([a-z_0-9]*)-([0-9]+\.)*[0-9]+", r"\1-VERSION", file).replace(
-            ".exe", ""
-        )
-        for file in files
+    version = uv_wheel.name.split("-")[1]
+    # The wheel filename determines the exact versioned directories and script
+    # suffixes. Normalizing archive entries can hide incorrect or missing files.
+    expected = {
+        entry.replace("VERSION", version)
+        + (".exe" if windows and ".data/scripts/" in entry else "")
+        for entry in expected
     }
-    if expected != actual:
+    with ZipFile(uv_wheel) as wheel:
+        files = Counter(wheel.namelist())
+    actual = set(files)
+    duplicates = sorted(name for name, count in files.items() if count > 1)
+    if expected != actual or duplicates:
         # Verbose log
         print(f"Expected: {sorted(expected)}", file=sys.stderr)
         print(f"Actual:   {sorted(actual)}", file=sys.stderr)
@@ -74,6 +78,8 @@ def check_uv_wheel(uv_wheel: Path) -> None:
             print(f"  Missing wheel entries: {expected - actual}", file=sys.stderr)
         if actual - expected:
             print(f"  Unexpected wheel entries: {actual - expected}", file=sys.stderr)
+        if duplicates:
+            print(f"  Duplicate wheel entries: {duplicates}", file=sys.stderr)
         sys.exit(1)
 
 
