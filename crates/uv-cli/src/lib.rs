@@ -1834,18 +1834,13 @@ pub struct PipSyncArgs {
     #[arg(long, overrides_with("system"), hide = true)]
     pub no_system: bool,
 
-    /// Allow uv to modify an `EXTERNALLY-MANAGED` Python installation.
+    /// Allow uv to modify an `EXTERNALLY-MANAGED` Python installation. [env: `UV_BREAK_SYSTEM_PACKAGES`=]
     ///
     /// WARNING: `--break-system-packages` is intended for use in continuous integration (CI)
     /// environments, when installing into Python installations that are managed by an external
     /// package manager, like `apt`. It should be used with caution, as such Python installations
     /// explicitly recommend against modifications by other package managers (like uv or `pip`).
-    #[arg(
-        long,
-        env = EnvVars::UV_BREAK_SYSTEM_PACKAGES,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        overrides_with("no_break_system_packages")
-    )]
+    #[arg(long, overrides_with("no_break_system_packages"))]
     pub break_system_packages: bool,
 
     #[arg(long, overrides_with("break_system_packages"))]
@@ -2138,18 +2133,13 @@ pub struct PipInstallArgs {
     #[arg(long, overrides_with("system"), hide = true)]
     pub no_system: bool,
 
-    /// Allow uv to modify an `EXTERNALLY-MANAGED` Python installation.
+    /// Allow uv to modify an `EXTERNALLY-MANAGED` Python installation. [env: `UV_BREAK_SYSTEM_PACKAGES`=]
     ///
     /// WARNING: `--break-system-packages` is intended for use in continuous integration (CI)
     /// environments, when installing into Python installations that are managed by an external
     /// package manager, like `apt`. It should be used with caution, as such Python installations
     /// explicitly recommend against modifications by other package managers (like uv or `pip`).
-    #[arg(
-        long,
-        env = EnvVars::UV_BREAK_SYSTEM_PACKAGES,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        overrides_with("no_break_system_packages")
-    )]
+    #[arg(long, overrides_with("no_break_system_packages"))]
     pub break_system_packages: bool,
 
     #[arg(long, overrides_with("break_system_packages"))]
@@ -2373,18 +2363,13 @@ pub struct PipUninstallArgs {
     #[arg(long, overrides_with("system"), hide = true)]
     pub no_system: bool,
 
-    /// Allow uv to modify an `EXTERNALLY-MANAGED` Python installation.
+    /// Allow uv to modify an `EXTERNALLY-MANAGED` Python installation. [env: `UV_BREAK_SYSTEM_PACKAGES`=]
     ///
     /// WARNING: `--break-system-packages` is intended for use in continuous integration (CI)
     /// environments, when installing into Python installations that are managed by an external
     /// package manager, like `apt`. It should be used with caution, as such Python installations
     /// explicitly recommend against modifications by other package managers (like uv or `pip`).
-    #[arg(
-        long,
-        env = EnvVars::UV_BREAK_SYSTEM_PACKAGES,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        overrides_with("no_break_system_packages")
-    )]
+    #[arg(long, overrides_with("no_break_system_packages"))]
     pub break_system_packages: bool,
 
     #[arg(long, overrides_with("break_system_packages"))]
@@ -5973,7 +5958,7 @@ pub struct PythonDirArgs {
 
 #[derive(Args)]
 pub struct PythonInstallCompileBytecodeArgs {
-    /// Compile Python's standard library to bytecode after installation.
+    /// Compile Python's standard library to bytecode after installation. [env: `UV_COMPILE_BYTECODE`=]
     ///
     /// By default, uv does not compile Python (`.py`) files to bytecode (`__pycache__/*.pyc`);
     /// instead, compilation is performed lazily the first time a module is imported. For use-cases
@@ -5983,13 +5968,7 @@ pub struct PythonInstallCompileBytecodeArgs {
     ///
     /// When enabled, uv will process the Python version's `stdlib` directory. It will ignore any
     /// compilation errors.
-    #[arg(
-        long,
-        alias = "compile",
-        overrides_with("no_compile_bytecode"),
-        env = EnvVars::UV_COMPILE_BYTECODE,
-        value_parser = clap::builder::BoolishValueParser::new(),
-    )]
+    #[arg(long, alias = "compile", overrides_with("no_compile_bytecode"))]
     compile_bytecode: bool,
 
     #[arg(
@@ -6660,13 +6639,8 @@ pub struct RegistryClientArgs {
 pub struct SourcesArgs {
     /// Ignore the `tool.uv.sources` table when resolving dependencies. Used to lock against the
     /// standards-compliant, publishable package metadata, as opposed to using any workspace, Git,
-    /// URL, or local path sources.
-    #[arg(
-        long,
-        env = EnvVars::UV_NO_SOURCES,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        help_heading = "Resolver options",
-    )]
+    /// URL, or local path sources. [env: `UV_NO_SOURCES`=]
+    #[arg(long, help_heading = "Resolver options")]
     no_sources: bool,
 
     /// Don't use sources from the `tool.uv.sources` table for the specified packages [env: `UV_NO_SOURCES_PACKAGE`=]
@@ -6827,7 +6801,7 @@ pub type ConflictCheckedDependencyGroupsArgs = ProjectDependencyGroupsArgs<true>
 #[derive(Args)]
 #[group(skip)]
 pub struct HashCheckingArgs {
-    /// Require a matching hash for each requirement.
+    /// Require a matching hash for each requirement. [env: `UV_REQUIRE_HASHES`=]
     ///
     /// By default, uv will verify any available hashes in the requirements file, but will not
     /// require that all requirements have an associated hash.
@@ -6844,12 +6818,7 @@ pub struct HashCheckingArgs {
     /// - Editable installations are not supported.
     /// - Local dependencies are not supported, unless they point to a specific wheel (`.whl`) or
     ///   source archive (`.zip`, `.tar.gz`), as opposed to a directory.
-    #[arg(
-        long,
-        env = EnvVars::UV_REQUIRE_HASHES,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        overrides_with("no_require_hashes"),
-    )]
+    #[arg(long, overrides_with("no_require_hashes"))]
     require_hashes: bool,
 
     #[arg(long, overrides_with("require_hashes"), hide = true)]
@@ -6858,17 +6827,12 @@ pub struct HashCheckingArgs {
     #[arg(long, overrides_with("no_verify_hashes"), hide = true)]
     verify_hashes: bool,
 
-    /// Disable validation of hashes in the requirements file.
+    /// Disable validation of hashes in the requirements file. [env: `UV_NO_VERIFY_HASHES`=]
     ///
     /// By default, uv will verify any available hashes in the requirements file, but will not
     /// require that all requirements have an associated hash. To enforce hash validation, use
     /// `--require-hashes`.
-    #[arg(
-        long,
-        env = EnvVars::UV_NO_VERIFY_HASHES,
-        value_parser = clap::builder::BoolishValueParser::new(),
-        overrides_with("verify_hashes"),
-    )]
+    #[arg(long, overrides_with("verify_hashes"))]
     no_verify_hashes: bool,
 }
 
@@ -6947,19 +6911,13 @@ pub struct RefreshArgs {
 
 #[derive(Args)]
 pub struct BuildOptionsArgs {
-    /// Don't build source distributions.
+    /// Don't build source distributions. [env: `UV_NO_BUILD`=]
     ///
     /// When enabled, uv will reuse cached wheels from previously built source distributions, but
     /// operations that require building a source distribution will exit with an error. First-party
     /// packages, such as projects in the workspace, will still be built. uv will also still build
     /// editable requirements, and their build backends may run arbitrary Python code.
-    #[arg(
-        long,
-        env = EnvVars::UV_NO_BUILD,
-        overrides_with("build"),
-        value_parser = clap::builder::BoolishValueParser::new(),
-        help_heading = "Build options",
-    )]
+    #[arg(long, overrides_with("build"), help_heading = "Build options")]
     no_build: bool,
 
     #[arg(
@@ -6981,17 +6939,11 @@ pub struct BuildOptionsArgs {
     )]
     no_build_package: Vec<PackageName>,
 
-    /// Don't install pre-built wheels.
+    /// Don't install pre-built wheels. [env: `UV_NO_BINARY`=]
     ///
     /// The given packages will be built and installed from source. The resolver will still use
     /// pre-built wheels to extract package metadata, if available.
-    #[arg(
-        long,
-        env = EnvVars::UV_NO_BINARY,
-        overrides_with("binary"),
-        value_parser = clap::builder::BoolishValueParser::new(),
-        help_heading = "Build options"
-    )]
+    #[arg(long, overrides_with("binary"), help_heading = "Build options")]
     no_binary: bool,
 
     #[arg(
@@ -7043,15 +6995,13 @@ pub struct BuildOptionsArgs {
 #[derive(Args)]
 #[group(skip)]
 pub struct BuildIsolationArgs {
-    /// Disable isolation when building source distributions.
+    /// Disable isolation when building source distributions. [env: `UV_NO_BUILD_ISOLATION`=]
     ///
     /// Assumes that build dependencies specified by PEP 518 are already installed.
     #[arg(
         long,
         overrides_with("build_isolation"),
-        help_heading = "Build options",
-        env = EnvVars::UV_NO_BUILD_ISOLATION,
-        value_parser = clap::builder::BoolishValueParser::new(),
+        help_heading = "Build options"
     )]
     no_build_isolation: bool,
 
@@ -7108,7 +7058,7 @@ pub struct ReinstallArgs {
 #[derive(Args)]
 #[group(skip)]
 pub struct CompileBytecodeArgs {
-    /// Compile Python files to bytecode after installation.
+    /// Compile Python files to bytecode after installation. [env: `UV_COMPILE_BYTECODE`=]
     ///
     /// By default, uv does not compile Python (`.py`) files to bytecode (`__pycache__/*.pyc`);
     /// instead, compilation is performed lazily the first time a module is imported. For use-cases
@@ -7123,9 +7073,7 @@ pub struct CompileBytecodeArgs {
         long,
         alias = "compile",
         overrides_with("no_compile_bytecode"),
-        help_heading = "Installer options",
-        env = EnvVars::UV_COMPILE_BYTECODE,
-        value_parser = clap::builder::BoolishValueParser::new(),
+        help_heading = "Installer options"
     )]
     compile_bytecode: bool,
 
