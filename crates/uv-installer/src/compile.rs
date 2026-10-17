@@ -181,7 +181,7 @@ pub async fn compile_tree(
         "compileall doesn't work with relative paths: `{}`",
         dir.display()
     );
-    let worker_count = concurrency.installs;
+    let worker_count = concurrency.installs.get();
 
     // A larger buffer is significantly faster than just 1 or the worker count.
     let (sender, receiver) = async_channel::bounded::<PathBuf>(worker_count * 10);
@@ -257,8 +257,8 @@ pub async fn compile_files(
     cache: &Path,
 ) -> Result<usize, CompileError> {
     let mut files = files.into_iter();
-    let mut initial_files = Vec::with_capacity(concurrency.installs);
-    for file in files.by_ref().take(concurrency.installs) {
+    let mut initial_files = Vec::with_capacity(concurrency.installs.get());
+    for file in files.by_ref().take(concurrency.installs.get()) {
         initial_files.push(file.map_err(CompileError::SourceFiles)?);
     }
     if initial_files.is_empty() {

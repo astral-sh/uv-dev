@@ -695,7 +695,7 @@ async fn render_export<'output>(
                     .index_locations(settings.index_locations.clone())
                     .build()?;
                 export
-                    .generate_missing_hashes(&client, concurrency.downloads, output_dir)
+                    .generate_missing_hashes(&client, concurrency.downloads.get(), output_dir)
                     .await?;
             }
 

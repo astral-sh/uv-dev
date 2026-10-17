@@ -52,7 +52,7 @@ impl<'a> ProjectStatusAudit<'a> {
                 let semaphore = semaphore.clone();
                 async move { self.query_one(name, index, semaphore.as_ref()).await }
             })
-            .buffer_unordered(self.concurrency.downloads)
+            .buffer_unordered(self.concurrency.downloads.get())
             .filter_map(|finding| async move { finding })
             .collect()
             .await
