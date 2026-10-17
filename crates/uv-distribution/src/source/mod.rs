@@ -53,7 +53,7 @@ use crate::metadata::{ArchiveMetadata, GitWorkspaceMember, Metadata};
 use crate::source::built_wheel_metadata::{BuiltWheelFile, BuiltWheelMetadata};
 use crate::source::revision::Revision;
 use crate::source::validated_archive::{ArchiveValidation, ValidatedSourceArchive};
-use crate::{FirstPartyPackages, Reporter, RequiresDist};
+use crate::{BuildPurpose, Reporter, RequiresDist};
 
 mod built_wheel_metadata;
 mod revision;
@@ -211,7 +211,7 @@ pub(crate) struct SourceDistributionBuilder<'a, T: BuildContext> {
     build_context: &'a T,
     build_stack: Option<&'a BuildStack>,
     reporter: Option<Arc<dyn Reporter>>,
-    metadata_first_party_packages: Option<&'a FirstPartyPackages>,
+    build_purpose: BuildPurpose<'a>,
 }
 
 /// The name of the file that contains the revision ID for a remote distribution, encoded via `MsgPack`.
@@ -236,29 +236,21 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             build_context,
             build_stack: None,
             reporter: None,
-            metadata_first_party_packages: None,
+            build_purpose: BuildPurpose::Installation,
         }
     }
 
-    /// Set the first-party policy for a metadata build.
-    pub(crate) fn for_metadata<'metadata>(
-        &'metadata self,
-        first_party_packages: Option<&'metadata FirstPartyPackages>,
-    ) -> SourceDistributionBuilder<'metadata, T> {
+    /// Set the operation context for a build, including any metadata-to-wheel fallback.
+    pub(crate) fn with_build_purpose<'build>(
+        &'build self,
+        build_purpose: BuildPurpose<'build>,
+    ) -> SourceDistributionBuilder<'build, T> {
         SourceDistributionBuilder {
             build_context: self.build_context,
             build_stack: self.build_stack,
             reporter: self.reporter.clone(),
-            metadata_first_party_packages: first_party_packages,
+            build_purpose,
         }
-    }
-
-    /// Return whether the source is eligible for first-party builds.
-    fn is_first_party(&self, source: &BuildableSource<'_>) -> bool {
-        source.is_first_party()
-            || self
-                .metadata_first_party_packages
-                .is_some_and(|packages| packages.contains_source(source))
     }
 
     /// Set the [`BuildStack`] to use for the [`SourceDistributionBuilder`].
@@ -2938,8 +2930,10 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .build_options()
             .no_build_requirement(source.name())
         {
-            if source.is_editable() || self.is_first_party(source) {
-                debug!("Allowing build for first-party or editable source distribution: {source}");
+            if source.is_editable() || self.build_purpose.allows_workspace_build(source) {
+                debug!(
+                    "Allowing build for workspace member or editable source distribution: {source}"
+                );
             } else {
                 return Err(Error::NoBuild);
             }
@@ -3100,7 +3094,7 @@ impl<'a, T: BuildContext> SourceDistributionBuilder<'a, T> {
             .no_build_requirement(source_name)
             // Unnamed editables need metadata to apply package-specific build settings.
             && !(source_name.is_none() && source.is_editable())
-            && !self.is_first_party(source)
+            && !self.build_purpose.allows_workspace_build(source)
         {
             return if let Some(name) = source_name {
                 Err(Error::NoBuildPackage(name.clone()))
