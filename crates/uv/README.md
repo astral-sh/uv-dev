@@ -70,6 +70,7 @@ The following uv workspace members are also available:
 - [uv-publish](https://crates.io/crates/uv-publish)
 - [uv-publish-commands](https://crates.io/crates/uv-publish-commands)
 - [uv-pypi-types](https://crates.io/crates/uv-pypi-types)
+- [uv-pyproject-toml](https://crates.io/crates/uv-pyproject-toml)
 - [uv-python-commands](https://crates.io/crates/uv-python-commands)
 - [uv-python-discovery](https://crates.io/crates/uv-python-discovery)
 - [uv-python-interpreter](https://crates.io/crates/uv-python-interpreter)
