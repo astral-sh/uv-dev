@@ -22,9 +22,10 @@ use uv_test::assert_link_target;
 use uv_test::{LATEST_PYTHON_3_12, assert_path_missing, uv_snapshot};
 
 use uv_fs::Simplified;
-use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 use walkdir::WalkDir;
+
+use super::platform_key_from_env;
 
 #[test]
 fn python_install() {
@@ -2488,7 +2489,6 @@ fn python_install_default_from_env() {
 #[test]
 fn python_install_patch_dylib() {
     use assert_cmd::assert::OutputAssertExt;
-    use uv_python_managed::platform_key_from_env;
 
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
@@ -3463,8 +3463,6 @@ fn uninstall_last_patch_removes_minor_version_link() {
 /// the minor version link should be updated (not removed).
 #[test]
 fn uninstall_highest_patch_updates_minor_version_link() {
-    use uv_python_managed::platform_key_from_env;
-
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
@@ -3687,8 +3685,6 @@ fn python_install_pyodide() {
 
 #[test]
 fn python_install_build_version() {
-    use uv_python_managed::platform_key_from_env;
-
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_managed_python_dirs()
@@ -3754,8 +3750,6 @@ fn python_install_build_version() {
 
 #[test]
 fn python_install_build_version_pypy() {
-    use uv_python_managed::platform_key_from_env;
-
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
         .with_filtered_python_sources()
