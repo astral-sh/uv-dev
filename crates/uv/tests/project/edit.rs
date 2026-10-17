@@ -8,7 +8,7 @@ mod conditional_imports {
 #[cfg(feature = "test-git")]
 use conditional_imports::*;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
@@ -10762,8 +10762,8 @@ async fn add_index_credentials() -> Result<()> {
         dependencies = []
     "#})?;
 
-    // Provide credentials for the index via the environment variable.
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").env(EnvVars::UV_DEFAULT_INDEX, proxy.authenticated_url("public", "heron", "/basic-auth/simple")), @"
+    // Provide credentials for the index selected for persistence.
+    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").arg("--default-index").arg(proxy.authenticated_url("public", "heron", "/basic-auth/simple")), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -11698,7 +11698,7 @@ fn add_index_comments() -> Result<()> {
     "#})?;
 
     // Preserve the comment on the index URL, despite replacing it.
-    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").env(EnvVars::UV_DEFAULT_INDEX, "https://pypi.org/simple"), @"
+    uv_snapshot!(context.filters(), context.add().arg("iniconfig==2.0.0").args(["--default-index", "https://pypi.org/simple"]), @"
     exit_code: 0 (success)
     ----- stderr -----
     Resolved 2 packages in [TIME]
@@ -13019,7 +13019,6 @@ fn repeated_index_cli_environment_variable() -> Result<()> {
 
         [[tool.uv.index]]
         url = "https://test.pypi.org/simple"
-        default = true
         "#
         );
     });
@@ -13071,11 +13070,7 @@ fn repeated_index_cli_environment_variable() -> Result<()> {
     Ok(())
 }
 
-/// If an index is repeated on the CLI, the first-provided index should take precedence.
-/// Newlines in `UV_INDEX` should be treated as separators.
-///
-/// The index that appears in the `pyproject.toml` should also be consistent with the index that
-/// appears in the `uv.lock`.
+/// Newlines in `UV_INDEX` separate resolver indexes without persisting them to the project.
 ///
 /// See: <https://github.com/astral-sh/uv/issues/11312>
 #[test]
@@ -13118,8 +13113,6 @@ fn repeated_index_cli_environment_variable_newline() -> Result<()> {
             "iniconfig>=2.0.0",
         ]
 
-        [[tool.uv.index]]
-        url = "https://test.pypi.org/simple"
         "#
         );
     });
@@ -15563,4 +15556,375 @@ async fn add_malware_detected() {
       - `iniconfig==2.0.0`: MAL-2026-1234 (https://osv.dev/vulnerability/MAL-2026-1234)
     error: Malware detected in one or more dependencies that would be installed; aborting sync. Set `UV_MALWARE_CHECK=0` to bypass this check.
     ");
+}
+
+/// A named ambient index resolves and installs a dependency without declaring or pinning it.
+#[tokio::test]
+async fn add_environment_index_is_not_persisted() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackageServer::new(&"ok".parse()?).await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+    )?;
+    server
+        .serve("ok-1.0.0-py3-none-any.whl", &wheel, None)
+        .await;
+    let index = format!("local={}", server.index_url());
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().arg("ok").env(EnvVars::UV_INDEX, &index), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .context("lockfile packages")?
+        .iter()
+        .find(|package| package["name"].as_str() == Some("ok"))
+        .context("locked ok package")?;
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(server.index_url().as_str())
+    );
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "ok>=1.0.0",
+        ]
+        "#);
+    });
+    Ok(())
+}
+
+/// `--raw` omits index declarations and source pins even for an explicit CLI index.
+#[tokio::test]
+async fn add_raw_explicit_index_is_not_persisted() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackageServer::new(&"ok".parse()?).await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+    )?;
+    server
+        .serve("ok-1.0.0-py3-none-any.whl", &wheel, None)
+        .await;
+    let index = format!("local={}", server.index_url());
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().args(["ok", "--raw", "--index"]).arg(&index), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+    context.assert_installed("ok", "1.0.0");
+    let lock: toml::Value = toml::from_str(&context.read("uv.lock"))?;
+    let package = lock["package"]
+        .as_array()
+        .context("lockfile packages")?
+        .iter()
+        .find(|package| package["name"].as_str() == Some("ok"))
+        .context("locked ok package")?;
+    assert_eq!(
+        package["source"]["registry"].as_str(),
+        Some(server.index_url().as_str())
+    );
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "ok",
+        ]
+        "#);
+    });
+    Ok(())
+}
+
+/// A script resolves through the ambient default index without persisting its name or URL.
+#[tokio::test]
+async fn add_script_environment_default_index_is_not_persisted() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackageServer::new(&"ok".parse()?).await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+    )?;
+    server
+        .serve("ok-1.0.0-py3-none-any.whl", &wheel, None)
+        .await;
+    let index = format!("local={}", server.index_url());
+    context.temp_dir.child("main.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+        from importlib.metadata import version
+        print(version("ok"))
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().args(["ok", "--script", "main.py"]).env(EnvVars::UV_DEFAULT_INDEX, &index), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("main.py"), @r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = [
+        #     "ok>=1.0.0",
+        # ]
+        # ///
+        from importlib.metadata import version
+        print(version("ok"))
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.run().args(["--script", "main.py"]).env(EnvVars::UV_DEFAULT_INDEX, &index), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+    Ok(())
+}
+
+/// An explicit default index is retained so the script can run without ambient index settings.
+#[tokio::test]
+async fn add_script_explicit_default_index_is_persisted() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackageServer::new(&"ok".parse()?).await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+    )?;
+    server
+        .serve("ok-1.0.0-py3-none-any.whl", &wheel, None)
+        .await;
+    let index = format!("local={}", server.index_url());
+    context.temp_dir.child("main.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+        from importlib.metadata import version
+        print(version("ok"))
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().args(["ok", "--script", "main.py", "--default-index"]).arg(&index), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("main.py"), @r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = [
+        #     "ok>=1.0.0",
+        # ]
+        #
+        # [tool.uv.sources]
+        # ok = { index = "local" }
+        #
+        # [[tool.uv.index]]
+        # name = "local"
+        # url = "http://[LOCALHOST]/simple"
+        # default = true
+        # ///
+        from importlib.metadata import version
+        print(version("ok"))
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.run().args(["--script", "main.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+    Ok(())
+}
+
+/// `--raw` also omits an explicitly selected index from inline script metadata.
+#[tokio::test]
+async fn add_script_raw_explicit_index_is_not_persisted() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = PackageServer::new(&"ok".parse()?).await;
+    let wheel = fs_err::read(
+        context
+            .workspace_root
+            .join("test/links/ok-1.0.0-py3-none-any.whl"),
+    )?;
+    server
+        .serve("ok-1.0.0-py3-none-any.whl", &wheel, None)
+        .await;
+    let index = format!("local={}", server.index_url());
+    context.temp_dir.child("main.py").write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+        from importlib.metadata import version
+        print(version("ok"))
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().args(["ok", "--script", "main.py", "--raw", "--index"]).arg(&index), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("main.py"), @r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = [
+        #     "ok",
+        # ]
+        # ///
+        from importlib.metadata import version
+        print(version("ok"))
+        "#);
+    });
+    uv_snapshot!(context.filters(), context.run().arg("--index").arg(&index).args(["--script", "main.py"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + ok==1.0.0
+    ");
+    Ok(())
+}
+
+/// The selecting CLI flag owns a configured default index, despite an ambient default selection.
+#[test]
+fn add_named_index_with_ambient_default_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "https://explicit.example.org/simple"
+        default = true
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().args(["ok", "--frozen", "--preview-features", "index-by-name", "--index", "local"]).env(EnvVars::UV_DEFAULT_INDEX, "ambient=https://ambient.example.org/simple"), @"
+    exit_code: 0 (success)
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "ok",
+        ]
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "https://explicit.example.org/simple"
+        default = true
+
+        [tool.uv.sources]
+        ok = { index = "local" }
+        "#);
+    });
+    Ok(())
+}
+
+/// An explicit default selection persists a configured non-default index despite an ambient index.
+#[test]
+fn add_named_default_index_with_ambient_index() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "https://explicit.example.org/simple"
+        default = false
+    "#})?;
+    uv_snapshot!(context.filters(), context.add().args(["ok", "--frozen", "--preview-features", "index-by-name", "--default-index", "local"]).env(EnvVars::UV_INDEX, "ambient=https://ambient.example.org/simple"), @"
+    exit_code: 0 (success)
+    ");
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("pyproject.toml"), @r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "ok",
+        ]
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "https://explicit.example.org/simple"
+        default = true
+
+        [tool.uv.sources]
+        ok = { index = "local" }
+        "#);
+    });
+    Ok(())
 }
