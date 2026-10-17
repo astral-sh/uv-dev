@@ -1,10 +1,12 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use indoc::indoc;
 
+use uv_cache::CacheBucket;
 use uv_static::EnvVars;
 
+use uv_test::archive::generate_source_archive;
 use uv_test::uv_snapshot;
 
 /// `cache prune` should be a no-op if there's nothing out-of-date in the cache.
@@ -366,6 +368,71 @@ fn prune_unzipped() -> Result<()> {
 
     hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
+
+    Ok(())
+}
+
+/// Source archives built only with custom settings have metadata in a child shard of the revision.
+#[test]
+fn prune_unzipped_build_settings() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_file_counts()
+        .with_filtered_sizes_and_units();
+    let marker = context.temp_dir.child("backend-marker");
+    let archive = generate_source_archive(
+        &"project".parse()?,
+        &"0.1.0".parse()?,
+        "",
+        Some(marker.path()),
+    )?;
+    context
+        .temp_dir
+        .child("project-0.1.0.tar.gz")
+        .write_binary(&archive)?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("./project-0.1.0.tar.gz")
+        .arg("-Csetting=value")
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + project==0.1.0 (from file://[TEMP_DIR]/project-0.1.0.tar.gz)
+    ");
+    assert!(marker.exists());
+    fs_err::remove_file(&marker)?;
+
+    let cache_files = context.cache_files(CacheBucket::SourceDistributions)?;
+    let source = cache_files
+        .iter()
+        .find(|path| path.ends_with("src/backend.py"))
+        .context("Expected the unpacked source distribution to be cached")?;
+
+    uv_snapshot!(context.filters(), context.prune().arg("--ci"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Pruning cache at: [CACHE_DIR]/
+    Removed [N] files ([SIZE])
+    ");
+    assert!(!source.exists());
+
+    context.venv().arg("--clear").assert().success();
+
+    // Both the metadata and the built wheel must remain usable without running the backend.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("./project-0.1.0.tar.gz")
+        .arg("-Csetting=value")
+        .arg("--offline"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + project==0.1.0 (from file://[TEMP_DIR]/project-0.1.0.tar.gz)
+    ");
+    assert!(!marker.exists());
 
     Ok(())
 }
