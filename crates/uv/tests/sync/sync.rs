@@ -52,6 +52,187 @@ fn sync() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn isolated_lock() -> Result<()> {
+    let server = PackseServer::new("simple/single-package.toml");
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["a>=1.0.0"]
+    "#})?;
+    let sentinel = context.venv.child("sentinel");
+    sentinel.write_str("present")?;
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--isolated-lock")
+        .arg("--index").arg(server.index_url())
+        .arg("--output-format=json"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "target": "project",
+      "project": {
+        "path": "[TEMP_DIR]/",
+        "workspace": {
+          "path": "[TEMP_DIR]/"
+        }
+      },
+      "sync": {
+        "environment": {
+          "path": "[VENV]/",
+          "python": {
+            "path": "[VENV]/[BIN]/[PYTHON]",
+            "version": "3.12.[X]",
+            "implementation": "cpython"
+          }
+        },
+        "action": "check",
+        "changes": [
+          {
+            "name": "a",
+            "version": "2.0.0",
+            "action": "installed"
+          }
+        ]
+      },
+      "lock": {
+        "path": "[TEMP_DIR]/uv.lock",
+        "action": "resolve"
+      },
+      "dry_run": false
+    }
+
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + a==2.0.0
+    "#);
+    assert!(!context.temp_dir.child("uv.lock").exists());
+    assert!(sentinel.exists());
+
+    context
+        .lock()
+        .arg("--index")
+        .arg(server.index_url())
+        .assert()
+        .success();
+    let lockfile = context.read("uv.lock");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .args(["--isolated-lock", "--dry-run", "--resolution=lowest-direct"])
+        .arg("--index").arg(server.index_url())
+        .arg("--output-format=json"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "target": "project",
+      "project": {
+        "path": "[TEMP_DIR]/",
+        "workspace": {
+          "path": "[TEMP_DIR]/"
+        }
+      },
+      "sync": {
+        "environment": {
+          "path": "[VENV]/",
+          "python": {
+            "path": "[VENV]/[BIN]/[PYTHON]",
+            "version": "3.12.[X]",
+            "implementation": "cpython"
+          }
+        },
+        "action": "check",
+        "changes": [
+          {
+            "name": "a",
+            "version": "2.0.0",
+            "action": "uninstalled"
+          },
+          {
+            "name": "a",
+            "version": "1.0.0",
+            "action": "installed"
+          }
+        ]
+      },
+      "lock": {
+        "path": "[TEMP_DIR]/uv.lock",
+        "action": "resolve"
+      },
+      "dry_run": true
+    }
+
+    ----- stderr -----
+    Ignoring existing lockfile due to change in resolution mode: `highest` vs. `lowest-direct`
+    Resolved 2 packages in [TIME]
+    Would download 1 package
+    Would uninstall 1 package
+    Would install 1 package
+     - a==2.0.0
+     + a==1.0.0
+    "#);
+    assert_eq!(lockfile, context.read("uv.lock"));
+    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("python")
+        .arg("-c").arg("import a; print(a.__version__)"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    2.0.0
+    ");
+
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--resolution=lowest-direct")
+        .arg("--index")
+        .arg(server.index_url())
+        .env(EnvVars::UV_ISOLATED_LOCK, "1"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Ignoring existing lockfile due to change in resolution mode: `highest` vs. `lowest-direct`
+    Resolved 2 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Uninstalled 1 package in [TIME]
+    Installed 1 package in [TIME]
+     - a==2.0.0
+     + a==1.0.0
+    ");
+    assert_eq!(lockfile, context.read("uv.lock"));
+    assert!(sentinel.exists());
+    uv_snapshot!(context.filters(), context.run().arg("--no-sync").arg("python")
+        .arg("-c").arg("import a; print(a.__version__)"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1.0.0
+    ");
+
+    // Explicitly disabling an inherited setting permits a lockfile update.
+    context
+        .sync()
+        .arg("--no-isolated-lock")
+        .arg("--resolution=lowest-direct")
+        .arg("--index")
+        .arg(server.index_url())
+        .env(EnvVars::UV_ISOLATED_LOCK, "1")
+        .assert()
+        .success();
+    assert_ne!(lockfile, context.read("uv.lock"));
+
+    Ok(())
+}
+
 /// Sync a frozen resolution after removing the project manifest.
 #[test]
 fn sync_lockfile_without_manifest() -> Result<()> {
