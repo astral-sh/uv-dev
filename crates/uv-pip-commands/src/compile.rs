@@ -4,11 +4,12 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use owo_colors::OwoColorize;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
 use uv_cache::Cache;
@@ -22,9 +23,10 @@ use uv_configuration::{KeyringProviderType, TargetTriple};
 use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
-    ConfigSettings, DependencyMetadata, ExtraBuildVariables, HashCollection, Index, IndexLocations,
-    MinimumLibcVersion, NameRequirementSpecification, Origin, PackageConfigSettings, Requirement,
-    RequiresPython, Verbatim,
+    ConfigSettings, DependencyMetadata, Dist, ExtraBuildVariables, HashCollection, Identifier,
+    Index, IndexLocations, MinimumLibcVersion, NameRequirementSpecification, Origin,
+    PackageConfigSettings, Requirement, RequirementScope, RequirementSource, RequiresPython,
+    ResolvedDist, Verbatim,
 };
 use uv_fs::{CWD, Simplified};
 use uv_git::ResolvedRepositoryReference;
@@ -44,9 +46,9 @@ use uv_requirements::{
     GroupsSpecification, RequirementsSource, RequirementsSpecification, is_pylock_toml,
 };
 use uv_resolver::{
-    AnnotationStyle, DependencyMode, DisplayResolutionGraph, ExcludeNewer, FlatIndex, ForkStrategy,
-    InMemoryIndex, OptionsBuilder, Prerelease, PythonRequirement, ResolutionMode,
-    ResolverEnvironment,
+    AnnotationStyle, BuildDependencies, DependencyMode, DisplayResolutionGraph, ExcludeNewer,
+    FlatIndex, ForkStrategy, InMemoryIndex, OptionsBuilder, Preference, Prerelease,
+    PythonRequirement, ResolutionMode, ResolverEnvironment, ResolverOutput,
 };
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
@@ -62,7 +64,7 @@ use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations::locked_requirements::{
     LockedRequirements, read_pylock_toml_requirements, read_requirements_txt,
 };
-use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::loggers::{DefaultResolveLogger, ResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 
 /// Resolve a set of requirements into a set of pinned versions.
@@ -91,6 +93,7 @@ pub async fn pip_compile(
     upgrade: Upgrade,
     generate_hashes: bool,
     build_hash_checking: HashCheckingMode,
+    include_build_dependencies: bool,
     no_emit_packages: Vec<PackageName>,
     include_extras: bool,
     include_markers: bool,
@@ -159,6 +162,23 @@ pub async fn pip_compile(
             PipCompileFormat::RequirementsTxt
         }
     });
+
+    if include_build_dependencies && universal {
+        return Err(anyhow!(
+            "`--include-build-dependencies` is not supported with `--universal`"
+        ));
+    }
+    if include_build_dependencies && matches!(format, PipCompileFormat::PylockToml) {
+        return Err(anyhow!(
+            "`--include-build-dependencies` is only supported for `requirements.txt` output"
+        ));
+    }
+    if include_build_dependencies && !preview.is_enabled(PreviewFeature::PipBuildDependencies) {
+        warn_user!(
+            "The `--include-build-dependencies` option is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::PipBuildDependencies
+        );
+    }
 
     // If the user is exporting to PEP 751, ensure the filename matches the specification.
     if matches!(format, PipCompileFormat::PylockToml) {
@@ -246,7 +266,7 @@ pub async fn pip_compile(
         ));
     }
 
-    let constraints = constraints
+    let constraints: Vec<NameRequirementSpecification> = constraints
         .iter()
         .cloned()
         .chain(
@@ -336,6 +356,26 @@ pub async fn pip_compile(
         interpreter.python_version(),
         interpreter.sys_executable().user_display().cyan()
     );
+
+    if include_build_dependencies {
+        if python_platform
+            .as_ref()
+            .is_some_and(|target| target.platform() != *interpreter.platform())
+        {
+            return Err(anyhow!(
+                "`--include-build-dependencies` requires the target platform to match the build interpreter platform"
+            ));
+        }
+        if python_version.as_ref().is_some_and(|target| {
+            target.major() != interpreter.python_major()
+                || target.minor() != interpreter.python_minor()
+                || (target.patch().is_some() && target.version() != interpreter.python_version())
+        }) {
+            return Err(anyhow!(
+                "`--include-build-dependencies` requires the target Python version to match the build interpreter version"
+            ));
+        }
+    }
 
     if let Some(python_version) = python_version.as_ref() {
         // If the requested version does not match the version we're using warn the user
@@ -571,45 +611,215 @@ pub async fn pip_compile(
         })
         .build();
 
-    // Resolve the requirements.
-    let mut resolution = match uv_resolve_operations::resolve(
-        requirements,
-        constraints,
-        overrides,
-        override_dependencies,
-        excludes,
-        source_trees,
-        project,
-        BTreeMap::default(),
-        &extras,
-        &groups,
-        preferences,
-        None,
-        &hasher,
-        &Reinstall::None,
-        &upgrade,
-        tags.as_deref(),
-        resolver_env.clone(),
-        python_requirement,
-        interpreter.markers(),
-        Conflicts::empty(),
-        &client,
-        &flat_index,
-        &top_level_index,
-        &build_dispatch,
-        &concurrency,
-        options,
-        None,
-        Box::new(DefaultResolveLogger),
-        printer,
-    )
-    .await
-    {
-        Ok((resolution, _)) => resolution,
-        Err(err) => {
-            return Err(UvError::from(err).into());
-        }
+    // All passes share resolver configuration; build roots retain their own constraint context.
+    let resolve = async |requirements,
+                         build_requirements: Vec<Requirement>,
+                         constraints,
+                         preferences,
+                         logger: Box<dyn ResolveLogger>| {
+        uv_resolve_operations::resolve(
+            requirements,
+            constraints,
+            (!build_requirements.is_empty()).then(|| BuildDependencies {
+                requirements: build_requirements,
+                constraints: build_constraints.clone(),
+            }),
+            overrides.clone(),
+            override_dependencies.clone(),
+            excludes.clone(),
+            source_trees.clone(),
+            project.clone(),
+            BTreeMap::default(),
+            &extras,
+            &groups,
+            preferences,
+            None,
+            &hasher,
+            &Reinstall::None,
+            &upgrade,
+            tags.as_deref(),
+            resolver_env.clone(),
+            python_requirement.clone(),
+            interpreter.markers(),
+            Conflicts::empty(),
+            &client,
+            &flat_index,
+            &top_level_index,
+            &build_dispatch,
+            &concurrency,
+            options.clone(),
+            None,
+            logger,
+            printer,
+        )
+        .await
+        .map(|(resolution, _)| resolution)
+        .map_err(UvError::from)
     };
+    let mut resolution = resolve(
+        requirements.clone(),
+        Vec::new(),
+        constraints.clone(),
+        preferences.clone(),
+        Box::new(DefaultResolveLogger),
+    )
+    .await?;
+
+    if include_build_dependencies {
+        let mut declarations_by_source = FxHashMap::default();
+        let mut requirements_by_source = FxHashMap::default();
+        let discovery_inputs = |resolution: &ResolverOutput| {
+            let mut constraints = constraints.clone();
+            let mut preferences = Vec::new();
+            for (_, distribution) in resolution.base_dists() {
+                let source = RequirementSource::from(&distribution.dist);
+                if !matches!(source, RequirementSource::Registry { .. }) {
+                    constraints.push(NameRequirementSpecification::from(Requirement {
+                        name: distribution.name.clone(),
+                        extras: Box::new([]),
+                        groups: Box::new([]),
+                        marker: distribution.marker.pep508(),
+                        source,
+                        scope: RequirementScope::Global,
+                        origin: None,
+                    }));
+                }
+                preferences.push(Preference::from_locked(
+                    distribution.name.clone(),
+                    distribution.version.clone(),
+                    distribution.index().cloned(),
+                    Vec::new(),
+                ));
+            }
+            (constraints, preferences)
+        };
+        let mut previous_requirements = FxHashSet::default();
+        let mut requirement_states = Vec::new();
+
+        loop {
+            let sources = resolution
+                .distributions()
+                .filter_map(|distribution| {
+                    let ResolvedDist::Installable { dist, .. } = distribution else {
+                        return None;
+                    };
+                    let Dist::Source(source) = dist.as_ref() else {
+                        return None;
+                    };
+                    Some(source)
+                })
+                .collect::<Vec<_>>();
+            let mut active_requirements = Vec::new();
+            let mut active_seen = FxHashSet::default();
+            if !sources.is_empty() {
+                let mut declared_requirements = Vec::new();
+                let mut declared_seen = FxHashSet::default();
+                for &source in &sources {
+                    let id = source.distribution_id();
+                    if !declarations_by_source.contains_key(&id) {
+                        let declared = build_dispatch
+                            .discover_declared_build_requirements(
+                                source,
+                                hasher.metadata_policy(source),
+                            )
+                            .await
+                            .map_err(|err| {
+                                if err.is_user_failure() {
+                                    UvError::User(err.into())
+                                } else {
+                                    UvError::Unexpected(err.into())
+                                }
+                            })?;
+                        declarations_by_source.insert(id.clone(), declared);
+                    }
+                    if let Some(declared) = declarations_by_source.get(&id) {
+                        declared_requirements.extend(
+                            declared
+                                .iter()
+                                .filter(|requirement| declared_seen.insert((*requirement).clone()))
+                                .cloned(),
+                        );
+                    }
+                }
+                // Reconcile every source's declarations before running hooks. Hook results from
+                // independently selected backend versions need not form a compatible environment.
+                let (backend_constraints, backend_preferences) = discovery_inputs(&resolution);
+                let backend_resolution = resolve(
+                    requirements.clone(),
+                    declared_requirements,
+                    backend_constraints,
+                    backend_preferences,
+                    Box::new(SummaryResolveLogger),
+                )
+                .await?;
+                let selection = Arc::new(
+                    backend_resolution
+                        .distributions()
+                        .map(Identifier::distribution_id)
+                        .collect::<FxHashSet<_>>(),
+                );
+                let (discovery_constraints, discovery_preferences) =
+                    discovery_inputs(&backend_resolution);
+                let discovery_constraints = Constraints::from_specifications(discovery_constraints);
+                for source in sources {
+                    let id = source.distribution_id();
+                    if requirements_by_source
+                        .get(&id)
+                        .is_none_or(|(previous, _)| previous != &selection)
+                    {
+                        let discovered = build_dispatch
+                            .discover_build_requirements(
+                                source,
+                                hasher.metadata_policy(source),
+                                &discovery_constraints,
+                                discovery_preferences.clone(),
+                            )
+                            .await
+                            .map_err(|err| {
+                                if err.is_user_failure() {
+                                    UvError::User(err.into())
+                                } else {
+                                    UvError::Unexpected(err.into())
+                                }
+                            })?;
+                        requirements_by_source
+                            .insert(id.clone(), (Arc::clone(&selection), discovered));
+                    }
+                    if let Some((_, build_requirements)) = requirements_by_source.get(&id) {
+                        active_requirements.extend(
+                            build_requirements
+                                .iter()
+                                .filter(|requirement| active_seen.insert((*requirement).clone()))
+                                .cloned(),
+                        );
+                    }
+                }
+            }
+            let active_state = active_seen;
+
+            // Requirements belong to selected sources; replaced source releases cannot retain
+            // their backend requirements in the next resolution.
+            if active_state == previous_requirements {
+                break;
+            }
+            if requirement_states.contains(&active_state) {
+                return Err(anyhow!(
+                    "Build dependency requirements do not converge across selected source distributions"
+                ));
+            }
+            requirement_states.push(previous_requirements);
+            previous_requirements = active_state;
+
+            resolution = resolve(
+                requirements.clone(),
+                active_requirements,
+                constraints.clone(),
+                preferences.clone(),
+                Box::new(DefaultResolveLogger),
+            )
+            .await?;
+        }
+    }
 
     if generate_hashes && preview.is_enabled(PreviewFeature::ArtifactHashFiltering) {
         resolution.retain_allowed_distribution_hashes(&build_options);

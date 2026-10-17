@@ -287,6 +287,66 @@ pub struct SourceBuild {
 }
 
 impl SourceBuild {
+    /// Read declared and configured build requirements without installing or invoking a backend.
+    pub async fn declared_build_requirements(
+        source: &Path,
+        subdirectory: Option<&Path>,
+        install_path: &Path,
+        stop_discovery_at: Option<&Path>,
+        fallback_package_name: Option<&PackageName>,
+        build_context: &impl BuildContext,
+        no_sources: &NoSources,
+        credentials_cache: &CredentialsCache,
+    ) -> Result<Vec<Requirement>, Error> {
+        let source_tree =
+            subdirectory.map_or_else(|| source.to_path_buf(), |path| source.join(path));
+        let (backend, project) = Self::extract_pep517_backend(
+            &source_tree,
+            install_path,
+            fallback_package_name,
+            build_context.locations(),
+            no_sources,
+            stop_discovery_at,
+            build_context.cache(),
+            build_context.workspace_cache(),
+            credentials_cache,
+        )
+        .await
+        .map_err(|err| *err)?;
+        let package_name = project
+            .as_ref()
+            .map(|project| &project.name)
+            .or(fallback_package_name);
+        let extra =
+            Self::extra_build_dependencies(package_name, build_context.extra_build_requires())?;
+        Ok(backend.requirements.into_iter().chain(extra).collect())
+    }
+
+    fn extra_build_dependencies(
+        package_name: Option<&PackageName>,
+        extra_build_requires: &ExtraBuildRequires,
+    ) -> Result<Vec<Requirement>, Error> {
+        let Some(package_name) = package_name else {
+            return Ok(Vec::new());
+        };
+        extra_build_requires
+            .get(package_name)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|requirement| match requirement {
+                ExtraBuildRequirement {
+                    requirement,
+                    match_runtime: true,
+                } if requirement.source.is_empty() => Err(Error::UnmatchedRuntime(
+                    requirement.name.clone(),
+                    package_name.clone(),
+                )),
+                requirement => Ok(Requirement::from(requirement)),
+            })
+            .collect()
+    }
+
     /// Create a virtual environment in which to build a source distribution, extracting the
     /// contents from an archive if necessary.
     ///
@@ -348,28 +408,8 @@ impl SourceBuild {
             .or(fallback_package_version)
             .cloned();
 
-        let extra_build_dependencies = package_name
-            .as_ref()
-            .and_then(|name| extra_build_requires.get(name).cloned())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|requirement| {
-                match requirement {
-                    ExtraBuildRequirement {
-                        requirement,
-                        match_runtime: true,
-                    } if requirement.source.is_empty() => {
-                        Err(Error::UnmatchedRuntime(
-                            requirement.name.clone(),
-                            // SAFETY: if `package_name` is `None`, the iterator is empty.
-                            package_name.clone().unwrap(),
-                        ))
-                    }
-                    requirement => Ok(requirement),
-                }
-            })
-            .map_ok(Requirement::from)
-            .collect::<Result<Vec<_>, _>>()?;
+        let extra_build_dependencies =
+            Self::extra_build_dependencies(package_name.as_ref(), extra_build_requires)?;
 
         // Create a virtual environment, or install into the shared environment if requested.
         let venv = if let Some(venv) = build_isolation.shared_environment(package_name.as_ref()) {
