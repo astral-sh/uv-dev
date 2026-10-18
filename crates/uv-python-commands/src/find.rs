@@ -1,10 +1,13 @@
-use anyhow::Result;
+use std::error::Error as StdError;
 use std::fmt::Write;
 use std::path::Path;
+
+use anyhow::Result;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults};
+use uv_errors::{Diagnostic, ErrorOptions, Hints};
 use uv_fs::Simplified;
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::PythonInstallation;
@@ -21,6 +24,11 @@ use uv_command_support::Printer;
 use uv_command_support::UvError;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::ScriptInterpreter;
+
+fn diagnostic_for_error<'a>(error: &'a (dyn StdError + 'static)) -> Option<Diagnostic<'a>> {
+    uv_settings::diagnostic_for_error(error)
+        .or_else(|| uv_workspace::pyproject::diagnostic_for_error(error))
+}
 
 /// Find a Python interpreter.
 #[expect(clippy::fn_params_excessive_bools)]
@@ -66,7 +74,11 @@ pub async fn find(
                         | WorkspaceErrorKind::MissingPyprojectToml
                         | WorkspaceErrorKind::NonWorkspace(_)
                 ) {
-                    warn_user_once_with_chain!(&err);
+                    warn_user_once_with_chain!(
+                        &err,
+                        Hints::none(),
+                        ErrorOptions::default().with_diagnostic(diagnostic_for_error),
+                    );
                 }
                 None
             }
