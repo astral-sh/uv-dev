@@ -687,10 +687,7 @@ fn python_installation_from_executable(
     cache: &Cache,
 ) -> Result<PythonInstallation, Error> {
     Interpreter::query(&path, cache)
-        .map(|interpreter| PythonInstallation {
-            source,
-            interpreter,
-        })
+        .map(|interpreter| PythonInstallation::new(source, interpreter))
         .inspect(|installation| {
             debug!(
                 "Found `{}` at `{}` ({source})",
@@ -754,16 +751,20 @@ fn python_installations_from_executable_group(
 }
 
 /// Sort successful installations without moving them across critical query errors.
-fn sort_installations_by_key<T, K: Ord>(
+fn sort_installations_by_key<T, K: Ord + ?Sized>(
     installations: &mut [Result<T, Error>],
-    key: impl Fn(&T) -> K,
+    key: impl for<'a> Fn(&'a T) -> &'a K,
 ) {
     // Critical errors preserve discovery order; non-critical errors must not interrupt
     // installation-key ordering and can follow successful queries.
     for candidates in
         installations.split_mut(|result| result.as_ref().is_err_and(Error::is_critical))
     {
-        candidates.sort_by_key(|result| Reverse(result.as_ref().ok().map(&key)));
+        candidates.sort_by(|left, right| {
+            let left = left.as_ref().ok().map(&key);
+            let right = right.as_ref().ok().map(&key);
+            Reverse(left).cmp(&Reverse(right))
+        });
     }
 }
 
@@ -887,10 +888,10 @@ fn python_installation_from_directory(
     cache: &Cache,
 ) -> Result<PythonInstallation, uv_python_interpreter::InterpreterError> {
     let executable = virtualenv_python_executable(path);
-    Ok(PythonInstallation {
-        source: PythonSource::ProvidedPath,
-        interpreter: Interpreter::query(&executable, cache)?,
-    })
+    Ok(PythonInstallation::new(
+        PythonSource::ProvidedPath,
+        Interpreter::query(&executable, cache)?,
+    ))
 }
 
 /// Lazily iterate over all Python executable paths on the path with the given executable name.
@@ -961,10 +962,10 @@ fn find_python_installations_with_strategy<'a>(
             if preference.allows_source(PythonSource::ProvidedPath) {
                 debug!("Checking for Python interpreter at {request}");
                 match Interpreter::query(path, cache) {
-                    Ok(interpreter) => Ok(Ok(PythonInstallation {
-                        source: PythonSource::ProvidedPath,
+                    Ok(interpreter) => Ok(Ok(PythonInstallation::new(
+                        PythonSource::ProvidedPath,
                         interpreter,
-                    })),
+                    ))),
                     Err(InterpreterError::NotFound(_) | InterpreterError::BrokenLink(_)) => {
                         Ok(Err(PythonNotFound {
                             request: request.clone(),
@@ -1767,7 +1768,7 @@ mod tests {
             Ok(3),
         ];
 
-        sort_installations_by_key(&mut installations, |key| *key);
+        sort_installations_by_key(&mut installations, |key| key);
 
         assert_matches!(
             &installations[..],

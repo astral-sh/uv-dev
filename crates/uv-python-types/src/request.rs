@@ -154,6 +154,10 @@ pub enum PythonVariant {
     GilDebug,
 }
 
+/// A publisher-defined name identifying a Python build, such as `custom`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PythonBuildName(String);
+
 /// A Python discovery version request.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum VersionRequest {
@@ -1666,6 +1670,61 @@ impl FromStr for PythonVariant {
     }
 }
 
+/// Parse a [`PythonVariant`] and an optional [`PythonBuildName`] written after `+`.
+pub(crate) fn parse_python_variant_and_build_name(
+    value: &str,
+) -> Result<(PythonVariant, Option<PythonBuildName>), ()> {
+    let value = value.to_ascii_lowercase();
+    if let Ok(python) = PythonVariant::from_str(&value) {
+        return Ok((python, None));
+    }
+
+    let mut python_variant = String::new();
+    let mut build_name = None;
+    for component in value.split('+') {
+        if component.is_empty() {
+            return Err(());
+        }
+        if PythonVariant::from_str(component).is_ok() {
+            if !python_variant.is_empty() {
+                python_variant.push('+');
+            }
+            python_variant.push_str(component);
+        } else {
+            if build_name.is_some() {
+                return Err(());
+            }
+            build_name = Some(PythonBuildName::from_str(component)?);
+        }
+    }
+
+    // Long-form components can appear in either order, but short variant spellings must be
+    // complete: `td` is valid, while `t+d` and `t+debug` are not.
+    let python = match python_variant.as_str() {
+        "debug+freethreaded" => PythonVariant::FreethreadedDebug,
+        "debug+gil" => PythonVariant::GilDebug,
+        variant => PythonVariant::from_str(variant)?,
+    };
+    Ok((python, build_name))
+}
+
+impl FromStr for PythonBuildName {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let name = s.to_ascii_lowercase();
+        if PythonVariant::from_str(&name).is_ok()
+            || !name.starts_with(|character: char| character.is_ascii_lowercase())
+            || !name.chars().all(|character| {
+                character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+            })
+        {
+            return Err(());
+        }
+        Ok(Self(name))
+    }
+}
+
 impl fmt::Display for PythonVariant {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -1676,6 +1735,12 @@ impl fmt::Display for PythonVariant {
             Self::Gil => f.write_str("gil"),
             Self::GilDebug => f.write_str("gil+debug"),
         }
+    }
+}
+
+impl fmt::Display for PythonBuildName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -2213,6 +2278,46 @@ mod tests {
             "./foo",
             "A string with a file system separator is treated as a file"
         );
+    }
+
+    #[test]
+    fn build_name_from_str() {
+        for (name, variant) in [
+            ("custom", "custom"),
+            ("CUSTOM", "custom"),
+            ("custom_internal", "custom_internal"),
+            ("custom20260825", "custom20260825"),
+            ("avx2", "avx2"),
+            ("openssl3", "openssl3"),
+            ("pgo", "pgo"),
+        ] {
+            assert_eq!(
+                PythonBuildName::from_str(name).map(|variant| variant.to_string()),
+                Ok(variant.to_string()),
+                "name: {name}"
+            );
+        }
+        for name in [
+            "",
+            "custom+internal",
+            "custom+custom",
+            "pgo+lto",
+            "custom.public",
+            "custom-internal",
+            "custom/internal",
+            "custom internal",
+            "cüstom",
+            "20260825",
+            "_custom",
+            "t",
+            "d",
+            "td",
+            "freethreaded",
+            "debug",
+            "gil",
+        ] {
+            assert!(PythonBuildName::from_str(name).is_err(), "name: {name}");
+        }
     }
 
     #[test]
