@@ -30,10 +30,60 @@ impl<'de> Deserialize<'de> for SourceWire {
         struct SourceVisitor;
 
         impl<'de> Visitor<'de> for SourceVisitor {
-            type Value = SourceWire;
+            type Value = Option<SourceWire>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("a lockfile source table")
+            }
+
+            fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(None)
+            }
+
+            fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(None)
+            }
+
+            fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(None)
+            }
+
+            fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(None)
+            }
+
+            fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(None)
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(None)
+            }
+
+            fn visit_seq<A>(self, sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                IgnoredAny.visit_seq(sequence)?;
+                Ok(None)
             }
 
             fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
@@ -42,47 +92,48 @@ impl<'de> Deserialize<'de> for SourceWire {
             {
                 let fields = Fields::deserialize(MapAccessDeserializer::new(map))?;
                 if let Some(registry) = fields.registry.decode() {
-                    return Ok(SourceWire::Registry { registry });
+                    return Ok(Some(SourceWire::Registry { registry }));
                 }
                 if let Some(git) = fields.git.decode() {
-                    return Ok(SourceWire::Git { git });
+                    return Ok(Some(SourceWire::Git { git }));
                 }
                 if let Some(url) = fields.url.decode() {
                     match fields.subdirectory {
                         StringField::Missing => {
-                            return Ok(SourceWire::Direct {
+                            return Ok(Some(SourceWire::Direct {
                                 url,
                                 subdirectory: None,
-                            });
+                            }));
                         }
                         StringField::Value(subdirectory) => {
                             if let Some(subdirectory) = StringField::Value(subdirectory).decode() {
-                                return Ok(SourceWire::Direct {
+                                return Ok(Some(SourceWire::Direct {
                                     url,
                                     subdirectory: Some(subdirectory),
-                                });
+                                }));
                             }
                         }
                         StringField::Invalid => {}
                     }
                 }
                 if let Some(path) = fields.path.decode() {
-                    return Ok(SourceWire::Path { path });
+                    return Ok(Some(SourceWire::Path { path }));
                 }
                 if let Some(directory) = fields.directory.decode() {
-                    return Ok(SourceWire::Directory { directory });
+                    return Ok(Some(SourceWire::Directory { directory }));
                 }
                 if let Some(editable) = fields.editable.decode() {
-                    return Ok(SourceWire::Editable { editable });
+                    return Ok(Some(SourceWire::Editable { editable }));
                 }
                 if let Some(r#virtual) = fields.r#virtual.decode() {
-                    return Ok(SourceWire::Virtual { r#virtual });
+                    return Ok(Some(SourceWire::Virtual { r#virtual }));
                 }
-                Err(serde::de::Error::custom("invalid lockfile source"))
+                Ok(None)
             }
         }
 
-        deserializer.deserialize_map(SourceVisitor).map_err(|_| {
+        // Report a shape mismatch here so errors from reading the input retain their context.
+        deserializer.deserialize_any(SourceVisitor)?.ok_or_else(|| {
             serde::de::Error::custom("data did not match any variant of untagged enum SourceWire")
         })
     }

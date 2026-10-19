@@ -899,7 +899,7 @@ mod tests {
 
     use serde::Deserialize;
 
-    use super::super::{LockParseError, VERSION};
+    use super::super::{LockParseError, SourceWire, VERSION};
     use super::{Cursor, Error, Lock, ValueDeserializer, from_str};
 
     const CANONICAL_LOCK: &str = r#"version = 1
@@ -1133,6 +1133,32 @@ version = "1.0.0"
 
         assert_matches!(&invalid, Error::Invalid { offset, .. } if *offset > 0,
             "invalid TOML scalars must retain their real byte offset: {invalid}"
+        );
+    }
+
+    #[test]
+    fn source_syntax_errors_preserve_real_byte_offsets() {
+        let mut cursor = Cursor::new(r#"{ path = "\q" }"#);
+        let invalid = SourceWire::deserialize(ValueDeserializer {
+            cursor: &mut cursor,
+        })
+        .expect_err("TOML rejects invalid escapes");
+
+        assert_matches!(&invalid, Error::Invalid { offset, message } if *offset > 0 && message.contains("escape"),
+            "invalid source strings must retain their cause and byte offset: {invalid}"
+        );
+    }
+
+    #[test]
+    fn unsupported_source_syntax_preserves_real_byte_offsets() {
+        let mut cursor = Cursor::new("{ virtual = '.' }");
+        let unsupported = SourceWire::deserialize(ValueDeserializer {
+            cursor: &mut cursor,
+        })
+        .expect_err("literal source strings require the TOML fallback");
+
+        assert_matches!(&unsupported, Error::Unsupported { offset, .. } if *offset > 0,
+            "unsupported source strings must retain their real byte offset: {unsupported}"
         );
     }
 
