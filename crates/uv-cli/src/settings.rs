@@ -139,7 +139,7 @@ impl GlobalSettings {
                     .cache_reads
                     .map(NonZeroUsize::get)
                     .unwrap_or(Concurrency::DEFAULT_CACHE_READS),
-            ),
+            )?,
             show_settings: args.show_settings,
             preview: resolve_preview(args, workspace, environment)?,
             python_preference,

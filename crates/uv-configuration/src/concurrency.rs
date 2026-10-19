@@ -30,6 +30,12 @@ pub struct Concurrency {
     pub builds_semaphore: Arc<Semaphore>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("The `{setting}` setting must be at most {}", Semaphore::MAX_PERMITS)]
+pub struct ConcurrencyLimitError {
+    setting: &'static str,
+}
+
 /// Custom `Debug` to hide semaphore fields from `--show-settings` output.
 #[expect(clippy::missing_fields_in_debug)]
 impl fmt::Debug for Concurrency {
@@ -45,7 +51,7 @@ impl fmt::Debug for Concurrency {
 
 impl Default for Concurrency {
     fn default() -> Self {
-        Self::new(
+        Self::new_unchecked(
             Self::DEFAULT_DOWNLOADS,
             Self::threads(),
             Self::threads(),
@@ -62,7 +68,29 @@ impl Concurrency {
     pub const DEFAULT_CACHE_READS: usize = 4;
 
     /// Create a new [`Concurrency`] with the given limits.
-    pub fn new(downloads: usize, builds: usize, installs: usize, cache_reads: usize) -> Self {
+    pub fn new(
+        downloads: usize,
+        builds: usize,
+        installs: usize,
+        cache_reads: usize,
+    ) -> Result<Self, ConcurrencyLimitError> {
+        for (setting, value) in [
+            ("concurrent-downloads", downloads),
+            ("concurrent-builds", builds),
+        ] {
+            if value > Semaphore::MAX_PERMITS {
+                return Err(ConcurrencyLimitError { setting });
+            }
+        }
+        Ok(Self::new_unchecked(
+            downloads,
+            builds,
+            installs,
+            cache_reads,
+        ))
+    }
+
+    fn new_unchecked(downloads: usize, builds: usize, installs: usize, cache_reads: usize) -> Self {
         Self {
             downloads,
             builds,
