@@ -1,25 +1,16 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use uv_static::EnvVars;
-use uv_test::packse::generate_wheel;
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, site_packages_path};
 
 use super::wheel_fixture::write_many_files_wheel;
 
 /// Create a wheel containing exactly one Python source file.
 fn bytecode_wheel(context: &TestContext) -> Result<PathBuf> {
-    let (filename, bytes) = generate_wheel(
-        &"bytecode-test".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, bytes) = WheelBuilder::new(&"bytecode-test".parse()?, &"1.0.0".parse()?).build();
     let wheel = context.temp_dir.join(filename);
     fs_err::write(&wheel, bytes)?;
     Ok(wheel)

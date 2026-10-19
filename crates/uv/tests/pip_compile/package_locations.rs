@@ -1,27 +1,17 @@
 //! Package locations from index and find-links inputs.
 
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use assert_fs::prelude::*;
 use sha2::{Digest, Sha256};
 
 use uv_static::EnvVars;
 use uv_test::find_links::FindLinksServer;
-use uv_test::packse::{PackseServer, generate_wheel};
+use uv_test::packse::{PackseServer, WheelBuilder};
 use uv_test::{TestContext, uv_snapshot};
 
 fn setup_wheelhouse() -> Result<TestContext> {
     let context = uv_test::test_context!("3.12");
-    let (filename, wheel) = generate_wheel(
-        &"tqdm".parse()?,
-        &"4.64.1".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"tqdm".parse()?, &"4.64.1".parse()?).build();
     let wheelhouse = context.temp_dir.child("wheelhouse");
     wheelhouse.child(&filename).write_binary(&wheel)?;
     let hash = hex::encode(Sha256::digest(&wheel));

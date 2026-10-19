@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -6882,15 +6881,7 @@ fn prepare_duplicate_installed_versions(context: &TestContext) -> Result<ChildPa
     links.create_dir_all()?;
     let name = "a".parse()?;
     for version in ["1.0.0", "2.0.0", "3.0.0"] {
-        let (filename, wheel) = generate_wheel(
-            &name,
-            &version.parse()?,
-            &[],
-            &BTreeMap::new(),
-            None,
-            "py3-none-any",
-            &[],
-        );
+        let (filename, wheel) = WheelBuilder::new(&name, &version.parse()?).build();
         links.child(filename).write_binary(&wheel)?;
     }
     context
@@ -12428,18 +12419,12 @@ fn install_in_prefix_symlinked_wheel_data_directory() -> Result<()> {
 }
 
 fn wheel_with_reserved_script(context: &TestContext, reserved_path: &str) -> Result<PathBuf> {
-    let (filename, wheel) = generate_wheel_with_files(
-        &"foo".parse()?,
-        &"0.1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .files(&[
             ("foo-0.1.0.data/data/harmless.txt", "this must not be moved"),
             (reserved_path, "this must not replace python"),
-        ],
-    );
+        ])
+        .build();
     let path = context.temp_dir.join(filename);
     fs::write(&path, wheel)?;
     Ok(path)

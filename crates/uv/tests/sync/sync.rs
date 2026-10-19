@@ -10070,30 +10070,17 @@ fn no_build_path_dependency() -> Result<()> {
 
 /// Create an ABI-incompatible wheel and a compatible transitive dependency for its lock.
 fn incompatible_wheel_with_dependency(context: &TestContext) -> Result<(String, Vec<u8>)> {
-    let (filename, wheel) = generate_wheel(
-        &"pycparser".parse()?,
-        &"2.22".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"pycparser".parse()?, &"2.22".parse()?).build();
     context
         .temp_dir
         .child("wheels")
         .child(filename)
         .write_binary(&wheel)?;
 
-    Ok(generate_wheel(
-        &"cffi".parse()?,
-        &"1.17.1".parse()?,
-        &["pycparser".parse()?],
-        &BTreeMap::new(),
-        None,
-        "cp310-cp310-macosx_11_0_arm64",
-        &[],
-    ))
+    Ok(WheelBuilder::new(&"cffi".parse()?, &"1.17.1".parse()?)
+        .requires(&["pycparser".parse()?])
+        .tag("cp310-cp310-macosx_11_0_arm64")
+        .build())
 }
 
 #[tokio::test]
@@ -11580,15 +11567,7 @@ fn sync_ignores_incompatible_global_python_version() -> Result<()> {
 async fn sync_explicit_index_uses_cached_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let name = "idna".parse()?;
-    let (filename, wheel) = generate_wheel(
-        &name,
-        &"2.7".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&name, &"2.7".parse()?).build();
     let server = PackageServer::new(&name).await;
     server.serve(&filename, &wheel, None).await;
 

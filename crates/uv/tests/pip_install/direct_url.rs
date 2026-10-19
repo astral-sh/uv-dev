@@ -1,7 +1,5 @@
 //! Provenance and reuse of direct URL installations.
 
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
@@ -13,7 +11,7 @@ use wiremock::{
 
 use uv_redacted::SafeUrl;
 use uv_test::archive::generate_source_archive;
-use uv_test::packse::{generate_wheel, generate_wheel_with_files};
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot};
 
 fn assert_archive_provenance(context: &TestContext, dist_info: &str, url: &str) -> Result<()> {
@@ -36,15 +34,9 @@ fn path_changes_with_same_name() -> Result<()> {
     let name = "ok".parse()?;
     let version = "1.0.0".parse()?;
     for (wheel, payload) in [(&one, "one"), (&two, "two")] {
-        let (_, bytes) = generate_wheel_with_files(
-            &name,
-            &version,
-            &[],
-            &BTreeMap::new(),
-            None,
-            "py3-none-any",
-            &[("ok/origin.txt", payload)],
-        );
+        let (_, bytes) = WheelBuilder::new(&name, &version)
+            .files(&[("ok/origin.txt", payload)])
+            .build();
         wheel.write_binary(&bytes)?;
     }
     let installed_payload = ChildPath::new(context.site_packages().join("ok/origin.txt"));
@@ -124,15 +116,9 @@ async fn direct_url_json_direct_url() -> Result<()> {
 #[tokio::test]
 async fn direct_url_json_query() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (filename, wheel) = generate_wheel(
-        &"six".parse()?,
-        &"1.17.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py2.py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"six".parse()?, &"1.17.0".parse()?)
+        .tag("py2.py3-none-any")
+        .build();
     let server = MockServer::start().await;
     Mock::given(path(format!("/{filename}")))
         .and(basic_auth("username", "password"))

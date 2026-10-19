@@ -1,14 +1,13 @@
 //! Installation with the cache and environment on different filesystems.
 //! Requires `UV_INTERNAL__TEST_ALT_FS`.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use assert_cmd::prelude::*;
 use indoc::indoc;
 
-use uv_test::packse::generate_wheel;
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot};
 
 fn fixture() -> Result<Option<(TestContext, PathBuf)>> {
@@ -30,15 +29,7 @@ fn fixture() -> Result<Option<(TestContext, PathBuf)>> {
         .arg(context.venv.path())
         .assert()
         .success();
-    let (filename, bytes) = generate_wheel(
-        &"cross-device".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, bytes) = WheelBuilder::new(&"cross-device".parse()?, &"1.0.0".parse()?).build();
     let wheel = context.temp_dir.join(filename);
     fs_err::write(&wheel, bytes)?;
     Ok(Some((context, wheel)))

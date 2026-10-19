@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
@@ -12,20 +11,13 @@ use uv_cache::CacheBucket;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
-use uv_test::packse::generate_wheel;
+use uv_test::packse::WheelBuilder;
 use uv_test::uv_snapshot;
 
 fn tomli_2_0_1_wheel() -> Result<Vec<u8>> {
-    Ok(generate_wheel(
-        &"tomli".parse()?,
-        &"2.0.1".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    )
-    .1)
+    Ok(WheelBuilder::new(&"tomli".parse()?, &"2.0.1".parse()?)
+        .build()
+        .1)
 }
 
 /// Reject a mismatched version unless the filename check is explicitly disabled.

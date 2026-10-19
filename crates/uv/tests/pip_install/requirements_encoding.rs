@@ -1,14 +1,12 @@
 //! Requirements files with a UTF-16 byte-order mark.
 //! See <https://github.com/astral-sh/uv/issues/2276>.
 
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
-use uv_test::packse::generate_wheel;
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot};
 
 const REQUIREMENTS: &str = "# café 🐍\ntomli<=2.0.1\n";
@@ -18,15 +16,7 @@ fn tomli_wheels(context: &TestContext) -> Result<ChildPath> {
     wheels.create_dir_all()?;
     let name = "tomli".parse()?;
     for version in ["2.0.1", "2.2.1"] {
-        let (filename, contents) = generate_wheel(
-            &name,
-            &version.parse()?,
-            &[],
-            &BTreeMap::new(),
-            None,
-            "py3-none-any",
-            &[],
-        );
+        let (filename, contents) = WheelBuilder::new(&name, &version.parse()?).build();
         wheels.child(filename).write_binary(&contents)?;
     }
     Ok(wheels)

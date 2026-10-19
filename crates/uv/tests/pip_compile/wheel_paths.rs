@@ -1,13 +1,11 @@
 //! Resolve local wheel path spellings and their transitive dependency metadata.
 
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use assert_fs::prelude::*;
 
 use uv_redacted::SafeUrl;
 use uv_test::packse::scenario::{Package, PackageMetadata, Scenario};
-use uv_test::packse::{PackseServer, generate_wheel};
+use uv_test::packse::{PackseServer, WheelBuilder};
 use uv_test::{TestContext, uv_snapshot};
 
 const FLASK_WHEEL: &str = "flask-3.0.0-py3-none-any.whl";
@@ -15,15 +13,9 @@ const FLASK_WHEEL: &str = "flask-3.0.0-py3-none-any.whl";
 /// The local wheel depends on two packages that share a transitive dependency.
 fn flask_wheel_fixture() -> Result<(TestContext, PackseServer)> {
     let context = uv_test::test_context!("3.12");
-    let (filename, wheel) = generate_wheel(
-        &"flask".parse()?,
-        &"3.0.0".parse()?,
-        &["jinja2==3.1.3".parse()?, "werkzeug==3.0.1".parse()?],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"flask".parse()?, &"3.0.0".parse()?)
+        .requires(&["jinja2==3.1.3".parse()?, "werkzeug==3.0.1".parse()?])
+        .build();
     assert_eq!(filename, FLASK_WHEEL);
     context.temp_dir.child(filename).write_binary(&wheel)?;
 

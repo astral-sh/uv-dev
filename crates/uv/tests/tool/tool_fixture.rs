@@ -1,10 +1,8 @@
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use assert_fs::fixture::{ChildPath, FileWriteBin, PathChild};
 
 use uv_test::TestContext;
-use uv_test::packse::generate_wheel;
+use uv_test::packse::WheelBuilder;
 
 /// Create a local wheel for a tool with known entry points.
 pub(super) fn local_tool_wheel(
@@ -16,15 +14,9 @@ pub(super) fn local_tool_wheel(
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    let (filename, contents) = generate_wheel(
-        &name.parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &entry_points,
-    );
+    let (filename, contents) = WheelBuilder::new(&name.parse()?, &"1.0.0".parse()?)
+        .entry_points(&entry_points)
+        .build();
     let wheel = context.temp_dir.child(filename);
     wheel.write_binary(&contents)?;
     Ok(wheel)

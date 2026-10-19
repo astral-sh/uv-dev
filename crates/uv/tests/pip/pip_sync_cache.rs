@@ -1,6 +1,5 @@
 //! Cache reuse and eviction for distribution sources.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -13,7 +12,7 @@ use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::generate_source_archive;
 use uv_test::package_server::PackageServer;
-use uv_test::packse::{generate_wheel, generate_wheel_with_files};
+use uv_test::packse::WheelBuilder;
 use uv_test::uv_snapshot;
 
 const SOURCE_ARCHIVE: &str = "source_distribution-0.0.1.tar.gz";
@@ -42,15 +41,7 @@ async fn artifact_downloads(server: &MockServer, filename: &str) -> usize {
 #[tokio::test]
 async fn require_hashes_re_download() -> Result<()> {
     let name = "anyio".parse()?;
-    let (filename, wheel) = generate_wheel(
-        &name,
-        &"4.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&name, &"4.0.0".parse()?).build();
     let actual_hash = hex::encode(Sha256::digest(&wheel));
     let wrong_hash = "0".repeat(64);
     assert_ne!(actual_hash, wrong_hash);
@@ -114,15 +105,7 @@ async fn require_hashes_re_download() -> Result<()> {
 }
 
 async fn serve_index_wheel(server: &MockServer, package: &str, version: &str) -> Result<String> {
-    let (filename, wheel) = generate_wheel(
-        &package.parse()?,
-        &version.parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&package.parse()?, &version.parse()?).build();
     Mock::given(path(format!("/simple/{package}/")))
         .respond_with(
             ResponseTemplate::new(200)
@@ -146,15 +129,9 @@ async fn serve_index_wheel(server: &MockServer, package: &str, version: &str) ->
 }
 
 fn write_tomli_wheel(archive: &Path, payload: &str, mtime: i64) -> Result<()> {
-    let (_, wheel) = generate_wheel_with_files(
-        &"tomli".parse()?,
-        &"2.0.1".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("tomli/payload.txt", payload)],
-    );
+    let (_, wheel) = WheelBuilder::new(&"tomli".parse()?, &"2.0.1".parse()?)
+        .files(&[("tomli/payload.txt", payload)])
+        .build();
     fs_err::write(archive, wheel)?;
     filetime::set_file_mtime(archive, filetime::FileTime::from_unix_time(mtime, 0))?;
     Ok(())
@@ -414,15 +391,7 @@ async fn install_url_built_dist_cached() -> Result<()> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_file_counts()
         .with_filtered_sizes_and_units();
-    let (filename, wheel) = generate_wheel(
-        &"tqdm".parse()?,
-        &"4.66.1".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"tqdm".parse()?, &"4.66.1".parse()?).build();
     let server = MockServer::start().await;
     Mock::given(path(format!("/{filename}")))
         .respond_with(

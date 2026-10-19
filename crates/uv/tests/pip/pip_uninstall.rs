@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 #[cfg(windows)]
 use std::path::{Component, Prefix};
 
@@ -8,7 +7,7 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
 
-use uv_test::packse::generate_wheel;
+use uv_test::packse::WheelBuilder;
 use uv_test::uv_snapshot;
 
 #[test]
@@ -44,15 +43,7 @@ fn uninstall_ignores_version_specifier() -> Result<()> {
 #[test]
 fn missing_record() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (filename, bytes) = generate_wheel(
-        &"demo".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, bytes) = WheelBuilder::new(&"demo".parse()?, &"1.0.0".parse()?).build();
     let wheel = context.temp_dir.child(filename);
     wheel.write_binary(&bytes)?;
     context
@@ -407,15 +398,7 @@ fn uninstall_record_path_traversal() -> Result<()> {
         "[..]/traversal_target.txt",
     ));
 
-    let (filename, bytes) = generate_wheel(
-        &"evilpkg".parse()?,
-        &"0.1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, bytes) = WheelBuilder::new(&"evilpkg".parse()?, &"0.1.0".parse()?).build();
     let wheel = context.temp_dir.child(filename);
     wheel.write_binary(&bytes)?;
     context.pip_install().arg(wheel.path()).assert().success();
