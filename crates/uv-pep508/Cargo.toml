@@ -39,6 +39,7 @@ version-ranges = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+rmp-serde = { workspace = true }
 serde_json = { workspace = true }
 temp-env = { workspace = true }
 tracing-test = { workspace = true }

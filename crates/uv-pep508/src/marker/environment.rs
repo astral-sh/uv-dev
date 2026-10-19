@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
+use serde::{Deserialize, Deserializer};
+
 use uv_pep440::{Version, VersionParseError};
 
 use crate::{CanonicalMarkerValueString, CanonicalMarkerValueVersion, StringVersion};
@@ -7,11 +10,41 @@ use crate::{CanonicalMarkerValueString, CanonicalMarkerValueVersion, StringVersi
 /// The marker values for a python interpreter, normally the current one
 ///
 /// <https://packaging.python.org/en/latest/specifications/dependency-specifiers/#environment-markers>
-#[allow(missing_docs, clippy::unsafe_derive_deserialize)]
-#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
+#[allow(missing_docs)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize)]
 pub struct MarkerEnvironment {
     #[serde(flatten)]
     inner: Arc<MarkerEnvironmentInner>,
+}
+
+impl<'de> Deserialize<'de> for MarkerEnvironment {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct MarkerEnvironmentVisitor;
+
+        impl<'de> Visitor<'de> for MarkerEnvironmentVisitor {
+            type Value = MarkerEnvironment;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct MarkerEnvironment")
+            }
+
+            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                Ok(MarkerEnvironment {
+                    inner: Arc::deserialize(MapAccessDeserializer::new(map))?,
+                })
+            }
+        }
+
+        // The flattened representation is a map, including in binary cache formats.
+        // Decode it directly without buffering all fields for `serde(flatten)`.
+        deserializer.deserialize_map(MarkerEnvironmentVisitor)
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -316,5 +349,55 @@ impl<'a> TryFrom<MarkerEnvironmentBuilder<'a>> for MarkerEnvironment {
                 sys_platform: builder.sys_platform.to_string(),
             }),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MarkerEnvironment;
+
+    const ENVIRONMENT: &str = r##"{
+        "implementation_name": "cpython",
+        "implementation_version": "3.12.0",
+        "os_name": "posix",
+        "platform_machine": "x86_64",
+        "platform_python_implementation": "CPython",
+        "platform_release": "6.1.0",
+        "platform_system": "Linux",
+        "platform_version": "#1 SMP",
+        "python_full_version": "3.12.0",
+        "python_version": "3.12",
+        "sys_platform": "linux"
+    }"##;
+
+    #[test]
+    fn messagepack_map_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        let environment: MarkerEnvironment = serde_json::from_str(ENVIRONMENT)?;
+        let encoded = rmp_serde::to_vec(&environment)?;
+        // A fixmap with eleven fields, even with the compact MessagePack serializer.
+        assert_eq!(encoded[0], 0x8b);
+        assert_eq!(
+            rmp_serde::from_slice::<MarkerEnvironment>(&encoded)?,
+            environment
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_unknown_fields() -> Result<(), Box<dyn std::error::Error>> {
+        let environment: MarkerEnvironment = serde_json::from_str(ENVIRONMENT)?;
+        let mut value = serde_json::from_str::<serde_json::Value>(ENVIRONMENT)?;
+        value["unknown"] = serde_json::json!({"nested": [1, true, null]});
+        assert_eq!(
+            serde_json::from_value::<MarkerEnvironment>(value)?,
+            environment
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_sequence() {
+        insta::assert_snapshot!(serde_json::from_str::<MarkerEnvironment>("[]").unwrap_err(),
+            @"invalid type: sequence, expected struct MarkerEnvironment at line 1 column 0");
     }
 }
