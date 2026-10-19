@@ -189,7 +189,7 @@ pub async fn compile_tree(
 
     // Running Python with an actual file will produce better error messages.
     let tempdir = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let pip_compileall_py = tempdir.path().join("pip_compileall.py.inc");
+    let pip_compileall_py = tempdir.path().join("pip_compileall.py");
     let timeout = compile_timeout()?;
     let worker_handles = spawn_workers(
         dir,
@@ -271,7 +271,7 @@ pub async fn compile_files(
 
     // Running Python with an actual file will produce better error messages.
     let tempdir = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let pip_compileall_py = tempdir.path().join("pip_compileall.py.inc");
+    let pip_compileall_py = tempdir.path().join("pip_compileall.py");
     let timeout = compile_timeout()?;
     let worker_handles = spawn_workers(
         cache,

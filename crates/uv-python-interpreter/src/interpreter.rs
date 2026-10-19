@@ -1274,7 +1274,7 @@ impl InterpreterInfo {
         let python_dir = root.join("python");
         fs_err::create_dir(&python_dir)?;
         fs_err::write(
-            python_dir.join("get_interpreter_info.py.inc"),
+            python_dir.join("get_interpreter_info.py"),
             include_str!("../python/get_interpreter_info.py.inc"),
         )?;
         fs_err::write(
@@ -1288,15 +1288,15 @@ impl InterpreterInfo {
             include_str!("../python/packaging/__init__.py"),
         )?;
         fs_err::write(
-            packaging_dir.join("_elffile.py.inc"),
+            packaging_dir.join("_elffile.py"),
             include_str!("../python/packaging/_elffile.py.inc"),
         )?;
         fs_err::write(
-            packaging_dir.join("_manylinux.py.inc"),
+            packaging_dir.join("_manylinux.py"),
             include_str!("../python/packaging/_manylinux.py.inc"),
         )?;
         fs_err::write(
-            packaging_dir.join("_musllinux.py.inc"),
+            packaging_dir.join("_musllinux.py"),
             include_str!("../python/packaging/_musllinux.py.inc"),
         )?;
         Ok(())

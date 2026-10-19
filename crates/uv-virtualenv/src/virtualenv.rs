@@ -619,7 +619,7 @@ pub(crate) fn create(
     }
 
     if install_distutils_patch(interpreter) {
-        fs_err::write(site_packages.join("_virtualenv.py.inc"), VIRTUALENV_PATCH)?;
+        fs_err::write(site_packages.join("_virtualenv.py"), VIRTUALENV_PATCH)?;
         fs_err::write(site_packages.join("_virtualenv.pth"), "import _virtualenv")?;
     }
 
