@@ -882,6 +882,42 @@ fn sdist_error_without_module() -> Result<()> {
     Ok(())
 }
 
+/// An absolute module name must not make a namespace wheel build traverse outside the project.
+#[test]
+fn namespace_module_name_must_be_valid() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let temp_dir = TempDir::new()?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+
+        [tool.uv.build-backend]
+        module-name = "/"
+        namespace = true
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+
+    uv_snapshot!(context
+        .build_backend()
+        .arg("build-wheel")
+        .arg(temp_dir.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Invalid module name: /
+      cause: Invalid first character `/` for identifier `/`, expected an underscore or an alphabetic character
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn complex_namespace_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12");
