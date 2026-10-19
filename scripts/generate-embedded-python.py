@@ -87,12 +87,13 @@ def main() -> None:
         generated = strip_comments(source)
         verify_code(source, generated, filename)
         saved += len(source.encode("utf-8")) - len(generated.encode("utf-8"))
+        if (
+            output_path.exists()
+            and output_path.read_text(encoding="utf-8") == generated
+        ):
+            continue
         if args.check:
-            if (
-                not output_path.exists()
-                or output_path.read_text(encoding="utf-8") != generated
-            ):
-                stale.append(str(output_path.relative_to(ROOT)))
+            stale.append(str(output_path.relative_to(ROOT)))
         else:
             output_path.write_text(generated, encoding="utf-8")
     if stale:
