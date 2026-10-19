@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use std::fmt;
 
 use serde::de::{
     DeserializeOwned, IgnoredAny, MapAccess, SeqAccess, Visitor,
-    value::{Error, MapAccessDeserializer, StringDeserializer},
+    value::{BorrowedStrDeserializer, Error, MapAccessDeserializer, StringDeserializer},
 };
 use serde::{Deserialize, Deserializer};
 
@@ -16,15 +17,23 @@ impl<'de> Deserialize<'de> for SourceWire {
     {
         #[derive(Default, Deserialize)]
         #[serde(default)]
-        struct Fields {
-            registry: StringField,
-            git: StringField,
-            url: StringField,
-            subdirectory: StringField,
-            path: StringField,
-            directory: StringField,
-            editable: StringField,
-            r#virtual: StringField,
+        struct Fields<'a> {
+            #[serde(borrow)]
+            registry: StringField<'a>,
+            #[serde(borrow)]
+            git: StringField<'a>,
+            #[serde(borrow)]
+            url: StringField<'a>,
+            #[serde(borrow)]
+            subdirectory: StringField<'a>,
+            #[serde(borrow)]
+            path: StringField<'a>,
+            #[serde(borrow)]
+            directory: StringField<'a>,
+            #[serde(borrow)]
+            editable: StringField<'a>,
+            #[serde(borrow)]
+            r#virtual: StringField<'a>,
         }
 
         struct SourceVisitor;
@@ -142,23 +151,28 @@ impl<'de> Deserialize<'de> for SourceWire {
 /// A non-string field rules out its source variant, but not later variants.
 /// Consume ignored compound values too, without buffering their contents.
 #[derive(Default)]
-enum StringField {
+enum StringField<'a> {
     #[default]
     Missing,
-    Value(String),
+    Value(Cow<'a, str>),
     Invalid,
 }
 
-impl StringField {
+impl StringField<'_> {
     fn decode<T: DeserializeOwned>(self) -> Option<T> {
         match self {
-            Self::Value(value) => T::deserialize(StringDeserializer::<Error>::new(value)).ok(),
+            Self::Value(Cow::Borrowed(value)) => {
+                T::deserialize(BorrowedStrDeserializer::<Error>::new(value)).ok()
+            }
+            Self::Value(Cow::Owned(value)) => {
+                T::deserialize(StringDeserializer::<Error>::new(value)).ok()
+            }
             Self::Missing | Self::Invalid => None,
         }
     }
 }
 
-impl<'de> Deserialize<'de> for StringField {
+impl<'de: 'a, 'a> Deserialize<'de> for StringField<'a> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -166,7 +180,7 @@ impl<'de> Deserialize<'de> for StringField {
         struct StringFieldVisitor;
 
         impl<'de> Visitor<'de> for StringFieldVisitor {
-            type Value = StringField;
+            type Value = StringField<'de>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("a source field")
@@ -176,14 +190,21 @@ impl<'de> Deserialize<'de> for StringField {
             where
                 E: serde::de::Error,
             {
-                Ok(StringField::Value(value.to_owned()))
+                Ok(StringField::Value(Cow::Owned(value.to_owned())))
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StringField::Value(Cow::Borrowed(value)))
             }
 
             fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
             where
                 E: serde::de::Error,
             {
-                Ok(StringField::Value(value))
+                Ok(StringField::Value(Cow::Owned(value)))
             }
 
             fn visit_unit<E>(self) -> Result<Self::Value, E>
