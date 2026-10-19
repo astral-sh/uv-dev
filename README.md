@@ -12,6 +12,8 @@ Duplicate of astral-sh/uv#9711. astral-sh/uv#13299 confirms the same Windows/PyQ
 
 Public PyPI metadata confirms the distinction. This is an existing universal-resolution problem involving a package whose platform coverage varies between releases. The report does not show an ABI-tag rejection, an ignored explicit version pin, or a failure after configuring required environments.
 
+The reporter says manually downloading a wheel from the PyQt5 PyPI files page and installing it works. The exact wheel, installation command, target environment, and resulting dependency versions were not supplied; this is a reported workaround, not a verified reproduction or evidence that uv failed to discover the PyQt5 wheel.
+
 ## Draft response
 
 The Windows wheel you found is for `PyQt5`; the error concerns its dependency `PyQt5-Qt5==5.15.19`. PyPI lists only Linux/macOS wheels and no source distribution for that dependency version.
@@ -49,6 +51,14 @@ The new report supplies no project configuration or lockfile and does not say th
 - Commands and subsystems: project dependency addition, universal resolution/locking, and installation-time wheel compatibility.
 - Triggering conditions: Windows x64, Python 3.12, uv 0.13.0, and a wheel-only dependency release whose published artifacts cover Linux/macOS.
 - Literal identifiers: `PyQt5`, `pyqt5-qt5`, `5.15.19`, `win_amd64`, `cp38-abi3`, `required-environments`, and “doesn't have a source distribution or wheel for the current platform”.
+
+## Reported workaround and remaining reproduction details
+
+The reporter reports a successful installation using a wheel manually downloaded from https://pypi.org/project/PyQt5/#files, but still interprets the original failure as uv not knowing that wheel exists. The comment does not identify the downloaded filename or version, the installer or command used, whether the installation targeted the original project environment, or the installed `PyQt5-Qt5` version. It also does not confirm that `tool.uv.required-environments` was tried.
+
+This outcome is compatible with the already established distinction between the PyQt5 bindings and their Qt runtime dependency. The original error names `PyQt5-Qt5==5.15.19`, so successful installation of a manually downloaded PyQt5 wheel does not by itself demonstrate a discovery or ABI-compatibility failure for the parent package. How the successful installation satisfied the runtime dependency remains unknown; neither an older dependency selection nor reuse of an installed dependency has been established for this attempt. The duplicate classification remains unchanged.
+
+For a meaningful comparison with the failing `uv add PyQt5`, the missing evidence is the downloaded wheel filename, exact installation command and target environment, resulting PyQt5/PyQt5-Qt5 versions, and any project configuration or lockfile changes. These are investigation gaps, not new reproduction steps inferred from the comment.
 
 ## Supporting evidence
 
@@ -100,6 +110,6 @@ astral-sh/uv#11855 requests requiring the current platform by default. Maintaine
 
 ## Verification and limits
 
-The issue, candidate discussions, historical pull requests, repository documentation, and public package metadata were inspected read-only. No installation or Windows reproduction was run, so the suggested configuration has not been tested against the reporter's undisclosed project constraints. The setting and earlier successful PyQt5 use are supported by documentation and maintainer/reporter discussion.
+The issue, candidate discussions, historical pull requests, repository documentation, and public package metadata were inspected read-only. No installation or Windows reproduction was run during this investigation, so the suggested configuration has not been tested against the reporter's undisclosed project constraints. The manual-wheel installation success is reported by the user and has not been independently verified. The setting and earlier successful PyQt5 use are supported by documentation and maintainer/reporter discussion.
 
 No GitHub changes were made. No checkout files were modified by this triage. Only this issue-context README was authored for the handoff.
