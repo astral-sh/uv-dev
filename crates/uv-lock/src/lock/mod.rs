@@ -90,6 +90,7 @@ mod installable;
 mod map;
 mod requirements;
 mod serialize;
+mod source_wire;
 mod tree;
 #[cfg(test)]
 mod windows_emulation_tests;
@@ -8133,8 +8134,7 @@ impl Source {
     }
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
-#[serde(untagged, rename_all = "kebab-case")]
+#[derive(Clone, Debug)]
 enum SourceWire {
     Registry {
         registry: RegistrySourceWire,
