@@ -7447,7 +7447,7 @@ dependencies = [
 
 [[package]]
 name = "uv-pyproject-toml"
-version = "0.0.93"
+version = "0.0.97"
 dependencies = [
  "indexmap",
  "insta",
