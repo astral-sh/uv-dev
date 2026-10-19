@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 9711,
+        "title": "Tracking issue: package without source distribution gets an \"incomplete\" resolution",
+        "url": "https://github.com/astral-sh/uv/issues/9711",
+        "state": "open",
+        "reason": "Canonical tracking issue for universal resolution selecting wheel-only releases that cannot install on some platforms. Maintainers explicitly include PyQt5-Qt5 releases without Windows wheels and direct matching PyQt5 reports here."
+      },
+      {
+        "kind": "issue",
+        "number": 13299,
+        "title": "uv add fails to install package while  uv pip install doesn't",
+        "url": "https://github.com/astral-sh/uv/issues/13299",
+        "state": "closed",
+        "reason": "Same Windows `uv add pyqt5` failure, involving PyQt5-Qt5 5.15.16 instead of 5.15.19. A maintainer recommended required-environments; the reporter confirmed it selected Windows-compatible PyQt5-Qt5 5.15.2 and installed successfully."
+      },
+      {
+        "kind": "issue",
+        "number": 9907,
+        "title": "resolver: requiring `PyQt5` produces non-portable locks",
+        "url": "https://github.com/astral-sh/uv/issues/9907",
+        "state": "closed",
+        "reason": "Same dependency and missing Windows artifacts after `uv add PyQt5`. Maintainers explicitly closed it into astral-sh/uv#9711; it documents why Windows wheels for older releases do not make the selected newer release installable."
+      },
+      {
+        "kind": "pull_request",
+        "number": 9928,
+        "title": "Fork when wheels are missing platform support",
+        "url": "https://github.com/astral-sh/uv/pull/9928",
+        "state": "closed",
+        "reason": "Proposed general platform-based backtracking explicitly covered the PyQt5 case, but was closed without merging. Its discussion identifies the narrower astral-sh/uv#10046 as the change shipped instead."
+      },
+      {
+        "kind": "pull_request",
+        "number": 10046,
+        "title": "Backtrack to non-local versions when wheels are missing platform support",
+        "url": "https://github.com/astral-sh/uv/pull/10046",
+        "state": "merged",
+        "reason": "Merged December 20, 2024, but only handles local versions such as 2.5.1+cpu and their corresponding base versions. It does not fix selection among ordinary PyQt5-Qt5 releases, so this report does not establish a regression of that fix."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open/closed issues and open/closed/merged PRs with authenticated gh. Literal searches covered PyQt5, pyqt5-qt5, 5.15.19, cp38-abi3-win_amd64, and the missing-source-distribution-or-wheel error. Conceptual searches covered current-platform version selection, required-environments, incomplete universal resolutions, and missing platform support; fix searches also checked closed 0.13.0 wheel reports. PR keyword searches returned no matches; discussion links led to the directly inspected historical PRs. Read candidate comments and followed astral-sh/uv#7005 and astral-sh/uv#8603 through astral-sh/uv#5182, plus astral-sh/uv#9907 to astral-sh/uv#9711. Ruled out astral-sh/uv#19308 as the canonical match because it alleges ignored explicit Windows pins and required-environments, neither reported here; astral-sh/uv#15421 concerns a source-build failure. Also reviewed astral-sh/uv#11865 and astral-sh/uv#11855, repository documentation, and public PyPI release metadata."
+  },
+  "type": "duplicate",
+  "type_reason": "The same universal-resolution problem is already tracked in open astral-sh/uv#9711, including explicit maintainer discussion of PyQt5-Qt5 on Windows. PyPI confirms that PyQt5 5.15.11 has a Windows wheel, while its dependency PyQt5-Qt5 5.15.19 has neither Windows wheels nor a source distribution. Earlier matching reports establish the required-environments workaround. No regression is established: the general fix was not merged, and the merged local-version fix does not cover these releases.",
+  "summary": "Duplicate of astral-sh/uv#9711. astral-sh/uv#13299 confirms the same Windows/PyQt5 failure and required-environments workaround; astral-sh/uv#9907 establishes the canonical discussion. Historical PRs did not ship a general fix for this case.",
+  "draft_response": "The Windows wheel you found is for `PyQt5`; the error concerns its dependency `PyQt5-Qt5==5.15.19`. PyPI lists only Linux/macOS wheels and no source distribution for that dependency version.\n\nThis is tracked in astral-sh/uv#9711. The same Windows/PyQt5 case in astral-sh/uv#13299 was resolved by declaring Windows as a required environment. Add this to your `pyproject.toml`, merging it into any existing `[tool.uv]` section, then rerun `uv add PyQt5`:\n\n```toml\n[tool.uv]\nrequired-environments = [\"sys_platform == 'win32' and platform_machine == 'AMD64'\"]\n```\n\nThis tells uv to require Windows-compatible wheels during resolution. Please continue discussion in astral-sh/uv#9711."
+}
