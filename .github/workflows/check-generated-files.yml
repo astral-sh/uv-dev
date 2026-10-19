@@ -50,3 +50,5 @@ jobs:
         run: cargo --locked dev generate-json-schema --mode check
       - name: "Check uv-extract dirhash test vectors"
         run: cargo --locked dev generate-dirhash-test-vectors --mode check
+      - name: "Check embedded Python sources"
+        run: uv run --no-project --python 3.12 scripts/generate-embedded-python.py --check

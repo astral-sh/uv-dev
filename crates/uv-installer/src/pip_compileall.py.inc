@@ -1,0 +1,67 @@
+"""
+Based on
+https://github.com/pypa/pip/blob/3820b0e52c7fed2b2c43ba731b718f316e6816d1/src/pip/_internal/operations/install/wheel.py#L612-L623
+
+pip silently just swallows all pyc compilation errors, but `python -m compileall` does
+not have such a flag, so we adapt the pip code. This is relevant, e.g., for
+`debugpy-1.5.1-cp38-cp38-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_12_x86_64.manylinux2010_x86_64`,
+which contains some vendored Python 2 code which fails to compile.
+"""
+
+import compileall
+import os
+import py_compile
+import sys
+import warnings
+
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore")
+
+
+    print("Ready")
+
+
+
+    invalidation_mode = os.environ.get("PYC_INVALIDATION_MODE")
+    if invalidation_mode is not None:
+        try:
+            invalidation_mode = py_compile.PycInvalidationMode[invalidation_mode]
+        except KeyError:
+            invalidation_modes = ", ".join(
+                '"' + x.name + '"' for x in py_compile.PycInvalidationMode
+            )
+            print(
+                f'Invalid value for PYC_INVALIDATION_MODE "{invalidation_mode}", '
+                f"valid are {invalidation_modes}: ",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    if invalidation_mode is None:
+        try:
+            invalidation_mode = py_compile._get_default_invalidation_mode()
+        except AttributeError:
+            invalidation_mode = None
+
+
+
+    force = False
+    if invalidation_mode != py_compile.PycInvalidationMode.TIMESTAMP:
+
+
+
+        force = True
+
+
+    for path in sys.stdin:
+
+        path = path.strip()
+        if not path:
+            continue
+
+
+
+        success = compileall.compile_file(
+            path, invalidation_mode=invalidation_mode, force=force, quiet=2
+        )
+
+        print(path)

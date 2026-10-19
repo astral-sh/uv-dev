@@ -18,7 +18,8 @@ use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_warnings::warn_user;
 
-const COMPILEALL_SCRIPT: &str = include_str!("pip_compileall.py");
+// Generated from pip_compileall.py by scripts/generate-embedded-python.py.
+const COMPILEALL_SCRIPT: &str = include_str!("pip_compileall.py.inc");
 /// This is longer than any compilation should ever take.
 const DEFAULT_COMPILE_TIMEOUT: Duration = Duration::from_mins(1);
 
@@ -188,7 +189,7 @@ pub async fn compile_tree(
 
     // Running Python with an actual file will produce better error messages.
     let tempdir = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let pip_compileall_py = tempdir.path().join("pip_compileall.py");
+    let pip_compileall_py = tempdir.path().join("pip_compileall.py.inc");
     let timeout = compile_timeout()?;
     let worker_handles = spawn_workers(
         dir,
@@ -270,7 +271,7 @@ pub async fn compile_files(
 
     // Running Python with an actual file will produce better error messages.
     let tempdir = tempdir_in(cache).map_err(CompileError::TempFile)?;
-    let pip_compileall_py = tempdir.path().join("pip_compileall.py");
+    let pip_compileall_py = tempdir.path().join("pip_compileall.py.inc");
     let timeout = compile_timeout()?;
     let worker_handles = spawn_workers(
         cache,
