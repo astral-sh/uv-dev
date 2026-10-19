@@ -62,6 +62,16 @@ Read-only public PyPI JSON metadata was checked for these exact releases:
 
 These facts establish why the cited parent-package wheel does not satisfy the dependency named in the error.
 
+### Package roles and Python compatibility
+
+The reporter's follow-up in astral-sh/uv#22716 asks what distinguishes `PyQt5` from `PyQt5-Qt5`. It adds no reproduction configuration or confirmation that the required-environments workaround was tried. The duplicate classification remains applicable.
+
+Public PyPI metadata describes `PyQt5` as the Python bindings for the Qt application toolkit and `PyQt5-Qt5` as the subset of a Qt installation needed by PyQt5. The former supplies the Python bindings; the latter supplies the Qt runtime libraries they need. They are separate distributions with separate release files. The already verified `PyQt5==5.15.11` metadata declares a dependency on `PyQt5-Qt5>=5.15.2,<5.16.0`, so availability of the bindings' Windows wheel alone does not make the selected dependency release installable. These roles were checked against the `summary` fields at https://pypi.org/pypi/PyQt5/5.15.11/json and https://pypi.org/pypi/PyQt5-Qt5/5.15.19/json.
+
+The discussion also contains an edited participant claim that PyQt5 Windows wheels are only for Python 3.8. That claim is incorrect for the cited `cp38-abi3-win_amd64` wheel: `cp38` with `abi3` denotes a CPython 3.8 stable-ABI baseline, compatible with later standard CPython versions, including 3.12, on the matching platform. PyQt5 5.15.11 declares `Requires-Python: >=3.8`. In this checkout, `crates/uv-platform-tags/src/tags.rs:242` generates compatible stable-ABI tags for earlier Python minor versions, including `cp38-abi3` for CPython 3.12. There is no evidence here of a Python 3.12 incompatibility in that parent-package wheel.
+
+The participant's broader statement that PyQt5-Qt5 has no Windows wheels must also be scoped to the selected release: the verified 5.15.19 files lack Windows wheels, while 5.15.2 includes them. Neither participant assertion is a maintainer decision or evidence that the existing workaround failed.
+
 ### Repository documentation and maintainer findings
 
 `docs/concepts/resolution.md:175` explains required environments. Lines 191–209 describe the default wheel-availability requirement and how `required-environments` makes resolution require platform coverage and backtrack past newer releases. `docs/concepts/projects/config.md:618` documents the same setting. Public documentation: https://docs.astral.sh/uv/concepts/resolution/#required-environments.
