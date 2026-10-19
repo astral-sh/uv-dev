@@ -1,6 +1,5 @@
 //! Artifact selection when wheel and source distribution policies overlap.
 
-use std::collections::BTreeMap;
 use std::process::Command;
 
 use anyhow::Result;
@@ -12,7 +11,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_pep508::Requirement;
 use uv_test::archive::generate_source_archive;
-use uv_test::packse::generate_wheel_with_files;
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot};
 
 struct ArtifactMarkers {
@@ -35,15 +34,10 @@ impl ArtifactMarkers {
 fn write_wheel(context: &TestContext, name: &str, requires: &[Requirement]) -> Result<ChildPath> {
     let package_name = name.parse::<uv_normalize::PackageName>()?;
     let marker = format!("{}/wheel-marker.txt", package_name.as_dist_info_name());
-    let (filename, wheel) = generate_wheel_with_files(
-        &package_name,
-        &"1.0.0".parse()?,
-        requires,
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[(&marker, "wheel\n")],
-    );
+    let (filename, wheel) = WheelBuilder::new(&package_name, &"1.0.0".parse()?)
+        .requires(requires)
+        .files(&[(&marker, "wheel\n")])
+        .build();
     context.temp_dir.child(filename).write_binary(&wheel)?;
     Ok(ChildPath::new(context.site_packages()).child(marker))
 }

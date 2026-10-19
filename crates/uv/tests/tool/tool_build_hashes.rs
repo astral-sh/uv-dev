@@ -1,7 +1,5 @@
 //! Build dependency hash verification for tool commands.
 
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::assert::PathAssert;
@@ -12,7 +10,7 @@ use predicates::prelude::predicate;
 use sha2::{Digest, Sha256};
 
 use uv_static::EnvVars;
-use uv_test::packse::{generate_wheel, generate_wheel_with_files};
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot};
 
 const WRONG_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -22,36 +20,23 @@ fn build_hash_context() -> Result<(TestContext, String)> {
     let context = uv_test::test_context!("3.12")
         .with_filtered_exe_suffix()
         .with_tool_dirs();
-    let (filename, wheel) = generate_wheel(
-        &"build-dependency".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) =
+        WheelBuilder::new(&"build-dependency".parse()?, &"1.0.0".parse()?).build();
     let hash = hex::encode(Sha256::digest(&wheel));
     context
         .temp_dir
         .child("wheels")
         .child(filename)
         .write_binary(&wheel)?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"hash-tool".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (filename, wheel) = WheelBuilder::new(&"hash-tool".parse()?, &"1.0.0".parse()?)
+        .files(&[
             ("hash_tool/cli.py", "def main():\n    print('tool-ok')\n"),
             (
                 "hash_tool-1.0.0.dist-info/entry_points.txt",
                 "[console_scripts]\nhash-tool = hash_tool.cli:main\n",
             ),
-        ],
-    );
+        ])
+        .build();
     context
         .temp_dir
         .child("wheels")

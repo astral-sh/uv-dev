@@ -1,6 +1,5 @@
 //! Wheel entry point path validation and normalization.
 
-use std::collections::BTreeMap;
 use std::env::consts::EXE_SUFFIX;
 use std::path::PathBuf;
 
@@ -11,7 +10,7 @@ use fs_err as fs;
 use indoc::indoc;
 
 use uv_fs::Simplified;
-use uv_test::packse::generate_wheel_with_files;
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot, venv_bin_path};
 
 /// Create entry point metadata directly so the installer receives names a build backend may reject.
@@ -35,18 +34,12 @@ fn wheel_with_entrypoint_source(
     source: &str,
 ) -> Result<PathBuf> {
     let entry_points = format!("[{section}]\n{entrypoint_name} = foo.cli:main\n");
-    let (filename, wheel) = generate_wheel_with_files(
-        &"foo".parse()?,
-        &"0.1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (filename, wheel) = WheelBuilder::new(&"foo".parse()?, &"0.1.0".parse()?)
+        .files(&[
             ("foo-0.1.0.dist-info/entry_points.txt", &entry_points),
             ("foo/cli.py", source),
-        ],
-    );
+        ])
+        .build();
     let path = context.temp_dir.join(filename);
     fs::write(&path, wheel)?;
     Ok(path)

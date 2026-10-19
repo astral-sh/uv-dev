@@ -1,27 +1,17 @@
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use assert_fs::prelude::*;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_static::EnvVars;
-use uv_test::packse::generate_wheel;
+use uv_test::packse::WheelBuilder;
 use uv_test::uv_snapshot;
 
 /// Skip incompatible source archives before fetching metadata, including speculative prefetches.
 #[tokio::test]
 async fn requires_python_prefetch() -> Result<()> {
     let context = uv_test::test_context!("3.8");
-    let (filename, wheel) = generate_wheel(
-        &"voluptuous".parse()?,
-        &"0.14.2".parse()?,
-        &[],
-        &BTreeMap::default(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"voluptuous".parse()?, &"0.14.2".parse()?).build();
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/simple/voluptuous/"))
@@ -76,15 +66,9 @@ async fn index_without_requires_python() -> Result<MockServer> {
     let server = MockServer::start().await;
     let mut links = Vec::new();
     for (version, requires_python) in [("3.2.1", ">=3.9"), ("3.3", ">=3.10")] {
-        let (filename, wheel) = generate_wheel(
-            &"networkx".parse()?,
-            &version.parse()?,
-            &[],
-            &BTreeMap::new(),
-            Some(&requires_python.parse()?),
-            "py3-none-any",
-            &[],
-        );
+        let (filename, wheel) = WheelBuilder::new(&"networkx".parse()?, &version.parse()?)
+            .requires_python(Some(&requires_python.parse()?))
+            .build();
         links.push(format!(r#"<a href="/files/{filename}">{filename}</a>"#));
         Mock::given(method("GET"))
             .and(path(format!("/files/{filename}")))

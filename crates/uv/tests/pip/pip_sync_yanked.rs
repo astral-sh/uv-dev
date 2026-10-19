@@ -1,24 +1,14 @@
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use assert_fs::prelude::*;
 use serde_json::json;
 
 use uv_test::package_server::PackageServer;
-use uv_test::packse::generate_wheel;
+use uv_test::packse::WheelBuilder;
 use uv_test::uv_snapshot;
 
 async fn yanked_colorama() -> Result<PackageServer> {
     let name = "colorama".parse()?;
-    let (filename, wheel) = generate_wheel(
-        &name,
-        &"0.4.2".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&name, &"0.4.2".parse()?).build();
     let index = PackageServer::new(&name).await;
     index
         .serve_with(

@@ -1,27 +1,17 @@
 //! Archive paths in PEP 751 lockfiles are relative to the lockfile location.
 
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use assert_fs::prelude::*;
 use sha2::{Digest, Sha256};
 
 use uv_test::archive::generate_source_archive;
-use uv_test::packse::generate_wheel;
+use uv_test::packse::WheelBuilder;
 use uv_test::uv_snapshot;
 
 #[test]
 fn pep_751_compile_path_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (filename, wheel) = generate_wheel(
-        &"iniconfig".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"iniconfig".parse()?, &"2.0.0".parse()?).build();
     context.temp_dir.child(&filename).write_binary(&wheel)?;
     let context = context.with_filter((hex::encode(Sha256::digest(&wheel)), "[WHEEL_SHA256]"));
     context

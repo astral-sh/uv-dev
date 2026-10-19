@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use anyhow::{Context, Result};
 use assert_cmd::prelude::*;
 use assert_fs::fixture::ChildPath;
@@ -13,7 +11,7 @@ use indoc::indoc;
 use uv_cache::{Cache, CacheBucket};
 use uv_extract::dirhash::{DirectoryDigest, dirhash_path};
 use uv_install_wheel::{read_record, validate_and_heal_record};
-use uv_test::packse::{PackseServer, generate_wheel_with_files, scenario::Scenario};
+use uv_test::packse::{PackseServer, WheelBuilder, scenario::Scenario};
 use uv_test::{apply_filters, uv_snapshot};
 
 /// Warn when replacing a distribution without a RECORD, and install a usable replacement.
@@ -185,14 +183,8 @@ fn handle_record_mismatches() -> Result<()> {
 #[test]
 fn record_uses_forward_slashes() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (filename, bytes) = generate_wheel_with_files(
-        &"project".parse()?,
-        &"0.1.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (filename, bytes) = WheelBuilder::new(&"project".parse()?, &"0.1.0".parse()?)
+        .files(&[
             (
                 "project-0.1.0.data/scripts/my_script",
                 "#!python\nprint(\"Hello from script\")\n",
@@ -201,8 +193,8 @@ fn record_uses_forward_slashes() -> Result<()> {
                 "project-0.1.0.data/headers/project.h",
                 "#include <stdio.h>\n",
             ),
-        ],
-    );
+        ])
+        .build();
     let wheel = context.temp_dir.join(filename);
     fs_err::write(&wheel, bytes)?;
     context

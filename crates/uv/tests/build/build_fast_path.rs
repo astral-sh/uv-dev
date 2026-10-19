@@ -1,12 +1,10 @@
 //! Builds and file-listing checks for the bundled build backend.
 
-use std::collections::BTreeMap;
-
 use anyhow::Result;
 use assert_fs::assert::PathAssert;
 use assert_fs::fixture::{FileWriteBin, PathChild};
 use predicates::prelude::predicate;
-use uv_test::packse::generate_wheel;
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, assert_path_missing, uv_snapshot};
 
 /// The default plan builds a wheel from the source distribution.
@@ -112,15 +110,8 @@ fn build_sdist_and_wheel_plan() {
 }
 
 fn write_unhashed_backend_wheel(context: &TestContext) -> Result<()> {
-    let (filename, wheel) = generate_wheel(
-        &"uv-build".parse()?,
-        &uv_version::version().parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) =
+        WheelBuilder::new(&"uv-build".parse()?, &uv_version::version().parse()?).build();
     context
         .temp_dir
         .child("wheels")
