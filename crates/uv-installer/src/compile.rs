@@ -18,7 +18,8 @@ use uv_fs::Simplified;
 use uv_static::EnvVars;
 use uv_warnings::warn_user;
 
-const COMPILEALL_SCRIPT: &str = include_str!("pip_compileall.py");
+// Generated from pip_compileall.py by scripts/generate-embedded-python.py.
+const COMPILEALL_SCRIPT: &str = include_str!("pip_compileall.py.inc");
 /// This is longer than any compilation should ever take.
 const DEFAULT_COMPILE_TIMEOUT: Duration = Duration::from_mins(1);
 

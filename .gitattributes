@@ -1,4 +1,5 @@
 * text=auto eol=lf
 *.inc linguist-language=Rust
+*.py.inc linguist-language=Python linguist-generated=true
 
 uv.schema.json linguist-generated=true text=auto eol=lf

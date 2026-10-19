@@ -41,7 +41,8 @@ const ACTIVATE_TEMPLATES: &[(&str, &str)] = &[
         include_str!("activator/activate_this.py"),
     ),
 ];
-const VIRTUALENV_PATCH: &str = include_str!("_virtualenv.py");
+// Generated from _virtualenv.py by scripts/generate-embedded-python.py.
+const VIRTUALENV_PATCH: &str = include_str!("_virtualenv.py.inc");
 
 /// Python 3.10 and later already ignore the distutils install config keys this hook guards
 /// against, while the last pip release supporting Python 3.9 still needs the workaround.

@@ -7,3 +7,5 @@ docs/reference/settings.md
 docs/reference/environment.md
 test/ecosystem/**/LICENSE.md
 docs/guides/integration/gitlab.md
+# Generated Python sources are validated by scripts/generate-embedded-python.py.
+**/*.py.inc
