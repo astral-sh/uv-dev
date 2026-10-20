@@ -36,5 +36,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
+[dev-dependencies]
+indoc = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 self-replace = { workspace = true }
