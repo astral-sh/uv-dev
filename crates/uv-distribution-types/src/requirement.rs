@@ -1168,11 +1168,7 @@ impl<'de> Deserialize<'de> for RequirementSourceWire {
             }
         }
 
-        deserializer.deserialize_any(SourceVisitor).map_err(|_| {
-            serde::de::Error::custom(
-                "data did not match any variant of untagged enum RequirementSourceWire",
-            )
-        })
+        deserializer.deserialize_any(SourceVisitor)
     }
 }
 
@@ -1498,12 +1494,31 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::io::{self, Read};
     use std::path::PathBuf;
 
     use uv_pep508::{MarkerTree, VerbatimUrl};
 
     use super::RequirementSourceWire;
     use crate::{Requirement, RequirementScope, RequirementSource};
+
+    #[test]
+    fn source_retains_read_error() {
+        struct FailedRead;
+
+        impl Read for FailedRead {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("metadata read failed"))
+            }
+        }
+
+        let reader = br#"{"git":"#.as_slice().chain(FailedRead);
+        assert!(
+            serde_json::from_reader::<_, RequirementSource>(reader)
+                .unwrap_err()
+                .is_io()
+        );
+    }
 
     #[test]
     fn source_variant_precedence() -> Result<(), Box<dyn Error>> {
