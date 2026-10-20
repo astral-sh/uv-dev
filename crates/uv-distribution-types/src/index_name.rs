@@ -34,7 +34,7 @@ impl IndexName {
     /// Converts the index name to an environment variable name.
     ///
     /// For example, given `IndexName("foo-bar")`, this will return `"FOO_BAR"`.
-    pub(crate) fn to_env_var(&self) -> String {
+    pub fn to_env_var(&self) -> String {
         self.0
             .chars()
             .map(|c| {
