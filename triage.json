@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 10709,
+        "title": "The uv installer does not respect HTTPS_PROXY on Windows",
+        "url": "https://github.com/astral-sh/uv/issues/10709",
+        "state": "closed",
+        "reason": "The same Windows self-update archive-download stage failed while version checks and other uv downloads worked. Maintainer discussion identified the PowerShell installer. Its HTTP proxy configuration/authentication problem was fixed through axodotdev/cargo-dist#2078; the new report instead rejects the SOCKS5 scheme after reading ALL_PROXY."
+      },
+      {
+        "kind": "pull_request",
+        "number": 2078,
+        "title": "Powershell installer: respect HTTPS_PROXY and ANY_PROXY env vars",
+        "url": "https://github.com/axodotdev/cargo-dist/pull/2078",
+        "state": "merged",
+        "reason": "The upstream fix linked from astral-sh/uv#10709 added explicit proxy environment handling to the PowerShell installer. Despite ANY_PROXY in its title, the implementation reads HTTPS_PROXY and ALL_PROXY and constructs System.Net.WebProxy for WebClient. It did not introduce a SOCKS-capable downloader."
+      },
+      {
+        "kind": "issue",
+        "number": 22265,
+        "title": "standalone installer for Windows - NO_PROXY environment variable is not applied",
+        "url": "https://github.com/astral-sh/uv/issues/22265",
+        "state": "open",
+        "reason": "Another current defect in the same generated PowerShell proxy helper. It concerns bypassing proxies for internal hosts, not connecting through SOCKS5. Its upstream issue axodotdev/cargo-dist#2538 and open fix axodotdev/cargo-dist#2539 only address NO_PROXY, so they do not centralize this report."
+      },
+      {
+        "kind": "issue",
+        "number": 4227,
+        "title": "Support for SOCKS5 and SOCKS5H",
+        "url": "https://github.com/astral-sh/uv/issues/4227",
+        "state": "closed",
+        "reason": "The historical SOCKS support request was closed with astral-sh/uv#7503. It concerns uv's reqwest client, whereas this report fails inside the separate PowerShell installer; it is not evidence that Windows self-update previously supported SOCKS5."
+      },
+      {
+        "kind": "pull_request",
+        "number": 7503,
+        "title": "Add `socks` support",
+        "url": "https://github.com/astral-sh/uv/pull/7503",
+        "state": "merged",
+        "reason": "Merged on 2024-09-18, this enabled reqwest's socks feature and added its dependency. The diff does not change the PowerShell installer. It supports the distinction between successful uvx downloads and failing self-update archive downloads, rather than establishing a regression."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues using ServicePointManager, \"does not support proxies\", SOCKS5, SOCKS5H, socks, ALL_PROXY, \"self update\" with proxy/SOCKS5/reqwest, installer proxy, PowerShell proxy, WebClient, and area:windows proxy searches, including searches without versions or platforms. Searched open, closed, and merged pull requests for proxy, socks/SOCKS5, self update, and cargo-dist. PR searches returned no matches even for known linked history, so inspected referenced PRs directly, including astral-sh/uv#7503 and astral-sh/uv#15798, and followed upstream discussions and fixes. Inspected candidate comments and the astral-sh/uv#22265 cross-reference chain to axodotdev/cargo-dist#2538 and axodotdev/cargo-dist#2539. Ruled out astral-sh/uv#10709 as the same bug because it addressed HTTP proxy configuration/authentication; astral-sh/uv#22265 addresses NO_PROXY. Also ruled out astral-sh/uv#15970 (mirror configuration), astral-sh/uv#10724 (certificate trust), and astral-sh/uv#16309 (generic WebClient exception without a confirmed SOCKS mechanism). Checked current uv source and the pinned cargo-dist v0.32.0 PowerShell template. No existing item found tracks this exact SOCKS5 archive-download failure."
+  },
+  "type": "bug",
+  "type_reason": "Windows self-update fails to download an available update through SOCKS5 even though uv's Rust HTTP client supports that proxy scheme. The source confirms a separate PowerShell archive-download path using WebClient/WebProxy, consistent with the reported ServicePointManager error. The closest historical fixes enabled Rust-client SOCKS support or installer HTTP proxy configuration; neither establishes prior SOCKS support in this installer path. No same-problem duplicate or previously fixed regression was established.",
+  "summary": "A separate Windows installer bug. astral-sh/uv#10709 and axodotdev/cargo-dist#2078 cover historical HTTP proxy handling; astral-sh/uv#22265 covers NO_PROXY. astral-sh/uv#4227 and astral-sh/uv#7503 added SOCKS support to uv's Rust client, not the PowerShell archive downloader.",
+  "draft_response": "uv's Rust HTTP client supports SOCKS5 through astral-sh/uv#7503, but Windows self-update runs a separate PowerShell installer whose archive download uses WebClient/WebProxy. Your ServicePointManager error comes from that download stage. The HTTP proxy fix associated with astral-sh/uv#10709 did not add SOCKS support there.\n\nThis needs a SOCKS-capable download path in the cargo-dist PowerShell installer. If your proxy also provides an HTTP endpoint, try setting HTTPS_PROXY to that endpoint before updating; the installer prioritizes it over ALL_PROXY."
+}
