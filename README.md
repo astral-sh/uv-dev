@@ -40,6 +40,8 @@ A repository member proposed that uv could stop forwarding SIGPIPE. The stated c
 
 The reporter confirms that removing the `sigpipe_handle.recv` select arm makes the proposed synthetic regression test pass. This demonstrates the effect of that change but does not resolve the compatibility decision about explicitly forwarding SIGPIPE.
 
+Varshith-Kali has volunteered to implement removal of SIGPIPE forwarding in `crates/uv-command-support/src/child.rs` and add a regression test based on the reporter's sketch. This is a contributor's stated plan; the supplied discussion includes no linked implementation, new test results, or maintainer approval of that plan.
+
 The alternative proposal is to use `exec` for eligible Python invocations so uv is no longer a signal-forwarding parent. The member noted that uv must retain the forked-process model for cases such as `--isolated`; the scope and implementation cost of using `exec` elsewhere are still unknown. A separate cleanup-holder process was mentioned but considered difficult to implement correctly. No fix has been selected.
 
 ## Related
@@ -57,6 +59,6 @@ astral-sh/uv#12244 was a plausible literal match because it discusses SIGPIPE an
 
 ## Supporting source evidence
 
-In `crates/uv/src/child.rs`, `run_to_completion` installs `handle_signal(SignalKind::pipe())`. Its select loop logs `Received SIGPIPE, forwarding to child` and invokes `signal::kill(child_pid, signal::Signal::SIGPIPE)` without checking whether the signal was externally addressed to uv or arose from uv's own I/O. When the child then terminates from signal 13, the same function maps that disposition to 128+13, yielding exit status 141. The astral-sh/uv#13017 diff shows that both SIGPIPE handling branches were introduced together.
+The current implementation is in `crates/uv-command-support/src/child.rs`; the earlier reproduction discussion referred to its former location, `crates/uv/src/child.rs`. Inspection of the current checkout confirms that the runner still installs `handle_signal(SignalKind::pipe())`. Its select loop logs `Received SIGPIPE, forwarding to child` and invokes `signal::kill(child_pid, signal::Signal::SIGPIPE)` without checking whether the signal was externally addressed to uv or arose from uv's own I/O. When the child then terminates from signal 13, the same function maps that disposition to 128+13, yielding exit status 141. The astral-sh/uv#13017 diff shows that both SIGPIPE handling branches were introduced together.
 
 The proposed integration test provides a deterministic trigger for that source path: SIGWINCH prompts uv to log to a deliberately closed stderr socket, causing SIGPIPE in uv while a child with the default SIGPIPE disposition is running. This removes the network stack and HTTP/2 timing from the minimal reproduction, while preserving the reported failure mechanism.
