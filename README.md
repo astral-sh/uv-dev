@@ -10,7 +10,7 @@ The reporter runs `uv sync --no-build-isolation-package internal_package` with u
 
 Reproduction outcome: **needs_more_information**. On the available Linux x86_64 runner, installed uv 0.13.1 successfully completed a minimal Python 3.15.0 sync and downloaded the exact Windows archive named in the report, with both bundled and system certificates. Adding a deliberately nonexistent `SSL_CERT_FILE` produced the reported `UnknownIssuer` chain even with `--system-certs`. This confirms a possible configuration-dependent mechanism, but that override is not established on the reporter's runner. Linux download success does not establish Windows certificate behavior or an upgrade fix.
 
-Closest matches concern Windows certificate trust and certificate-file overrides, including a Windows CI configuration fix. Python 3.15 support was already present in uv 0.13.0; no matching 0.13.1 TLS fix or confirmed duplicate was found. The issue has no follow-up comments. A corporate TLS proxy, certificate overrides, and use of system certificates remain unknown. Installing uv from an internal package mirror does not identify the certificate chain presented by the separate GitHub download request.
+Closest matches concern Windows certificate trust and certificate-file overrides, including a Windows CI configuration fix. Python 3.15 support was already present in uv 0.13.0; no matching 0.13.1 TLS fix or confirmed duplicate was found. The reporter clarified that Python downloads were deliberately configured to use GitHub because network policy blocks an Astral server URI. The exact configuration and blocked endpoint were not supplied. A corporate TLS proxy, certificate overrides, and use of system certificates remain unknown; a network-policy block does not by itself establish TLS interception or explain the GitHub certificate error. Installing uv from an internal package mirror does not identify the certificate chain presented by the separate GitHub download request.
 
 ## Reproduction
 
@@ -71,6 +71,8 @@ env -i \
 
 This exited 0. A separate invocation adding `--system-certs`, with fresh `exact-windows-system/cache` and `exact-windows-system/python` directories, also exited 0. Both downloaded and installed the archive, and both installed `BUILD` files contained `20261009`. The Windows interpreter was not executed. These observations establish that the reported archive is downloadable with this Linux client's trust configuration.
 
+The reporter's follow-up confirms that selecting GitHub was intentional. The exact-archive checks above explicitly used the GitHub `--mirror`, so they remain relevant to the chosen download source, but they did not reproduce the reporter's network policy or unspecified mirror configuration. Further isolated attempts must retain the intended GitHub download source: `--no-config` or a cleared environment can remove the setting that selects it. Success or failure against another endpoint would not test the reported request.
+
 ### Certificate-override diagnostic
 
 Repeated the exact-archive system-certificate invocation with fresh `exact-windows-invalid-cert` directories and the deliberately added environment variable `SSL_CERT_FILE=/tmp/uv-22756.QpIgOp/missing.pem`. It exited 1 with:
@@ -119,6 +121,8 @@ The existing GitHub bug label is not evidence of a confirmed correctness defect.
 
 ## Supporting evidence
 
+- In the reporter's 2026-10-20 follow-up on astral-sh/uv#22756 (comment ID 6288444697), they state that GitHub was selected explicitly because network policy blocks an Astral server URI. This is reporter-supplied configuration context, not an independently verified policy or a confirmed cause of `UnknownIssuer`. No setting name, exact blocked URI, or comparison of the two runners' download-source settings was provided.
+- `crates/uv-settings/src/settings.rs` defines `python-install-mirror`, and `crates/uv-static/src/env_vars.rs` documents `UV_PYTHON_INSTALL_MIRROR` and its precedence over `UV_ASTRAL_MIRROR_URL` for CPython downloads. These are relevant configuration mechanisms to check; the comment does not identify which mechanism the reporter used.
 - The reported failure occurs while connecting to the Python archive URL, before Python can be downloaded or the internal package can be built. The log does not show a missing download entry, HTTP 404, archive extraction failure, or build-isolation failure.
 - `docs/concepts/authentication/certificates.md` documents bundled Mozilla roots by default, Windows system verification with `--system-certs` / `UV_SYSTEM_CERTS=true`, and complete replacement of the trust source by nonempty `SSL_CERT_FILE` / `SSL_CERT_DIR` values. `crates/uv-client/src/base_client.rs:630` implements the custom-certificate, system-certificate, and bundled-root precedence.
 - astral-sh/uv#8832 contains a maintainer recommendation to enable the historical `--native-tls` flag and reporter confirmation that it resolved the Windows Python download. The modern flag is `--system-certs`.
@@ -142,7 +146,7 @@ PR search queries did not yield usable PR candidates, so the review also scanned
 
 ## Next information needed
 
-An isolated Python-install attempt on the failing Windows runner with fresh temporary cache/install directories, first with its normal trust configuration and then with system certificates enabled. Record the uv version for each attempt, whether `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, whether each path exists and is intentional, and whether `UV_SYSTEM_CERTS` or a TLS-inspecting proxy is in use. Share only sanitized diagnostics with credentials removed. The presented certificate issuer and whether its CA is trusted in the Windows store would help distinguish an override from a missing trust root. No internal package source or credentials are needed. If an earlier Windows run succeeded, identify its uv/Python versions and whether runner/network/trust settings were the same.
+The non-secret download-source configuration used to select GitHub (setting or environment-variable name and public base URL), the blocked Astral endpoint without credentials or sensitive query parameters, and whether Windows and Ubuntu use the same download-source settings. An isolated Python-install attempt on the failing Windows runner with fresh temporary cache/install directories, retaining the intended GitHub download source, first with its normal trust configuration and then with system certificates enabled. Record the uv version for each attempt, whether `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, whether each path exists and is intentional, and whether `UV_SYSTEM_CERTS` or a TLS-inspecting proxy is in use. Share only sanitized diagnostics with credentials removed. The presented certificate issuer and whether its CA is trusted in the Windows store would help distinguish an override from a missing trust root. No internal package source or credentials are needed. If an earlier Windows run succeeded, identify its uv/Python versions and whether runner/network/trust settings were the same.
 
 ## Scope of work
 
