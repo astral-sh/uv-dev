@@ -10,8 +10,6 @@ use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::process::Command;
 use std::str::FromStr;
-#[cfg(unix)]
-use std::thread;
 
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
@@ -14120,7 +14118,6 @@ fn output_file_broken_stdout() -> Result<()> {
 
     Ok(())
 }
-
 
 /// An unsupported output stream must fail without replacing the socket.
 #[test]

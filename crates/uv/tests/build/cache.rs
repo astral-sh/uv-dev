@@ -2,6 +2,7 @@ use std::process::Command;
 
 use anyhow::Result;
 use assert_fs::prelude::*;
+use indoc::indoc;
 #[cfg(feature = "test-python")]
 use predicates::prelude::predicate;
 #[cfg(feature = "test-python")]
