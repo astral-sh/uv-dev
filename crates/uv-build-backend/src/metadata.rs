@@ -1224,9 +1224,7 @@ impl<'de> Deserialize<'de> for Readme {
             }
         }
 
-        deserializer.deserialize_any(ReadmeVisitor).map_err(|_| {
-            serde::de::Error::custom("data did not match any variant of untagged enum Readme")
-        })
+        deserializer.deserialize_any(ReadmeVisitor)
     }
 }
 
@@ -1314,9 +1312,7 @@ impl<'de> Deserialize<'de> for License {
             }
         }
 
-        deserializer.deserialize_any(LicenseVisitor).map_err(|_| {
-            serde::de::Error::custom("data did not match any variant of untagged enum License")
-        })
+        deserializer.deserialize_any(LicenseVisitor)
     }
 }
 
@@ -1555,9 +1551,34 @@ mod tests {
     use super::*;
     use indoc::{formatdoc, indoc};
     use insta::assert_snapshot;
+    use std::io::{self, Read};
     use std::iter;
     use tempfile::TempDir;
     use uv_pep508::MarkerEnvironmentBuilder;
+
+    #[test]
+    fn readme_and_license_retain_read_errors() {
+        struct FailedRead;
+
+        impl Read for FailedRead {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("metadata read failed"))
+            }
+        }
+
+        let reader = br#"{"file":"#.as_slice().chain(FailedRead);
+        assert!(
+            serde_json::from_reader::<_, Readme>(reader)
+                .unwrap_err()
+                .is_io()
+        );
+        let reader = br#"{"text":"#.as_slice().chain(FailedRead);
+        assert!(
+            serde_json::from_reader::<_, License>(reader)
+                .unwrap_err()
+                .is_io()
+        );
+    }
 
     #[test]
     fn readme_variant_precedence() {
@@ -1606,7 +1627,7 @@ mod tests {
             r#"{"file":"README.md","text":"description","content-type":"text/plain","charset":42}"#,
         )
         .unwrap_err();
-        insta::assert_snapshot!(readme.to_string(), @"data did not match any variant of untagged enum Readme");
+        insta::assert_snapshot!(readme.to_string(), @"invalid README charset at line 1 column 82");
     }
     fn extend_project(payload: &str) -> String {
         formatdoc! {r#"
@@ -2284,7 +2305,7 @@ mod tests {
           |
         4 | readme = { path = "Readme.md" }
           |          ^^^^^^^^^^^^^^^^^^^^^^
-        data did not match any variant of untagged enum Readme
+        invalid README content type
         "#);
     }
 
