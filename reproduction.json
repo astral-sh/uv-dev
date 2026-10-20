@@ -1,0 +1,4 @@
+{
+  "reproduction": "needs_more_information",
+  "reason": "On Linux x86_64 with installed uv 0.13.1, a minimal `uv sync --no-build-isolation-package internal_package` succeeded. Python installation using uv 0.13.0's download metadata also successfully downloaded the exact reported Windows 20261009 archive with both bundled and system certificates. Deliberately setting SSL_CERT_FILE to a nonexistent file produced UnknownIssuer even with --system-certs, but that configuration is unconfirmed on the reporter's runner. These results cannot establish the Windows-specific failure or whether upgrading fixes it. Need sanitized fresh-cache `uv python install 3.15.0` results on the failing Windows runner, with and without --system-certs, plus certificate-override settings, proxy details, and the presented certificate issuer. Updated the issue-context README with commands, results, limitations, and relevant existing test coverage."
+}
