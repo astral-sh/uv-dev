@@ -1,0 +1,6 @@
+{
+  "outcome": "not_fixed",
+  "summary": "The three parent regression tests pass and confirm the unwanted warnings. Choosing between suppressing inherited-setting warnings and correcting their wording requires a diagnostic-policy decision that the report leaves unresolved. The checkout remains unchanged, and the investigation README records the findings and limitation.",
+  "validation": [],
+  "pull_request": null
+}
