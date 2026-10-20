@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 6361,
+        "title": "Respect `.python-version` files in `uv run` outside projects",
+        "url": "https://github.com/astral-sh/uv/pull/6361",
+        "state": "merged",
+        "reason": "Intentionally added local version-file discovery to the non-project run path, while preserving explicit --python precedence. It fixed astral-sh/uv#6285 and shipped in uv 0.3.1; this report requests changing that established behavior, not restoring that fix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 12115,
+        "title": "Add support for global `uv python pin`",
+        "url": "https://github.com/astral-sh/uv/pull/12115",
+        "state": "merged",
+        "reason": "Introduced global pins in uv 0.6.7 explicitly as a fallback when no version file is found locally or in ancestor directories. Its description and maintainer review establish the local-before-global precedence involved here."
+      },
+      {
+        "kind": "issue",
+        "number": 16578,
+        "title": "`--no-project` has no effect if a project virtual environment already exists (.venv)",
+        "url": "https://github.com/astral-sh/uv/issues/16578",
+        "state": "closed",
+        "reason": "Maintainer clarification says --no-project disables project discovery but retains general environment discovery; closed as intended. Its logs also show a local .python-version being read. The requested change there concerns .venv isolation, not skipping local pins in favor of a global pin."
+      },
+      {
+        "kind": "issue",
+        "number": 9393,
+        "title": "Script inline python requirement not respected when .python-version file is in project",
+        "url": "https://github.com/astral-sh/uv/issues/9393",
+        "state": "open",
+        "reason": "Discusses whether a project-local pin should influence self-contained scripts. It concerns a pin conflicting with PEP 723 requires-python, whereas this report requests global-pin fallback under --no-project without reporting any script requirement conflict."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18097,
+        "title": "Fix Python version selection for scripts with a `requires-python` conflicting with `.python-version`",
+        "url": "https://github.com/astral-sh/uv/pull/18097",
+        "state": "merged",
+        "reason": "Shipped in uv 0.10.6 and filters incompatible pins when selecting Python for scripts. This is a relevant historical fix, but it does not make --no-project ignore workspace-root pins generally; the new report does not establish a regression of this fix."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14112,
+        "title": "Respect global Python version pins in `uv tool run` and `uv tool install`",
+        "url": "https://github.com/astral-sh/uv/pull/14112",
+        "state": "merged",
+        "reason": "Implemented global-pin selection for tool commands, closing astral-sh/uv#12921 and shipping in uv 0.10.0. Current tool discovery explicitly skips local version files, providing a related implementation precedent; uv run --no-project uses a different discovery path."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Literal searches covered no-project, .python-version, global pins, and precedence; conceptual searches covered interpreter discovery, workspace boundaries, local pins, version files, isolation, and non-project execution. Closed-issue and fix-oriented searches covered historical pin and script-selection changes. PR keyword searches unexpectedly returned no results, so a paginated REST listing of all 13,175 PRs was filtered by relevant titles and body combinations. Inspected candidate bodies, comments, reviews, linked timelines, patches, source, tests, and changelogs. Ruled out astral-sh/uv#14916 and astral-sh/uv#15473 as incompatible-global-pin/project-requirement behavior, and astral-sh/uv#7815 as init/pin file placement. No same-scope duplicate or regression tracker was found."
+  },
+  "type": "enhancement",
+  "type_reason": "The request changes established Python-selection semantics: --no-project leaves ordinary version-file discovery enabled, local pins precede the global fallback, and explicit --python already takes precedence. The source, the intentional non-project support in astral-sh/uv#6361, and the global-pin design in astral-sh/uv#12115 agree on that behavior. No existing item tracks the same requested change, and the script-conflict fixes address different conditions rather than a demonstrated regression here.",
+  "summary": "No duplicate found. astral-sh/uv#6361 and astral-sh/uv#12115 establish the current local-first behavior. Related discussions and fixes cover environment isolation, script requirement conflicts, and global pins for tool commands.",
+  "draft_response": "Currently, `--no-project` disables project discovery but still reads `.python-version` files, including local pins. That behavior was deliberately added for runs outside projects in astral-sh/uv#6361; the global pin is a fallback when no local pin is found.\n\nYour request would change that selection policy. It needs a decision about whether `--no-project` should skip only workspace-root pins or all local pins while retaining the global fallback. For now, use `uv run --no-project --python <version> ...` to override the local pin explicitly. `--no-config` skips global pins too, so it does not provide the fallback you want."
+}
