@@ -181,7 +181,7 @@ fn list_invalid_direct_url_metadata() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to read metadata from: [SITE_PACKAGES]/project-1.0.0.dist-info
-      cause: data did not match any variant of untagged enum DirectUrl
+      cause: invalid direct URL metadata at line 1 column 37
     ");
     Ok(())
 }
