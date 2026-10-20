@@ -335,9 +335,7 @@ Version: 0.22.0
      - zstandard==0.22.0
     ");
 
-    site_packages
-        .child("easy-install.pth")
-        .assert(indoc! {"
+    site_packages.child("easy-install.pth").assert(indoc! {"
             something
             another thing
         "});
