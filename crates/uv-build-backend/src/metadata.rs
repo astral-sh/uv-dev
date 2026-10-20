@@ -1562,7 +1562,7 @@ mod tests {
     #[test]
     fn readme_variant_precedence() {
         let readme: Readme = serde_json::from_str(
-            r#"{"text":false,"file":"README.md","content-type":"text/markdown","ignored":[1,2]}"#,
+            r#"{"text":"description","file":"README.md","content-type":"text/markdown","ignored":[1,2]}"#,
         )
         .unwrap();
         insta::assert_debug_snapshot!(readme, @r#"
