@@ -113,10 +113,9 @@ impl LockedFileMode {
     #[cfg(not(target_os = "android"))]
     fn try_lock(self, file: &fs_err::File) -> Result<(), std::fs::TryLockError> {
         match self {
-            Self::Exclusive => file.try_lock()?,
-            Self::Shared => file.try_lock_shared()?,
+            Self::Exclusive => file.try_lock(),
+            Self::Shared => file.try_lock_shared(),
         }
-        Ok(())
     }
 
     /// Try to lock the file and return an error if the lock is already acquired by another process
@@ -153,10 +152,9 @@ impl LockedFileMode {
     #[cfg(not(target_os = "android"))]
     fn lock(self, file: &fs_err::File) -> Result<(), io::Error> {
         match self {
-            Self::Exclusive => file.lock()?,
-            Self::Shared => file.lock_shared()?,
+            Self::Exclusive => file.lock(),
+            Self::Shared => file.lock_shared(),
         }
-        Ok(())
     }
 
     /// Lock the file, blocking until the lock becomes available if necessary.
@@ -207,8 +205,8 @@ impl LockedFile {
             file.path().user_display()
         );
         // If there's no contention, return directly.
-        let try_lock_exclusive = tokio::task::spawn_blocking(move || (mode.try_lock(&file), file));
-        let file = match try_lock_exclusive.await? {
+        let try_lock = tokio::task::spawn_blocking(move || (mode.try_lock(&file), file));
+        let file = match try_lock.await? {
             (Ok(()), file) => {
                 trace!("Acquired {mode} lock for `{resource}`");
                 return Ok(Self(file));
@@ -228,8 +226,8 @@ impl LockedFile {
             file.path().user_display(),
         );
         let path = file.path().to_path_buf();
-        let lock_exclusive = tokio::task::spawn_blocking(move || (mode.lock(&file), file));
-        let (result, file) = tokio::time::timeout(*LOCK_TIMEOUT, lock_exclusive)
+        let lock = tokio::task::spawn_blocking(move || (mode.lock(&file), file));
+        let (result, file) = tokio::time::timeout(*LOCK_TIMEOUT, lock)
             .await
             .map_err(|_| LockedFileError::Timeout {
                 timeout: *LOCK_TIMEOUT,
@@ -315,18 +313,18 @@ impl LockedFile {
             }
         }
 
+        let path = path.as_ref();
+        let mut options = fs_err::OpenOptions::new();
+        options.read(true).write(true);
+
         // If path already exists, return it.
-        if let Ok(file) = fs_err::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path.as_ref())
-        {
+        if let Ok(file) = options.open(path) {
             return Ok(file);
         }
 
         // Otherwise, create a temporary file with 666 permissions. We must set
         // permissions _after_ creating the file, to override the `umask`.
-        let file = if let Some(parent) = path.as_ref().parent() {
+        let file = if let Some(parent) = path.parent() {
             NamedTempFile::new_in(parent)
         } else {
             NamedTempFile::new()
@@ -335,15 +333,11 @@ impl LockedFile {
         try_set_permissions(file.as_file(), file.path());
 
         // Try to move the file to path, but if path exists now, just open path
-        match file.persist_noclobber(path.as_ref()) {
-            Ok(file) => Ok(fs_err::File::from_parts(file, path.as_ref())),
+        match file.persist_noclobber(path) {
+            Ok(file) => Ok(fs_err::File::from_parts(file, path)),
             Err(err) => {
                 if err.error.kind() == std::io::ErrorKind::AlreadyExists {
-                    fs_err::OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .open(path.as_ref())
-                        .map_err(Into::into)
+                    options.open(path).map_err(Into::into)
                 } else if matches!(
                     Errno::from_io_error(&err.error),
                     Some(Errno::NOTSUP | Errno::INVAL)
@@ -361,11 +355,7 @@ impl LockedFile {
                     // are locking two different files. Also, since `persist_noclobber` is more
                     // likely to not be supported on special filesystems which don't have permission
                     // bits, it's less likely to ever matter.
-                    let file = fs_err::OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .create(true)
-                        .open(path.as_ref())?;
+                    let file = options.create(true).open(path)?;
 
                     // We don't want to `try_set_permissions` in cases where another user's process
                     // has already created the lockfile and changed its permissions because we might
@@ -375,7 +365,7 @@ impl LockedFile {
                         .metadata()
                         .is_ok_and(|metadata| metadata.permissions().mode() != DESIRED_MODE)
                     {
-                        try_set_permissions(file.file(), path.as_ref());
+                        try_set_permissions(file.file(), path);
                     }
                     Ok(file)
                 } else {

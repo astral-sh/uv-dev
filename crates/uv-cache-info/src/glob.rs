@@ -12,12 +12,11 @@ use std::{
 /// will not be affected but efficiency might be (because we'll traverse more than we should),
 /// however it should not return false negatives.
 fn is_glob_like(part: Component) -> bool {
-    matches!(part, Component::Normal(_))
-        && part.as_os_str().to_str().is_some_and(|part| {
-            ["*", "{", "}", "?", "[", "]"]
-                .into_iter()
-                .any(|c| part.contains(c))
-        })
+    let Component::Normal(part) = part else {
+        return false;
+    };
+    part.to_str()
+        .is_some_and(|part| part.contains(['*', '{', '}', '?', '[', ']']))
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -28,31 +27,25 @@ struct GlobParts {
 
 /// Split a glob into longest possible base + shortest possible glob pattern.
 fn split_glob(pattern: impl AsRef<str>) -> GlobParts {
-    let pattern: &Path = pattern.as_ref().as_ref();
-
+    let mut parts = Path::new(pattern.as_ref()).components();
+    let last = parts.next_back();
     let mut glob = GlobParts::default();
     let mut globbing = false;
-    let mut last = None;
 
-    for part in pattern.components() {
-        if let Some(last) = last {
-            if last != Component::CurDir {
-                if globbing {
-                    glob.pattern.push(last);
-                } else {
-                    glob.base.push(last);
-                }
-            }
+    for part in parts {
+        if part == Component::CurDir {
+            continue;
         }
-        if !globbing {
-            globbing = is_glob_like(part);
+        globbing = globbing || is_glob_like(part);
+        if globbing {
+            glob.pattern.push(part);
+        } else {
+            glob.base.push(part);
         }
-        // we don't know if this part is the last one, defer handling it by one iteration
-        last = Some(part);
     }
 
     if let Some(last) = last {
-        // defer handling the last component to prevent draining entire pattern into base
+        // Keep the final normal component in the pattern, even if it has no glob syntax.
         if globbing || matches!(last, Component::Normal(_)) {
             glob.pattern.push(last);
         } else {
@@ -70,35 +63,33 @@ struct Trie<'a> {
 }
 
 impl<'a> Trie<'a> {
-    fn insert(&mut self, mut components: Components<'a>, pattern: &'a Path) {
-        if let Some(part) = components.next() {
-            self.children
-                .entry(part)
-                .or_default()
-                .insert(components, pattern);
-        } else {
-            self.patterns.push(pattern);
+    fn insert(&mut self, components: Components<'a>, pattern: &'a Path) {
+        let mut node = self;
+        for part in components {
+            node = node.children.entry(part).or_default();
         }
+        node.patterns.push(pattern);
     }
 
-    #[expect(clippy::needless_pass_by_value)]
     fn collect_patterns(
         &self,
-        pattern_prefix: PathBuf,
-        group_prefix: PathBuf,
+        pattern_prefix: &Path,
+        group_prefix: &Path,
         patterns: &mut Vec<PathBuf>,
         groups: &mut Vec<(PathBuf, Vec<PathBuf>)>,
     ) {
         // collect all patterns beneath and including this node
-        for pattern in &self.patterns {
-            patterns.push(pattern_prefix.join(pattern));
-        }
+        patterns.extend(
+            self.patterns
+                .iter()
+                .map(|pattern| pattern_prefix.join(pattern)),
+        );
         for (part, child) in &self.children {
             if let Component::Normal(_) = part {
                 // for normal components, collect all descendant patterns ('normal' edges only)
                 child.collect_patterns(
-                    pattern_prefix.join(part),
-                    group_prefix.join(part),
+                    &pattern_prefix.join(part),
+                    &group_prefix.join(part),
                     patterns,
                     groups,
                 );
@@ -119,7 +110,7 @@ impl<'a> Trie<'a> {
         } else {
             // pivot point, we've hit a pattern node; we have to stop here and form a group
             let mut group = Vec::new();
-            self.collect_patterns(PathBuf::new(), prefix.clone(), &mut group, groups);
+            self.collect_patterns(Path::new(""), &prefix, &mut group, groups);
             groups.push((prefix, group));
         }
     }
