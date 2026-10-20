@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Using installed uv 0.13.1 on Linux x86_64 with Python 3.12.3, a test.py containing print(\"script ran\") and UV_FROZEN=1 uv run --no-project test.py produced the exact warning: `--frozen` has no effect when used alongside `--no-project`. The script exited successfully, both with and without a minimal pyproject.toml. Unsetting UV_FROZEN or adding --no-frozen removed the warning. Reported uv 0.13.3 was inspected in source but not executed. Whether inherited settings should suppress this warning remains a policy decision. Updated $RUNNER_TEMP/issue-context/README.md; no checkout files or GitHub state changed."
+}

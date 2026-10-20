@@ -2,64 +2,128 @@
 
 Issue: astral-sh/uv#22755
 
-Classification: bug
+Classification: bug (diagnostic usability; warning policy requires a maintainer decision)
 
 ## Summary
 
-The reporter sets `UV_FROZEN` globally for CI and runs a minor script with `uv run --no-project test.py`. On uv 0.13.3 on Linux x86_64, this emits:
+The reported warning is reproducible. With `UV_FROZEN=1` inherited from the environment, `uv run --no-project test.py` prints:
 
 ```text
 warning: `--frozen` has no effect when used alongside `--no-project`
 ```
 
-The reporter asks whether these warnings should ignore environment-derived settings, also mentioning `UV_LOCKED` and `UV_NO_SYNC`. No execution failure is reported. The source confirms that the warning does not use the recorded source of frozen mode.
+The script still runs successfully. The warning occurs both in an otherwise empty directory and beside a minimal `pyproject.toml`. It names a command-line flag even though frozen mode was enabled only through the environment. Removing `UV_FROZEN` or passing `--no-frozen` eliminates the warning.
 
-No duplicate found. astral-sh/uv#5856 and astral-sh/uv#5977 explain the warning's origin; astral-sh/uv#17259 and astral-sh/uv#17318 provide related precedent for environment-aware diagnostics.
-
-## Draft response
-
-The current `--no-project` warning checks whether frozen mode is enabled and always names `--frozen`, even when it came from `UV_FROZEN`. That explains the misleading output you're seeing. The source already records where frozen mode came from, so this warning can distinguish inherited settings from explicit flags. A targeted next step is to suppress the warning for environment-only settings and review `UV_NO_SYNC` and `UV_LOCKED` consistently. For now, `uv run --no-project --no-frozen test.py` overrides `UV_FROZEN` for that invocation.
+The reporter used uv 0.13.3 on Linux x86_64. Runtime reproduction used the installed uv 0.13.1 on Linux x86_64; uv 0.13.3 was inspected in source but was not executed. The report does not claim an upgrade regression or an execution failure.
 
 ## Classification
 
-The 0.13.3 source confirms misleading diagnostics: inherited UV_FROZEN triggers a warning naming --frozen even though no such flag was supplied. FrozenSource retains the environment/CLI distinction, but this warning ignores it. UV_NO_SYNC has similar flag-only wording; UV_LOCKED already identifies its environment source but still warns. No existing item tracks this specific problem, and the historical missing-lockfile fix addressed a different diagnostic.
+Retain the diagnostic-usability bug classification. The observed behavior establishes that an inherited setting produces the reported warning, not that ignoring the setting or issuing a warning is itself incorrect. The reporter asks whether environment-derived settings should be exempt from these no-effect warnings. Suppression versus source-aware wording remains a maintainer decision.
 
-The established correctness issue is the misleading attribution of an inherited setting to a command-line flag. Suppressing environment-only warnings is the requested remedy; the broader policy for other settings still needs a maintainer decision. The wording of the report as a question does not make this a support-only issue.
+`UV_NO_SYNC=1` also produces flag-only wording. `UV_LOCKED=1` already identifies its environment source, but still warns. These extensions should be considered separately rather than assuming identical attribution behavior for all three settings.
+
+## Reproduction
+
+Outcome: **reproducible**.
+
+### Environment and scope
+
+- Reported: uv 0.13.3 (`x86_64-unknown-linux-gnu`), Linux `6.8.0-142-generic` x86_64 GNU/Linux; Python version listed as N/A. The report does not specify the value of `UV_FROZEN`; the reproduction uses the supported enabled value `1`.
+- Executed: uv 0.13.1 (`x86_64-unknown-linux-gnu`) from `/opt/hostedtoolcache/uv/0.13.1/x86_64/uv`, resolved from `PATH`.
+- Host: Linux `6.17.0-1022-azure` x86_64, glibc 2.39; CPython 3.12.3 at `/usr/bin/python3`.
+- Source reviewed: checkout commit `502f93c`, the uv 0.13.3 version bump. No checkout binary was built or executed, and the repository test suite was not run.
+- All reproduction files and caches are under `/tmp/uv-22755-qpf_x17h`. Each invocation used a fresh, explicitly constructed environment with no inherited virtual environment or other uv settings. `UV_NO_CONFIG=1`, `UV_OFFLINE=1`, `UV_PYTHON_DOWNLOADS=never`, and `UV_PYTHON=/usr/bin/python3` disabled configuration discovery and downloads and selected the existing interpreter. `TMPDIR`, `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR`, and the XDG cache/config/data directories all pointed inside the temporary directory.
+
+### Minimal input and commands
+
+`test.py` is an ordinary script without PEP 723 metadata:
+
+```python
+print("script ran")
+```
+
+With the isolation settings above, run in the temporary working directory:
+
+```sh
+UV_FROZEN=1 uv run --no-project test.py
+```
+
+Observed exit status: `0`. Standard output:
+
+```text
+script ran
+```
+
+Standard error:
+
+```text
+warning: `--frozen` has no effect when used alongside `--no-project`
+```
+
+This first reproduced without any project file. The same command produced identical output after adding only:
+
+```toml
+[project]
+name = "warning-repro"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+```
+
+There were no workspace members, dependency groups, sources, lockfile, virtual environment, or script dependencies. The runs created neither `uv.lock` nor `.venv`.
+
+### Controls and related settings
+
+Each command below ran separately beside that project file, with only the indicated setting enabled. All exited `0` and printed `script ran`.
+
+| Command | Standard error |
+| --- | --- |
+| `uv run --no-project test.py` with `UV_FROZEN` unset | Empty |
+| `uv run --no-project --frozen test.py` with `UV_FROZEN` unset | `warning: ` followed by the same `--frozen` warning reproduced above |
+| `UV_FROZEN=1 uv run --no-project --no-frozen test.py` | Empty |
+| `UV_LOCKED=1 uv run --no-project test.py` | `warning: ` followed by `` `UV_LOCKED=1` has no effect when used alongside `--no-project` `` |
+| `UV_NO_SYNC=1 uv run --no-project test.py` | `warning: ` followed by `` `--no-sync` has no effect when used alongside `--no-project` `` |
+
+The `--no-frozen` override is therefore an observed per-invocation workaround. Raw command arguments, environment overrides, exit codes, stdout, stderr, and version metadata are retained in `/tmp/uv-22755-qpf_x17h/results.json`.
+
+### Existing test coverage
+
+Searched `crates/uv/tests/` and `crates/uv-client/tests/it/` for `UV_FROZEN`, `UV_LOCKED`, `UV_NO_SYNC`, and the no-project warning. Read the relevant project-run fixtures and assertions:
+
+- `crates/uv/tests/project/run.rs`, `run_no_project` (line 3512): creates a Python 3.12 project depending on `anyio`, runs it to create a virtual environment, then verifies ordinary and isolated `--no-project` execution. Its final snapshot explicitly passes `--locked`, expects exit status 0, and checks the `--locked`/`--no-project` warning. It does not exercise environment-derived frozen mode.
+- `crates/uv/tests/project/run.rs`, `run_no_sync_env_var` (line 2838): verifies that `UV_NO_SYNC=1` allows project execution without a lockfile, skips installing requirements after locking, and allows importing installed dependencies after syncing. It does not use `--no-project` or assert this warning.
+
+No existing integration test for the exact `UV_FROZEN=1` plus `--no-project` warning was found. The project-run module is gated by both `test-python` and `test-pypi` in `crates/uv/tests/project/main.rs`. No tests were added or modified.
+
+## Implementation evidence
+
+The inspected uv 0.13.3 source is consistent with the runtime observation on uv 0.13.1:
+
+- `crates/uv-cli/src/settings.rs:653`: `resolve_frozen` distinguishes `FrozenSource::Cli` from `FrozenSource::Env`; `--no-frozen` prevents the environment fallback.
+- `crates/uv-cli/src/settings.rs:783`: `RunSettings::resolve` resolves locked, frozen, and no-sync settings from CLI arguments and the environment. The no-sync value is reduced to a boolean at line 863.
+- `crates/uv-project-commands/src/run.rs:601`: in the ordinary-script/non-PEP-723 path, the no-project warning block checks `frozen.is_some()` and emits hard-coded `--frozen` wording at line 612. It does not branch on the setting's source. No-sync similarly uses hard-coded `--no-sync` wording.
+- `crates/uv-project-commands/src/run.rs:609` and `crates/uv-settings/src/resolved.rs:50`: the locked warning formats `LockedSource`; the environment variant renders as `UV_LOCKED=1`.
+- `crates/uv-cli/src/lib.rs:3407`: the CLI documents `--no-frozen` as overriding `UV_FROZEN`.
+
+These source observations explain the diagnostic path in the checkout. They are separate from the direct runtime evidence; the reported uv 0.13.3 executable was not tested.
 
 ## Related
 
-- astral-sh/uv#5977 (pull request, merged) — Warn when project-specific settings are passed to non-project `uv run` commands. Introduced the exact --frozen/--no-project warning in August 2024. Its purpose was to warn about ignored project options; it did not address suppressing warnings for inherited environment settings.
-- astral-sh/uv#5856 (issue, closed) — Warn when project options are used with `uv run` outside a project. The original request behind astral-sh/uv#5977 explains why these warnings exist. It requested warnings for ignored options, whereas this report concerns misleading warnings from environment-only defaults.
-- astral-sh/uv#17259 (issue, closed) — Unfriendly error message when `uv lock` or `uv sync` with `UV_FROZEN=1` env variable. Related precedent for confusing diagnostics caused by inherited UV_FROZEN. It concerned missing-lockfile errors during lock/sync, not no-project warnings, and was fixed by astral-sh/uv#17318.
-- astral-sh/uv#17318 (pull request, merged) — Use a dedicated error message when lockfile can't be found. Merged January 2026; made missing-lockfile errors identify UV_FROZEN or UV_LOCKED as their source. The diff leaves the no-project warning unchanged, so this report is not a regression of that fix.
+The existing issue context identified these historical relationships; no additional GitHub search was performed during reproduction:
 
-## Supporting evidence
+- astral-sh/uv#5977 (pull request, merged) — Introduced warnings for project-specific settings passed to non-project `uv run` commands, including the exact frozen/no-project warning, in August 2024. It did not address suppressing warnings for inherited environment settings.
+- astral-sh/uv#5856 (issue, closed) — Original request behind astral-sh/uv#5977, asking for warnings when project options are ignored outside a project. This explains the warning's purpose but does not settle the policy for environment defaults.
+- astral-sh/uv#17259 (issue, closed) — Related confusing diagnostics when `UV_FROZEN=1` is inherited by `uv lock` or `uv sync`; concerned missing-lockfile errors and was addressed by astral-sh/uv#17318.
+- astral-sh/uv#17318 (pull request, merged) — January 2026 change making missing-lockfile errors identify `UV_FROZEN` or `UV_LOCKED` as their source. It left the no-project warning unchanged; the available evidence does not establish a regression of that fix.
 
-The checkout is at commit `502f93c`, the uv 0.13.3 version bump, matching the reported release. The issue currently has no comments.
+## Prior search context
 
-- `crates/uv-cli/src/settings.rs:653`: `resolve_frozen` records `FrozenSource::Cli` for an explicit flag and `FrozenSource::Env` for an enabled environment setting. An explicit `--no-frozen` prevents the environment fallback.
-- `crates/uv-cli/src/settings.rs:783`: `RunSettings::resolve` resolves locked, frozen, and no-sync values from CLI arguments and environment settings. At line 863, no-sync is reduced to a boolean, discarding its source before command execution.
-- `crates/uv-project-commands/src/run.rs:601`: the ordinary-script/non-PEP-723 path emits no-project warnings. At line 612, `frozen.is_some()` triggers hard-coded `--frozen` wording for both CLI and environment sources. At line 615, the no-sync boolean triggers hard-coded `--no-sync` wording.
-- `crates/uv-project-commands/src/run.rs:609` and `crates/uv-settings/src/resolved.rs:50`: the locked warning formats `LockedSource`; an environment-derived value is already rendered as `UV_LOCKED=1`. Thus the reporter's broader request also concerns warning suppression, but the attribution problem is not identical for every setting.
-- `crates/uv-cli/src/lib.rs:3407`: `--no-frozen` is explicitly documented in source as overriding `UV_FROZEN`, supporting the per-invocation workaround in the draft response.
-- `crates/uv/tests/project/run.rs:3512`: `run_no_project` already snapshots the warning for an explicit `--locked`. Existing no-sync environment tests exercise project syncing, but no existing test combining environment-derived frozen mode with this no-project warning was found.
+The existing handoff records searches of open and closed issues and pull requests in astral-sh/uv, including exact warning text, combinations of `--no-project` and the three environment settings, ignored options, and environment-aware diagnostics. No duplicate was found in that search.
 
-The diff and review of astral-sh/uv#5977 establish that the warning was intentionally introduced for ignored project-specific options. A maintainer explained that runtime warnings kept behavior consistent with cases where project discovery cannot be known during argument parsing. That rationale does not establish a policy for globally inherited settings.
-
-The January 2026 fix in astral-sh/uv#17318 predates this report, but only changes missing-lockfile diagnostics. It does not suppress or correct this no-project warning. There is no evidence here of a previously fixed version of the reported behavior returning.
-
-These findings come from source and existing tests; no runtime reproduction, build, or test execution was performed.
-
-## Search scope and excluded candidates
-
-Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using the exact warning, --no-project with UV_FROZEN, UV_LOCKED, and UV_NO_SYNC separately, and broader terms including no-op, ignored settings, spurious warnings, environment variables, and area:error-messages. Removed version/platform constraints and searched historical fixes; inspected candidate comments, timelines, PR reviews, and diffs. Ruled out astral-sh/uv#10743 because its similar warning concerns dependency-group/project discovery, and astral-sh/uv#9772 because it requests warnings for resolution options ignored by frozen mode. No duplicate found.
-
-The report was decomposed before searching into the exact frozen warning, the requested distinction between explicit flags and inherited settings, and the separate locked/no-sync extensions. Searches covered `uv run`, project discovery, ignored project options, and diagnostic wording without restricting the search to Linux or uv 0.13.3. Historical PRs were located through issue timelines and inspected directly.
-
-astral-sh/uv#10743 was especially plausible because it quotes the same warning template. Its comments establish that dependency-group discovery and a missing `[project]` table explain the behavior, rather than inherited environment defaults. astral-sh/uv#9772 concerns the opposite diagnostic gap: frozen mode silently ignoring resolution options. The astral-sh/uv#5977 review also references astral-sh/uv#5855; that issue concerns ignored `[tool.uv]` settings in inline script metadata and is not the same request.
+Excluded candidates were astral-sh/uv#10743, whose similar warning concerns dependency-group discovery and a missing `[project]` table; astral-sh/uv#9772, which requests warnings about resolution options ignored by frozen mode; and astral-sh/uv#5855, which concerns ignored `[tool.uv]` settings in inline script metadata. They do not describe this environment-derived no-project warning.
 
 ## Suggested next step
 
-Make the no-project warning use the setting's source, with a maintainer decision on suppressing environment-only no-effect warnings. Review frozen, locked, and no-sync separately because their current source handling differs. A focused regression test should cover `UV_FROZEN=1` with `--no-project` and retain meaningful coverage for an explicitly supplied flag; extend the existing project-run test module and check its feature-gating conventions.
+Decide whether inherited project-only settings should produce no-effect warnings under `--no-project`, or whether the warnings should identify the environment variable. Review frozen, locked, and no-sync separately because their source tracking and wording differ. If behavior changes, add focused coverage in the existing project-run integration module for environment-derived frozen mode and retain meaningful explicit-flag coverage.
 
-Only this temporary handoff was updated. No checkout files or GitHub state were changed.
+Only this issue-context README and temporary reproduction artifacts were written. No checkout files or GitHub state were changed.
