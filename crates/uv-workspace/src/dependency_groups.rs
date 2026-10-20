@@ -1,14 +1,16 @@
+use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::path::Path;
 use std::str::FromStr;
-use std::{collections::BTreeMap, path::Path};
 
+use rustc_hash::FxHashSet;
 use thiserror::Error;
 
 use uv_distribution_types::RequiresPython;
 use uv_fs::Simplified;
 use uv_normalize::{DEV_DEPENDENCIES, GroupName};
 use uv_pep440::VersionSpecifiers;
-use uv_pep508::Pep508Error;
+use uv_pep508::{Pep508Error, Requirement};
 use uv_pypi_types::{DependencyGroupSpecifier, VerbatimParsedUrl};
 
 use crate::pyproject::{DependencyGroupSettings, PyProjectToml, ToolUvDependencyGroups};
@@ -19,7 +21,7 @@ pub struct FlatDependencyGroups(BTreeMap<GroupName, FlatDependencyGroup>);
 
 #[derive(Debug, Default, Clone)]
 pub struct FlatDependencyGroup {
-    pub requirements: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
+    pub requirements: Vec<Requirement<VerbatimParsedUrl>>,
     pub requires_python: Option<VersionSpecifiers>,
 }
 
@@ -92,115 +94,6 @@ impl FlatDependencyGroups {
         groups: &BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
         settings: &BTreeMap<GroupName, DependencyGroupSettings>,
     ) -> Result<Self, DependencyGroupErrorInner> {
-        fn resolve_group<'data>(
-            resolved: &mut BTreeMap<GroupName, FlatDependencyGroup>,
-            groups: &'data BTreeMap<&GroupName, &Vec<DependencyGroupSpecifier>>,
-            settings: &BTreeMap<GroupName, DependencyGroupSettings>,
-            name: &'data GroupName,
-            parents: &mut Vec<&'data GroupName>,
-        ) -> Result<(), DependencyGroupErrorInner> {
-            let Some(specifiers) = groups.get(name) else {
-                // Missing group
-                let parent_name = parents
-                    .iter()
-                    .last()
-                    .copied()
-                    .expect("parent when group is missing");
-                return Err(DependencyGroupErrorInner::GroupNotFound(
-                    name.clone(),
-                    parent_name.clone(),
-                ));
-            };
-
-            // "Dependency Group Includes MUST NOT include cycles, and tools SHOULD report an error if they detect a cycle."
-            if parents.contains(&name) {
-                return Err(DependencyGroupErrorInner::DependencyGroupCycle(Cycle(
-                    parents.iter().copied().cloned().collect(),
-                )));
-            }
-
-            // If we already resolved this group, short-circuit.
-            if resolved.contains_key(name) {
-                return Ok(());
-            }
-
-            parents.push(name);
-            let mut requirements = Vec::with_capacity(specifiers.len());
-            let mut requires_python_intersection = VersionSpecifiers::empty();
-            for specifier in *specifiers {
-                match specifier {
-                    DependencyGroupSpecifier::Requirement(requirement) => {
-                        match uv_pep508::Requirement::<VerbatimParsedUrl>::from_str(requirement) {
-                            Ok(requirement) => requirements.push(requirement),
-                            Err(err) => {
-                                return Err(DependencyGroupErrorInner::GroupParseError(
-                                    name.clone(),
-                                    requirement.clone(),
-                                    Box::new(err),
-                                ));
-                            }
-                        }
-                    }
-                    DependencyGroupSpecifier::IncludeGroup { include_group } => {
-                        resolve_group(resolved, groups, settings, include_group, parents)?;
-                        if let Some(included) = resolved.get(include_group) {
-                            requirements.extend(included.requirements.iter().cloned());
-
-                            // Intersect the requires-python for this group with the included group's
-                            requires_python_intersection = requires_python_intersection
-                                .into_iter()
-                                .chain(included.requires_python.clone().into_iter().flatten())
-                                .collect();
-                        }
-                    }
-                    DependencyGroupSpecifier::Object(map) => {
-                        return Err(
-                            DependencyGroupErrorInner::DependencyObjectSpecifierNotSupported(
-                                name.clone(),
-                                map.clone(),
-                            ),
-                        );
-                    }
-                }
-            }
-
-            let empty_settings = DependencyGroupSettings::default();
-            let DependencyGroupSettings { requires_python } =
-                settings.get(name).unwrap_or(&empty_settings);
-            if let Some(requires_python) = requires_python {
-                // Intersect the requires-python for this group to get the final requires-python
-                // that will be used by interpreter discovery and checking.
-                requires_python_intersection = requires_python_intersection
-                    .into_iter()
-                    .chain(requires_python.clone())
-                    .collect();
-
-                // Add the group requires-python as a marker to each requirement
-                // We don't use `requires_python_intersection` because each `include-group`
-                // should already have its markers applied to these.
-                for requirement in &mut requirements {
-                    let extra_markers =
-                        RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree();
-                    requirement.marker = requirement.marker.and(extra_markers);
-                }
-            }
-
-            parents.pop();
-
-            resolved.insert(
-                name.clone(),
-                FlatDependencyGroup {
-                    requirements,
-                    requires_python: if requires_python_intersection.is_empty() {
-                        None
-                    } else {
-                        Some(requires_python_intersection)
-                    },
-                },
-            );
-            Ok(())
-        }
-
         // Validate the settings
         for (group_name, ..) in settings {
             if !groups.contains_key(group_name) {
@@ -211,9 +104,69 @@ impl FlatDependencyGroups {
         }
 
         let mut resolved = BTreeMap::new();
-        for name in groups.keys() {
-            let mut parents = Vec::new();
-            resolve_group(&mut resolved, groups, settings, name, &mut parents)?;
+        // Track suspended parents for efficient cycle detection.
+        let mut active = FxHashSet::default();
+        let mut parents = Vec::new();
+        for (name, specifiers) in groups {
+            if resolved.contains_key(*name) {
+                continue;
+            }
+            let mut frame = GroupFrame::new(name, specifiers);
+            loop {
+                match frame.specifiers.next() {
+                    Some(DependencyGroupSpecifier::Requirement(requirement)) => {
+                        let requirement = Requirement::from_str(requirement).map_err(|err| {
+                            DependencyGroupErrorInner::GroupParseError(
+                                frame.name.clone(),
+                                requirement.clone(),
+                                Box::new(err),
+                            )
+                        })?;
+                        frame.requirements.push(requirement);
+                    }
+                    Some(DependencyGroupSpecifier::IncludeGroup { include_group }) => {
+                        if let Some(included) = resolved.get(include_group) {
+                            frame.include(included);
+                            continue;
+                        }
+                        let Some(specifiers) = groups.get(include_group) else {
+                            return Err(DependencyGroupErrorInner::GroupNotFound(
+                                include_group.clone(),
+                                frame.name.clone(),
+                            ));
+                        };
+                        active.insert(frame.name);
+                        parents.push(frame);
+                        if active.contains(include_group) {
+                            return Err(DependencyGroupErrorInner::DependencyGroupCycle(Cycle(
+                                parents.iter().map(|parent| parent.name.clone()).collect(),
+                            )));
+                        }
+                        frame = GroupFrame::new(include_group, specifiers);
+                    }
+                    Some(DependencyGroupSpecifier::Object(map)) => {
+                        return Err(
+                            DependencyGroupErrorInner::DependencyObjectSpecifierNotSupported(
+                                frame.name.clone(),
+                                map.clone(),
+                            ),
+                        );
+                    }
+                    None => {
+                        let name = frame.name;
+                        let group = frame.finish(settings.get(name));
+                        if let Some(parent) = parents.last_mut() {
+                            parent.include(&group);
+                        }
+                        resolved.insert(name.clone(), group);
+                        let Some(parent) = parents.pop() else {
+                            break;
+                        };
+                        active.remove(parent.name);
+                        frame = parent;
+                    }
+                }
+            }
         }
         Ok(Self(resolved))
     }
@@ -231,6 +184,64 @@ impl FlatDependencyGroups {
     /// Consume the [`FlatDependencyGroups`] and return the inner map.
     pub(crate) fn into_inner(self) -> BTreeMap<GroupName, FlatDependencyGroup> {
         self.0
+    }
+}
+
+/// An in-progress dependency group in the depth-first traversal.
+struct GroupFrame<'a> {
+    name: &'a GroupName,
+    specifiers: std::slice::Iter<'a, DependencyGroupSpecifier>,
+    requirements: Vec<Requirement<VerbatimParsedUrl>>,
+    requires_python_intersection: VersionSpecifiers,
+}
+
+impl<'a> GroupFrame<'a> {
+    fn new(name: &'a GroupName, specifiers: &'a [DependencyGroupSpecifier]) -> Self {
+        Self {
+            name,
+            specifiers: specifiers.iter(),
+            requirements: Vec::with_capacity(specifiers.len()),
+            requires_python_intersection: VersionSpecifiers::empty(),
+        }
+    }
+
+    fn include(&mut self, included: &FlatDependencyGroup) {
+        self.requirements
+            .extend(included.requirements.iter().cloned());
+        if let Some(requires_python) = &included.requires_python {
+            self.requires_python_intersection =
+                std::mem::take(&mut self.requires_python_intersection)
+                    .into_iter()
+                    .chain(requires_python.iter().cloned())
+                    .collect();
+        }
+    }
+
+    fn finish(mut self, settings: Option<&DependencyGroupSettings>) -> FlatDependencyGroup {
+        if let Some(requires_python) =
+            settings.and_then(|settings| settings.requires_python.as_ref())
+        {
+            self.requires_python_intersection = self
+                .requires_python_intersection
+                .into_iter()
+                .chain(requires_python.clone())
+                .collect();
+
+            // Each included group already has its own requires-python marker applied.
+            if !self.requirements.is_empty() {
+                let extra_markers =
+                    RequiresPython::from_specifiers(requires_python.clone()).to_marker_tree();
+                for requirement in &mut self.requirements {
+                    requirement.marker = requirement.marker.and(extra_markers);
+                }
+            }
+        }
+
+        FlatDependencyGroup {
+            requirements: self.requirements,
+            requires_python: (!self.requires_python_intersection.is_empty())
+                .then_some(self.requires_python_intersection),
+        }
     }
 }
 
