@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 8832,
+        "title": "uv unable to download python due to corp proxy certificate",
+        "url": "https://github.com/astral-sh/uv/issues/8832",
+        "state": "closed",
+        "reason": "The same Windows managed-Python download failure ended in UnknownIssuer. The reporter confirmed that enabling system certificates with the then-current --native-tls flag resolved it. Unlike this report, a corporate proxy was confirmed."
+      },
+      {
+        "kind": "issue",
+        "number": 6649,
+        "title": "Cannot install packages or download Python in Windows with Corporate Cisco Umbrella Certificate",
+        "url": "https://github.com/astral-sh/uv/issues/6649",
+        "state": "closed",
+        "reason": "Python downloads failed with UnknownIssuer on Windows while Ubuntu under WSL worked. Follow-up comments confirmed success after removing a certificate-file override and using native TLS. This report does not yet establish either a proxy or an override."
+      },
+      {
+        "kind": "issue",
+        "number": 22011,
+        "title": "Can't install packages: UnknownIssuer",
+        "url": "https://github.com/astral-sh/uv/issues/22011",
+        "state": "open",
+        "reason": "Recent Windows UnknownIssuer failures persisted with --system-certs; the reporter confirmed SSL_CERT_FILE was overriding it. Useful diagnostic precedent, but it concerns PyPI package requests and a confirmed override, neither of which establishes the cause here."
+      },
+      {
+        "kind": "pull_request",
+        "number": 20807,
+        "title": "Fix Windows conda system tests with invalid certificate override",
+        "url": "https://github.com/astral-sh/uv/pull/20807",
+        "state": "merged",
+        "reason": "Fixed Windows CI UnknownIssuer failures by clearing a nonexistent SSL_CERT_FILE path set by Conda activation. This changed uv's test workflow, not runtime TLS behavior; the new report does not mention Conda."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22400,
+        "title": "Sync latest Python releases",
+        "url": "https://github.com/astral-sh/uv/pull/22400",
+        "state": "merged",
+        "reason": "Added the 20261009 CPython 3.15.0 builds for uv 0.13.0. Establishes that this release already supports the requested Python version; catalog availability is separate from the reported TLS connection failure."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues for UnknownIssuer, invalid peer certificate, the CPython 3.15.0/20261009 identifiers, Windows/Azure CI, and Python downloads. Broadened to system/native TLS, trust stores, certificate overrides, corporate proxies, and area:network. Searched PRs across all states and supplemented search with a paginated title/body scan of open, closed, and merged PRs for the errors, TLS terminology, reqwest, and release identifiers. Inspected candidate comments and linked fixes, plus 0.13.0/0.13.1 release notes and certificate-selection source. Ruled out astral-sh/uv#22439 (missing catalog entry before 0.13.0), astral-sh/uv#16696 (prerelease executable aliases), and a demonstrated recurrence of astral-sh/uv#9243 or astral-sh/uv#17355: their system-verification fix, astral-sh/uv#18550, shipped in 0.11.0, and this report does not establish failure with system certificates enabled. Also inspected astral-sh/uv#16474 and astral-sh/uv#20741 for explicit certificate-override behavior."
+  },
+  "type": "question",
+  "type_reason": "The report establishes a TLS trust failure and asks whether upgrading resolves it, but does not establish that uv rejects a valid certificate chain under the intended trust configuration. Python 3.15 support already shipped in 0.13.0. Related reports have confirmed proxy or certificate-override conditions absent here, so neither an exact duplicate nor a regression of the historical TLS fix is established.",
+  "summary": "Closest matches concern Windows certificate trust and certificate-file overrides, including a Windows CI configuration fix. Python 3.15 support was already present in uv 0.13.0; no matching 0.13.1 TLS fix or confirmed duplicate was found.",
+  "draft_response": "Python 3.15 is supported in uv 0.13.0 through astral-sh/uv#22400. Your log shows a TLS certificate trust failure while connecting to GitHub; the 0.13.1 release notes do not list a fix for this. A similar Windows Python-download failure was resolved by using system certificates in astral-sh/uv#8832.\n\nPlease try `uv --system-certs python install 3.15.0` on the failing runner. Also check whether `SSL_CERT_FILE` or `SSL_CERT_DIR` is set: nonempty values override system certificates (see astral-sh/uv#22011), and missing paths leave no trusted certificates. Clear unintended overrides, or ensure an intentional bundle contains the required CAs. If it still fails, please share sanitized output from `uv -vv --system-certs python install 3.15.0` and say whether the runner uses a TLS-inspecting proxy and whether either certificate override is set."
+}
