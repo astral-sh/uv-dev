@@ -12935,7 +12935,12 @@ fn frozen_lockfile_without_manifests() -> Result<()> {
     // Workspace members come from the lockfile after their manifests are removed.
     let output = context
         .workspace_metadata()
-        .args(["--frozen", "--preview-features", "frozen-lockfile"])
+        .args([
+            "--frozen",
+            "--no-module-owners",
+            "--preview-features",
+            "frozen-lockfile",
+        ])
         .assert()
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
@@ -14208,7 +14213,7 @@ fn frozen_lockfile_non_project_workspace() -> Result<()> {
 
     // Inspect the non-project workspace metadata.
     uv_snapshot!(context.filters(), context.workspace_metadata()
-        .args(["--frozen", "--preview-features", "workspace-metadata"]), @r#"
+        .args(["--frozen", "--no-module-owners", "--preview-features", "workspace-metadata"]), @r#"
     exit_code: 0 (success)
     ----- stdout -----
     {

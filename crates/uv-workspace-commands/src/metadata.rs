@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
@@ -15,7 +16,7 @@ use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
     ProjectInterpreter, ScriptEnvironment,
 };
-use uv_lock::{Lock, Metadata, Package};
+use uv_lock::{Installable, Lock, Metadata, Package};
 use uv_lock_operations::{
     DiscoveredProject, FrozenWorkspace, LockError, LockMode, LockOperation, LockTarget,
 };
@@ -33,6 +34,7 @@ use uv_warnings::warn_user;
 use uv_workspace::{DiscoveryOptions, WorkspaceCache};
 
 use super::environment::collect_environment;
+use super::modules::collect_modules;
 
 /// The input used to obtain metadata and its locked resolution.
 enum MetadataSource<'a> {
@@ -47,6 +49,7 @@ pub async fn metadata(
     frozen: Option<FrozenSource>,
     refresh: Refresh,
     sync: Option<Modifications>,
+    include_module_owners: bool,
     active: ActiveEnvironment,
     python: Option<String>,
     install_mirrors: PythonInstallMirrors,
@@ -97,6 +100,7 @@ pub async fn metadata(
     let groups = DependencyGroupsWithDefaults::none();
     let state = UniversalState::default();
 
+    let mut resolved_interpreter = None;
     let resolved_lock;
     let lock: &Lock = match &source {
         MetadataSource::Lockfile(workspace) => workspace.lock(),
@@ -153,6 +157,8 @@ pub async fn metadata(
                         .into_interpreter()
                     }
                 };
+
+                resolved_interpreter = Some(interpreter.clone());
 
                 if let LockCheck::Enabled(lock_check) = lock_check {
                     LockMode::Locked(&interpreter, lock_check)
@@ -287,18 +293,24 @@ pub async fn metadata(
         }
     };
 
-    if let Some(environment) = environment {
-        let _lock = environment
+    // Shared artifact builds can reuse this environment after its inventory is collected.
+    let _environment_lock = match &environment {
+        Some(environment) => environment
             .lock()
             .await
             .inspect_err(|err| {
                 tracing::warn!("Failed to acquire environment lock: {err}");
             })
-            .ok();
+            .ok(),
+        None => None,
+    };
+    let mut module_owners = BTreeMap::new();
+    if let Some(environment) = &environment {
         let collected = collect_environment(
             install_target,
             &export,
-            &environment,
+            include_module_owners,
+            environment,
             &settings,
             &client_builder,
             &state,
@@ -311,9 +323,84 @@ pub async fn metadata(
         )
         .await
         .context("Failed to inspect environment")?;
-        export = export
-            .with_environment(&environment, collected.packages)
-            .with_module_owners(collected.module_owners);
+        export = export.with_environment(environment, collected.packages);
+        module_owners = collected.module_owners;
+    }
+
+    if include_module_owners {
+        let interpreter = if let Some(environment) = environment.as_ref().filter(|_| sync.is_some())
+        {
+            environment.interpreter().clone()
+        } else if let Some(interpreter) = resolved_interpreter {
+            interpreter
+        } else {
+            match &source {
+                MetadataSource::Manifest(LockTarget::Script(script)) => {
+                    ScriptInterpreter::discover(
+                        (*script).into(),
+                        python.as_deref().map(PythonRequest::parse),
+                        &client_builder,
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        false,
+                        config_discovery,
+                        active,
+                        cache,
+                        printer,
+                    )
+                    .await?
+                    .into_interpreter()
+                }
+                MetadataSource::Manifest(LockTarget::Workspace(_))
+                | MetadataSource::Lockfile(_) => {
+                    let project_python = ProjectPythonRequest::from_requirements(
+                        python.as_deref().map(PythonRequest::parse),
+                        Some(install_target.install_path()),
+                        Some(install_target.python_requirement(&groups)?),
+                        project_dir,
+                        config_discovery,
+                    )
+                    .await?;
+                    ProjectInterpreter::discover(
+                        ProjectEnvironmentTarget::Lockfile {
+                            root: install_target.install_path(),
+                            lock,
+                        },
+                        project_python,
+                        &client_builder,
+                        python_preference,
+                        python_arch,
+                        python_downloads,
+                        &install_mirrors,
+                        ProjectEnvironmentPolicy::Optional,
+                        active,
+                        cache,
+                        printer,
+                    )
+                    .await?
+                    .into_interpreter()
+                }
+            }
+        };
+        for (module, owners) in collect_modules(
+            install_target,
+            &export,
+            &interpreter,
+            &settings,
+            &client_builder,
+            &state,
+            &concurrency,
+            cache,
+            workspace_cache,
+            preview,
+        )
+        .await?
+        {
+            module_owners.entry(module).or_default().extend(owners);
+        }
+        export = export.with_module_owners(module_owners);
     }
 
     print_metadata(&export, printer)

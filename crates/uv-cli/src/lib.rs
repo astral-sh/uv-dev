@@ -7623,15 +7623,22 @@ pub struct MetadataArgs {
     #[command(flatten)]
     pub refresh: RefreshArgs,
 
-    /// Sync the environment to include module ownership metadata in the output.
+    /// Sync the environment before reporting its installed packages.
     ///
-    /// This adds a mapping from importable module names to references to the package nodes
-    /// that provide them. By default, the environment is synced in inexact mode.
+    /// Module ownership is collected from cached wheels without requiring synchronization.
+    /// By default, the environment is synced in inexact mode.
     ///
     /// This also allows creating or updating the lockfile, unless `--locked` or `--frozen` is
     /// provided. For scripts, the lockfile is only updated if it already exists.
     #[arg(long)]
     pub sync: bool,
+
+    /// Omit module ownership from the output.
+    ///
+    /// By default, uv downloads or builds wheels for locked packages to discover their modules.
+    /// This option skips artifact preparation for module discovery.
+    #[arg(long)]
+    pub no_module_owners: bool,
 
     /// Perform an exact sync, removing extraneous packages.
     ///

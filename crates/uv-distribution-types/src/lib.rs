@@ -83,6 +83,7 @@ pub use crate::index_entry::*;
 pub use crate::index_name::*;
 pub use crate::index_url::*;
 pub use crate::installed::*;
+pub use crate::installed_modules::read_wheel_modules;
 pub use crate::minimum_libc_version::MinimumLibcVersion;
 pub use crate::origin::*;
 pub use crate::pip_index::*;

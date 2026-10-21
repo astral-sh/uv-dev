@@ -1659,10 +1659,9 @@ fn check_no_sync_frozen_uses_existing_lock_without_update() -> Result<()> {
             .arg("--frozen")
             .env(EnvVars::UV_INDEX, server.index_url()),
         @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stdout -----
-    pyproject.toml: warning[uv-metadata] Failed to load uv dependency metadata: uv metadata has no module ownership or editable source paths
-    Found 1 diagnostic
+    All checks passed!
 
     ----- stderr -----
     warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
@@ -1732,10 +1731,9 @@ fn check_no_sync_isolated_does_not_write_lock_or_sync() -> Result<()> {
             .arg("--isolated")
             .env(EnvVars::UV_INDEX, server.index_url()),
         @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stdout -----
-    pyproject.toml: warning[uv-metadata] Failed to load uv dependency metadata: uv metadata has no module ownership or editable source paths
-    Found 1 diagnostic
+    All checks passed!
 
     ----- stderr -----
     warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.

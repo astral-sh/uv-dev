@@ -1,4 +1,4 @@
-//! Discovers importable modules provided by an installed wheel.
+//! Discovers importable modules provided by installed and cached wheels.
 //!
 //! Installed wheels record installed paths in `<name>-<version>.dist-info/RECORD`. Python source
 //! files, legacy sourceless bytecode, and recognized native extension modules located under the
@@ -8,6 +8,7 @@
 //! legacy namespace declarations in `__init__.py`, or `.pyi`-only stub distributions.
 
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::{Component, Path};
 
 use fs_err::File;
@@ -40,6 +41,34 @@ impl InstalledDist {
     }
 }
 
+/// Read modules from a wheel's original `RECORD`, including its library data directories.
+pub fn read_wheel_modules(
+    record: impl Read,
+    dist_info_prefix: &str,
+    extension_suffixes: &[Box<str>],
+) -> Result<BTreeSet<ModuleName>, uv_install_wheel::Error> {
+    let data_directory = format!("{dist_info_prefix}.data");
+    let mut modules = BTreeSet::new();
+    for entry in read_record(record)? {
+        let Some(components) = record_path_components(&entry.path) else {
+            continue;
+        };
+        let components = if components
+            .first()
+            .is_some_and(|part| **part == data_directory)
+        {
+            match components.get(1).map(AsRef::as_ref) {
+                Some("purelib" | "platlib") => &components[2..],
+                _ => continue,
+            }
+        } else {
+            &components
+        };
+        add_module_path(components, extension_suffixes, &mut modules);
+    }
+    Ok(modules)
+}
+
 fn add_record_module(
     path: &str,
     extension_suffixes: &[Box<str>],
@@ -48,6 +77,14 @@ fn add_record_module(
     let Some(components) = record_path_components(path) else {
         return;
     };
+    add_module_path(&components, extension_suffixes, modules);
+}
+
+fn add_module_path(
+    components: &[Box<str>],
+    extension_suffixes: &[Box<str>],
+    modules: &mut BTreeSet<ModuleName>,
+) {
     let Some((file_name, parents)) = components.split_last() else {
         return;
     };

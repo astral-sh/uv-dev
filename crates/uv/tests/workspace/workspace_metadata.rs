@@ -7,11 +7,15 @@ use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
+#[cfg(feature = "test-python")]
+use sha2::{Digest, Sha256};
 
 #[cfg(feature = "test-python")]
 use uv_fs::create_symlink;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+#[cfg(feature = "test-python")]
+use uv_test::package_server::PackageServer;
 use uv_test::{copy_dir_ignore, uv_snapshot};
 
 fn write_wheel(
@@ -99,6 +103,13 @@ fn workspace_metadata_simple() {
       "conflicts": {
         "sets": []
       },
+      "module_owners": {
+        "foo": [
+          {
+            "package_id": "foo==0.1.0@editable+[TEMP_DIR]/foo"
+          }
+        ]
+      },
       "members": [
         {
           "name": "foo",
@@ -156,6 +167,13 @@ fn workspace_metadata_quiet() {
       "requires_python": ">=3.12",
       "conflicts": {
         "sets": []
+      },
+      "module_owners": {
+        "foo": [
+          {
+            "package_id": "foo==0.1.0@editable+[TEMP_DIR]/foo"
+          }
+        ]
       },
       "members": [
         {
@@ -241,7 +259,12 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
     let output = context
         .workspace_metadata()
         .current_dir(&workspace)
-        .args(["--frozen", "--preview-features", "frozen-lockfile"])
+        .args([
+            "--frozen",
+            "--no-module-owners",
+            "--preview-features",
+            "frozen-lockfile",
+        ])
         .assert()
         .success();
     let broken: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
@@ -250,7 +273,12 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
     let output = context
         .workspace_metadata()
         .current_dir(&workspace)
-        .args(["--frozen", "--preview-features", "frozen-lockfile"])
+        .args([
+            "--frozen",
+            "--no-module-owners",
+            "--preview-features",
+            "frozen-lockfile",
+        ])
         .env(EnvVars::UV_PROJECT_ENVIRONMENT, "missing-env")
         .assert()
         .success();
@@ -306,6 +334,9 @@ fn workspace_metadata_conflicting_extras() -> Result<()> {
         {
           "idna": [
             {
+              "package_id": "idna==3.10@registry+https://pypi.org/simple"
+            },
+            {
               "package_id": "idna==3.9@registry+https://pypi.org/simple"
             }
           ],
@@ -337,6 +368,9 @@ fn workspace_metadata_conflicting_extras() -> Result<()> {
           "idna": [
             {
               "package_id": "idna==3.10@registry+https://pypi.org/simple"
+            },
+            {
+              "package_id": "idna==3.9@registry+https://pypi.org/simple"
             }
           ],
           "packages": {
@@ -360,6 +394,17 @@ fn workspace_metadata_conflicting_extras() -> Result<()> {
     error: Failed to inspect environment
       cause: Found conflicting extras `mre[a]` and `mre[b]` enabled simultaneously
     ");
+
+    fs_err::remove_dir_all(&context.venv)?;
+    let output = context
+        .workspace_metadata()
+        .args(["--frozen", "--offline"])
+        .assert()
+        .success();
+    let cached: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    assert_eq!(cached["module_owners"], metadata["module_owners"]);
+    assert!(cached.get("environment").is_none());
+    assert!(!context.venv.exists());
 
     Ok(())
 }
@@ -438,6 +483,11 @@ fn workspace_metadata_conflicting_sources() -> Result<()> {
             "first_module": [
               {
                 "package_id": "module-owner==0.1.0@path+[TEMP_DIR]/first/module_owner-0.1.0-py3-none-any.whl"
+              }
+            ],
+            "second_module": [
+              {
+                "package_id": "module-owner==0.1.0@path+[TEMP_DIR]/second/module_owner-0.1.0-py3-none-any.whl"
               }
             ]
           },
@@ -598,9 +648,19 @@ fn workspace_metadata_conflicting_unmatched_source() -> Result<()> {
         }), @r#"
         {
           "module_owners": {
+            "first_module": [
+              {
+                "package_id": "module-owner==0.1.0@path+[TEMP_DIR]/first/module_owner-0.1.0-py3-none-any.whl"
+              }
+            ],
             "other_module": [
               {
                 "package_id": "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info"
+              }
+            ],
+            "second_module": [
+              {
+                "package_id": "module-owner==0.1.0@path+[TEMP_DIR]/second/module_owner-0.1.0-py3-none-any.whl"
               }
             ]
           },
@@ -678,7 +738,7 @@ fn workspace_metadata_conflicting_indexes() -> Result<()> {
 
     let output = context
         .workspace_metadata()
-        .arg("--frozen")
+        .args(["--frozen", "--no-module-owners"])
         .assert()
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
@@ -688,13 +748,7 @@ fn workspace_metadata_conflicting_indexes() -> Result<()> {
             "module_owners": metadata["module_owners"],
         }), @r#"
         {
-          "module_owners": {
-            "installed_module": [
-              {
-                "package_id": "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info"
-              }
-            ]
-          },
+          "module_owners": null,
           "packages": {
             "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info": {
               "editable": false,
@@ -724,13 +778,20 @@ fn workspace_metadata_conflicting_extra_markers() -> Result<()> {
         "module_owner-0.1.0",
         &[("installed_module.py", "")],
     )?;
-    context
-        .pip_install()
-        .args(["--no-index", "--find-links"])
-        .arg(context.temp_dir.path())
-        .arg("module-owner==0.1.0")
-        .assert()
-        .success();
+    let second = context
+        .temp_dir
+        .child("module_owner-0.2.0-py3-none-any.whl");
+    write_wheel_with_metadata(
+        second.path(),
+        "module-owner",
+        "0.2.0",
+        "module_owner-0.2.0",
+        "",
+        &[("second_module.py", "")],
+    )?;
+    let first_hash = hex::encode(Sha256::digest(fs_err::read(wheel.path())?));
+    let second_hash = hex::encode(Sha256::digest(fs_err::read(second.path())?));
+    context.pip_install().arg(wheel.path()).assert().success();
     context
         .temp_dir
         .child("pyproject.toml")
@@ -740,30 +801,32 @@ fn workspace_metadata_conflicting_extra_markers() -> Result<()> {
         version = "0.1.0"
         requires-python = ">=3.12"
     "#})?;
-    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+    context.temp_dir.child("uv.lock").write_str(&formatdoc! {r#"
         version = 1
         revision = 3
         requires-python = ">=3.12"
-        conflicts = [[{ package = "mre", extra = "first" }, { package = "mre", extra = "second" }]]
+        conflicts = [[{{ package = "mre", extra = "first" }}, {{ package = "mre", extra = "second" }}]]
 
         [[package]]
         name = "module-owner"
         version = "0.1.0"
-        source = { registry = "https://first.example/simple" }
+        source = {{ path = "module_owner-0.1.0-py3-none-any.whl" }}
+        wheels = [{{ filename = "module_owner-0.1.0-py3-none-any.whl", hash = "sha256:{first_hash}" }}]
 
         [[package]]
         name = "module-owner"
         version = "0.2.0"
-        source = { registry = "https://second.example/simple" }
+        source = {{ path = "module_owner-0.2.0-py3-none-any.whl" }}
+        wheels = [{{ filename = "module_owner-0.2.0-py3-none-any.whl", hash = "sha256:{second_hash}" }}]
 
         [[package]]
         name = "mre"
         version = "0.1.0"
-        source = { virtual = "." }
+        source = {{ virtual = "." }}
 
         [package.optional-dependencies]
-        first = [{ name = "module-owner", version = "0.1.0", source = { registry = "https://first.example/simple" }, marker = "extra == 'extra-3-mre-first'" }]
-        second = [{ name = "module-owner", version = "0.2.0", source = { registry = "https://second.example/simple" }, marker = "extra == 'extra-3-mre-second'" }]
+        first = [{{ name = "module-owner", version = "0.1.0", source = {{ path = "module_owner-0.1.0-py3-none-any.whl" }}, marker = "extra == 'extra-3-mre-first'" }}]
+        second = [{{ name = "module-owner", version = "0.2.0", source = {{ path = "module_owner-0.2.0-py3-none-any.whl" }}, marker = "extra == 'extra-3-mre-second'" }}]
     "#})?;
 
     let output = context
@@ -781,12 +844,17 @@ fn workspace_metadata_conflicting_extra_markers() -> Result<()> {
           "module_owners": {
             "installed_module": [
               {
-                "package_id": "module-owner==0.1.0@registry+https://first.example/simple"
+                "package_id": "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl"
+              }
+            ],
+            "second_module": [
+              {
+                "package_id": "module-owner==0.2.0@path+[TEMP_DIR]/module_owner-0.2.0-py3-none-any.whl"
               }
             ]
           },
           "packages": {
-            "module-owner==0.1.0@registry+https://first.example/simple": {
+            "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl": {
               "editable": false,
               "name": "module-owner",
               "path": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info",
@@ -1087,7 +1155,7 @@ fn workspace_metadata_conflicting_git_lfs() -> Result<()> {
 
     let output = context
         .workspace_metadata()
-        .arg("--frozen")
+        .args(["--frozen", "--no-module-owners"])
         .assert()
         .success();
     let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
@@ -1097,13 +1165,7 @@ fn workspace_metadata_conflicting_git_lfs() -> Result<()> {
             "module_owners": metadata["module_owners"],
         }), @r#"
         {
-          "module_owners": {
-            "installed_module": [
-              {
-                "package_id": "module-owner==0.1.0@git+https://example.com/module-owner?lfs=true#abcdef0123456789abcdef0123456789abcdef01"
-              }
-            ]
-          },
+          "module_owners": null,
           "packages": {
             "module-owner==0.1.0@git+https://example.com/module-owner?lfs=true#abcdef0123456789abcdef0123456789abcdef01": {
               "editable": false,
@@ -2301,9 +2363,6 @@ dependencies = [
         .assert()
         .success();
 
-    // Removing the uninstalled wheel makes any accidental synchronization fail.
-    fs_err::remove_file(missing_owner.path())?;
-
     let assert = context
         .workspace_metadata()
         .arg("--frozen")
@@ -2337,6 +2396,11 @@ dependencies = [
             "installed_module": [
               {
                 "package_id": "installed-owner==0.1.0@path+[TEMP_DIR]/installed_owner-0.1.0-py3-none-any.whl"
+              }
+            ],
+            "missing_module": [
+              {
+                "package_id": "missing-owner==0.1.0@path+[TEMP_DIR]/missing_owner-0.1.0-py3-none-any.whl"
               }
             ]
           }
@@ -2379,6 +2443,11 @@ dependencies = [
             {
               "package_id": "installed-owner==0.1.0@path+[TEMP_DIR]/installed_owner-0.1.0-py3-none-any.whl"
             }
+          ],
+          "missing_module": [
+            {
+              "package_id": "missing-owner==0.1.0@path+[TEMP_DIR]/missing_owner-0.1.0-py3-none-any.whl"
+            }
           ]
         }
         "#);
@@ -2406,7 +2475,20 @@ dependencies = [
           "root": "[TEMP_DIR]/override-env"
         }
         "#);
-        insta::assert_json_snapshot!(metadata.get("module_owners"), @"null");
+        insta::assert_json_snapshot!(metadata.get("module_owners"), @r#"
+        {
+          "installed_module": [
+            {
+              "package_id": "installed-owner==0.1.0@path+[TEMP_DIR]/installed_owner-0.1.0-py3-none-any.whl"
+            }
+          ],
+          "missing_module": [
+            {
+              "package_id": "missing-owner==0.1.0@path+[TEMP_DIR]/missing_owner-0.1.0-py3-none-any.whl"
+            }
+          ]
+        }
+        "#);
     });
 
     Ok(())
@@ -2505,6 +2587,685 @@ fn workspace_metadata_lockfile_workspace_group_module_owners() -> Result<()> {
         "#);
     });
 
+    Ok(())
+}
+
+/// Mutually exclusive wheels provide ownership without creating an environment.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_cached_conflicting_modules() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let first = context
+        .temp_dir
+        .child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        first.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[
+            ("shared.py", ""),
+            ("module_owner-0.1.0.data/purelib/first/module.py", ""),
+            ("module_owner-0.1.0.data/scripts/ignored.py", ""),
+            ("module_owner-0.1.0.data/data/ignored.py", ""),
+        ],
+    )?;
+    let second = context
+        .temp_dir
+        .child("module_owner-0.2.0-py3-none-any.whl");
+    write_wheel_with_metadata(
+        second.path(),
+        "module-owner",
+        "0.2.0",
+        "module_owner-0.2.0",
+        "",
+        &[
+            ("shared.py", ""),
+            ("module_owner-0.2.0.data/platlib/second/module.py", ""),
+        ],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "module-owner-root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        first = ["module-owner"]
+        second = ["module-owner"]
+
+        [tool.uv]
+        conflicts = [[{ extra = "first" }, { extra = "second" }]]
+
+        [tool.uv.sources]
+        module-owner = [
+            { path = "module_owner-0.1.0-py3-none-any.whl", extra = "first" },
+            { path = "module_owner-0.2.0-py3-none-any.whl", extra = "second" },
+        ]
+    "#})?;
+
+    context.lock().assert().success();
+    let output = context.workspace_metadata().assert().success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "environment": metadata.get("environment"),
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "environment": null,
+          "module_owners": {
+            "first": [
+              {
+                "package_id": "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl"
+              }
+            ],
+            "first.module": [
+              {
+                "package_id": "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl"
+              }
+            ],
+            "second": [
+              {
+                "package_id": "module-owner==0.2.0@path+[TEMP_DIR]/module_owner-0.2.0-py3-none-any.whl"
+              }
+            ],
+            "second.module": [
+              {
+                "package_id": "module-owner==0.2.0@path+[TEMP_DIR]/module_owner-0.2.0-py3-none-any.whl"
+              }
+            ],
+            "shared": [
+              {
+                "package_id": "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl"
+              },
+              {
+                "package_id": "module-owner==0.2.0@path+[TEMP_DIR]/module_owner-0.2.0-py3-none-any.whl"
+              }
+            ]
+          }
+        }
+        "#);
+    });
+    assert!(!context.temp_dir.child(".venv").exists());
+
+    let output = context
+        .workspace_metadata()
+        .args(["--frozen", "--offline"])
+        .assert()
+        .success();
+    let cached: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    assert_eq!(cached, metadata);
+    assert!(!context.temp_dir.child(".venv").exists());
+    Ok(())
+}
+
+/// Editable source trees are built as regular wheels to discover modules behind import hooks.
+#[test]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+fn workspace_metadata_cached_editable_modules() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .init()
+        .args([
+            "--lib",
+            "--name",
+            "module-owner",
+            "--build-backend",
+            "setuptools",
+        ])
+        .assert()
+        .success();
+
+    context.lock().assert().success();
+    let output = context.workspace_metadata().assert().success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "environment": metadata.get("environment"),
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "environment": null,
+          "module_owners": {
+            "module_owner": [
+              {
+                "package_id": "module-owner==0.1.0@editable+[TEMP_DIR]/"
+              }
+            ]
+          }
+        }
+        "#);
+    });
+    assert!(!context.temp_dir.child(".venv").exists());
+
+    let output = context
+        .workspace_metadata()
+        .args(["--frozen", "--offline"])
+        .assert()
+        .success();
+    let cached: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    assert_eq!(cached, metadata);
+    assert!(!context.temp_dir.child(".venv").exists());
+    Ok(())
+}
+
+/// Artifact builds use a compatible interpreter while inventory describes the existing incompatible environment.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_compatible_build_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    context.venv().args(["--python", "3.11"]).assert().success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "module-owner"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    write_wheel(
+        context
+            .temp_dir
+            .child("module_owner-0.1.0-py3-none-any.whl")
+            .path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("module_owner.py", "")],
+    )?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+        import shutil
+        import sys
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            assert sys.version_info >= (3, 12)
+            name = "module_owner-0.1.0-py3-none-any.whl"
+            shutil.copyfile(pathlib.Path(__file__).parent / name, pathlib.Path(wheel_directory) / name)
+            return name
+    "#})?;
+    context.lock().assert().success();
+
+    let output = context.workspace_metadata().assert().success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "installed_python": metadata["environment"]["python"]["version"],
+            "installed_packages": metadata["environment"]["packages"],
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "installed_packages": {},
+          "installed_python": "3.11.[X]",
+          "module_owners": {
+            "module_owner": [
+              {
+                "package_id": "module-owner==0.1.0@editable+[TEMP_DIR]/"
+              }
+            ]
+          }
+        }
+        "#);
+    });
+
+    fs_err::remove_dir_all(&context.cache_dir)?;
+    let output = context
+        .workspace_metadata()
+        .args(["--frozen", "--offline"])
+        .assert()
+        .success();
+    let frozen: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    assert_eq!(frozen, metadata);
+    Ok(())
+}
+
+/// The environment remains locked while shared artifact builds execute.
+#[test]
+#[cfg(all(unix, feature = "test-python"))]
+fn workspace_metadata_shared_build_environment_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "module-owner"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    write_wheel(
+        context
+            .temp_dir
+            .child("module_owner-0.1.0-py3-none-any.whl")
+            .path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("module_owner.py", "")],
+    )?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import fcntl
+        import pathlib
+        import shutil
+        import sys
+
+        def build_editable(wheel_directory, config_settings=None, metadata_directory=None):
+            name = "module_owner-0.1.0-py3-none-any.whl"
+            shutil.copyfile(pathlib.Path(__file__).parent / name, pathlib.Path(wheel_directory) / name)
+            return name
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            with (pathlib.Path(sys.prefix) / ".lock").open("a") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    raise AssertionError("environment lock was released before the artifact build")
+            return build_editable(wheel_directory, config_settings, metadata_directory)
+    "#})?;
+
+    let output = context
+        .workspace_metadata()
+        .args(["--sync", "--no-build-isolation"])
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["module_owners"], @r#"
+        {
+          "module_owner": [
+            {
+              "package_id": "module-owner==0.1.0@editable+[TEMP_DIR]/"
+            }
+          ]
+        }
+        "#);
+    });
+    Ok(())
+}
+
+/// A `match-runtime` build dependency uses the locked runtime distribution without installing the project environment.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_cached_build_runtime() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let runtime = context.temp_dir.child("runtime-0.1.0-py3-none-any.whl");
+    write_wheel(
+        runtime.path(),
+        "runtime",
+        "runtime-0.1.0",
+        &[("runtime.py", "version = '0.1.0'")],
+    )?;
+    context.temp_dir.child("runtime/index.html").write_str(indoc! {r#"
+        <!DOCTYPE html>
+        <a href="../runtime-0.1.0-py3-none-any.whl" data-upload-time="2020-01-01T00:00:00Z">runtime-0.1.0-py3-none-any.whl</a>
+    "#})?;
+    let source = context.temp_dir.child("source");
+    source.create_dir_all()?;
+    write_wheel(
+        source.child("built_source-0.1.0-py3-none-any.whl").path(),
+        "built-source",
+        "built_source-0.1.0",
+        &[("built.py", "")],
+    )?;
+    source.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "built-source"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    source.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+        import shutil
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            import runtime
+            assert runtime.version == "0.1.0"
+            name = "built_source-0.1.0-py3-none-any.whl"
+            shutil.copyfile(pathlib.Path(__file__).parent / name, pathlib.Path(wheel_directory) / name)
+            return name
+    "#})?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "module-owner-root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["built-source", "runtime"]
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "."
+        default = true
+
+        [tool.uv.sources]
+        built-source = { path = "source" }
+
+        [tool.uv.extra-build-dependencies]
+        built-source = [{ requirement = "runtime", match-runtime = true }]
+    "#})?;
+    context.lock().assert().success();
+
+    uv_snapshot!(context.filters(), context.workspace_metadata().args(["--frozen", "--no-build"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Distribution `built-source==0.1.0 @ directory+source` can't be installed because it is marked as `--no-build` but has no binary distribution
+    ");
+
+    let output = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "environment": metadata.get("environment"),
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "environment": null,
+          "module_owners": {
+            "built": [
+              {
+                "package_id": "built-source==0.1.0@directory+[TEMP_DIR]/source"
+              }
+            ],
+            "runtime": [
+              {
+                "package_id": "runtime==0.1.0@registry+[TEMP_DIR]/"
+              }
+            ]
+          }
+        }
+        "#);
+    });
+    assert!(!context.temp_dir.child(".venv").exists());
+    write_wheel_with_metadata(
+        context
+            .temp_dir
+            .child("runtime-0.2.0-py3-none-any.whl")
+            .path(),
+        "runtime",
+        "0.2.0",
+        "runtime-0.2.0",
+        "",
+        &[("runtime.py", "version = '0.2.0'")],
+    )?;
+    context.temp_dir.child("runtime/index.html").write_str(indoc! {r#"
+        <!DOCTYPE html>
+        <a href="../runtime-0.1.0-py3-none-any.whl" data-upload-time="2020-01-01T00:00:00Z">runtime-0.1.0-py3-none-any.whl</a>
+        <a href="../runtime-0.2.0-py3-none-any.whl" data-upload-time="2020-01-01T00:00:00Z">runtime-0.2.0-py3-none-any.whl</a>
+    "#})?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "module-owner-root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["built-source"]
+
+        [project.optional-dependencies]
+        first = ["runtime==0.1.0"]
+        second = ["runtime==0.2.0"]
+
+        [tool.uv]
+        conflicts = [[{ extra = "first" }, { extra = "second" }]]
+
+        [[tool.uv.index]]
+        name = "local"
+        url = "."
+        default = true
+
+        [tool.uv.sources]
+        built-source = { path = "source" }
+
+        [tool.uv.extra-build-dependencies]
+        built-source = [{ requirement = "runtime", match-runtime = true }]
+    "#})?;
+    uv_snapshot!(context.filters(), context.workspace_metadata(), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Resolved 4 packages in [TIME]
+    error: `runtime` was declared as an extra build dependency with `match-runtime = true`, but multiple locked distributions are available
+    ");
+    assert!(!context.temp_dir.child(".venv").exists());
+    Ok(())
+}
+
+/// Same-version wheels from different indexes must match their own locked hashes.
+#[tokio::test]
+#[cfg(feature = "test-python")]
+async fn workspace_metadata_cached_conflicting_index_hashes() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let first = context.temp_dir.child("first");
+    first.create_dir_all()?;
+    let first_wheel = first.child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        first_wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("first_module.py", "")],
+    )?;
+    let second = context.temp_dir.child("second");
+    second.create_dir_all()?;
+    let second_wheel = second.child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        second_wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("second_module.py", "")],
+    )?;
+    let first_bytes = fs_err::read(&first_wheel)?;
+    let second_bytes = fs_err::read(&second_wheel)?;
+    let first_hash = hex::encode(Sha256::digest(&first_bytes));
+    let second_hash = hex::encode(Sha256::digest(&second_bytes));
+    let context = context
+        .with_filter((first_hash.clone(), "[FIRST_HASH]"))
+        .with_filter((second_hash.clone(), "[SECOND_HASH]"));
+    let name = "module-owner".parse()?;
+    let first_server = PackageServer::new(&name).await;
+    let second_server = PackageServer::new(&name).await;
+    first_server
+        .serve(
+            "module_owner-0.1.0-py3-none-any.whl",
+            &first_bytes,
+            Some(&first_hash),
+        )
+        .await;
+    second_server
+        .serve(
+            "module_owner-0.1.0-py3-none-any.whl",
+            &second_bytes,
+            Some(&second_hash),
+        )
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "module-owner-root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        first = ["module-owner"]
+        second = ["module-owner"]
+
+        [tool.uv]
+        conflicts = [[{{ extra = "first" }}, {{ extra = "second" }}]]
+
+        [[tool.uv.index]]
+        name = "first"
+        url = "{first_index}"
+        explicit = true
+
+        [[tool.uv.index]]
+        name = "second"
+        url = "{second_index}"
+        explicit = true
+
+        [tool.uv.sources]
+        module-owner = [
+            {{ index = "first", extra = "first" }},
+            {{ index = "second", extra = "second" }},
+        ]
+    "#, first_index = first_server.index_url(), second_index = second_server.index_url()})?;
+    context.lock().assert().success();
+
+    first_server
+        .serve(
+            "module_owner-0.1.0-py3-none-any.whl",
+            &second_bytes,
+            Some(&first_hash),
+        )
+        .await;
+    uv_snapshot!(context.filters(), context.workspace_metadata().args(["--frozen", "--no-cache"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Failed to prepare `module-owner==0.1.0@registry+http://[LOCALHOST]/simple` for module discovery
+      cause: Failed to download `module-owner==0.1.0`
+      cause: Hash mismatch for `module-owner==0.1.0`
+
+             Expected:
+               sha256:[FIRST_HASH]
+
+             Computed:
+               sha256:[SECOND_HASH]
+    ");
+    assert!(!context.temp_dir.child(".venv").exists());
+    Ok(())
+}
+
+/// Graph-only metadata remains available when a locked artifact is unavailable.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_without_module_owners() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let wheel = context
+        .temp_dir
+        .child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("owner.py", "")],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "module-owner-root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["module-owner"]
+
+        [tool.uv.sources]
+        module-owner = { path = "module_owner-0.1.0-py3-none-any.whl" }
+    "#})?;
+    context.lock().assert().success();
+    fs_err::remove_file(wheel.path())?;
+
+    let mut filters = context.filters();
+    filters.push((r#""sha256": "[0-9a-f]{64}""#, r#""sha256": "[SHA256]""#));
+    uv_snapshot!(filters, context.workspace_metadata().args([
+        "--frozen", "--no-module-owners", "--offline"
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
+        {
+          "name": "module-owner-root",
+          "path": "[TEMP_DIR]/",
+          "id": "module-owner-root==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "module-owner-root==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "module-owner-root",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": [
+            {
+              "id": "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl": {
+          "name": "module-owner",
+          "version": "0.1.0",
+          "source": {
+            "path": "[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl"
+          },
+          "kind": "package",
+          "dependencies": [],
+          "wheels": [
+            {
+              "hashes": {
+                "sha256": "[SHA256]"
+              },
+              "filename": "module_owner-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    "#);
+    assert!(!context.temp_dir.child(".venv").exists());
     Ok(())
 }
 
@@ -2910,7 +3671,7 @@ fn workspace_metadata_module_owners_after_dependency_changes() -> Result<()> {
         "#
     })?;
 
-    // A selected package owns modules from an older installed version with the same name.
+    // Locked artifacts determine ownership even when an older version is installed.
     let assert = context.workspace_metadata().assert().success();
     let metadata: serde_json::Value = serde_json::from_slice(&assert.get_output().stdout)?;
     insta::with_settings!({ filters => context.filters() }, {
@@ -2928,7 +3689,7 @@ fn workspace_metadata_module_owners_after_dependency_changes() -> Result<()> {
             }
           },
           "module_owners": {
-            "installed_module": [
+            "replacement_module": [
               {
                 "package_id": "module-owner==0.2.0@path+[TEMP_DIR]/module_owner-0.2.0-py3-none-any.whl"
               }
@@ -3082,7 +3843,10 @@ fn workspace_metadata_installed_packages_with_duplicate_names() -> Result<()> {
 
 #[test]
 fn workspace_metadata_installed_packages_without_modules() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_missing_file_error();
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_missing_file_error()
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
     let pyproject = context.temp_dir.child("pyproject.toml");
     pyproject.write_str(indoc! {r#"
         [project]
@@ -3142,7 +3906,7 @@ fn workspace_metadata_installed_packages_without_modules() -> Result<()> {
         "#);
     });
 
-    // Missing module records for a selected package make module ownership incomplete.
+    // The cached wheel supplies modules even when the installed distribution has no record.
     let declared = context
         .temp_dir
         .child("missing_record-0.1.0-py3-none-any.whl");
@@ -3150,7 +3914,7 @@ fn workspace_metadata_installed_packages_without_modules() -> Result<()> {
         declared.path(),
         "missing-record",
         "missing_record-0.1.0",
-        &[],
+        &[("missing_record.py", "")],
     )?;
     let declared_url = SafeUrl::from_file_path(declared.path())
         .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
@@ -3164,12 +3928,99 @@ fn workspace_metadata_installed_packages_without_modules() -> Result<()> {
     })?;
 
     uv_snapshot!(context.filters(), context.workspace_metadata(), @r#"
-    exit_code: 2 (failure)
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        },
+        "packages": {
+          "missing-record==0.1.0@path+[TEMP_DIR]/missing_record-0.1.0-py3-none-any.whl": {
+            "name": "missing-record",
+            "version": "0.1.0",
+            "path": "[SITE_PACKAGES]/missing_record-0.1.0.dist-info",
+            "editable": false
+          },
+          "stub-only==0.1.0@unmanaged+[SITE_PACKAGES]/stub_only-0.1.0.dist-info": {
+            "name": "stub-only",
+            "version": "0.1.0",
+            "path": "[SITE_PACKAGES]/stub_only-0.1.0.dist-info",
+            "editable": false
+          }
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "module_owners": {
+        "missing_record": [
+          {
+            "package_id": "missing-record==0.1.0@path+[TEMP_DIR]/missing_record-0.1.0-py3-none-any.whl"
+          }
+        ]
+      },
+      "members": [
+        {
+          "name": "module-owner-root",
+          "path": "[TEMP_DIR]/",
+          "id": "module-owner-root==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "missing-record==0.1.0@path+[TEMP_DIR]/missing_record-0.1.0-py3-none-any.whl": {
+          "name": "missing-record",
+          "version": "0.1.0",
+          "source": {
+            "path": "[TEMP_DIR]/missing_record-0.1.0-py3-none-any.whl"
+          },
+          "kind": "package",
+          "dependencies": [],
+          "wheels": [
+            {
+              "hashes": {
+                "sha256": "cb45b39edc19a780ef7465f4d4ec10c7674a605798358be82631a58ec0f8f752"
+              },
+              "filename": "missing_record-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "module-owner-root==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "module-owner-root",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": [
+            {
+              "id": "missing-record==0.1.0@path+[TEMP_DIR]/missing_record-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
     ----- stderr -----
     warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
     Resolved 2 packages in [TIME]
-    error: Failed to inspect environment
-      cause: failed to open file `[SITE_PACKAGES]/missing_record-0.1.0.dist-info/RECORD`: [OS ERROR 2]
     "#);
 
     Ok(())
@@ -3243,6 +4094,83 @@ fn workspace_metadata_root_workspace() -> Result<()> {
       "requires_python": ">=3.12",
       "conflicts": {
         "sets": []
+      },
+      "module_owners": {
+        "albatross": [
+          {
+            "package_id": "albatross==0.1.0@editable+[TEMP_DIR]/workspace"
+          }
+        ],
+        "bird_feeder": [
+          {
+            "package_id": "bird-feeder==1.0.0@editable+[TEMP_DIR]/workspace/packages/bird-feeder"
+          }
+        ],
+        "idna": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.codec": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.compat": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.core": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.idnadata": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.intranges": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.package_data": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.uts46data": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._parse": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._version": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig.exceptions": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "seeds": [
+          {
+            "package_id": "seeds==1.0.0@editable+[TEMP_DIR]/workspace/packages/seeds"
+          }
+        ]
       },
       "members": [
         {
@@ -3414,6 +4342,293 @@ fn workspace_metadata_virtual_workspace() -> Result<()> {
       "requires_python": ">=3.12",
       "conflicts": {
         "sets": []
+      },
+      "module_owners": {
+        "albatross": [
+          {
+            "package_id": "albatross==0.1.0@editable+[TEMP_DIR]/workspace/packages/albatross"
+          }
+        ],
+        "anyio": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._backends": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._backends._asyncio": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._backends._trio": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._eventloop": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._exceptions": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._fileio": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._resources": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._signals": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._sockets": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._streams": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._subprocesses": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._synchronization": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._tasks": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._testing": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._typedattr": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._eventloop": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._resources": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._sockets": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._streams": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._subprocesses": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._tasks": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._testing": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.from_thread": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.lowlevel": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.pytest_plugin": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.buffered": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.file": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.memory": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.stapled": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.text": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.tls": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.to_process": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.to_thread": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "bird_feeder": [
+          {
+            "package_id": "bird-feeder==1.0.0@editable+[TEMP_DIR]/workspace/packages/bird-feeder"
+          }
+        ],
+        "idna": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.codec": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.compat": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.core": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.idnadata": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.intranges": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.package_data": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.uts46data": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._parse": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._version": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig.exceptions": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "seeds": [
+          {
+            "package_id": "seeds==1.0.0@editable+[TEMP_DIR]/workspace/packages/seeds"
+          }
+        ],
+        "sniffio": [
+          {
+            "package_id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+          }
+        ],
+        "sniffio._impl": [
+          {
+            "package_id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+          }
+        ],
+        "sniffio._tests": [
+          {
+            "package_id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+          }
+        ],
+        "sniffio._tests.test_sniffio": [
+          {
+            "package_id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+          }
+        ],
+        "sniffio._version": [
+          {
+            "package_id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+          }
+        ]
       },
       "members": [
         {
@@ -3655,6 +4870,83 @@ fn workspace_metadata_from_member() -> Result<()> {
       "conflicts": {
         "sets": []
       },
+      "module_owners": {
+        "albatross": [
+          {
+            "package_id": "albatross==0.1.0@editable+[TEMP_DIR]/workspace"
+          }
+        ],
+        "bird_feeder": [
+          {
+            "package_id": "bird-feeder==1.0.0@editable+[TEMP_DIR]/workspace/packages/bird-feeder"
+          }
+        ],
+        "idna": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.codec": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.compat": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.core": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.idnadata": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.intranges": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.package_data": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.uts46data": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._parse": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._version": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig.exceptions": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "seeds": [
+          {
+            "package_id": "seeds==1.0.0@editable+[TEMP_DIR]/workspace/packages/seeds"
+          }
+        ]
+      },
       "members": [
         {
           "name": "albatross",
@@ -3837,6 +5129,23 @@ fn workspace_metadata_multiple_members() {
       "conflicts": {
         "sets": []
       },
+      "module_owners": {
+        "pkg_a": [
+          {
+            "package_id": "pkg-a==0.1.0@editable+[TEMP_DIR]/pkg-a"
+          }
+        ],
+        "pkg_b": [
+          {
+            "package_id": "pkg-b==0.1.0@editable+[TEMP_DIR]/pkg-a/pkg-b"
+          }
+        ],
+        "pkg_c": [
+          {
+            "package_id": "pkg-c==0.1.0@editable+[TEMP_DIR]/pkg-a/pkg-c"
+          }
+        ]
+      },
       "members": [
         {
           "name": "pkg-a",
@@ -3923,6 +5232,13 @@ fn workspace_metadata_single_project() {
       "conflicts": {
         "sets": []
       },
+      "module_owners": {
+        "my_project": [
+          {
+            "package_id": "my-project==0.1.0@editable+[TEMP_DIR]/my-project"
+          }
+        ]
+      },
       "members": [
         {
           "name": "my-project",
@@ -3985,6 +5301,33 @@ fn workspace_metadata_with_excluded() -> Result<()> {
       "requires_python": ">=3.12",
       "conflicts": {
         "sets": []
+      },
+      "module_owners": {
+        "albatross": [
+          {
+            "package_id": "albatross==0.1.0@editable+[TEMP_DIR]/workspace"
+          }
+        ],
+        "iniconfig": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._parse": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._version": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig.exceptions": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ]
       },
       "members": [
         {
@@ -4084,6 +5427,28 @@ fn workspace_metadata_group_only() -> Result<()> {
       "requires_python": ">=3.12",
       "conflicts": {
         "sets": []
+      },
+      "module_owners": {
+        "iniconfig": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._parse": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._version": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig.exceptions": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ]
       },
       "resolution": {
         "iniconfig==2.0.0@registry+https://pypi.org/simple": {
@@ -4231,6 +5596,283 @@ fn workspace_metadata_various_dependency_rainbow() -> Result<()> {
       "requires_python": ">=3.12",
       "conflicts": {
         "sets": []
+      },
+      "module_owners": {
+        "albatross": [
+          {
+            "package_id": "albatross==0.1.0@editable+[TEMP_DIR]/workspace"
+          }
+        ],
+        "anyio": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._backends": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._backends._asyncio": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._backends._trio": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._eventloop": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._exceptions": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._fileio": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._resources": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._signals": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._sockets": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._streams": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._subprocesses": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._synchronization": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._tasks": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._testing": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio._core._typedattr": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._eventloop": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._resources": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._sockets": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._streams": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._subprocesses": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._tasks": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.abc._testing": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.from_thread": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.lowlevel": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.pytest_plugin": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.buffered": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.file": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.memory": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.stapled": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.text": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.streams.tls": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.to_process": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "anyio.to_thread": [
+          {
+            "package_id": "anyio==4.3.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.codec": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.compat": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.core": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.idnadata": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.intranges": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.package_data": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "idna.uts46data": [
+          {
+            "package_id": "idna==3.6@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._parse": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig._version": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "iniconfig.exceptions": [
+          {
+            "package_id": "iniconfig==2.0.0@registry+https://pypi.org/simple"
+          }
+        ],
+        "sniffio": [
+          {
+            "package_id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+          }
+        ],
+        "sniffio._impl": [
+          {
+            "package_id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+          }
+        ],
+        "sniffio._tests": [
+          {
+            "package_id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+          }
+        ],
+        "sniffio._tests.test_sniffio": [
+          {
+            "package_id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+          }
+        ],
+        "sniffio._version": [
+          {
+            "package_id": "sniffio==1.3.1@registry+https://pypi.org/simple"
+          }
+        ]
       },
       "members": [
         {

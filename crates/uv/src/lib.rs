@@ -2120,6 +2120,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                     args.frozen,
                     args.refresh,
                     args.sync,
+                    args.module_owners,
                     args.active,
                     args.python,
                     args.install_mirrors,

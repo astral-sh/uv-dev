@@ -5,8 +5,14 @@ JSON so other tools can use it. If you want access to the information in a `uv.l
 lockfile, prefer this command's output: the lockfile format is not guaranteed to be stable. Pass
 `--script path/to/script.py` to request metadata for a script.
 
-Pass `--sync` to install the selected packages before collecting module ownership information.
-Synchronization preserves unrelated installed packages by default; add `--exact` to remove them.
+Module ownership for locked packages is collected from cached wheels for the selected interpreter,
+including alternatives from conflicting extras and groups. uv downloads or builds missing wheels
+without installing them into the project environment. Pass `--no-module-owners` to omit this mapping
+and skip artifact preparation for module discovery.
+
+Pass `--sync` to install the selected packages before reporting the environment's installed
+packages. Synchronization preserves unrelated installed packages by default; add `--exact` to remove
+them.
 
 The primary structure is the "resolution" field which contains the dependency graph with exact
 package versions that a `uv.lock` encodes.
@@ -58,8 +64,24 @@ An installed distribution is matched by normalized name to a package in the sele
 matched entry then uses that package's resolution node ID. The entry's `version` reports the actual
 installed version; node IDs should be treated as opaque.
 
-`module_owners` maps importable module names to package IDs in `environment.packages`. IDs for
-packages outside the selected resolution do not appear in `resolution`.
+## Module ownership
+
+`module_owners` maps module names discovered from package files to candidate package IDs in
+`resolution`, independently of whether those packages are installed. Ownership for managed packages
+comes from their locked artifacts even when a different version is installed. When available,
+modules from unmanaged installed distributions are also included; their IDs appear only in
+`environment.packages`. Multiple owners can refer to mutually exclusive versions or sources; an
+ownership entry does not imply that all its owners can be installed together.
+
+uv reads wheel `RECORD` entries, including entries under `.data/purelib` and `.data/platlib`.
+Editable projects are built as regular wheels so their modules can be discovered without executing
+editable import hooks. Discovery covers Python source, legacy bytecode, and native extensions for
+the selected interpreter. It does not enumerate modules created dynamically by import hooks or
+`.pth` files, or `.pyi`-only stub distributions.
+
+Package preparation uses the configured build settings. For a prepared package with a
+`match-runtime = true` build dependency, the matching runtime package must have exactly one locked
+candidate for the selected interpreter; a missing or ambiguous match is an error.
 
 ## Handling multiple versions of a package
 
@@ -225,8 +247,7 @@ Here is a human-readable annotated example:
   //
   // `marker` fields all have this as an implicit constraint that is omitted for cleanliness
   "requires_python": ">=3.12",
-  // Module owners refer to entries in `environment.packages`.
-  // Matched package IDs also refer to nodes in `resolution`.
+  // Module owners refer to nodes in `resolution` or unmanaged entries in `environment.packages`.
   "module_owners": {
     "idna": [
       {

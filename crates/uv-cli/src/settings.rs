@@ -2135,6 +2135,7 @@ pub struct MetadataSettings {
     pub lock_check: LockCheck,
     pub frozen: Option<FrozenSource>,
     pub sync: Option<Modifications>,
+    pub module_owners: bool,
     pub active: ActiveEnvironment,
     pub python: Option<String>,
     pub install_mirrors: PythonInstallMirrors,
@@ -2160,6 +2161,7 @@ impl MetadataSettings {
             build,
             refresh,
             sync,
+            no_module_owners,
             exact,
             active,
             python,
@@ -2187,6 +2189,7 @@ impl MetadataSettings {
             } else {
                 Modifications::Sufficient
             }),
+            module_owners: !no_module_owners,
             active: Some(active).into(),
             python: python.and_then(Maybe::into_option),
             refresh: Refresh::try_from(refresh)?,

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Display;
 use std::iter::once;
 use std::path::Path;
@@ -255,10 +255,10 @@ impl MetadataWorkspaceMember {
     }
 }
 
-/// An installed distribution that provides an importable module.
+/// A package that may provide a module.
 #[derive(Debug, serde::Serialize)]
 struct MetadataModuleOwner {
-    /// Key in `environment.packages` and, for a matched distribution, `resolution`.
+    /// Key in `resolution` or `environment.packages`.
     package_id: MetadataNodeIdFlat,
 }
 
@@ -1615,6 +1615,43 @@ impl Metadata {
         .to_flat())
     }
 
+    /// Return reachable packages for an interpreter, including mutually exclusive variants.
+    pub fn packages_for_environment<'a>(
+        &'a self,
+        lock: &'a Lock,
+        marker_env: &'a ResolverMarkerEnvironment,
+    ) -> impl Iterator<Item = (String, &'a Package)> {
+        lock.packages().iter().filter_map(move |package| {
+            self.eligible_package_node_id(package, marker_env)
+                .map(|id| (id, package))
+        })
+    }
+
+    /// Return the node ID for a non-virtual package reachable with the interpreter's markers.
+    fn eligible_package_node_id(
+        &self,
+        package: &Package,
+        marker_env: &ResolverMarkerEnvironment,
+    ) -> Option<String> {
+        if let Source::Virtual(_) = package.id.source {
+            return None;
+        }
+        let id = MetadataNodeId::from_package_id(
+            &self.workspace_root,
+            &package.id,
+            MetadataNodeKind::Package,
+        )
+        .to_flat();
+        self.reachability
+            .get(&id)
+            .is_some_and(|marker| {
+                self.requires_python
+                    .complexify_markers(marker.without_extras())
+                    .evaluate(marker_env, &[])
+            })
+            .then_some(id)
+    }
+
     /// Match an installed distribution to a locked package without selecting conflicting extras.
     pub fn installed_package_node_id(
         &self,
@@ -1625,49 +1662,28 @@ impl Metadata {
         let mut candidates = lock
             .packages_for_name(dist.name())
             .iter()
-            .filter(|package| {
-                if let Source::Virtual(_) = package.id.source {
-                    return false;
-                }
-                let id = MetadataNodeId::from_package_id(
-                    &self.workspace_root,
-                    &package.id,
-                    MetadataNodeKind::Package,
-                )
-                .to_flat();
-                self.reachability.get(&id).is_some_and(|marker| {
-                    self.requires_python
-                        .complexify_markers(marker.without_extras())
-                        .evaluate(marker_env, &[])
-                })
+            .filter_map(|package| {
+                self.eligible_package_node_id(package, marker_env)
+                    .map(|id| (id, package))
             })
             .peekable();
         let first = candidates.next()?;
-        let package = if candidates.peek().is_none() {
-            // A single candidate owns modules by name even when the installed version or source differs.
-            first
-        } else {
-            let mut matches = once(first).chain(candidates).filter(|package| {
-                package
-                    .version()
-                    .is_none_or(|version| version == dist.version())
-                    && package_source_matches_installed(self.workspace_root.as_ref(), package, dist)
-            });
-            let package = matches.next()?;
-            // Installed metadata does not always identify a source, such as the original index.
-            if matches.next().is_some() {
-                return None;
-            }
+        if candidates.peek().is_none() {
+            // A single candidate identifies an installed package by name even when its version or source differs.
+            return Some(first.0);
+        }
+        let mut matches = once(first).chain(candidates).filter(|(_, package)| {
             package
-        };
-        Some(
-            MetadataNodeId::from_package_id(
-                &self.workspace_root,
-                &package.id,
-                MetadataNodeKind::Package,
-            )
-            .to_flat(),
-        )
+                .version()
+                .is_none_or(|version| version == dist.version())
+                && package_source_matches_installed(self.workspace_root.as_ref(), package, dist)
+        });
+        let (id, _) = matches.next()?;
+        // Installed metadata does not always identify a source, such as the original index.
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(id)
     }
 
     /// Return the package node ID for an unmanaged distribution.
@@ -1696,16 +1712,20 @@ impl Metadata {
     }
 
     #[must_use]
-    pub fn with_module_owners(mut self, module_owners: BTreeMap<ModuleName, Vec<String>>) -> Self {
+    pub fn with_module_owners(
+        mut self,
+        module_owners: BTreeMap<ModuleName, BTreeSet<String>>,
+    ) -> Self {
         self.module_owners = module_owners
             .into_iter()
             .filter_map(|(module, owners)| {
                 let owners = owners
                     .into_iter()
                     .filter(|package_id| {
-                        self.environment.as_ref().is_some_and(|environment| {
-                            environment.packages.contains_key(package_id)
-                        })
+                        self.resolution.contains_key(package_id)
+                            || self.environment.as_ref().is_some_and(|environment| {
+                                environment.packages.contains_key(package_id)
+                            })
                     })
                     .map(|package_id| MetadataModuleOwner { package_id })
                     .collect::<Vec<_>>();

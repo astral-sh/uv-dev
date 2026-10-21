@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_normalize::PackageName;
 
-use crate::{Name, Requirement, RequirementSource, Resolution};
+use crate::{Name, Requirement, RequirementSource, Resolution, ResolvedDist};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExtraBuildRequiresError {
@@ -13,6 +13,10 @@ pub enum ExtraBuildRequiresError {
         "`{0}` was declared as an extra build dependency with `match-runtime = true`, but was not found in the resolution"
     )]
     NotFound(PackageName),
+    #[error(
+        "`{0}` was declared as an extra build dependency with `match-runtime = true`, but multiple locked distributions are available"
+    )]
+    Ambiguous(PackageName),
     #[error(
         "Dependencies marked with `match-runtime = true` cannot include version specifiers, but found: `{0}{1}`"
     )]
@@ -82,9 +86,20 @@ impl CacheKey for ExtraBuildRequirement {
 impl ExtraBuildRequires {
     /// Apply runtime constraints from a resolution to the extra build requirements.
     pub fn match_runtime(self, resolution: &Resolution) -> Result<Self, ExtraBuildRequiresError> {
+        self.match_runtime_distributions(|| resolution.distributions())
+    }
+
+    /// Apply runtime constraints from distributions that may contain mutually exclusive variants.
+    pub fn match_runtime_distributions<'a, I>(
+        self,
+        distributions: impl Fn() -> I,
+    ) -> Result<Self, ExtraBuildRequiresError>
+    where
+        I: Iterator<Item = &'a ResolvedDist>,
+    {
         self.into_iter()
             .filter(|(_, requirements)| !requirements.is_empty())
-            .filter(|(name, _)| resolution.distributions().any(|dist| dist.name() == name))
+            .filter(|(name, _)| distributions().any(|dist| dist.name() == name))
             .map(|(name, requirements)| {
                 let requirements = requirements
                     .into_iter()
@@ -113,12 +128,16 @@ impl ExtraBuildRequires {
                                 ));
                             }
 
-                            let dist = resolution
-                                .distributions()
-                                .find(|dist| dist.name() == &requirement.name)
-                                .ok_or_else(|| {
-                                    ExtraBuildRequiresError::NotFound(requirement.name.clone())
-                                })?;
+                            let mut candidates =
+                                distributions().filter(|dist| dist.name() == &requirement.name);
+                            let dist = candidates.next().ok_or_else(|| {
+                                ExtraBuildRequiresError::NotFound(requirement.name.clone())
+                            })?;
+                            if candidates.next().is_some() {
+                                return Err(ExtraBuildRequiresError::Ambiguous(
+                                    requirement.name.clone(),
+                                ));
+                            }
                             let requirement = Requirement {
                                 source: RequirementSource::from(dist),
                                 ..requirement
