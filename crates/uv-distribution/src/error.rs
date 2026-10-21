@@ -19,7 +19,7 @@ use uv_pep440::{Version, VersionSpecifiers};
 use uv_platform_tags::Platform;
 use uv_pypi_types::{HashAlgorithm, HashDigest};
 use uv_python_types::PythonVariant;
-use uv_redacted::{DisplaySafeUrl, SafeUrl};
+use uv_redacted::SafeUrl;
 use uv_types::AnyErrorBuild;
 
 #[derive(Debug, Clone, Copy)]
