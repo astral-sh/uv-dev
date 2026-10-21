@@ -526,10 +526,15 @@ pub async fn check(
                 {
                     // A workspace checker may require a different Python version than the script.
                     let tool_groups = source.groups();
-                    let project_python = ProjectPythonRequest::from_request(
+                    let target = InstallTarget::Workspace {
+                        workspace: project.workspace(),
+                        project_name: project.project_name(),
+                        lock: &lock,
+                    };
+                    let project_python = ProjectPythonRequest::from_requirements(
                         None,
-                        Some(project.workspace()),
-                        &tool_groups,
+                        Some(project.workspace().install_path()),
+                        Some(target.python_requirement(&tool_groups)?),
                         project.workspace().install_path(),
                         config_discovery,
                     )
@@ -566,14 +571,7 @@ pub async fn check(
                             &base_interpreter,
                             &settings.resolver.build_options,
                         )?;
-                        store_credentials_from_target(
-                            InstallTarget::Workspace {
-                                workspace: project.workspace(),
-                                project_name: project.project_name(),
-                                lock: &lock,
-                            },
-                            &client_builder,
-                        )?;
+                        store_credentials_from_target(target, &client_builder)?;
                         let tool_state = state.fork();
                         let environment = match CachedEnvironment::from_locked_resolution(
                             &resolution,
