@@ -43497,6 +43497,100 @@ fn lock_android_no_sdist() -> Result<()> {
     Ok(())
 }
 
+/// A Python-only environment restriction also checks wheel coverage inside dependency marker forks.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_android_wheel_only_fork() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "android-wheel-only-fork"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        wheel_tags = ["py3-none-android_21_arm64_v8a", "py3-none-manylinux_2_17_x86_64"]
+
+        [packages.b.versions."1.0.0"]
+        sdist = false
+
+        [packages.b.versions."2.0.0"]
+        sdist = false
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.14");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.14"
+        dependencies = [
+            "a==1.0.0",
+            "b==1.0.0; sys_platform != 'android'",
+            "b==2.0.0; sys_platform == 'android'",
+        ]
+
+        [tool.uv]
+        environments = ["python_version >= '3.14'"]
+    "#})?;
+
+    // The Android fork accepts the wheel for the platform it targets: astral-sh/uv#22805.
+    uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 4 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
+/// Direct wheel URLs also need Android coverage when it is a required environment.
+#[cfg(feature = "test-universal")]
+#[test]
+fn lock_android_wheel_url_required_environment() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "android-wheel-url-required-environment"
+
+        [root]
+
+        [expected]
+        satisfiable = true
+
+        [packages.a.versions."1.0.0"]
+        sdist = false
+        wheel_tags = ["py3-none-android_21_arm64_v8a"]
+    "#})?;
+    let server = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.14");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.14"
+        dependencies = ["a @ {}"]
+
+        [tool.uv]
+        required-environments = ["sys_platform == 'android'"]
+    "#, server.file_url("a-1.0.0-py3-none-android_21_arm64_v8a.whl")})?;
+
+    // The Android wheel satisfies the required environment it targets: astral-sh/uv#22805.
+    uv_snapshot!(context.filters(), context.lock(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+
+    Ok(())
+}
+
 #[cfg(feature = "test-universal")]
 #[test]
 fn lock_required_intersection() -> Result<()> {
