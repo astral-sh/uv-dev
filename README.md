@@ -8,7 +8,7 @@ Status: closed on 2026-10-21 at 10:01:02 UTC; reporter reports success with `UV_
 
 ## Summary
 
-The reporter reports that several tests with `UV_SYSTEM_CERTS=1` appear to work and closed astral-sh/uv#22756. This provides a reported resolution through system-certificate selection, not evidence of a Python-version bug or an upgrade fix. No detailed successful-run logs, successful-run uv version, or explicit `UV_SYSTEM_CERTS=0` result were supplied.
+The reporter reports that several tests with `UV_SYSTEM_CERTS=1` appear to work and closed astral-sh/uv#22756. This provides a reported resolution through system-certificate selection, not evidence of a Python-version bug or an upgrade fix. No detailed successful-run logs, successful-run uv version, or explicit `UV_SYSTEM_CERTS=0` result were supplied. The reporter also reports successfully setting `system-certs = true` in `pyproject.toml`; source inspection confirms that the current checkout accepts and resolves this setting from `[tool.uv]`, despite documentation examples showing only `uv.toml`.
 
 The reporter runs `uv sync --no-build-isolation-package internal_package` with uv 0.13.0, installed from an internal PyPI mirror. On Azure DevOps `windows-latest` / Windows Server 2025, downloading the x86_64 CPython 3.15.0 build from the python-build-standalone 20261009 release fails with `client error (Connect)` and `invalid peer certificate: UnknownIssuer`. Ubuntu successfully downloads Python and creates the environment. The reporter asks whether uv 0.13.1 fixes this.
 
@@ -115,7 +115,7 @@ Please try `uv --system-certs python install 3.15.0` on the failing runner with 
 
 Classification remains question. The reporter reports success after enabling system certificates and closed the issue, supporting resolution through trust configuration. The specific certificate-chain difference, any TLS-inspecting proxy, and any certificate-source override remain unconfirmed. The reported success does not establish a uv correctness defect, a regression, or a 0.13.1 fix. Python 3.15 support already shipped in uv 0.13.0.
 
-The local reproduction findings remain unchanged: the exact archive downloaded on Linux, and a matching failure was observed only after deliberately adding a certificate override. That artificial override has not been established on the reporter's runner. The similar resolution in astral-sh/uv#8832 is relevant, but its confirmed corporate-proxy mechanism is not established here. The reporter's secondary preference for `pyproject.toml` configuration does not change the classification of this resolved download-support question.
+The local reproduction findings remain unchanged: the exact archive downloaded on Linux, and a matching failure was observed only after deliberately adding a certificate override. That artificial override has not been established on the reporter's runner. The similar resolution in astral-sh/uv#8832 is relevant, but its confirmed corporate-proxy mechanism is not established here. The reporter has withdrawn the assumption that `pyproject.toml` configuration is unavailable after trying it successfully. The documentation discrepancy does not change the classification of this resolved download-support question.
 
 ## Related
 
@@ -159,9 +159,18 @@ If the failure recurs, useful diagnostics remain separate fresh-download attempt
 
 ## Persistent configuration clarification
 
-The reporter would prefer `system-certs = true` in `pyproject.toml` and is considering setting `UV_SYSTEM_CERTS` in `Taskfile.yml` to cover pipeline stages. That Taskfile change is a proposal, not a reported implementation or tested result.
+In the 2026-10-21 follow-up on astral-sh/uv#22756 (comment ID 6313916244), the reporter retracts the claim that `system-certs = true` cannot be set in `pyproject.toml`: they report having tried it successfully and describe it as undocumented. They provide no exact TOML snippet, command, uv version, or confirmation that the earlier environment-variable setting was removed. This is a reported configuration success, not an independently reproduced Windows result. The earlier idea of setting the variable in `Taskfile.yml` is not a confirmed implementation or necessary workaround for a `pyproject.toml` restriction.
 
-Repository evidence supports the `pyproject.toml` limitation: `crates/uv-settings/src/settings.rs:288` marks `system-certs` as `uv_toml_only`, and `docs/concepts/authentication/certificates.md` documents the environment variable, command-line flag, and `uv.toml` setting. However, `uv.toml` is not restricted to system-wide configuration. `docs/concepts/configuration-files.md` documents discovery of project-local `uv.toml` in the current or nearest parent directory, as well as user- and system-level files. A project-local `uv.toml` is therefore an available persistent configuration location for project commands such as `uv sync`. When both files are present in the same directory, `uv.toml` takes precedence and the accompanying `[tool.uv]` section in `pyproject.toml` is ignored. These are source-backed configuration facts, not additional tests on the reporter's pipeline.
+Current source supports this configuration under `[tool.uv]`:
+
+- `crates/uv-settings/src/settings.rs:40` defines the `pyproject.toml` wrapper with `tool.uv: Option<Options>`. `OptionsWire` accepts `system_certs` and transfers it into `GlobalOptions` when constructing `Options`.
+- `crates/uv-settings/src/lib.rs:167` loads `[tool.uv]` from `pyproject.toml` into filesystem options without rejecting `system-certs`.
+- `crates/uv-cli/src/settings.rs:360` resolves system certificates from CLI arguments, then environment variables, then workspace `globals.system_certs` (with the deprecated native-TLS alias as a fallback). A higher-precedence setting can therefore mask the TOML value.
+- `crates/uv-settings/src/settings.rs:288` marks the option `uv_toml_only` as options metadata. `crates/uv-dev/src/generate_options_reference.rs:286` uses that metadata to render only a `uv.toml` example. This is not a runtime prohibition on `pyproject.toml`. `docs/concepts/authentication/certificates.md` also describes the environment variable, command-line flag, and `uv.toml` setting without showing the accepted `[tool.uv]` form.
+
+The source-backed configuration form is `[tool.uv]` with `system-certs = true` in `pyproject.toml`. This source inspection corrects the assertion of a runtime limitation; it does not establish the exact settings used in the reporter's successful run or test a released binary in this update.
+
+`uv.toml` remains another persistent option and is not restricted to system-wide configuration. `docs/concepts/configuration-files.md` documents project-local discovery as well as user- and system-level files. When both files are present in the same directory, `uv.toml` takes precedence and the accompanying `[tool.uv]` section in `pyproject.toml` is ignored.
 
 ## Scope of work
 
