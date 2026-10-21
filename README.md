@@ -17,8 +17,14 @@ Read-only checks on 2026-10-21, completed at approximately 14:05 UTC, reproduce 
 reported state. The exact changelog says “Released on 2026-10-21”; GitHub's latest
 published release is 0.13.4; the 0.13.5 release API and installer URL return HTTP
 404; and the cited workflow concluded `cancelled`. The 0.13.4 installer URL returns
-HTTP 200. These observations establish the publication mismatch, not the reason
-for cancellation or whether canceling was incorrect.
+HTTP 200. These observations establish the publication mismatch at that time;
+they do not establish that canceling was incorrect.
+
+Maintainer zanieb subsequently confirmed in astral-sh/uv#22793 that they
+intentionally canceled the release after discovering a miscompilation in the
+Python versions. They expected the release to be available soon, without giving
+a firm date. This resolves the cancellation question; it does not establish that
+publication has since completed or that the changelog has been corrected.
 
 astral-sh/uv#22787 prepared 0.13.5; astral-sh/uv#22788 subsequently reverted its
 Python update. astral-sh/uv#22789 separately requests refreshed Docker images.
@@ -37,7 +43,10 @@ starting the release workflow. Repository metadata can therefore precede a
 published release. Automation requiring downloadable versions should use published
 release metadata, such as `https://api.github.com/repos/astral-sh/uv/releases/latest`,
 rather than treating the development branch's changelog as a publication guarantee.
-Whether the cancellation was intentional still requires maintainer confirmation.
+The maintainer has confirmed intentional cancellation because of a Python
+miscompilation. This answers the release-process clarification request without
+changing the reproduced release-status/documentation discrepancy. It does not
+establish a runtime defect in a published uv release.
 
 ## Reproduction
 
@@ -94,9 +103,11 @@ GitHub release response for version 9.9.9 and snapshots the dry-run update messa
 Their setup and assertions do not cover changelog/publication consistency or the
 reason for a live workflow cancellation. No repository tests were added or run.
 
-The reported mismatch needs no further reproduction input. The unanswered question
-is the maintainer's reason for cancellation; neither status metadata nor the
-subsequent Python rollback proves intent or causation.
+The reported mismatch needs no further reproduction input. The maintainer's
+comment now supplies the cancellation's intent and reason: a discovered Python
+miscompilation. The checks above remain observations from approximately 14:05 UTC,
+not a recheck of availability after that comment. The comment does not identify
+the affected Python versions or provide a reproduction of the miscompilation.
 
 ## Related
 
@@ -108,8 +119,10 @@ subsequent Python rollback proves intent or causation.
   request). Merged at 04:26:17 UTC, after cancellation. Its body reports
   intermittent SIGBUS crashes from the `cpython-3.14.8-linux-x86_64-gnu` archive
   during CodSpeed walltime profiling and restores metadata to 20261013. It does
-  not explicitly explain the release cancellation or correct the changelog's
-  publication status.
+  not itself explicitly explain the release cancellation or correct the
+  changelog's publication status. The maintainer's issue comment now confirms
+  that a Python miscompilation prompted cancellation, but does not explicitly
+  identify this PR or equate the miscompilation with the SIGBUS symptom.
 - astral-sh/uv#22789 — Rebuild 0.13.4 Docker images to pick up patched
   ca-certificates (eMudhra CA compromise) (open issue). Requests rebuilding
   0.13.4 images or releasing 0.13.5. It concerns the same release window but
@@ -118,6 +131,13 @@ subsequent Python rollback proves intent or causation.
 
 ## Supporting evidence
 
+- In astral-sh/uv#22793, repository member zanieb confirmed at
+  2026-10-21 16:39:30 UTC (comment ID 6321267030) that they canceled the release
+  because they discovered a miscompilation in the Python versions. The supplied
+  full discussion marks the author as `MEMBER`. They also said the release would
+  be out soon; this is a maintainer expectation, not a fixed publication date or
+  confirmation of a completed release. No affected Python version, compiler
+  details, or miscompilation reproduction was provided.
 - The exact reported changelog is available at
   https://github.com/astral-sh/uv/blob/79422c835f214875852bf2b2cb950c44684eb046/CHANGELOG.md.
   That commit is dated 11:50:25 UTC, after cancellation and the Python rollback;
@@ -163,11 +183,14 @@ established as a duplicate.
 
 ## Maintainer follow-up
 
-Confirm whether the release was intentionally canceled and document the reason.
-Clarify the changelog's release status and Python-update description against the
-actual release plan. No publication date or restart is established by the
-inspected evidence. Recommend published-release metadata for automation that
-requires an available download.
+The maintainer has answered why the release was canceled: a Python
+miscompilation. No further confirmation of intent is needed. Check publication
+status before treating the earlier 404 results as current, and reconcile the
+changelog's release status and Python-update description with the actual release.
+The maintainer expects a release soon, but no firm date, restart, or completed
+publication is established by the supplied discussion. Published-release metadata
+remains the workaround for automation requiring an available download.
 
-No GitHub changes were made and no checkout files were modified. Only this
-issue-context README and a temporary copy of the public changelog were written.
+No public response was drafted or posted for this update. Only this README was
+updated; the checkout, GitHub, structured findings, and temporary changelog copy
+from the earlier reproduction were left unchanged.
