@@ -871,6 +871,79 @@ fn workspace_metadata_conflicting_inactive_dependency() -> Result<()> {
     Ok(())
 }
 
+/// Locked packages are matched using release-only Python version markers for pre-release interpreters.
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn workspace_metadata_conflicting_prerelease_python() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let wheel = context
+        .temp_dir
+        .child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("installed_module.py", "")],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.15"
+        dependencies = ["module-owner"]
+
+        [project.optional-dependencies]
+        first = []
+        second = []
+
+        [tool.uv]
+        conflicts = [[{ extra = "first" }, { extra = "second" }]]
+
+        [tool.uv.sources]
+        module-owner = { path = "module_owner-0.1.0-py3-none-any.whl" }
+    "#})?;
+    context
+        .sync()
+        .args(["--extra=first", "--python=3.15.0rc3"])
+        .assert()
+        .success();
+
+    let output = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "packages": metadata["environment"]["packages"],
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "module_owners": {
+            "installed_module": [
+              {
+                "package_id": "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl"
+              }
+            ]
+          },
+          "packages": {
+            "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl": {
+              "editable": false,
+              "name": "module-owner",
+              "path": "[VENV]/[PYTHON-LIB]/site-packages/module_owner-0.1.0.dist-info",
+              "version": "0.1.0"
+            }
+          }
+        }
+        "#);
+    });
+    Ok(())
+}
+
 /// Installed packages remain unmanaged when the environment is outside the lockfile's Python bounds.
 #[test]
 #[cfg(feature = "test-python")]

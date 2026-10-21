@@ -55,8 +55,9 @@ pub(super) async fn collect_environment(
     sync: Option<Modifications>,
 ) -> Result<CollectedEnvironment> {
     if sync.is_none() && !target.lock().conflicts().is_empty() {
+        let marker_env = resolution_markers(None, None, venv.interpreter());
         return inspect_environment(venv, |dist| {
-            metadata.installed_package_node_id(target.lock(), dist, venv.interpreter().markers())
+            metadata.installed_package_node_id(target.lock(), dist, &marker_env)
         });
     }
 

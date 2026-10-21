@@ -11,9 +11,10 @@ use uv_distribution_types::{
 use uv_fs::{PortablePathBuf, is_same_file_allow_missing, normalize_path};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
-use uv_pep508::{MarkerEnvironment, MarkerTree, StringVersion};
+use uv_pep508::{MarkerTree, StringVersion};
 use uv_pypi_types::{
-    ConflictItem, ConflictKind, ConflictSet, Conflicts, DirectUrl, HashDigest, ModuleName, VcsKind,
+    ConflictItem, ConflictKind, ConflictSet, Conflicts, DirectUrl, HashDigest, ModuleName,
+    ResolverMarkerEnvironment, VcsKind,
 };
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::LenientImplementationName;
@@ -1619,7 +1620,7 @@ impl Metadata {
         &self,
         lock: &Lock,
         dist: &InstalledDist,
-        marker_env: &MarkerEnvironment,
+        marker_env: &ResolverMarkerEnvironment,
     ) -> Option<String> {
         let mut candidates = lock
             .packages_for_name(dist.name())
