@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Display;
 use std::iter::once;
 use std::path::Path;
@@ -1723,7 +1723,10 @@ impl Metadata {
     }
 
     #[must_use]
-    pub fn with_module_owners(mut self, module_owners: BTreeMap<ModuleName, Vec<String>>) -> Self {
+    pub fn with_module_owners(
+        mut self,
+        module_owners: BTreeMap<ModuleName, BTreeSet<String>>,
+    ) -> Self {
         self.module_owners = module_owners
             .into_iter()
             .filter_map(|(module, owners)| {

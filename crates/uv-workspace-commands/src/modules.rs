@@ -38,7 +38,7 @@ pub(super) async fn collect_modules(
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     preview: Preview,
-) -> Result<BTreeMap<ModuleName, Vec<String>>> {
+) -> Result<BTreeMap<ModuleName, BTreeSet<String>>> {
     let marker_env = resolution_markers(None, None, interpreter);
     let packages = metadata
         .packages_for_environment(target.lock(), &marker_env)
@@ -178,8 +178,5 @@ pub(super) async fn collect_modules(
             owners.entry(module).or_default().insert(package_id.clone());
         }
     }
-    Ok(owners
-        .into_iter()
-        .map(|(module, owners)| (module, owners.into_iter().collect()))
-        .collect())
+    Ok(owners)
 }

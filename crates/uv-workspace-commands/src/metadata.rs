@@ -400,10 +400,6 @@ pub async fn metadata(
         {
             module_owners.entry(module).or_default().extend(owners);
         }
-        for owners in module_owners.values_mut() {
-            owners.sort_unstable();
-            owners.dedup();
-        }
         export = export.with_module_owners(module_owners);
     }
 

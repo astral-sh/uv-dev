@@ -33,7 +33,7 @@ pub(super) struct CollectedEnvironment {
     /// Installed distributions keyed by their selected or unmanaged package IDs.
     pub(super) packages: BTreeMap<String, InstalledDist>,
     /// Maps importable module names to the IDs of their owning distributions.
-    pub(super) module_owners: BTreeMap<ModuleName, Vec<String>>,
+    pub(super) module_owners: BTreeMap<ModuleName, BTreeSet<String>>,
 }
 
 /// Collect installed distributions and module ownership, optionally synchronizing first.
@@ -206,10 +206,7 @@ fn inspect_environment(
 
     Ok(CollectedEnvironment {
         packages,
-        module_owners: owners
-            .into_iter()
-            .map(|(module, owners)| (module, owners.into_iter().collect()))
-            .collect(),
+        module_owners: owners,
     })
 }
 
