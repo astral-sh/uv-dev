@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Confirmed on linux/amd64 by downloading both published images with `skopeo copy --src-no-creds --override-os linux --override-arch amd64` and querying their extracted package databases with `dpkg-query --admindir=<directory> -W ca-certificates`. ghcr.io/astral-sh/uv:0.13.4-python3.11-trixie-slim contains 20250419; python:3.11-slim-trixie contains 20250419+deb13u1. Both identify Python 3.11.17 and Debian 13. Host Python ssl and offline OpenSSL checks confirmed that the uv image’s CA bundle trusts emSign ECC Root CA - G3, while the refreshed upstream bundle excludes it. Docker daemon access was unavailable, so no containers were executed. Other variants, arm64, and live compromised certificate chains were not tested. Updated the issue-context README with commands, immutable image digests, observations, and test-coverage limits."
+}
