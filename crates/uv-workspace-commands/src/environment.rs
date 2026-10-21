@@ -30,7 +30,7 @@ use uv_workspace::WorkspaceCache;
 
 /// Installed distributions and their module ownership.
 pub(super) struct CollectedEnvironment {
-    /// Installed distributions keyed by their selected or unmanaged package IDs.
+    /// Installed distributions keyed by their locked or unmanaged package IDs.
     pub(super) packages: BTreeMap<String, InstalledDist>,
     /// Maps importable module names to the IDs of their owning distributions.
     pub(super) module_owners: BTreeMap<ModuleName, Vec<String>>,
@@ -53,6 +53,15 @@ pub(super) async fn collect_environment(
     malware_settings: &MalwareCheckSettings,
     sync: Option<Modifications>,
 ) -> Result<CollectedEnvironment> {
+    if sync.is_none() && !target.lock().conflicts().is_empty() {
+        // An existing environment need not contain all mutually exclusive extras or groups.
+        // Identify its installed alternatives without constructing an all-extras resolution.
+        let workspace_root = PortablePathBuf::from(target.install_path());
+        return inspect_environment(venv, |dist| {
+            Metadata::installed_package_node_id(&workspace_root, target.lock(), dist)
+        });
+    }
+
     let (extras, groups) = target_selection(target);
     let package_ids = selected_package_ids(target, venv, &extras, &groups, settings)?;
 
@@ -107,7 +116,8 @@ pub(super) async fn collect_environment(
         .await?;
     }
 
-    inspect_environment(venv, &package_ids.unwrap_or_default())
+    let package_ids = package_ids.unwrap_or_default();
+    inspect_environment(venv, |dist| package_ids.get(dist.name()).cloned())
 }
 
 /// Select the package IDs that can own modules in the target resolution.
@@ -144,18 +154,18 @@ fn selected_package_ids(
     Ok(Some(package_ids))
 }
 
-/// Collect installed distributions and associate their modules with selected or unmanaged package IDs.
+/// Collect installed distributions and associate their modules with locked or unmanaged package IDs.
 fn inspect_environment(
     venv: &PythonEnvironment,
-    package_ids: &BTreeMap<PackageName, String>,
+    package_id: impl Fn(&InstalledDist) -> Option<String>,
 ) -> Result<CollectedEnvironment> {
     let site_packages = SitePackages::from_environment(venv)?;
     let mut packages = BTreeMap::new();
     let mut owners = BTreeMap::<ModuleName, BTreeSet<String>>::new();
     for dist in site_packages {
-        let selected_package_id = package_ids.get(dist.name());
+        let selected_package_id = package_id(&dist);
         let package_id = selected_package_id
-            .cloned()
+            .clone()
             .unwrap_or_else(|| Metadata::unmanaged_package_node_id(&dist));
         let dist = match packages.entry(package_id.clone()) {
             Entry::Vacant(entry) => entry.insert(dist),
