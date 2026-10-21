@@ -2808,6 +2808,97 @@ fn check_script_workspace_ty_uses_locked_python_requirement() -> Result<()> {
     Ok(())
 }
 
+/// Reject a virtual workspace's checker when its lockfile does not support the current platform.
+#[test]
+#[cfg(all(feature = "test-pypi", not(windows)))]
+fn check_script_workspace_ty_rejects_unsupported_platform() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [dependency-groups]
+        dev = ["ty"]
+
+        [tool.uv]
+        environments = ["sys_platform == 'win32'"]
+
+        [tool.uv.sources]
+        ty = { path = "checker" }
+
+        [tool.uv.workspace]
+        members = []
+    "#})?;
+    let checker = context.temp_dir.child("checker");
+    checker.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "ty"
+        version = "1.2.3"
+        requires-python = ">=3.12"
+        dependencies = ["iniconfig==2.0.0"]
+
+        [project.scripts]
+        ty = "ty:main"
+
+        [build-system]
+        requires = ["uv_build>=0.7,<10000"]
+        build-backend = "uv_build"
+    "#})?;
+    checker
+        .child("src")
+        .child("ty")
+        .child("__init__.py")
+        .write_str(indoc! {r#"
+        import sys
+        import iniconfig
+
+        def main():
+            assert iniconfig is not None
+            if "--version" in sys.argv:
+                print("ty 1.2.3")
+            else:
+                print("All checks passed!")
+    "#})?;
+    context
+        .lock()
+        .arg("--python")
+        .arg("3.12")
+        .arg("--exclude-newer")
+        .arg("2026-02-15T00:00:00Z")
+        .assert()
+        .success();
+    let workspace_lock = context.read("uv.lock");
+    let script = context.temp_dir.child("script.py");
+    script.write_str(indoc! {r#"
+        # /// script
+        # requires-python = ">=3.12"
+        # dependencies = []
+        # ///
+
+        value: int = 1
+    "#})?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .check()
+            .arg("--script")
+            .arg(script.path())
+            .arg("--show-version"),
+        @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: `uv check` is experimental and may change without warning. Pass `--preview-features check-command` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: The current Python platform is not compatible with the lockfile's supported environments: `sys_platform == 'win32'`
+    "
+    );
+
+    assert_eq!(workspace_lock, context.read("uv.lock"));
+    assert!(!context.venv.exists());
+    Ok(())
+}
+
 /// A checker only present through another workspace dependency is not a selected tool.
 #[test]
 #[cfg(feature = "test-pypi")]

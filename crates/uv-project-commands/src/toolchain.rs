@@ -10,7 +10,7 @@ use uv_dispatch::UniversalState;
 use uv_distribution_types::Resolution;
 use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::InstallTarget;
-use uv_environment_operations::store_credentials_from_target;
+use uv_environment_operations::{store_credentials_from_target, validate_locked_platform};
 use uv_install_operations::loggers::SummaryInstallLogger;
 use uv_lock::{Lock, SelectedDependency};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
@@ -230,6 +230,7 @@ fn resolution_from_lock(
     build_options: &BuildOptions,
 ) -> Result<Resolution> {
     let marker_environment = resolution_markers(None, None, interpreter);
+    validate_locked_platform(lock, &marker_environment)?;
     let tags = resolution_tags(None, None, interpreter)?;
     Ok(lock.to_resolution_from_dependency(
         project.workspace().install_path(),
