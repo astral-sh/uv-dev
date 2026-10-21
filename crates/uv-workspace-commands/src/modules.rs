@@ -4,14 +4,16 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::Concurrency;
 use uv_dispatch::{BuildDispatch, UniversalState};
 use uv_distribution::DistributionDatabase;
-use uv_distribution_types::{Dist, Node, Resolution, ResolvedDist, SourceDist};
+use uv_distribution_types::{
+    Dist, DistributionMetadata, Node, Resolution, ResolvedDist, SourceDist,
+};
 use uv_environment_operations::install_target::InstallTarget;
 use uv_environment_operations::store_credentials_from_target;
 use uv_installer::Preparer;
@@ -23,7 +25,7 @@ use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_resolver::FlatIndex;
 use uv_settings::ResolverSettings;
-use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
+use uv_types::{BuildIsolation, HashStrategy, InFlight, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
 /// Discover modules from locked artifacts without installing them into the project environment.
@@ -51,24 +53,32 @@ pub(super) async fn collect_modules(
     let packages = packages
         .into_iter()
         .map(|(package_id, package)| {
-            let Node::Dist { dist, .. } =
+            let Node::Dist { dist, hashes, .. } =
                 target.installable_node(package, &tags, &marker_env, &settings.build_options)?
             else {
                 bail!("Locked package `{package_id}` has no installable distribution");
             };
-            Ok((package_id, dist))
+            let hashes = if hashes.is_empty() {
+                HashStrategy::default()
+            } else {
+                HashStrategy::verify(Arc::new(FxHashMap::from_iter([(
+                    dist.version_id(),
+                    hashes.into_iter().collect(),
+                )])))
+            };
+            Ok((package_id, dist, hashes))
         })
         .collect::<Result<Vec<_>>>()?;
-    let hashes = target
-        .lock()
-        .hash_strategy(target.install_path(), &FxHashSet::default())?;
     let build_constraints = target.lock().build_constraints(target.install_path());
     let build_hashes = HashStrategy::from_constraints(
         &build_constraints,
         Some(&marker_env),
         settings.build_hash_checking,
     )?;
-    let build_hashes = hashes.clone().with_constraint_hashes(&build_hashes)?;
+    let build_hashes = target
+        .lock()
+        .hash_strategy(target.install_path(), &FxHashSet::default())?
+        .with_constraint_hashes(&build_hashes)?;
     let extra_build_requires = target
         .extra_build_requires(
             &settings.extra_build_dependencies,
@@ -79,7 +89,7 @@ pub(super) async fn collect_modules(
             client_builder,
         )
         .await?
-        .match_runtime_distributions(|| packages.iter().map(|(_, dist)| dist))?;
+        .match_runtime_distributions(|| packages.iter().map(|(_, dist, _)| dist))?;
 
     store_credentials_from_target(target, client_builder)?;
     let client = RegistryClientBuilder::new(
@@ -100,7 +110,6 @@ pub(super) async fn collect_modules(
             BuildIsolation::SharedPackage(&build_environment, packages)
         }
     };
-    let state = state.fork();
     let build_dispatch = BuildDispatch::new(
         &client,
         cache,
@@ -109,7 +118,7 @@ pub(super) async fn collect_modules(
         &settings.index_locations,
         &flat_index,
         &settings.dependency_metadata,
-        state.clone().into_inner(),
+        state.fork().into_inner(),
         settings.index_strategy,
         &settings.config_setting,
         &settings.config_settings_package,
@@ -126,25 +135,29 @@ pub(super) async fn collect_modules(
         concurrency.clone(),
         preview,
     );
-    let preparer = Preparer::new(
-        cache,
-        &tags,
-        &hashes,
-        &settings.build_options,
-        DistributionDatabase::new(
-            &client,
-            &build_dispatch,
-            concurrency.downloads_semaphore.clone(),
-        ),
-    );
     let resolution = Resolution::default();
     let prepared = packages
         .into_iter()
-        .map(|(package_id, dist)| {
-            let preparer = &preparer;
+        .map(|(package_id, dist, hashes)| {
+            let client = &client;
+            let build_dispatch = &build_dispatch;
+            let tags = &tags;
             let resolution = &resolution;
-            let state = &state;
             async move {
+                let preparer = Preparer::new(
+                    cache,
+                    tags,
+                    &hashes,
+                    &settings.build_options,
+                    DistributionDatabase::new(
+                        client,
+                        build_dispatch,
+                        concurrency.downloads_semaphore.clone(),
+                    ),
+                );
+                // Artifact hash policies can differ between variants, so their in-flight caches
+                // must remain separate.
+                let in_flight = InFlight::default();
                 let ResolvedDist::Installable { dist, .. } = dist else {
                     bail!("Locked package `{package_id}` has no installable distribution");
                 };
@@ -154,7 +167,7 @@ pub(super) async fn collect_modules(
                     directory.editable = Some(false);
                 }
                 let wheel = preparer
-                    .get_wheel(dist, state.in_flight(), resolution)
+                    .get_wheel(dist, &in_flight, resolution)
                     .await
                     .with_context(|| {
                         format!("Failed to prepare `{package_id}` for module discovery")

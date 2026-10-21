@@ -14,6 +14,8 @@ use sha2::{Digest, Sha256};
 use uv_fs::create_symlink;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+#[cfg(feature = "test-python")]
+use uv_test::package_server::PackageServer;
 use uv_test::{copy_dir_ignore, uv_snapshot};
 
 fn write_wheel(
@@ -3052,6 +3054,113 @@ fn workspace_metadata_cached_build_runtime() -> Result<()> {
     Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
     Resolved 4 packages in [TIME]
     error: `runtime` was declared as an extra build dependency with `match-runtime = true`, but multiple locked distributions are available
+    ");
+    assert!(!context.temp_dir.child(".venv").exists());
+    Ok(())
+}
+
+/// Same-version wheels from different indexes must match their own locked hashes.
+#[tokio::test]
+#[cfg(feature = "test-python")]
+async fn workspace_metadata_cached_conflicting_index_hashes() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let first = context.temp_dir.child("first");
+    first.create_dir_all()?;
+    let first_wheel = first.child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        first_wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("first_module.py", "")],
+    )?;
+    let second = context.temp_dir.child("second");
+    second.create_dir_all()?;
+    let second_wheel = second.child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        second_wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("second_module.py", "")],
+    )?;
+    let first_bytes = fs_err::read(&first_wheel)?;
+    let second_bytes = fs_err::read(&second_wheel)?;
+    let first_hash = hex::encode(Sha256::digest(&first_bytes));
+    let second_hash = hex::encode(Sha256::digest(&second_bytes));
+    let context = context
+        .with_filter((first_hash.clone(), "[FIRST_HASH]"))
+        .with_filter((second_hash.clone(), "[SECOND_HASH]"));
+    let name = "module-owner".parse()?;
+    let first_server = PackageServer::new(&name).await;
+    let second_server = PackageServer::new(&name).await;
+    first_server
+        .serve(
+            "module_owner-0.1.0-py3-none-any.whl",
+            &first_bytes,
+            Some(&first_hash),
+        )
+        .await;
+    second_server
+        .serve(
+            "module_owner-0.1.0-py3-none-any.whl",
+            &second_bytes,
+            Some(&second_hash),
+        )
+        .await;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "module-owner-root"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        first = ["module-owner"]
+        second = ["module-owner"]
+
+        [tool.uv]
+        conflicts = [[{{ extra = "first" }}, {{ extra = "second" }}]]
+
+        [[tool.uv.index]]
+        name = "first"
+        url = "{first_index}"
+        explicit = true
+
+        [[tool.uv.index]]
+        name = "second"
+        url = "{second_index}"
+        explicit = true
+
+        [tool.uv.sources]
+        module-owner = [
+            {{ index = "first", extra = "first" }},
+            {{ index = "second", extra = "second" }},
+        ]
+    "#, first_index = first_server.index_url(), second_index = second_server.index_url()})?;
+    context.lock().assert().success();
+
+    first_server
+        .serve(
+            "module_owner-0.1.0-py3-none-any.whl",
+            &second_bytes,
+            Some(&first_hash),
+        )
+        .await;
+    uv_snapshot!(context.filters(), context.workspace_metadata().args(["--frozen", "--no-cache"]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    error: Failed to prepare `module-owner==0.1.0@registry+http://[LOCALHOST]/simple` for module discovery
+      cause: Failed to download `module-owner==0.1.0`
+      cause: Hash mismatch for `module-owner==0.1.0`
+
+             Expected:
+               sha256:[FIRST_HASH]
+
+             Computed:
+               sha256:[SECOND_HASH]
     ");
     assert!(!context.temp_dir.child(".venv").exists());
     Ok(())
