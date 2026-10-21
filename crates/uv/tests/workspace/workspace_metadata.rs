@@ -3087,29 +3087,75 @@ fn workspace_metadata_without_module_owners() -> Result<()> {
     context.lock().assert().success();
     fs_err::remove_file(wheel.path())?;
 
-    let output = context
-        .workspace_metadata()
-        .args(["--frozen", "--no-module-owners", "--offline"])
-        .assert()
-        .success();
-    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
-    insta::with_settings!({ filters => context.filters() }, {
-        insta::assert_json_snapshot!(serde_json::json!({
-            "environment": metadata.get("environment"),
-            "module_owners": metadata.get("module_owners"),
-            "resolution": metadata["resolution"].as_object().map(|resolution| resolution.keys().collect::<Vec<_>>()),
-        }), @r#"
+    let mut filters = context.filters();
+    filters.push((r#""sha256": "[0-9a-f]{64}""#, r#""sha256": "[SHA256]""#));
+    uv_snapshot!(filters, context.workspace_metadata().args([
+        "--frozen", "--no-module-owners", "--offline"
+    ]), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "members": [
         {
-          "environment": null,
-          "module_owners": null,
-          "resolution": [
-            "module-owner-root==0.1.0@virtual+[TEMP_DIR]/",
-            "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl",
-            "workspace+[TEMP_DIR]/"
-          ]
+          "name": "module-owner-root",
+          "path": "[TEMP_DIR]/",
+          "id": "module-owner-root==0.1.0@virtual+[TEMP_DIR]/"
         }
-        "#);
-    });
+      ],
+      "resolution": {
+        "module-owner-root==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "module-owner-root",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": [
+            {
+              "id": "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "module-owner==0.1.0@path+[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl": {
+          "name": "module-owner",
+          "version": "0.1.0",
+          "source": {
+            "path": "[TEMP_DIR]/module_owner-0.1.0-py3-none-any.whl"
+          },
+          "kind": "package",
+          "dependencies": [],
+          "wheels": [
+            {
+              "hashes": {
+                "sha256": "[SHA256]"
+              },
+              "filename": "module_owner-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    "#);
     assert!(!context.temp_dir.child(".venv").exists());
     Ok(())
 }
