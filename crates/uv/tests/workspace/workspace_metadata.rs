@@ -8,6 +8,7 @@ use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 
+#[cfg(feature = "test-python")]
 use uv_fs::create_symlink;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
@@ -746,6 +747,82 @@ fn workspace_metadata_conflicting_inactive_dependency() -> Result<()> {
             .join("module_owner-0.1.0.dist-info/RECORD"),
     )?;
     context.workspace_metadata().assert().success();
+    Ok(())
+}
+
+/// Installed packages remain unmanaged when the environment is outside the lockfile's Python bounds.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_conflicting_incompatible_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.11", "3.12"]);
+    context.venv().args(["--python", "3.11"]).assert().success();
+    let wheel = context
+        .temp_dir
+        .child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("installed_module.py", "")],
+    )?;
+    context.pip_install().arg(wheel.path()).assert().success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["module-owner"]
+
+        [project.optional-dependencies]
+        first = []
+        second = []
+
+        [tool.uv]
+        conflicts = [[{ extra = "first" }, { extra = "second" }]]
+
+        [tool.uv.sources]
+        module-owner = { path = "module_owner-0.1.0-py3-none-any.whl" }
+    "#})?;
+    context.lock().assert().success();
+
+    let output = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "installed_python": metadata["environment"]["python"]["version"],
+            "packages": metadata["environment"]["packages"],
+        }), @r#"
+        {
+          "installed_python": "3.11.[X]",
+          "packages": {
+            "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info": {
+              "editable": false,
+              "name": "module-owner",
+              "path": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info",
+              "version": "0.1.0"
+            }
+          }
+        }
+        "#);
+    });
+
+    fs_err::remove_file(
+        context
+            .site_packages()
+            .join("module_owner-0.1.0.dist-info/RECORD"),
+    )?;
+    context
+        .workspace_metadata()
+        .arg("--frozen")
+        .assert()
+        .success();
     Ok(())
 }
 
