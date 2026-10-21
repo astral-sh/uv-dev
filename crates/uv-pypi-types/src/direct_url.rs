@@ -292,6 +292,14 @@ mod unparsed {
                     formatter.write_str("direct URL metadata")
                 }
 
+                // Scalar URLs can contain credentials or signed query parameters.
+                fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
+                where
+                    E: serde::de::Error,
+                {
+                    Err(E::custom("invalid direct URL metadata"))
+                }
+
                 fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
                 where
                     A: MapAccess<'de>,
@@ -519,6 +527,21 @@ mod tests {
             .chain(FailedRead);
         match read_direct_url_json(reader).unwrap_err() {
             DirectUrlError::Json(error) => assert!(error.is_io()),
+            DirectUrlError::Url(error) => return Err(error.into()),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn direct_url_scalar_metadata_error() -> Result<()> {
+        let error = read_direct_url_json(
+            br#""https://user:secret@example.com/project?token=secret""#.as_slice(),
+        )
+        .unwrap_err();
+        match error {
+            DirectUrlError::Json(error) => {
+                insta::assert_snapshot!(error, @"invalid direct URL metadata at line 1 column 54");
+            }
             DirectUrlError::Url(error) => return Err(error.into()),
         }
         Ok(())
