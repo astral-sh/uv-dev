@@ -6,24 +6,36 @@ Classification: bug
 
 ## Summary
 
-No direct duplicate found. astral-sh/uv#20643 documents the relevant no-conflicts assumption; astral-sh/uv#22395 explains the current inspection path and error wording. astral-sh/uv#14848 concerns a distinct extras-selection problem in uv sync.
+Both reported failures were reproduced with the supplied minimal configuration using the installed uv 0.13.4 on Ubuntu 24.04.5 LTS x86_64 and CPython 3.12.3. Syncing only extra `a` succeeds and installs `idna==3.9`. Workspace metadata then exits 2 with the reported conflicting-extras error, and `uv check --extra a` exits 1 with the same `warning[uv-metadata]` diagnostic. A separate `uv pip check` succeeds for the environment.
 
-The reporter uses uv 0.13.4 on Ubuntu 24.04 x86_64. A single project declares extra `a` with `idna==3.9` and extra `b` with `idna==3.10`, and explicitly marks the extras as conflicting. After successfully syncing only extra `a`, workspace metadata exits with status 2. Its error says that both extras are enabled simultaneously. Running `uv check --extra a` then emits a `warning[uv-metadata]` diagnostic and exits with status 1.
+The report supplies a complete minimal configuration. It does not specify a Python version or a last working uv version; no upgrade regression is established. The issue was open with no comments when the earlier issue-context review was performed.
 
-The report supplies a complete minimal configuration. The issue was open with no comments when inspected.
+The earlier related-work search found no direct duplicate. astral-sh/uv#20643 documents the relevant no-conflicts assumption; astral-sh/uv#22395 explains the inspection path and error wording. astral-sh/uv#14848 concerns a distinct extras-selection problem in `uv sync`.
 
 ## Report and expected behavior
 
-The two observable symptoms are:
+The project explicitly declares two mutually exclusive extras and requests only one during synchronization and checking. Expected behavior is for metadata inspection to describe the valid environment without treating both alternatives as selected, and for `uv check --extra a` to avoid a metadata conflict diagnostic.
 
-- `uv workspace metadata --preview-features workspace-metadata` fails while inspecting an existing environment, despite the preceding single-extra sync.
-- `uv check --preview-features=check-command --extra a` surfaces the same metadata error through ty. The separate “No python files found” warning does not explain the conflicting-extras error.
+Observed behavior matches the report: metadata fails while inspecting the existing environment, and ty propagates that failure through `uv check`. The separate “No python files found” warning also appears in the reproduction, but the diagnostic explicitly identifies the failed metadata subprocess and conflicting extras.
 
-The trigger is an existing environment plus mutually exclusive optional dependencies declared in `tool.uv.conflicts`. Neither failing command requests all extras. Expected behavior is to inspect the valid environment and provide metadata without treating both alternatives as simultaneously selected.
+The documentation supports the bug classification independently of reproducing the error: `docs/concepts/resolution.md` permits declaring conflicting extras and installing one alternative, while `docs/reference/internals/metadata.md` describes metadata graphs containing multiple versions arising from declared conflicts. Neither failing command in this fixture requests all extras. No cross-platform or package-name/version variants were tested.
 
-The exact identifiers and error fragments used for comparison were `workspace-metadata`, `check-command`, `warning[uv-metadata]`, `Failed to inspect environment`, and `Found conflicting extras`. The package name, pinned versions, and Linux distribution are incidental to the source-confirmed selection behavior.
+## Reproduction
 
-Minimal configuration:
+**Outcome: reproducible.** Both commands produced the reported errors and exit codes on 2026-10-21.
+
+### Environment and isolation
+
+- OS: Ubuntu 24.04.5 LTS, Linux x86_64, matching the reported Ubuntu 24.04 x86_64 platform.
+- Executable from `PATH`: `/opt/hostedtoolcache/uv/0.13.4/x86_64/uv`; version output: `uv 0.13.4 (x86_64-unknown-linux-gnu)`.
+- Python: CPython 3.12.3, selected explicitly through `UV_PYTHON`. The report leaves Python unspecified.
+- `uv check` downloaded and used ty 0.0.90.
+- Project: `/tmp/uv-issue-22796-8trjppae/project`. All reproduction files, virtual environments, downloaded tools, and caches are under `/tmp/uv-issue-22796-8trjppae`.
+- Commands ran with an allowlisted environment, temporary `UV_CACHE_DIR`, `UV_CREDENTIALS_DIR`, `UV_PYTHON_INSTALL_DIR`, `UV_TOOL_DIR`, `UV_TOOL_BIN_DIR`, and `TMPDIR`. `UV_NO_CONFIG=1` avoided external uv configuration; `NETRC` pointed to a new empty temporary file and keyring integration was disabled. Python downloads and source builds were disabled. The fixture used public PyPI wheels.
+
+### Minimal fixture and commands
+
+Create this `pyproject.toml` in a new temporary project directory:
 
 ```toml
 [project]
@@ -39,7 +51,7 @@ b = ["idna==3.10"]
 conflicts = [[{ extra = "a" }, { extra = "b" }]]
 ```
 
-Reported command sequence:
+Run from that directory:
 
 ```console
 uv sync --quiet --extra a
@@ -47,15 +59,53 @@ uv workspace metadata --preview-features workspace-metadata
 uv check --preview-features=check-command --extra a
 ```
 
-## Draft response
+There are no workspace members, dependency groups, Python source files, or pre-existing lockfile or environment. The commands use the default non-frozen behavior. The configuration is the complete reported fixture, reconstructed independently; no variants were needed.
 
-Your conflict declaration is valid. Metadata inspection currently selects all extras, even when the environment was synced with only `a`, and `uv check` surfaces that failure through ty. The existing-environment integration in astral-sh/uv#20643 explicitly assumed no conflicts. This needs a fix in metadata’s environment inspection; your example is sufficient for regression tests covering both commands.
+### Observed results
+
+1. `uv sync --quiet --extra a` exits **0**, with empty stdout and stderr.
+2. `uv workspace metadata --preview-features workspace-metadata` exits **2**, with empty stdout and this stderr:
+
+   ```text
+   Resolved 3 packages in 0.51ms
+   error: Failed to inspect environment
+     cause: Found conflicting extras `mre[a]` and `mre[b]` enabled simultaneously
+   ```
+
+3. `uv check --preview-features=check-command --extra a` exits **1** and prints this diagnostic to stdout:
+
+   ```text
+   warning[uv-metadata]: `uv workspace metadata` failed with `exit status: 2`
+   --> pyproject.toml:1:1
+   info: Failed to inspect environment
+     cause: Found conflicting extras `mre[a]` and `mre[b]` enabled simultaneously
+
+   Found 1 diagnostic
+   ```
+
+   Stderr records the ty 0.0.90 download and `WARN No python files found under the given path(s)`.
+
+Inspection through `.venv/bin/python` confirms Python 3.12.3 and `idna==3.9`. The additional command `uv pip check --python .venv/bin/python` exits **0** and reports `Checked 1 package` and `All installed packages are compatible`. Thus the environment has the requested alternative installed; the reported failure does not require installing both versions.
+
+Raw exit codes and stdout/stderr are retained in `sync.json`, `metadata.json`, `check.json`, and `pip-check.json` under the temporary reproduction root.
+
+### Existing test coverage
+
+Reviewed setup and assertions in the relevant integration tests; no declared-conflicting-extras case was found in `crates/uv/tests/workspace/workspace_metadata.rs` or `crates/uv/tests/project/check.rs`.
+
+- `crates/uv/tests/workspace/workspace_metadata.rs::workspace_metadata_includes_existing_environment` locks two locally generated wheel dependencies, installs only one, deletes the uninstalled wheel, and verifies that frozen metadata inspection succeeds without syncing. It checks installed-package and module-owner output, lockfile-only discovery, and an overridden environment. It has no extras or conflict declaration.
+- `crates/uv/tests/workspace/workspace_metadata.rs::workspace_metadata_module_owners_failure_is_error` deletes a locked wheel and snapshots exit 2 with `Failed to inspect environment` under `--frozen --sync`. Its failure is a missing distribution during synchronization, not conflicting-extra inspection.
+- `crates/uv/tests/project/check.rs::check_no_sync_frozen_uses_existing_lock_without_update` makes manifest requirements unresolvable after locking, then verifies frozen checking retains the lockfile and does not install the dependency. Its exit-1 `warning[uv-metadata]` is about missing module ownership/editable paths, not conflicting extras.
+
+No repository tests were added or executed. A regression test using public PyPI dependencies needs `test-pypi` gating; the project check module already requires both `test-python` and `test-r2`. Local wheel fixtures are available in the metadata module. Any added coverage should use the existing snapshot style and separate named tests for the two commands.
 
 ## Classification
 
-Declared conflicting extras are supported when only one is selected. Source confirms that metadata inspection instead selects all extras and invokes conflict validation even without --sync, rejecting the valid environment and causing the downstream uv check diagnostic. Earlier metadata work acknowledged a no-conflicts assumption but did not fix this case. No existing issue tracks the same failure, and no previously fixed bug was found to have regressed.
+Bug; runtime reproduction confirms both reported symptoms. Explicitly conflicting extras can be locked together and used one at a time. The successful single-extra sync and compatibility check demonstrate a valid installed environment, while metadata inspection rejects it as if both extras were enabled.
 
-The earlier assumption that metadata consumers would not encounter conflicts is a limitation of the implementation, not evidence that the reported behavior is correct. The merged feature PRs below provide implementation history; they do not already track a fix for this failure. The report does not establish a last working version, and the inspected history does not establish recurrence of a previously fixed bug.
+Source inspection is consistent with the observed failure: the metadata environment-inspection path selects all extras and groups, then constructs a selected resolution before deciding whether to synchronize. Conflict validation can therefore reject the inspection even without `--sync`. Earlier metadata work acknowledged a no-conflicts assumption. This is an implementation limitation rather than an invalid conflict declaration.
+
+The related merged feature PRs provide implementation history; they do not track a fix for this failure. The report supplies no last working version, and this reproduction tested only uv 0.13.4. It establishes neither an upgrade regression nor the first affected release.
 
 ## Related
 
@@ -65,13 +115,13 @@ The earlier assumption that metadata consumers would not encounter conflicts is 
 
 ## Supporting evidence
 
-Source inspection was performed at checkout commit `dce03cb`.
+Source inspection was performed at checkout commit `dce03cb`. The runtime observations above used the installed uv 0.13.4 executable, not a binary built from this checkout.
 
 - `docs/concepts/resolution.md:612` documents explicitly conflicting extras as supported: they can be locked together but cannot be installed together.
 - `docs/reference/internals/metadata.md:67` explains that workspace metadata can describe multiple package versions arising from conflicts and exposes those conflicts in its output. A conflict declaration is therefore not inherently invalid metadata input.
 - `crates/uv-workspace-commands/src/metadata.rs:277` discovers an existing environment when sync is not requested; line 290 enters inspection whenever one exists. Line 312 adds the exact reported error context.
 - `crates/uv-workspace-commands/src/environment.rs:56` calls `target_selection` and `selected_package_ids` before the optional synchronization branch. At line 216, project and workspace targets unconditionally select all extras and all dependency groups.
-- `crates/uv-workspace-commands/src/environment.rs:124` passes those selections to `target.to_resolution`. `crates/uv-lock/src/lock/installable.rs:741` rejects activated extras belonging to the same conflict set. This establishes the metadata failure mechanism without requiring a runtime reproduction.
+- `crates/uv-workspace-commands/src/environment.rs:124` passes those selections to `target.to_resolution`. `crates/uv-lock/src/lock/installable.rs:741` rejects activated extras belonging to the same conflict set. This path is consistent with the conflict reported by the runtime reproduction.
 - `crates/uv-project-commands/src/check.rs:678` synchronizes using the requested extras. `crates/uv-project-commands/src/check/ty.rs:227` enables ty’s uv integration, and line 239 explicitly describes ty invoking workspace metadata. The reported diagnostic identifies that subprocess as the failing operation.
 - astral-sh/uv#20501 (merged July 20, 2026) changed `uv check` to have ty call uv for metadata and documented limitations in replaying command-line selections. This supports the propagation path, rather than identifying a separate type-checking error.
 - astral-sh/uv#20643 (merged July 23, 2026) extended collection to an existing environment without syncing. Its discussion explicitly describes the assumption that there are no conflicts. Its diff leaves all-extras package selection before the optional sync branch.
@@ -81,7 +131,7 @@ Source inspection was performed at checkout commit `dce03cb`.
 
 ## Search scope and excluded candidates
 
-Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separately searched workspace metadata failures and uv check propagation using the exact errors, the historical 'Failed to collect module owners' wording, workspace-metadata, check-command, uv-metadata, extras, optional dependencies, mutually exclusive dependencies, all-extras, environment inspection, and module ownership, without package/version/platform restrictions. Supplemented empty PR text searches by filtering the newest 4,000 all-state PRs and inspected candidate bodies, comments, review threads, referenced PRs, diffs, and release notes. Ruled out astral-sh/uv#22673 (conflict-validation order), astral-sh/uv#22638 (metadata schema change), and astral-sh/uv#22046 (lockfile revalidation). No matching duplicate or previous fix was found.
+The earlier issue-context review searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separately searched workspace metadata failures and uv check propagation using the exact errors, the historical 'Failed to collect module owners' wording, workspace-metadata, check-command, uv-metadata, extras, optional dependencies, mutually exclusive dependencies, all-extras, environment inspection, and module ownership, without package/version/platform restrictions. Supplemented empty PR text searches by filtering the newest 4,000 all-state PRs and inspected candidate bodies, comments, review threads, referenced PRs, diffs, and release notes. Ruled out astral-sh/uv#22673 (conflict-validation order), astral-sh/uv#22638 (metadata schema change), and astral-sh/uv#22046 (lockfile revalidation). No matching duplicate or previous fix was found.
 
 Searches covered both reported commands separately before investigating their shared implementation. Repository vocabulary included the `area:uv-check` and `area:workspaces` labels and the concepts of selected resolutions, installed distributions, module ownership, and conflict markers. Historical-error searches account for the changed outer error wording.
 
@@ -100,8 +150,6 @@ Additional plausible candidates were excluded:
 
 ## Recommended follow-up and validation limits
 
-Use the supplied example to cover metadata inspection of a valid single-extra environment and the downstream `uv check` invocation. The fix should make inspection respect declared conflicts without manufacturing a simultaneous selection of every extra. The exact selection and installed-package matching design remains implementation work.
+Add regression coverage for metadata inspection of a valid single-extra environment and the downstream `uv check` invocation in the existing test modules. Inspection should respect declared conflicts without manufacturing a simultaneous selection of every extra. The exact selection and installed-package matching design remains implementation work.
 
-Regression coverage belongs in the existing workspace metadata and project check test modules. Follow their snapshot conventions, inspect existing coverage before adding cases, and use the appropriate feature gate if a test downloads packages or ty.
-
-This handoff is based on the report, source inspection, documentation, PR diffs, comments, and release notes. No runtime reproduction or tests were run. No checkout files or GitHub objects were modified; only this handoff README was authored.
+Both reported failures are now supported by runtime evidence. The historical GitHub search findings above are retained from the earlier context review; this reproduction did not repeat those searches. No other uv versions or platforms were tested, and no repository test suite or build was run. No checkout files, existing user state, or GitHub objects were changed. The only handoff document updated was this README; reproduction artifacts remain in the temporary directory.

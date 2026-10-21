@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Reproduced using installed uv 0.13.4 on Ubuntu 24.04.5 x86_64 with CPython 3.12.3 and ty 0.0.90. With the reported pyproject.toml declaring conflicting extras a=[idna==3.9] and b=[idna==3.10], `uv sync --quiet --extra a` succeeds. `uv workspace metadata --preview-features workspace-metadata` exits 2: “Failed to inspect environment” and “Found conflicting extras `mre[a]` and `mre[b]` enabled simultaneously”. `uv check --preview-features=check-command --extra a` exits 1 with the reported warning[uv-metadata] diagnostic. The environment contains idna==3.9 and passes `uv pip check`. All reproduction files and caches were isolated under /tmp. Updated $RUNNER_TEMP/issue-context/README.md with observations and existing test coverage; no checkout files or GitHub objects were changed."
+}
