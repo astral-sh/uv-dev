@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Confirmed with installed uv 0.13.4 on Ubuntu 24.04.5 x86_64. Put `a ; python_full_version not in '3.20+x' and python_full_version < '4'` in requirements.in and run `uv pip compile --universal --no-index requirements.in`: it aborts with SIGABRT (shell status 134), reporting OperatorLocalCombo { operator: LessThan, version: \"3.20+x\" } at version_specifier.rs:629:78. The reported `uv lock --offline` fixture also reproduces with Python 3.14.8, as does a reconstructed `uv export --frozen` fixture. Removing the upper bound, replacing `not in` with `!=`, or removing the local suffix avoids the compile panic. Updated $RUNNER_TEMP/issue-context/README.md with fixtures, results, and test-coverage findings. No checkout files or GitHub state were changed."
+}

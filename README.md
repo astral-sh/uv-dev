@@ -6,22 +6,67 @@ Classification: bug
 
 ## Summary
 
-No duplicate found. astral-sh/uv#6172 provides the containment-marker implementation history; astral-sh/uv#21310 and astral-sh/uv#21311 discuss adjacent parsing limitations, not this panic.
+Reproduced on the installed uv 0.13.4 binary: `uv lock --offline`,
+`uv pip compile --universal --no-index`, and `uv export --frozen` all abort with
+`OperatorLocalCombo { operator: LessThan, version: "3.20+x" }` when a
+`python_full_version not in '3.20+x'` marker is combined with an upper bound of `< '4'`.
+Each process terminated with SIGABRT, matching shell status 134. No dependency download
+or package build is needed.
 
-The reporter describes an offline process abort when a dependency marker combines
-`python_full_version not in '3.20+x'` with `python_full_version < '4'`.
-The panic is `VersionSpecifierBuildError { kind: OperatorLocalCombo { operator: LessThan, version: "3.20+x" } }`
-from an unwrapped result in `crates/uv-pep440/src/version_specifier.rs:629`.
-Reported exit status is 134 (SIGABRT).
+The reproduction ran on Ubuntu 24.04.5 x86_64, rather than the reported Arch Linux host.
+The exact lock fixture reproduced with CPython 3.14.8. Universal compilation also
+reproduced before Python 3.14 was installed, with host Python 3.12.3 available.
+The reported three non-panicking variants returned ordinary resolution errors in
+universal compilation. Removing the export lockfile's upper-bound resolution marker
+made frozen export succeed.
 
-The report names uv 0.13.4 and 0.12.24, Linux x86_64, and Python 3.14. This is a synthetic
-marker-handling example; the reporter does not claim an affected real project. The issue has
-no comments at inspection time. Static inspection supports the failure mechanism; the CLI
-examples were not executed during this investigation.
+No duplicate was identified in the recorded related-issue investigation.
+astral-sh/uv#6172 provides containment-marker implementation history;
+astral-sh/uv#21310 and astral-sh/uv#21311 concern adjacent parsing limitations.
+The report is synthetic, with no claimed affected real project. It also names uv 0.12.24;
+that version was not tested, and no last known-good release or regression boundary was established.
 
-## Report and triggering conditions
+## Classification
 
-The minimal project supplied by the reporter is:
+Bug: an input marker causes a process abort instead of a controlled diagnostic or
+successful marker handling. This classification rests on observed CLI behavior.
+The choice between rejecting this marker and supporting a normalized form remains a
+maintainer decision; limited containment support does not require accepting this syntax.
+
+No inspected issue or pull request was identified as the same failure. The adjacent
+containment discussions establish compatibility constraints, and no inspected historical
+fix establishes this as a recurrence of a previously fixed bug.
+
+## Related
+
+- astral-sh/uv#6172 — Add support for `python_version in ...` markers (pull request, merged). Introduced version-field containment support with deliberately limited, whitespace-separated exact-version semantics. Its discussion explicitly covers python_full_version; it establishes the relevant implementation history but does not address local-version exclusions combined with bounds.
+- astral-sh/uv#21310 — uv-pep508 evaluates python_version in a,b,c as always true (issue, closed). Nearby containment-marker correctness report. Comma-separated versions were ignored and evaluated as true; the discussion declined broader support because version-field containment is deprecated. It reports neither local-version bounds nor a panic.
+- astral-sh/uv#21311 — fix: Allow commas as python_version string separators (pull request, open). Proposes a parser change for astral-sh/uv#21310. Maintainer comments explain why containment support should not be expanded. It remains unmerged and concerns separators, not the local-version range-rendering panic, so it is not a duplicate or a fix for this report.
+
+## Reproduction
+
+Outcome: **reproducible** for all three reported command paths.
+
+### Environment and isolation
+
+- Executable on PATH: `/opt/hostedtoolcache/uv/0.13.4/x86_64/uv`.
+- Version: `uv 0.13.4 (x86_64-unknown-linux-gnu)`.
+- Host: Ubuntu 24.04.5 LTS, Linux `7.0.0-1017-azure`, x86_64.
+- Initial host interpreter: Python 3.12.3. `uv python install 3.14` installed CPython
+  3.14.8 into the temporary reproduction directory for the exact lock example.
+- Reported environment: Arch Linux, Linux 7.2.8 x86_64, uv 0.13.4 and 0.12.24,
+  Python 3.14 (patch version unspecified).
+- Fixtures and captured stdout/stderr are under `/tmp/uv-22804-b0ezgnie/`.
+  Subprocesses used an isolated environment with temporary HOME, TMPDIR, XDG directories,
+  `UV_CACHE_DIR`, and `UV_PYTHON_INSTALL_DIR`; `UV_NO_CONFIG=1`, `UV_OFFLINE=1`, and
+  `UV_PYTHON_DOWNLOADS=never` were set for reproduction commands. Only the explicit
+  Python installation enabled network access. Core dumps were disabled.
+- The installed uv executable was used throughout. No checkout build, source edit,
+  test edit, or GitHub change was made.
+
+### Offline lock
+
+In a temporary directory, write `pyproject.toml`:
 
 ```toml
 [project]
@@ -31,73 +76,159 @@ requires-python = ">=3.14"
 dependencies = ["a ; python_full_version not in '3.20+x' and python_full_version < '4'"]
 ```
 
-The observable claims were separated before searching:
+With Python 3.14 available, run:
 
-- `uv lock --offline` aborts for this project, without needing the dependency to exist.
-- `uv pip compile --universal --no-index` reportedly aborts with the same requirement in
-  `requirements.in`.
-- `uv export --frozen` reportedly aborts when a lockfile dependency edge has
-  `python_full_version not in '3.20+x'` and the lockfile's `resolution-markers` contains
-  `python_full_version < '4'`. The report describes this lockfile shape but does not attach
-  a complete export fixture.
-- The reporter says removing the upper bound, using `!=` instead of `not in`, or removing
-  the local suffix avoids the panic.
-- Expected behavior is a controlled error or non-panicking marker handling. There is no request
-  to expand local-version or containment syntax support.
+```sh
+uv lock --offline
+```
 
-Search dimensions included the panic/abort symptom; the three command paths; PEP 508 marker
-parsing, range intersection and rendering; the conjunction of a local-version exclusion and
-upper bound; and the exact error and function identifiers. The reported explanation was
-checked separately from searches for observable failures.
+Observed stderr, omitting the variable thread identifier:
 
-## Draft response
+```text
+Using CPython 3.14.8
 
-Your example exposes a bug in marker handling. The current source retains the local suffix for `not in` ranges, then unwraps an error when rendering an ordered comparison against that local version. Version-field containment has deliberately limited support, as discussed in astral-sh/uv#21311, but it should not abort the process. The next step is regression coverage for your bounded exclusion and a change that handles or rejects the local-version bound without panicking, including the reported compile and export paths.
+thread 'main2' panicked at crates/uv-pep440/src/version_specifier.rs:629:78:
+called `Result::unwrap()` on an `Err` value: VersionSpecifierBuildError { kind: OperatorLocalCombo { operator: LessThan, version: "3.20+x" } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+```
 
-## Classification
+Python's subprocess API returned `-6` (SIGABRT), equivalent to shell status 134.
+Before installing Python 3.14, this exact fixture exited 2 because no interpreter
+satisfying `>=3.14` was available. That interpreter prerequisite was resolved without
+changing the reported fixture.
 
-The reported process abort is incorrect behavior, and the source confirms an unchecked conversion from a local-version range bound to a forbidden ordered PEP 440 specifier. Limited or deprecated containment syntax does not justify a panic. No inspected issue or PR tracks this same failure, and no prior fix or regression was established.
+### Universal compilation
 
-The related containment discussions establish a compatibility boundary, not permission to
-abort on input. No inspected historical fix addresses this combination, and the report also
-names an older affected release. Therefore this is neither a duplicate of the containment
-support request nor an established recurrence of a previously fixed bug.
+In another temporary directory, write `requirements.in`:
 
-## Related
+```text
+a ; python_full_version not in '3.20+x' and python_full_version < '4'
+```
 
-- astral-sh/uv#6172 — Add support for `python_version in ...` markers (pull request, merged). Introduced version-field containment support with deliberately limited, whitespace-separated exact-version semantics. Its discussion explicitly covers python_full_version; it establishes the relevant implementation history but does not address local-version exclusions combined with bounds.
-- astral-sh/uv#21310 — uv-pep508 evaluates python_version in a,b,c as always true (issue, closed). Nearby containment-marker correctness report. Comma-separated versions were ignored and evaluated as true; the discussion declined broader support because version-field containment is deprecated. It reports neither local-version bounds nor a panic.
-- astral-sh/uv#21311 — fix: Allow commas as python_version string separators (pull request, open). Proposes a parser change for astral-sh/uv#21310. Maintainer comments explain why containment support should not be expanded. It remains unmerged and concerns separators, not the local-version range-rendering panic, so it is not a duplicate or a fix for this report.
+Run:
+
+```sh
+uv pip compile --universal --no-index requirements.in
+```
+
+Observed the same source location and exact `OperatorLocalCombo` error in thread
+`main`, followed by SIGABRT (`subprocess.returncode == -6`, shell equivalent 134).
+This reproduced with only host Python 3.12.3 available. Package `a` does not need to exist.
+
+Three separate control inputs were each passed to the same universal compile command:
+
+| Requirement marker | Observed result |
+| --- | --- |
+| `python_full_version not in '3.20+x'` | Exit 1, ordinary unsatisfiable-requirements diagnostic; no panic. |
+| `python_full_version != '3.20+x' and python_full_version < '4'` | Exit 1, ordinary unsatisfiable-requirements diagnostic; no panic. |
+| `python_full_version not in '3.20' and python_full_version < '4'` | Exit 1, ordinary unsatisfiable-requirements diagnostic; no panic. |
+
+The controls have no available package versions because index access is disabled.
+They validate the reported panic distinction without establishing that these marker
+spellings have equivalent semantics.
+
+### Frozen export
+
+The report describes a lockfile shape but does not supply a complete file. The following
+minimal fixture was constructed and tested. Its package entries do not require downloads.
+
+`pyproject.toml`:
+
+```toml
+[project]
+name = "repro"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = ["a ; python_full_version not in '3.20+x'"]
+```
+
+`uv.lock`:
+
+```toml
+version = 1
+revision = 3
+requires-python = ">=3.14"
+resolution-markers = ["python_full_version < '4'"]
+
+[[package]]
+name = "repro"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "a", marker = "python_full_version not in '3.20+x'" },
+]
+
+[[package]]
+name = "a"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+```
+
+Run:
+
+```sh
+uv export --frozen
+```
+
+Observed the generated-file header, followed by the same `OperatorLocalCombo` panic
+at `version_specifier.rs:629:78` in thread `main2`, and SIGABRT (`-6`, shell equivalent 134).
+As a control, removing only the `resolution-markers` line made the command exit 0 and emit:
+
+```text
+a==1.0.0 ; python_full_version != '3.20+x'
+    # via repro
+```
+
+### Existing test coverage
+
+Searched `crates/uv/tests/`, including `crates/uv/tests/it/`, and
+`crates/uv-client/tests/it/`, plus the marker and version-specifier crates.
+No CLI regression test for this local-suffix containment plus upper-bound combination
+was found. In this checkout the relevant integration modules are
+`crates/uv/tests/lock/lock.rs`, `crates/uv/tests/pip_compile/pip_compile.rs`, and
+`crates/uv/tests/project/export.rs`.
+
+Read the following related test setups and assertions:
+
+- `crates/uv-pep508/src/marker/tree.rs::test_version_in_evaluation` checks version-field
+  containment against Python 2.7 and 3.7 marker environments, including `not in` for
+  `python_version` and `implementation_version`. It does not exercise a local suffix
+  combined with an upper bound or CLI rendering.
+- `crates/uv-pep508/src/marker/tree.rs::test_marker_simplification` checks marker equality
+  and rendered strings through `assert_simplifies`, including ordinary version containment
+  and unbounded exclusions. It lacks the reported bounded local-version exclusion.
+- `crates/uv/tests/project/export.rs::requirements_txt_simplifies_selected_root_extra_markers_from_lock`
+  writes a minimal lockfile and snapshots successful frozen export after selecting extras.
+  It establishes an existing fixture pattern but does not cover version containment.
+
+No repository tests were run or added; the installed CLI was exercised directly.
+Any follow-up regression tests should use the existing integration modules and applicable
+feature gates without duplicating these distinct existing cases.
 
 ## Supporting source evidence
 
 Inspected checkout: `1765e51d67f43299d8fbd37b302b773a80c8499d`.
+The following source behavior is consistent with the observed panic and control cases:
 
 - `crates/uv-pep508/src/marker/parse.rs:393`: `parse_version_in_expr` parses whitespace-separated
-  values using `Version::from_str` and retains the parsed versions, including local segments.
+  values using `Version::from_str`, retaining local segments.
 - `crates/uv-pep508/src/marker/algebra.rs:249`: `VersionIn` expressions for
   `PythonFullVersion` use `Edges::from_versions`.
 - `crates/uv-pep508/src/marker/algebra.rs:1692`: `from_versions` constructs singleton
-  ranges without stripping suffixes and complements the range for `NotIn`.
-  By contrast, ordinary comparison specifiers go through `only_release()` at line 1659.
-- `crates/uv-pep508/src/marker/simplify.rs:264`: `range_inequality` only renders an
-  exclusion as `!=` when the overall bounding range is unbounded on both sides.
-  Adding `< '4'` prevents that shortcut.
-- `crates/uv-pep508/src/marker/simplify.rs:94`: remaining version ranges are rendered
-  through `VersionSpecifier::from_release_only_bounds`. The local-version exclusion leaves
-  an excluded bound at `3.20+x`.
-- `crates/uv-pep440/src/version_specifier.rs:448`: `from_version` rejects a local version
-  combined with an incompatible operator using `OperatorLocalCombo`.
-  `from_upper_bound` at line 623 constructs `LessThan` for an excluded bound and unwraps
-  that rejected result at line 629.
+  ranges without stripping suffixes, then complements the range for `NotIn`.
+  Ordinary comparison specifiers instead go through `only_release()` at line 1659.
+- `crates/uv-pep508/src/marker/simplify.rs:264`: `range_inequality` renders exclusions
+  as `!=` only when the overall bounding range is unbounded on both sides.
+  The upper bound prevents that shortcut.
+- `crates/uv-pep508/src/marker/simplify.rs:94`: other version ranges are rendered through
+  `VersionSpecifier::from_release_only_bounds`.
+- `crates/uv-pep440/src/version_specifier.rs:448`: `from_version` rejects an incompatible
+  operator with a local version using `OperatorLocalCombo`. `from_upper_bound` at line 623
+  constructs `LessThan` for an excluded bound and unwraps that result at line 629.
+  The observed panic identifies precisely this rejected operator/version pair and location.
 
-These source facts explain the reported difference between `not in` and `!=`, and why the
-upper bound matters. They establish the unsafe error handling without independently confirming
-the reported exit status or every CLI path.
-
-Existing tests in `crates/uv-pep508/src/marker/tree.rs` cover version containment evaluation
-and simplification, including unbounded exclusions. A targeted search in the marker crates
-and CLI integration tests found no local-suffix containment case. No tests or code were changed.
+Runtime evidence confirms the abort and input distinctions. It does not establish a
+release regression boundary or which rejection/normalization policy should replace the panic.
 
 ## Search scope and exclusions
 
@@ -125,15 +256,11 @@ coverage of every historical PR.
 
 ## Suggested next steps
 
-Reproduce the offline lock example and add focused regression coverage in the relevant existing
-integration modules. Exercise universal compilation and frozen export where they reach distinct
-rendering paths; construct a complete lockfile fixture for the export case. Check the existing
-marker tests before adding overlapping coverage and apply any required test feature gates.
+Add focused regression coverage for the confirmed offline lock, universal compile, and
+frozen export paths where they exercise distinct rendering behavior. Check existing coverage
+and applicable feature gates before adding tests.
 
-Choose a controlled rejection or normalization strategy for local versions in containment
-ranges, consistent with the deliberately limited support discussed in astral-sh/uv#21311.
-Avoid creating an ordered local-version specifier and unwrapping its error. The report does not
-establish that replacing `not in` with `!=` preserves all intended semantics.
-
-This handoff records source inspection and GitHub research only. No runtime reproduction was
-attempted, no checkout files were edited, and no GitHub changes were made.
+Choose controlled rejection or normalization for local versions in containment ranges,
+consistent with the limited support discussed in astral-sh/uv#21311. Avoid constructing
+an ordered local-version specifier and unwrapping its error. The successful controls do not
+establish that replacing `not in` with `!=` preserves every intended semantic distinction.
