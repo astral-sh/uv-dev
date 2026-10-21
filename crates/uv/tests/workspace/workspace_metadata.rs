@@ -572,6 +572,176 @@ fn workspace_metadata_conflicting_indexes() -> Result<()> {
     Ok(())
 }
 
+/// Inactive dependency markers keep installed packages unmanaged despite declared conflicts.
+#[test]
+#[cfg(all(feature = "test-python", not(windows)))]
+fn workspace_metadata_conflicting_inactive_dependency() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context
+        .temp_dir
+        .child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("installed_module.py", "")],
+    )?;
+    context.pip_install().arg(wheel.path()).assert().success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["module-owner; sys_platform == 'win32'"]
+
+        [project.optional-dependencies]
+        first = []
+        second = []
+
+        [tool.uv]
+        conflicts = [[{ extra = "first" }, { extra = "second" }]]
+
+        [tool.uv.sources]
+        module-owner = { path = "module_owner-0.1.0-py3-none-any.whl" }
+    "#})?;
+
+    let output = context.workspace_metadata().assert().success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "packages": metadata["environment"]["packages"],
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "module_owners": {
+            "installed_module": [
+              {
+                "package_id": "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info"
+              }
+            ]
+          },
+          "packages": {
+            "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info": {
+              "editable": false,
+              "name": "module-owner",
+              "path": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info",
+              "version": "0.1.0"
+            }
+          }
+        }
+        "#);
+    });
+
+    fs_err::remove_file(
+        context
+            .site_packages()
+            .join("module_owner-0.1.0.dist-info/RECORD"),
+    )?;
+    context.workspace_metadata().assert().success();
+    Ok(())
+}
+
+/// Git LFS distinguishes locked sources sharing a repository, version, and commit.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_conflicting_git_lfs() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context
+        .temp_dir
+        .child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("installed_module.py", "")],
+    )?;
+    context.pip_install().arg(wheel.path()).assert().success();
+    fs_err::write(
+        context
+            .site_packages()
+            .join("module_owner-0.1.0.dist-info/direct_url.json"),
+        indoc! {r#"
+            {
+                "url": "https://example.com/module-owner",
+                "vcs_info": {
+                    "vcs": "git",
+                    "commit_id": "0123456789012345678901234567890123456789",
+                    "git_lfs": true
+                }
+            }
+        "#},
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        conflicts = [[{ package = "mre", extra = "first" }, { package = "mre", extra = "second" }]]
+
+        [[package]]
+        name = "module-owner"
+        version = "0.1.0"
+        source = { git = "https://example.com/module-owner#0123456789012345678901234567890123456789" }
+
+        [[package]]
+        name = "module-owner"
+        version = "0.1.0"
+        source = { git = "https://example.com/module-owner?lfs=true#0123456789012345678901234567890123456789" }
+
+        [[package]]
+        name = "mre"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [package.optional-dependencies]
+        first = [{ name = "module-owner", version = "0.1.0", source = { git = "https://example.com/module-owner#0123456789012345678901234567890123456789" } }]
+        second = [{ name = "module-owner", version = "0.1.0", source = { git = "https://example.com/module-owner?lfs=true#0123456789012345678901234567890123456789" } }]
+    "#})?;
+
+    let output = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "packages": metadata["environment"]["packages"],
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "module_owners": {
+            "installed_module": [
+              {
+                "package_id": "module-owner==0.1.0@git+https://example.com/module-owner?lfs=true#0123456789012345678901234567890123456789"
+              }
+            ]
+          },
+          "packages": {
+            "module-owner==0.1.0@git+https://example.com/module-owner?lfs=true#0123456789012345678901234567890123456789": {
+              "editable": false,
+              "name": "module-owner",
+              "path": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info",
+              "version": "0.1.0"
+            }
+          }
+        }
+        "#);
+    });
+    Ok(())
+}
+
 /// Lockfile metadata requires revision 5 or later.
 #[test]
 fn workspace_metadata_lockfile_requires_revision() -> Result<()> {

@@ -97,6 +97,8 @@ pub struct Metadata {
     /// The dependency graph.
     #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
     resolution: BTreeMap<MetadataNodeIdFlat, MetadataNode>,
+    #[serde(skip)]
+    reachability: BTreeMap<MetadataNodeIdFlat, MarkerTree>,
 }
 
 /// The schema version for the metadata report.
@@ -1091,6 +1093,7 @@ fn package_source_matches_installed(root: &Path, package: &Package, dist: &Insta
                 || source.subdirectory != *subdirectory
                 || source.path != *path
                 || vcs_info.commit_id.as_deref() != Some(source.precise.as_str())
+                || vcs_info.git_lfs.unwrap_or(false) != source.lfs.enabled()
             {
                 return false;
             }
@@ -1567,6 +1570,7 @@ impl Metadata {
             requires_python: lock.requires_python.clone(),
             members,
             resolution: resolve,
+            reachability,
         }
     }
 
@@ -1586,7 +1590,7 @@ impl Metadata {
 
     /// Match an installed distribution to a locked package without selecting conflicting extras.
     pub fn installed_package_node_id(
-        workspace_root: &PortablePathBuf,
+        &self,
         lock: &Lock,
         dist: &InstalledDist,
         marker_env: &MarkerEnvironment,
@@ -1598,11 +1602,15 @@ impl Metadata {
                 if let Source::Virtual(_) = package.id.source {
                     return false;
                 }
-                package.fork_markers.is_empty()
-                    || package
-                        .fork_markers
-                        .iter()
-                        .any(|marker| marker.pep508().evaluate(marker_env, &[]))
+                let id = MetadataNodeId::from_package_id(
+                    &self.workspace_root,
+                    &package.id,
+                    MetadataNodeKind::Package,
+                )
+                .to_flat();
+                self.reachability
+                    .get(&id)
+                    .is_some_and(|marker| marker.evaluate(marker_env, &[]))
             })
             .peekable();
         let first = candidates.next()?;
@@ -1614,7 +1622,7 @@ impl Metadata {
                 package
                     .version()
                     .is_none_or(|version| version == dist.version())
-                    && package_source_matches_installed(workspace_root.as_ref(), package, dist)
+                    && package_source_matches_installed(self.workspace_root.as_ref(), package, dist)
             });
             let package = matches.next()?;
             // Installed metadata does not always identify a source, such as the original index.
@@ -1624,8 +1632,12 @@ impl Metadata {
             package
         };
         Some(
-            MetadataNodeId::from_package_id(workspace_root, &package.id, MetadataNodeKind::Package)
-                .to_flat(),
+            MetadataNodeId::from_package_id(
+                &self.workspace_root,
+                &package.id,
+                MetadataNodeKind::Package,
+            )
+            .to_flat(),
         )
     }
 

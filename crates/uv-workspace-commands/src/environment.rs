@@ -42,6 +42,7 @@ pub(super) struct CollectedEnvironment {
 /// outside the selected resolution; exact synchronization removes them.
 pub(super) async fn collect_environment(
     target: InstallTarget<'_>,
+    metadata: &Metadata,
     venv: &PythonEnvironment,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
@@ -54,14 +55,8 @@ pub(super) async fn collect_environment(
     sync: Option<Modifications>,
 ) -> Result<CollectedEnvironment> {
     if sync.is_none() && !target.lock().conflicts().is_empty() {
-        let workspace_root = PortablePathBuf::from(target.install_path());
         return inspect_environment(venv, |dist| {
-            Metadata::installed_package_node_id(
-                &workspace_root,
-                target.lock(),
-                dist,
-                venv.interpreter().markers(),
-            )
+            metadata.installed_package_node_id(target.lock(), dist, venv.interpreter().markers())
         });
     }
 
