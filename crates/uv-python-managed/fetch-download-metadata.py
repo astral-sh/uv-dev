@@ -11,7 +11,7 @@
 """
 Fetch Python version download metadata.
 
-Generates the `download-metadata.json` file.
+Generates the provider catalogs in `download-metadata/`.
 
 Usage:
 
@@ -55,7 +55,7 @@ import logging
 import os
 import re
 from collections.abc import Generator, Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar, NamedTuple, Self
@@ -64,7 +64,7 @@ from urllib.parse import unquote
 import httpx
 
 SELF_DIR = Path(__file__).parent
-VERSIONS_FILE = SELF_DIR / "download-metadata.json"
+VERSIONS_DIR = SELF_DIR / "download-metadata"
 logger = logging.getLogger(__name__)
 
 # The date at which the default CPython musl builds became dynamically linked
@@ -131,6 +131,15 @@ class PlatformTriple(NamedTuple):
 
     def key(self) -> PlatformTripleKey:
         return (self.platform, self.arch.key(), self.libc)
+
+    def cargo_dist(self) -> str:
+        vendor = {"darwin": "apple", "windows": "pc"}.get(self.platform, "unknown")
+        triple = f"{self.arch}-{vendor}-{self.platform}"
+        if self.platform == "windows":
+            return f"{triple}-msvc"
+        if self.libc != "none":
+            return f"{triple}-{self.libc}"
+        return triple
 
 
 class Version(NamedTuple):
@@ -213,6 +222,7 @@ class PythonDownload:
     build: str
     artifact_variants: ArtifactVariants
     sha256: str | None = None
+    artifact: dict[str, Any] | None = None
 
     @property
     def variant(self) -> Variant | None:
@@ -379,6 +389,7 @@ class CPythonFinder(Finder):
                 variant_str, platform_build_options
             ),
             sha256=sha256,
+            artifact=artifact,
         )
 
     def _normalize_triple(self, triple: str) -> PlatformTriple | None:
@@ -787,7 +798,7 @@ def filter_cpython_versions(downloads: list[PythonDownload]) -> list[PythonDownl
 
 
 def render(downloads: list[PythonDownload], *, prune: bool = False) -> None:
-    """Render `download-metadata.json`."""
+    """Render the selected release artifacts in each provider's NDJSON catalog."""
     downloads = [download for download in downloads if is_compatible_download(download)]
     if prune:
         downloads = filter_cpython_versions(downloads)
@@ -825,7 +836,12 @@ def render(downloads: list[PythonDownload], *, prune: bool = False) -> None:
 
     downloads.sort(key=sort_key)
 
-    results = {}
+    catalogs: dict[str, dict[str, list[dict[str, Any]]]] = {
+        "python-build-standalone": {},
+        "pypy": {},
+        "graalpy": {},
+        "pyodide": {},
+    }
     for download in downloads:
         key = download.key()
         if (download.version.major, download.version.minor) < (3, 8):
@@ -845,24 +861,45 @@ def render(downloads: list[PythonDownload], *, prune: bool = False) -> None:
             if download.artifact_variants.flavor
             else "",
         )
-        results[key] = {
-            "name": download.implementation,
-            "arch": asdict(download.triple.arch),
-            "os": download.triple.platform,
-            "libc": download.triple.libc,
-            "major": download.version.major,
-            "minor": download.version.minor,
-            "patch": download.version.patch,
-            "prerelease": download.version.prerelease,
-            "url": download.url,
-            "sha256": download.sha256,
-            "variant": download.variant if download.variant else None,
-            "build": download.build,
-        }
+        if download.triple.platform == "emscripten":
+            provider = "pyodide"
+        elif download.implementation == ImplementationName.CPYTHON:
+            provider = "python-build-standalone"
+        else:
+            provider = download.implementation
 
-    VERSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    # Make newlines consistent across platforms
-    VERSIONS_FILE.write_text(json.dumps(results, indent=2) + "\n", newline="\n")
+        artifact = download.artifact
+        if artifact is None:
+            flavor = download.artifact_variants.flavor
+            if flavor is None or flavor not in ARCHIVE_FLAVORS:
+                raise ValueError("Provider adapters must specify an archive flavor")
+            archive_format = next(
+                extension
+                for extension in ("tar.gz", "tar.zst", "tar.bz2", "zip")
+                if download.filename.endswith(f".{extension}")
+            )
+            artifact = {
+                "url": download.url,
+                "platform": download.triple.cargo_dist(),
+                "variant": "+".join((*download.artifact_variants.names, flavor)),
+                "archive_format": archive_format,
+                "sha256": download.sha256,
+            }
+        version = f"{download.version}+{download.build}"
+        catalogs[provider].setdefault(version, []).append(artifact)
+
+    VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    for provider, releases in catalogs.items():
+        records = (
+            {"version": version, "artifacts": artifacts}
+            for version, artifacts in releases.items()
+        )
+        (VERSIONS_DIR / f"{provider}.ndjson").write_text(
+            "".join(
+                json.dumps(record, separators=(",", ":")) + "\n" for record in records
+            ),
+            newline="\n",
+        )
 
 
 async def find(*, prune: bool = False) -> None:

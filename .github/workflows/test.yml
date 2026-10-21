@@ -64,9 +64,12 @@ jobs:
           version: "0.13.4"
           checksum: "2b428396f12572d4429cf210ca234dd599a33b3af0958a4d5ed569d63e3f344f"
 
+      - name: "Export Python download metadata for bootstrap uv"
+        run: uv run --no-project --python 3.12 scripts/python_download_metadata.py "${{ runner.temp }}/python-downloads.json"
+
       - name: "Install required Python versions"
         env:
-          UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+          UV_PYTHON_DOWNLOADS_JSON_URL: ${{ runner.temp }}/python-downloads.json
         run: |
           uv python install
           # Warm the cache for Unix-only tests
@@ -208,9 +211,12 @@ jobs:
           version: "0.13.4"
           checksum: "e0b1d4743ce64c55d9f0f4a444afa6b81125680070ee04e853fcd0f6c1ebf8f1"
 
+      - name: "Export Python download metadata for bootstrap uv"
+        run: uv run --no-project --python 3.12 scripts/python_download_metadata.py "${{ runner.temp }}/python-downloads.json"
+
       - name: "Install required Python versions"
         env:
-          UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+          UV_PYTHON_DOWNLOADS_JSON_URL: ${{ runner.temp }}/python-downloads.json
         run: |
           uv python install
           # Warm the cache for Unix-only tests
@@ -290,9 +296,12 @@ jobs:
           version: "0.13.4"
           checksum: "ccec7508a07d9933d7cb1261880633efcf1f30d6e6eddab21823f1dae6f23225"
 
+      - name: "Export Python download metadata for bootstrap uv"
+        run: uv run --no-project --python 3.12 scripts/python_download_metadata.py "${{ runner.temp }}/python-downloads.json"
+
       - name: "Install required Python versions"
         env:
-          UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+          UV_PYTHON_DOWNLOADS_JSON_URL: ${{ runner.temp }}/python-downloads.json
         run: uv python install
 
       - name: "Install Rust toolchain"

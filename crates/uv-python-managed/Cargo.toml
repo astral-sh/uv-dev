@@ -70,5 +70,4 @@ temp-env = { workspace = true }
 [build-dependencies]
 uv-static = { workspace = true }
 
-serde_json = { workspace = true }
 zstd = { workspace = true }

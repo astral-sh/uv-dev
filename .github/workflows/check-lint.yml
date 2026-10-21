@@ -62,7 +62,7 @@ jobs:
           uv workspace list --scripts |
           while IFS= read -r script; do
             printf 'Checking %s\n' "$script" >&2
-            uv check --script "$script" --locked
+            PYTHONPATH="$(dirname "$(realpath "$script")")" uv check --script "$script" --locked
           done
 
   shellcheck:
