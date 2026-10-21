@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22787,
+        "title": "Bump version to 0.13.5",
+        "url": "https://github.com/astral-sh/uv/pull/22787",
+        "state": "merged",
+        "reason": "Merged on 2026-10-21 at 02:55 UTC, adding the 0.13.5 version and the changelog's \"Released on 2026-10-21\" statement. The canceled workflow ran on this merge commit. This is the release preparation that introduced the mismatch, not an existing discussion resolving it."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22788,
+        "title": "Revert python-build-standalone release sync",
+        "url": "https://github.com/astral-sh/uv/pull/22788",
+        "state": "merged",
+        "reason": "Merged at 04:26 UTC after the release cancellation, reverting the Python update advertised in the 0.13.5 changelog. Its body documents intermittent SIGBUS crashes during CodSpeed profiling and restoration of the 20261013 metadata. It does not explicitly establish why the release was canceled or correct the changelog's publication status."
+      },
+      {
+        "kind": "issue",
+        "number": 22789,
+        "title": "Rebuild 0.13.4 Docker images to pick up patched ca-certificates (eMudhra CA compromise)",
+        "url": "https://github.com/astral-sh/uv/issues/22789",
+        "state": "open",
+        "reason": "Requests rebuilding 0.13.4 images or releasing 0.13.5 to obtain patched system certificates. It concerns the same release window, but tracks stale Docker base images rather than the changelog/publication mismatch; it is not a duplicate or evidence of the cancellation's cause."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Literal searches covered 0.13.5, the reported commit SHA, workflow ID, changelog, and release canceled/cancelled. Conceptual searches covered unreleased versions, releases not available/not published, automation selecting the latest release, and internal:releases. Fix-oriented searches covered release/publish/changelog PRs and historical release failures. PR search omitted known matches, so coverage was supplemented with the 200 most recently updated PRs, commit metadata, and direct PR/comment/diff inspection. Followed the Python update/revert chain and astral-sh/uv#3198 to its merged fix astral-sh/uv#3217; that historical partial-publication failure differs from this canceled, unpublished release. Also ruled out astral-sh/uv#1774 (missing release notes) and astral-sh/uv#18813 (dry-run manifest failure). No duplicate was established."
+  },
+  "type": "bug",
+  "type_reason": "The reported commit explicitly labels 0.13.5 as released, but GitHub has no 0.13.5 release, reports 0.13.4 as latest, and confirms the linked workflow was canceled. Preparing version metadata before publication is documented, but that mechanism does not make the user-facing \"Released\" statement accurate. This is a confirmed release-status/documentation bug even though the reporter asks for clarification. The related preparation and rollback PRs do not track this mismatch, and no regression of a previously fixed bug was established.",
+  "summary": "astral-sh/uv#22787 prepared 0.13.5; astral-sh/uv#22788 subsequently reverted its Python update. astral-sh/uv#22789 separately requests refreshed Docker images. No existing discussion was found that tracks the misleading release status.",
+  "draft_response": "You're right: GitHub currently lists 0.13.4 as the latest release, and the linked 0.13.5 workflow was canceled. astral-sh/uv#22787 merged the version bump and changelog before publication, as our release process requires, but the changelog's \"Released on 2026-10-21\" wording is misleading while 0.13.5 remains unpublished.\n\nastral-sh/uv#22788 subsequently reverted the advertised Python update because of reported SIGBUS crashes. That PR does not explicitly explain the workflow cancellation, so whether it was intentionally canceled still needs confirmation from the release maintainer.\n\nFor your automation, use https://api.github.com/repos/astral-sh/uv/releases/latest to discover the published version. The maintainer follow-up is to confirm the cancellation reason and reconcile the changelog with the publication status and reverted Python update."
+}
