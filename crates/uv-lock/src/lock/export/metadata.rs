@@ -1633,7 +1633,11 @@ impl Metadata {
             .to_flat();
             self.reachability
                 .get(&id)
-                .is_some_and(|marker| marker.without_extras().evaluate(marker_env, &[]))
+                .is_some_and(|marker| {
+                    self.requires_python
+                        .complexify_markers(marker.without_extras())
+                        .evaluate(marker_env, &[])
+                })
                 .then_some((id, package))
         })
     }

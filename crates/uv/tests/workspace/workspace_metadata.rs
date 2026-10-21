@@ -7,6 +7,7 @@ use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
+#[cfg(feature = "test-python")]
 use sha2::{Digest, Sha256};
 
 #[cfg(feature = "test-python")]
