@@ -2825,6 +2825,76 @@ fn workspace_metadata_compatible_build_interpreter() -> Result<()> {
     Ok(())
 }
 
+/// The environment remains locked while shared artifact builds execute.
+#[test]
+#[cfg(all(unix, feature = "test-python"))]
+fn workspace_metadata_shared_build_environment_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "module-owner"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    write_wheel(
+        context
+            .temp_dir
+            .child("module_owner-0.1.0-py3-none-any.whl")
+            .path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("module_owner.py", "")],
+    )?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import fcntl
+        import pathlib
+        import shutil
+        import sys
+
+        def build_editable(wheel_directory, config_settings=None, metadata_directory=None):
+            name = "module_owner-0.1.0-py3-none-any.whl"
+            shutil.copyfile(pathlib.Path(__file__).parent / name, pathlib.Path(wheel_directory) / name)
+            return name
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            with (pathlib.Path(sys.prefix) / ".lock").open("a") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    raise AssertionError("environment lock was released before the artifact build")
+            return build_editable(wheel_directory, config_settings, metadata_directory)
+    "#})?;
+
+    let output = context
+        .workspace_metadata()
+        .args(["--sync", "--no-build-isolation"])
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["module_owners"], @r#"
+        {
+          "module_owner": [
+            {
+              "package_id": "module-owner==0.1.0@editable+[TEMP_DIR]/"
+            }
+          ]
+        }
+        "#);
+    });
+    Ok(())
+}
+
 /// A `match-runtime` build dependency uses the locked runtime distribution without installing the project environment.
 #[test]
 #[cfg(feature = "test-python")]

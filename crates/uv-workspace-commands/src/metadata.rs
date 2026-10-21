@@ -293,15 +293,19 @@ pub async fn metadata(
         }
     };
 
-    let mut module_owners = BTreeMap::new();
-    if let Some(environment) = &environment {
-        let _lock = environment
+    // Shared artifact builds can reuse this environment after its inventory is collected.
+    let _environment_lock = match &environment {
+        Some(environment) => environment
             .lock()
             .await
             .inspect_err(|err| {
                 tracing::warn!("Failed to acquire environment lock: {err}");
             })
-            .ok();
+            .ok(),
+        None => None,
+    };
+    let mut module_owners = BTreeMap::new();
+    if let Some(environment) = &environment {
         let collected = collect_environment(
             install_target,
             &export,
