@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 20643,
+        "title": "Include best-effort `environment` info by default in `uv workspace metadata`",
+        "url": "https://github.com/astral-sh/uv/pull/20643",
+        "state": "merged",
+        "reason": "Added inspection of an existing environment without --sync so uv check could retain its selected environment. The discussion explicitly assumed there were no conflicts. Its implementation still selects all extras before deciding whether to sync; it did not fix conflicting-extra inspection."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22395,
+        "title": "Include installed packages in workspace metadata",
+        "url": "https://github.com/astral-sh/uv/pull/22395",
+        "state": "merged",
+        "reason": "Updated the failing inspection path and introduced the reported 'Failed to inspect environment' context. Released in uv 0.13.2, before the reported 0.13.4. Its diff retains the pre-existing all-extras selection, so the changed wording does not establish a new conflict-selection regression."
+      },
+      {
+        "kind": "issue",
+        "number": 14848,
+        "title": "incorrect extras conflict detection when using `uv sync` with `--package` and `--all-extras`",
+        "url": "https://github.com/astral-sh/uv/issues/14848",
+        "state": "open",
+        "reason": "Also concerns selecting conflicting extras beyond the intended installation. Maintainer comments discuss restricting --all-extras to selected packages. Unlike this report, it requires explicit --all-extras and --package during sync; it does not cover metadata inspection failing after a valid single-extra sync."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separately searched workspace metadata failures and uv check propagation using exact errors, the historical 'Failed to collect module owners' wording, workspace-metadata, check-command, uv-metadata, extras, optional dependencies, mutually exclusive dependencies, all-extras, environment inspection, and module ownership, without package/version/platform restrictions. Supplemented empty PR text searches by filtering the newest 4,000 all-state PRs. Inspected candidate bodies, comments, review threads, referenced PRs, diffs, and release notes. Ruled out astral-sh/uv#22673 (conflict-validation order), astral-sh/uv#22638 (metadata schema change), and astral-sh/uv#22046 (lockfile revalidation). No matching duplicate or previous fix was found."
+  },
+  "type": "bug",
+  "type_reason": "Declared conflicting extras are supported when only one is selected. Source confirms that metadata inspection instead selects all extras and invokes conflict validation even without --sync, rejecting the valid environment and causing the downstream uv check diagnostic. Earlier metadata work acknowledged a no-conflicts assumption but did not fix this case. No existing issue tracks the same failure, and no previously fixed bug was found to have regressed.",
+  "summary": "No direct duplicate found. astral-sh/uv#20643 documents the relevant no-conflicts assumption; astral-sh/uv#22395 explains the current inspection path and error wording. astral-sh/uv#14848 concerns a distinct extras-selection problem in uv sync.",
+  "draft_response": "Your conflict declaration is valid. Metadata inspection currently selects all extras, even when the environment was synced with only `a`, and `uv check` surfaces that failure through ty. The existing-environment integration in astral-sh/uv#20643 explicitly assumed no conflicts. This needs a fix in metadata’s environment inspection; your example is sufficient for regression tests covering both commands."
+}
