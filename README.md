@@ -27,6 +27,30 @@ project-owned based on its location. It is consistent with the discovery impleme
 described below, but does not constitute a final acceptance or rejection of the request.
 The enhancement classification remains appropriate; no new reproduction details were supplied.
 
+## Requested alternatives and design scope
+
+The reporter's follow-up on astral-sh/uv#22768 (comment ID 6308108347) broadens the
+request to include explicit selection of the global pin, rather than requiring a change
+to `--no-project`. They propose these alternatives:
+
+- Have `uv run --no-project` skip only the `.python-version` in the current working
+  directory. This differs from the original workspace-root scope when invoked from a
+  member or another subdirectory.
+- Add a dedicated `--no-local-python-pin` or `--global-python-pin` flag to bypass local
+  pins or select the global pin explicitly.
+- Extend `--python` or `--python-preference` with a way to select the global pin.
+
+These are reporter proposals, not accepted designs or available workarounds. The supplied
+discussion contains no maintainer response to these alternatives and adds no affected
+version, platform, or reproduction fixture.
+
+Skipping only the current directory would not by itself guarantee use of the global pin:
+`PythonVersionFile::discover` searches ancestor directories before falling back to the
+user configuration directory (`crates/uv-python-discovery/src/version_files.rs:109`).
+An ancestor pin could therefore still take precedence if the remaining discovery order
+were retained. A design needs to distinguish current-directory suppression from bypassing
+all local/ancestor pins or explicitly selecting the global pin.
+
 ## Draft response
 
 Currently, `--no-project` disables project discovery but still reads `.python-version` files, including local pins. That behavior was deliberately added for runs outside projects in astral-sh/uv#6361; the global pin is a fallback when no local pin is found.
@@ -110,13 +134,16 @@ Additional distinctions from inspected candidates:
 
 ## Maintainer next step
 
-Resolve the maintainer's objection before choosing an implementation: a proposal needs
-to explain why disabling project discovery should also suppress version files that are
-not inherently project-owned. If a policy change is accepted, define whether it skips
-only the workspace-root file or all local/ancestor pins. Those scopes are different:
-the existing `no_local` option skips all local files. Any accepted change should retain
-global fallback and explicit-request precedence, and should define behavior from both the
-workspace root and a member directory.
+Decide whether to change `--no-project` semantics or provide an explicit way to select
+the global pin. A change to `--no-project` still needs to address the maintainer's
+objection that version files are not inherently project-owned; the reporter also proposes
+separate controls that need not change project-discovery semantics.
+
+For any accepted approach, define whether it skips the current-directory file, the
+workspace-root file, or all local/ancestor pins, and what happens when no global pin
+exists. The existing `no_local` option skips all local files. Retain the requested
+explicit-`--python` precedence and specify its interaction with any new selector. Behavior
+should be defined from both the workspace root and a member directory.
 
 For immediate use, the reporter can pass the desired version explicitly with
 `uv run --no-project --python <version> ...`. Neither `--isolated` nor `--no-config`
