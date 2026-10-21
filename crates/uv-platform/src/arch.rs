@@ -72,7 +72,7 @@ impl PartialOrd for Arch {
     }
 }
 impl Arch {
-    pub fn new(family: target_lexicon::Architecture, variant: Option<ArchVariant>) -> Self {
+    fn new(family: target_lexicon::Architecture, variant: Option<ArchVariant>) -> Self {
         Self { family, variant }
     }
 
@@ -196,6 +196,12 @@ impl std::fmt::Display for ArchVariant {
             Self::V4 => write!(f, "v4"),
             Self::Arm64Ec => write!(f, "arm64ec"),
         }
+    }
+}
+
+impl From<Architecture> for Arch {
+    fn from(family: Architecture) -> Self {
+        Self::new(family, None)
     }
 }
 

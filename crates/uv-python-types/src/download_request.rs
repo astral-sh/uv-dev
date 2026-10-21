@@ -161,7 +161,7 @@ impl PythonDownloadRequest {
             // Pyodide is actually CPython with an Emscripten OS, we paper over that for usability
             ImplementationName::Pyodide => {
                 self = self.with_os(Os::new(target_lexicon::OperatingSystem::Emscripten));
-                self = self.with_arch(Arch::new(target_lexicon::Architecture::Wasm32, None));
+                self = self.with_arch(Arch::from(target_lexicon::Architecture::Wasm32));
                 self = self.with_libc(Libc::Some(target_lexicon::Environment::Musl));
             }
             _ => {
@@ -726,9 +726,8 @@ mod tests {
         );
         assert_eq!(
             request.arch,
-            Some(ArchRequest::Explicit(Arch::new(
-                target_lexicon::Architecture::X86_64,
-                None
+            Some(ArchRequest::Explicit(Arch::from(
+                target_lexicon::Architecture::X86_64
             )))
         );
         assert_eq!(
@@ -751,9 +750,8 @@ mod tests {
         assert_eq!(request.os, None);
         assert_eq!(
             request.arch,
-            Some(ArchRequest::Explicit(Arch::new(
-                target_lexicon::Architecture::X86_64,
-                None
+            Some(ArchRequest::Explicit(Arch::from(
+                target_lexicon::Architecture::X86_64
             )))
         );
         assert_eq!(request.libc, None);
@@ -816,9 +814,8 @@ mod tests {
         );
         assert_eq!(
             request.arch,
-            Some(ArchRequest::Explicit(Arch::new(
-                target_lexicon::Architecture::X86_64,
-                None
+            Some(ArchRequest::Explicit(Arch::from(
+                target_lexicon::Architecture::X86_64
             )))
         );
         assert_eq!(request.libc, None);
@@ -883,9 +880,8 @@ mod tests {
         assert_eq!(request.os, None);
         assert_eq!(
             request.arch,
-            Some(ArchRequest::Explicit(Arch::new(
-                target_lexicon::Architecture::X86_64,
-                None
+            Some(ArchRequest::Explicit(Arch::from(
+                target_lexicon::Architecture::X86_64
             )))
         );
         assert_eq!(request.libc, None);
