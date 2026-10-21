@@ -453,7 +453,56 @@ fn workspace_metadata_conflicting_sources() -> Result<()> {
         "#);
     });
 
-    // A recorded subdirectory prevents a match to a locked local source without one.
+    Ok(())
+}
+
+/// An installed distribution with a recorded subdirectory does not match a locked local source without one.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_conflicting_source_subdirectory() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = context.temp_dir.child("first");
+    first.create_dir_all()?;
+    let first_wheel = first.child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        first_wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("first_module.py", "")],
+    )?;
+    let second = context.temp_dir.child("second");
+    second.create_dir_all()?;
+    let second_wheel = second.child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        second_wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("second_module.py", "")],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        first = ["module-owner"]
+        second = ["module-owner"]
+
+        [tool.uv]
+        conflicts = [[{ extra = "first" }, { extra = "second" }]]
+
+        [tool.uv.sources]
+        module-owner = [
+            { path = "first/module_owner-0.1.0-py3-none-any.whl", extra = "first" },
+            { path = "second/module_owner-0.1.0-py3-none-any.whl", extra = "second" },
+        ]
+    "#})?;
+
+    context.sync().arg("--extra=first").assert().success();
     let direct_url_path = context
         .site_packages()
         .join("module_owner-0.1.0.dist-info/direct_url.json");
@@ -476,7 +525,56 @@ fn workspace_metadata_conflicting_sources() -> Result<()> {
         "#);
     });
 
-    // A distribution from neither locked source must keep its own unmanaged identity.
+    Ok(())
+}
+
+/// An installed distribution from neither locked source keeps its unmanaged identity.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_conflicting_unmatched_source() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = context.temp_dir.child("first");
+    first.create_dir_all()?;
+    let first_wheel = first.child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        first_wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("first_module.py", "")],
+    )?;
+    let second = context.temp_dir.child("second");
+    second.create_dir_all()?;
+    let second_wheel = second.child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        second_wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("second_module.py", "")],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        first = ["module-owner"]
+        second = ["module-owner"]
+
+        [tool.uv]
+        conflicts = [[{ extra = "first" }, { extra = "second" }]]
+
+        [tool.uv.sources]
+        module-owner = [
+            { path = "first/module_owner-0.1.0-py3-none-any.whl", extra = "first" },
+            { path = "second/module_owner-0.1.0-py3-none-any.whl", extra = "second" },
+        ]
+    "#})?;
+
+    context.sync().arg("--extra=first").assert().success();
     let other_wheel = context
         .temp_dir
         .child("module_owner-0.1.0-py3-none-any.whl");
