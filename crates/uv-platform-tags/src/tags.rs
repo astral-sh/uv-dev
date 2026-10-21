@@ -1077,6 +1077,16 @@ impl FromStr for AndroidAbi {
 }
 
 impl AndroidAbi {
+    /// Return the `platform_machine` marker value for this ABI.
+    pub fn platform_machine(self) -> &'static str {
+        match self {
+            Self::ArmeabiV7a => "armv7l",
+            Self::Arm64V8a => "aarch64",
+            Self::X86 => "i686",
+            Self::X86_64 => "x86_64",
+        }
+    }
+
     /// Determine the appropriate Android arch.
     fn from_arch(arch: Arch) -> Result<Self, PlatformError> {
         match arch {

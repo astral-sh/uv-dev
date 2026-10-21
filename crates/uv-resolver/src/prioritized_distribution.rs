@@ -1126,6 +1126,21 @@ fn implied_platform_markers<'a>(
                 marker = marker.or(tag_marker);
             }
 
+            // Android
+            PlatformTag::Android { abi, .. } => {
+                let mut tag_marker = MarkerTree::expression(MarkerExpression::String {
+                    key: MarkerValueString::SysPlatform,
+                    operator: MarkerOperator::Equal,
+                    value: arcstr::literal!("android"),
+                });
+                tag_marker = tag_marker.and(MarkerTree::expression(MarkerExpression::String {
+                    key: MarkerValueString::PlatformMachine,
+                    operator: MarkerOperator::Equal,
+                    value: ArcStr::from(abi.platform_machine()),
+                }));
+                marker = marker.or(tag_marker);
+            }
+
             tag => {
                 debug!("Unknown platform tag in wheel tag: {tag}");
             }
