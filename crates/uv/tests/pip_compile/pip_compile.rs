@@ -38,6 +38,8 @@ use uv_fs::Simplified;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pep508::Requirement;
+#[cfg(feature = "test-python-managed")]
+use uv_platform::Platform;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 
@@ -20248,6 +20250,60 @@ fn compile_client_certificate_warning_chain() -> Result<()> {
     hint: Packages were unavailable because the network was disabled. When the network is disabled, registry packages may only be read from the cache.
     ");
     Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn compile_automatic_discovery_propagates_explicit_json_manifest_errors() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("requirements.in").touch().unwrap();
+    let manifest = context.temp_dir.child("python-downloads.json");
+    manifest.write_str("{").unwrap();
+
+    uv_snapshot!(context.filters(), context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--python-version")
+        .arg("3.99")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, manifest.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: Requirements file `requirements.in` does not contain any dependencies
+    error: Unable to parse the JSON Python download list at `[TEMP_DIR]/python-downloads.json`
+      cause: EOF while parsing an object at line 1 column 1
+    ");
+}
+
+/// An explicit manifest must be validated in full, even after a matching record is found.
+#[test]
+#[cfg(feature = "test-python-managed")]
+fn compile_automatic_discovery_rejects_invalid_ndjson_tail() {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context.temp_dir.child("requirements.in").touch().unwrap();
+    let platform = Platform::from_env().unwrap();
+    let manifest = context.temp_dir.child("python-downloads.ndjson");
+    manifest
+        .write_str(&format!(
+            "{{\"version\":\"3.99.0\",\"artifacts\":[{{\"url\":\"https://example.com/python.tar.gz\",\"platform\":\"{}\",\"variant\":\"install_only\"}}]}}\ninvalid trailing record\n",
+            platform.as_cargo_dist_triple(),
+        ))
+        .unwrap();
+
+    uv_snapshot!(context.filters(), context
+        .pip_compile()
+        .arg("requirements.in")
+        .arg("--python-version")
+        .arg("3.99.0")
+        .env(EnvVars::UV_PYTHON_DOWNLOADS, "automatic")
+        .env(EnvVars::UV_PYTHON_ARCH, platform.arch.to_string())
+        .env(EnvVars::UV_PYTHON_DOWNLOADS_JSON_URL, manifest.path()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    warning: Requirements file `requirements.in` does not contain any dependencies
+    error: Unable to parse NDJSON line 2 at [TEMP_DIR]/python-downloads.ndjson
+      cause: expected value at line 1 column 1
+    ");
 }
 
 /// Test that pip compile warns on download errors

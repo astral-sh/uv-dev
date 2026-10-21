@@ -1405,12 +1405,18 @@ pub(crate) async fn find_best_python_installation(
                 if let Some(download_state) = &mut download_state {
                     download_state
                 } else {
-                    let download_list = ManagedPythonDownloadList::new(
-                        client_builder,
-                        cache,
-                        python_downloads_json_url,
-                    )
-                    .await?;
+                    let download_list = if python_downloads_json_url.is_some() {
+                        Some(
+                            ManagedPythonDownloadList::new(
+                                client_builder,
+                                cache,
+                                python_downloads_json_url,
+                            )
+                            .await?,
+                        )
+                    } else {
+                        None
+                    };
                     let retry_policy = client_builder.retry_policy();
 
                     // Python downloads are performing their own retries to catch stream errors, disable
@@ -1419,15 +1425,36 @@ pub(crate) async fn find_best_python_installation(
                     download_state.insert((client, retry_policy, download_list))
                 };
 
-            let download = download_request
+            let download = match download_request
                 .clone()
                 .with_default_arch(arch.map(PythonArchitecture::into_inner))
                 .fill()
-                .map(|request| download_list.find(&request));
+            {
+                Ok(request) => {
+                    if let Some(download_list) = download_list {
+                        match download_list.find(&request) {
+                            Ok(download) => Ok(Some(download.clone())),
+                            Err(uv_python_managed::downloads::Error::NoDownloadFound(_)) => {
+                                Ok(None)
+                            }
+                            Err(error) => Err(error.into()),
+                        }
+                    } else {
+                        Ok(ManagedPythonDownloadList::find_streaming(
+                            client_builder,
+                            cache,
+                            python_downloads_json_url,
+                            &request,
+                        )
+                        .await?)
+                    }
+                }
+                Err(error) => Err(error.into()),
+            };
 
             let result = match download {
-                Ok(Ok(download)) => PythonInstallation::fetch(
-                    download,
+                Ok(Some(download)) => PythonInstallation::fetch(
+                    &download,
                     client,
                     retry_policy,
                     cache,
@@ -1436,9 +1463,8 @@ pub(crate) async fn find_best_python_installation(
                 )
                 .await
                 .map(Some),
-                Ok(Err(uv_python_managed::downloads::Error::NoDownloadFound(_))) => Ok(None),
-                Ok(Err(error)) => Err(error.into()),
-                Err(error) => Err(error.into()),
+                Ok(None) => Ok(None),
+                Err(error) => Err(error),
             };
             if let Ok(Some(installation)) = result {
                 return Ok(installation);
