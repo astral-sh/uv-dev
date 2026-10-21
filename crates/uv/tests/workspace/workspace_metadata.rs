@@ -757,7 +757,7 @@ fn workspace_metadata_conflicting_git_lfs() -> Result<()> {
                 "url": "https://example.com/module-owner",
                 "vcs_info": {
                     "vcs": "git",
-                    "commit_id": "0123456789012345678901234567890123456789",
+                    "commit_id": "ABCDEF0123456789abcdef0123456789ABCDEF01",
                     "git_lfs": true
                 }
             }
@@ -781,12 +781,12 @@ fn workspace_metadata_conflicting_git_lfs() -> Result<()> {
         [[package]]
         name = "module-owner"
         version = "0.1.0"
-        source = { git = "https://example.com/module-owner#0123456789012345678901234567890123456789" }
+        source = { git = "https://example.com/module-owner#abcdef0123456789abcdef0123456789abcdef01" }
 
         [[package]]
         name = "module-owner"
         version = "0.1.0"
-        source = { git = "https://example.com/module-owner?lfs=true#0123456789012345678901234567890123456789" }
+        source = { git = "https://example.com/module-owner?lfs=true#abcdef0123456789abcdef0123456789abcdef01" }
 
         [[package]]
         name = "mre"
@@ -794,8 +794,8 @@ fn workspace_metadata_conflicting_git_lfs() -> Result<()> {
         source = { virtual = "." }
 
         [package.optional-dependencies]
-        first = [{ name = "module-owner", version = "0.1.0", source = { git = "https://example.com/module-owner#0123456789012345678901234567890123456789" } }]
-        second = [{ name = "module-owner", version = "0.1.0", source = { git = "https://example.com/module-owner?lfs=true#0123456789012345678901234567890123456789" } }]
+        first = [{ name = "module-owner", version = "0.1.0", source = { git = "https://example.com/module-owner#abcdef0123456789abcdef0123456789abcdef01" } }]
+        second = [{ name = "module-owner", version = "0.1.0", source = { git = "https://example.com/module-owner?lfs=true#abcdef0123456789abcdef0123456789abcdef01" } }]
     "#})?;
 
     let output = context
@@ -813,12 +813,12 @@ fn workspace_metadata_conflicting_git_lfs() -> Result<()> {
           "module_owners": {
             "installed_module": [
               {
-                "package_id": "module-owner==0.1.0@git+https://example.com/module-owner?lfs=true#0123456789012345678901234567890123456789"
+                "package_id": "module-owner==0.1.0@git+https://example.com/module-owner?lfs=true#abcdef0123456789abcdef0123456789abcdef01"
               }
             ]
           },
           "packages": {
-            "module-owner==0.1.0@git+https://example.com/module-owner?lfs=true#0123456789012345678901234567890123456789": {
+            "module-owner==0.1.0@git+https://example.com/module-owner?lfs=true#abcdef0123456789abcdef0123456789abcdef01": {
               "editable": false,
               "name": "module-owner",
               "path": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info",

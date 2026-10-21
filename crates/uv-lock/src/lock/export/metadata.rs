@@ -1092,7 +1092,10 @@ fn package_source_matches_installed(root: &Path, package: &Package, dist: &Insta
             if vcs_info.vcs != VcsKind::Git
                 || source.subdirectory != *subdirectory
                 || source.path != *path
-                || vcs_info.commit_id.as_deref() != Some(source.precise.as_str())
+                || !vcs_info
+                    .commit_id
+                    .as_deref()
+                    .is_some_and(|commit| commit.eq_ignore_ascii_case(source.precise.as_str()))
                 || vcs_info.git_lfs.unwrap_or(false) != source.lfs.enabled()
             {
                 return false;
