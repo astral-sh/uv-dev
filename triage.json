@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 11348,
+        "title": "Run script that has inline deps with project deps",
+        "url": "https://github.com/astral-sh/uv/issues/11348",
+        "state": "open",
+        "reason": "Closest existing request: allow a PEP 723 script to use project dependencies alongside inline dependencies, avoiding duplicated declarations. The proposed --with-project option differs from this report’s inline group-selection syntax, but the underlying project/script integration request can be discussed together. Labeled enhancement and wish."
+      },
+      {
+        "kind": "issue",
+        "number": 11383,
+        "title": "Handle dependencies per script, in the `pyproject.toml`",
+        "url": "https://github.com/astral-sh/uv/issues/11383",
+        "state": "open",
+        "reason": "Requests automatic selection of a project optional dependency group for a particular script. Closely overlaps the per-script extras/group selection goal, but places the mapping in pyproject.toml and concerns project entry points rather than PEP 723 metadata."
+      },
+      {
+        "kind": "issue",
+        "number": 17244,
+        "title": "Support devDependencies for uv run --script",
+        "url": "https://github.com/astral-sh/uv/issues/17244",
+        "state": "closed",
+        "reason": "Maintainer explains that PEP 735 covers dependency groups in pyproject.toml, not inline scripts, and prefers a standards solution. This concerns declaring development groups inside a script; the new report instead proposes referencing groups already defined in a project."
+      },
+      {
+        "kind": "pull_request",
+        "number": 13997,
+        "title": "Do not allow `uv add --group ... --script`",
+        "url": "https://github.com/astral-sh/uv/pull/13997",
+        "state": "merged",
+        "reason": "Merged June 12, 2025, fixing astral-sh/uv#13988 by rejecting group/dev additions to scripts and adding regression coverage. Confirms that writing script-local dependency groups is intentionally unsupported; it does not implement importing groups from pyproject.toml."
+      },
+      {
+        "kind": "issue",
+        "number": 5903,
+        "title": "Using `uv run` as a task runner",
+        "url": "https://github.com/astral-sh/uv/issues/5903",
+        "state": "open",
+        "reason": "Reporter-linked task-runner proposal, labeled needs-design, with maintainer discussion of standards and environment workflows. Broader context only: named task definitions do not establish support for portable PEP 723 references to project extras or dependency groups."
+      }
+    ],
+    "search_scope": "Decomposed the report into editable local project extras, importing project dependency groups into PEP 723 environments, and portable task/environment metadata. Used authenticated gh searches across open and closed issues with PEP723/PEP 723, script extras/editable, dependency groups/dependency-groups, optional-dependencies, inline metadata, tool.environment, with-project, reuse, and inherit. No error, version, or platform was reported. PR keyword searches returned no matches, so supplemented them by retrieving all 13,194 open, closed, and merged PR titles and inspecting relevant bodies, comments, reviews, and diffs. Followed astral-sh/uv#13988 to astral-sh/uv#13997 and astral-sh/uv#18312 to astral-sh/uv#18328. Ruled out the latter pair’s fixed editable-lockfile invalidation bug; astral-sh/uv#21458 only changes environment reuse when dependencies are omitted; astral-sh/uv#20836 tests workspace group selection for ordinary scripts; astral-sh/uv#12529 requests copying metadata rather than runtime reuse. Compared candidates against current documentation, source, and existing tests."
+  },
+  "type": "duplicate",
+  "type_reason": "The unresolved capability is reusing project dependency definitions while running a PEP 723 script, already requested in astral-sh/uv#11348. Selecting particular groups and expressing the selection in portable inline metadata are additional design requirements that can be centralized there; astral-sh/uv#11383 also covers per-script optional-group selection. Editable local project dependencies and their extras already have a uv-specific mechanism. No incorrect behavior or recurrence of a previously fixed bug is established.",
+  "summary": "astral-sh/uv#11348 is the closest discussion for combining inline scripts with project dependencies; astral-sh/uv#11383 covers per-script group selection. astral-sh/uv#17244 and astral-sh/uv#13997 explain the script-local group limitation. astral-sh/uv#5903 provides broader task-runner context.",
+  "draft_response": "You can already use an editable local project with an extra through uv’s script source configuration. For an installable project named `my-project` one directory above the script, with a `docs` extra:\n\n```python\n# /// script\n# dependencies = [\"my-project[docs]\"]\n# [tool.uv.sources]\n# my-project = { path = \"..\", editable = true }\n# ///\n```\n\nThe source configuration is uv-specific. It selects an extra, not a dependency group. Referencing project dependency groups through `[tool.environment]` is not currently supported. Declaring groups inside scripts is also unsupported; astral-sh/uv#17244 explains the standards limitation.\n\nPlease continue the project-dependency integration request in astral-sh/uv#11348, including your requirements for selecting groups and sharing metadata across runners. That discussion is still open and marked as not on the immediate roadmap."
+}
