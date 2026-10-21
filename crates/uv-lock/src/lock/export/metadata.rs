@@ -255,10 +255,10 @@ impl MetadataWorkspaceMember {
     }
 }
 
-/// An installed distribution that provides an importable module.
+/// A package that may provide a module.
 #[derive(Debug, serde::Serialize)]
 struct MetadataModuleOwner {
-    /// Key in `environment.packages` and, for a matched distribution, `resolution`.
+    /// Key in `resolution` or `environment.packages`.
     package_id: MetadataNodeIdFlat,
 }
 
@@ -1622,24 +1622,34 @@ impl Metadata {
         marker_env: &'a ResolverMarkerEnvironment,
     ) -> impl Iterator<Item = (String, &'a Package)> {
         lock.packages().iter().filter_map(move |package| {
-            if let Source::Virtual(_) = package.id.source {
-                return None;
-            }
-            let id = MetadataNodeId::from_package_id(
-                &self.workspace_root,
-                &package.id,
-                MetadataNodeKind::Package,
-            )
-            .to_flat();
-            self.reachability
-                .get(&id)
-                .is_some_and(|marker| {
-                    self.requires_python
-                        .complexify_markers(marker.without_extras())
-                        .evaluate(marker_env, &[])
-                })
-                .then_some((id, package))
+            self.eligible_package_node_id(package, marker_env)
+                .map(|id| (id, package))
         })
+    }
+
+    /// Return the node ID for a non-virtual package reachable with the interpreter's markers.
+    fn eligible_package_node_id(
+        &self,
+        package: &Package,
+        marker_env: &ResolverMarkerEnvironment,
+    ) -> Option<String> {
+        if let Source::Virtual(_) = package.id.source {
+            return None;
+        }
+        let id = MetadataNodeId::from_package_id(
+            &self.workspace_root,
+            &package.id,
+            MetadataNodeKind::Package,
+        )
+        .to_flat();
+        self.reachability
+            .get(&id)
+            .is_some_and(|marker| {
+                self.requires_python
+                    .complexify_markers(marker.without_extras())
+                    .evaluate(marker_env, &[])
+            })
+            .then_some(id)
     }
 
     /// Match an installed distribution to a locked package without selecting conflicting extras.
@@ -1652,49 +1662,28 @@ impl Metadata {
         let mut candidates = lock
             .packages_for_name(dist.name())
             .iter()
-            .filter(|package| {
-                if let Source::Virtual(_) = package.id.source {
-                    return false;
-                }
-                let id = MetadataNodeId::from_package_id(
-                    &self.workspace_root,
-                    &package.id,
-                    MetadataNodeKind::Package,
-                )
-                .to_flat();
-                self.reachability.get(&id).is_some_and(|marker| {
-                    self.requires_python
-                        .complexify_markers(marker.without_extras())
-                        .evaluate(marker_env, &[])
-                })
+            .filter_map(|package| {
+                self.eligible_package_node_id(package, marker_env)
+                    .map(|id| (id, package))
             })
             .peekable();
         let first = candidates.next()?;
-        let package = if candidates.peek().is_none() {
+        if candidates.peek().is_none() {
             // A single candidate identifies an installed package by name even when its version or source differs.
-            first
-        } else {
-            let mut matches = once(first).chain(candidates).filter(|package| {
-                package
-                    .version()
-                    .is_none_or(|version| version == dist.version())
-                    && package_source_matches_installed(self.workspace_root.as_ref(), package, dist)
-            });
-            let package = matches.next()?;
-            // Installed metadata does not always identify a source, such as the original index.
-            if matches.next().is_some() {
-                return None;
-            }
+            return Some(first.0);
+        }
+        let mut matches = once(first).chain(candidates).filter(|(_, package)| {
             package
-        };
-        Some(
-            MetadataNodeId::from_package_id(
-                &self.workspace_root,
-                &package.id,
-                MetadataNodeKind::Package,
-            )
-            .to_flat(),
-        )
+                .version()
+                .is_none_or(|version| version == dist.version())
+                && package_source_matches_installed(self.workspace_root.as_ref(), package, dist)
+        });
+        let (id, _) = matches.next()?;
+        // Installed metadata does not always identify a source, such as the original index.
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(id)
     }
 
     /// Return the package node ID for an unmanaged distribution.
