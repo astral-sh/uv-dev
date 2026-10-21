@@ -1086,6 +1086,14 @@ impl<'de> Deserialize<'de> for RequirementSourceWire {
                 formatter.write_str("a requirement source")
             }
 
+            // Scalar URLs can contain credentials or signed query parameters.
+            fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom("invalid requirement source"))
+            }
+
             fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
             where
                 A: MapAccess<'de>,
@@ -1518,6 +1526,15 @@ mod tests {
                 .unwrap_err()
                 .is_io()
         );
+    }
+
+    #[test]
+    fn source_scalar_metadata_error() {
+        let error = serde_json::from_str::<RequirementSource>(
+            r#""https://user:secret@example.com/project?token=secret""#,
+        )
+        .unwrap_err();
+        insta::assert_snapshot!(error, @"invalid requirement source at line 1 column 54");
     }
 
     #[test]
