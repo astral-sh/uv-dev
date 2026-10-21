@@ -126,6 +126,8 @@ pub enum PlatformTag {
         /// Not to be confused with the Linux mulitarch concept.
         multiarch: IosMultiarch,
     },
+    /// Ex) `win_arm64ec`
+    WinArm64Ec,
 }
 
 impl PlatformTag {
@@ -143,6 +145,7 @@ impl PlatformTag {
             Self::Win32 => Some("Windows"),
             Self::WinAmd64 => Some("Windows"),
             Self::WinArm64 => Some("Windows"),
+            Self::WinArm64Ec => Some("Windows"),
             Self::WinIa64 => Some("Windows"),
             Self::Android { .. } => Some("Android"),
             Self::FreeBsd { .. } => Some("FreeBSD"),
@@ -203,7 +206,7 @@ impl PlatformTag {
     pub fn is_windows(&self) -> bool {
         matches!(
             self,
-            Self::Win32 | Self::WinAmd64 | Self::WinArm64 | Self::WinIa64
+            Self::Win32 | Self::WinAmd64 | Self::WinArm64 | Self::WinArm64Ec | Self::WinIa64
         )
     }
 
@@ -236,6 +239,7 @@ impl PlatformTag {
                 multiarch: IosMultiarch::Arm64Device | IosMultiarch::Arm64Simulator,
                 ..
             } | Self::WinArm64
+                | Self::WinArm64Ec
                 | Self::Android {
                     abi: AndroidAbi::Arm64V8a,
                     ..
@@ -461,6 +465,7 @@ impl std::fmt::Display for PlatformTag {
             Self::Win32 => write!(f, "win32"),
             Self::WinAmd64 => write!(f, "win_amd64"),
             Self::WinArm64 => write!(f, "win_arm64"),
+            Self::WinArm64Ec => write!(f, "win_arm64ec"),
             Self::WinIa64 => write!(f, "win_ia64"),
             Self::Android { api_level, abi } => write!(f, "android_{api_level}_{abi}"),
             Self::FreeBsd { release_arch } => write!(f, "freebsd_{release_arch}"),
@@ -494,6 +499,7 @@ impl FromStr for PlatformTag {
             "win32" => return Ok(Self::Win32),
             "win_amd64" => return Ok(Self::WinAmd64),
             "win_arm64" => return Ok(Self::WinArm64),
+            "win_arm64ec" => return Ok(Self::WinArm64Ec),
             "win_ia64" => return Ok(Self::WinIa64),
             _ => {}
         }
@@ -1199,6 +1205,18 @@ mod tests {
             Ok(PlatformTag::WinArm64)
         );
         assert_eq!(PlatformTag::WinArm64.to_string(), "win_arm64");
+    }
+
+    #[test]
+    fn win_arm64ec_platform() {
+        assert_eq!(
+            PlatformTag::from_str("win_arm64ec"),
+            Ok(PlatformTag::WinArm64Ec)
+        );
+        assert_eq!(PlatformTag::WinArm64Ec.to_string(), "win_arm64ec");
+        assert!(PlatformTag::WinArm64Ec.is_windows());
+        assert!(PlatformTag::WinArm64Ec.is_arm());
+        assert!(!PlatformTag::WinArm64Ec.is_x86_64());
     }
 
     #[test]

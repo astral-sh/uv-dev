@@ -184,6 +184,8 @@ pub enum Arch {
     LoongArch64,
     Riscv64,
     Wasm32,
+    /// Windows ARM64 with the x64-compatible ARM64EC ABI.
+    Arm64Ec,
 }
 
 impl fmt::Display for Arch {
@@ -198,6 +200,7 @@ impl FromStr for Arch {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "aarch64" => Ok(Self::Aarch64),
+            "arm64ec" => Ok(Self::Arm64Ec),
             "armv5tel" => Ok(Self::Armv5TEL),
             "armv6l" => Ok(Self::Armv6L),
             // armv8l is 32-bit ARM running on ARMv8 hardware, compatible with armv7l
@@ -231,7 +234,7 @@ impl Arch {
             // manylinux_2_36
             Self::LoongArch64 => Some(36),
             // unsupported
-            Self::Powerpc | Self::Armv5TEL | Self::Armv6L | Self::Wasm32 => None,
+            Self::Powerpc | Self::Armv5TEL | Self::Armv6L | Self::Wasm32 | Self::Arm64Ec => None,
         }
     }
 
@@ -239,6 +242,7 @@ impl Arch {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Aarch64 => "aarch64",
+            Self::Arm64Ec => "arm64ec",
             Self::Armv5TEL => "armv5tel",
             Self::Armv6L => "armv6l",
             Self::Armv7L => "armv7l",
@@ -261,7 +265,7 @@ impl Arch {
     /// Based on: <https://github.com/PyO3/maturin/blob/8ab42219247277fee513eac753a3e90e76cd46b9/src/target/mod.rs#L131>
     pub(crate) fn machine(self) -> &'static str {
         match self {
-            Self::Aarch64 => "arm64",
+            Self::Aarch64 | Self::Arm64Ec => "arm64",
             Self::Armv5TEL | Self::Armv6L | Self::Armv7L => "arm",
             Self::Powerpc | Self::Powerpc64Le | Self::Powerpc64 => "powerpc",
             Self::X86 => "i386",

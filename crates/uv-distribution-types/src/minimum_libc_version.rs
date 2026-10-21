@@ -39,6 +39,7 @@ impl MinimumLibcVersion {
             | PlatformTag::Win32
             | PlatformTag::WinAmd64
             | PlatformTag::WinArm64
+            | PlatformTag::WinArm64Ec
             | PlatformTag::WinIa64
             | PlatformTag::Android { .. }
             | PlatformTag::FreeBsd { .. }
