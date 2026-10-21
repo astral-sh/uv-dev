@@ -453,6 +453,29 @@ fn workspace_metadata_conflicting_sources() -> Result<()> {
         "#);
     });
 
+    // A recorded subdirectory prevents a match to a locked local source without one.
+    let direct_url_path = context
+        .site_packages()
+        .join("module_owner-0.1.0.dist-info/direct_url.json");
+    let mut direct_url: serde_json::Value =
+        serde_json::from_str(&fs_err::read_to_string(&direct_url_path)?)?;
+    direct_url["subdirectory"] = "nested".into();
+    fs_err::write(direct_url_path, direct_url.to_string())?;
+    let output = context.workspace_metadata().assert().success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(metadata["environment"]["packages"], @r#"
+        {
+          "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info": {
+            "editable": false,
+            "name": "module-owner",
+            "path": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info",
+            "version": "0.1.0"
+          }
+        }
+        "#);
+    });
+
     // A distribution from neither locked source must keep its own unmanaged identity.
     let other_wheel = context
         .temp_dir

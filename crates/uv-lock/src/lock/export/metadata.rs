@@ -1049,7 +1049,12 @@ fn package_source_matches_installed(root: &Path, package: &Package, dist: &Insta
             let InstalledDistKind::Url(dist) = &dist.kind else {
                 return false;
             };
-            let DirectUrl::ArchiveUrl { url, .. } = dist.direct_url.as_ref() else {
+            let DirectUrl::ArchiveUrl {
+                url,
+                subdirectory: None,
+                ..
+            } = dist.direct_url.as_ref()
+            else {
                 return false;
             };
             url.to_file_path().is_ok_and(|installed_path| {
@@ -1064,7 +1069,12 @@ fn package_source_matches_installed(root: &Path, package: &Package, dist: &Insta
             let editable = matches!(package.id.source, Source::Editable(_));
             match &dist.kind {
                 InstalledDistKind::Url(dist) => {
-                    let DirectUrl::LocalDirectory { url, .. } = dist.direct_url.as_ref() else {
+                    let DirectUrl::LocalDirectory {
+                        url,
+                        subdirectory: None,
+                        ..
+                    } = dist.direct_url.as_ref()
+                    else {
                         return false;
                     };
                     dist.editable == editable
