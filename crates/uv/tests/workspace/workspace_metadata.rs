@@ -572,6 +572,95 @@ fn workspace_metadata_conflicting_indexes() -> Result<()> {
     Ok(())
 }
 
+/// An installed package remains matched when an otherwise active dependency edge has a conflict predicate.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_conflicting_extra_markers() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context
+        .temp_dir
+        .child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("installed_module.py", "")],
+    )?;
+    context
+        .pip_install()
+        .args(["--no-index", "--find-links"])
+        .arg(context.temp_dir.path())
+        .arg("module-owner==0.1.0")
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        conflicts = [[{ package = "mre", extra = "first" }, { package = "mre", extra = "second" }]]
+
+        [[package]]
+        name = "module-owner"
+        version = "0.1.0"
+        source = { registry = "https://first.example/simple" }
+
+        [[package]]
+        name = "module-owner"
+        version = "0.2.0"
+        source = { registry = "https://second.example/simple" }
+
+        [[package]]
+        name = "mre"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [package.optional-dependencies]
+        first = [{ name = "module-owner", version = "0.1.0", source = { registry = "https://first.example/simple" }, marker = "extra == 'extra-3-mre-first'" }]
+        second = [{ name = "module-owner", version = "0.2.0", source = { registry = "https://second.example/simple" }, marker = "extra == 'extra-3-mre-second'" }]
+    "#})?;
+
+    let output = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "packages": metadata["environment"]["packages"],
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "module_owners": {
+            "installed_module": [
+              {
+                "package_id": "module-owner==0.1.0@registry+https://first.example/simple"
+              }
+            ]
+          },
+          "packages": {
+            "module-owner==0.1.0@registry+https://first.example/simple": {
+              "editable": false,
+              "name": "module-owner",
+              "path": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info",
+              "version": "0.1.0"
+            }
+          }
+        }
+        "#);
+    });
+    Ok(())
+}
+
 /// A package reachable only through an inactive dependency remains unmanaged when conflicts are declared.
 #[test]
 #[cfg(all(feature = "test-python", not(windows)))]
