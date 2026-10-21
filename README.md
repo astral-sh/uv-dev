@@ -38,9 +38,12 @@ Windows PowerShell 5.1/.NET Framework as a failing runtime and PowerShell 7/.NET
 as a successful runtime for the same WebClient/WebProxy download. Together with
 the verified invocation of `powershell` by uv, this strengthens the evidence
 for a runtime-specific installer networking failure. The comparison is reported
-evidence, not an independently executed Windows reproduction. Exact runtime
-builds, the standalone download test script, and the executable resolved by the
-failing updater are not provided.
+evidence, not an independently executed Windows reproduction. The reporter now
+provides the standalone download script and output identifying Windows
+PowerShell 5.1.26100.9711 and CLR 4.0.30319.42000. The exact PowerShell 7/.NET 10
+builds and executable path resolved by the failing updater remain unspecified.
+The CLR version is the reported `System.Environment.Version` value, not a
+precise .NET Framework product release identifier.
 
 No previously working Windows SOCKS5 self-update version or same-problem
 duplicate has been established. Historical Rust-client SOCKS support and
@@ -81,13 +84,34 @@ reporter describes a separate download test using `System.Net.WebClient` and
 
 | Runtime | Reported result |
 | --- | --- |
-| Windows PowerShell 5.1 / .NET Framework | `System.NotSupportedException: The ServicePointManager does not support proxies with the socks5 scheme.` |
+| Windows PowerShell 5.1.26100.9711 / .NET Framework (reported CLR 4.0.30319.42000) | `System.NotSupportedException: The ServicePointManager does not support proxies with the socks5 scheme.` |
 | PowerShell 7 / .NET 10 | The same download succeeds. |
 
+The reporter supplied a full script and exception output in that comment. The
+script prints `$PSVersionTable.PSVersion` and `[System.Environment]::Version`,
+sets `ALL_PROXY` to the loopback SOCKS5 address, constructs a WebProxy from that
+URI, assigns it directly to a new WebClient, and calls `DownloadFile` for:
+
+```text
+https://releases.astral.sh/github/uv/releases/download/0.13.4/uv-x86_64-pc-windows-msvc.zip
+```
+
+The destination is `$env:TEMP\uv-test.zip`. The reported invocation is
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File path\to\script.ps1`.
+The script catches and prints the exception and disposes the client. Its
+output shows a MethodInvocationException wrapping a WebException and then the
+SOCKS5 NotSupportedException, with frames in
+`ServicePointManager.FindServicePointHelper`, `HttpWebRequest.set_Proxy`, and
+`WebClient.DownloadFile`. This supports rejection while configuring the
+request's proxy rather than a general connectivity failure.
+
 The failure matches the original updater exception and isolates the comparison
-to the downloader APIs used by the installer. The comment does not include the
-exact script, download URL, or full runtime build numbers. It reports a separate
-API-level test, not a new full self-update run or a tested updater workaround.
+to the downloader APIs used by the installer. This script assigns the proxy
+directly, so it does not test the installer's environment-variable selection.
+The supplied trace covers the Windows PowerShell test; the PowerShell 7 success
+remains reported without its exact build or corresponding output. This is a
+separate API-level test, not a new full self-update run or a tested updater
+workaround.
 
 ### Executed controls and observations
 
@@ -181,8 +205,10 @@ removed. Capture the version and CLR/runtime of the `powershell.exe` actually
 resolved by the updater, as well as the uv exit status and sanitized installer
 output. The parent shell may be PowerShell 7 while uv starts Windows PowerShell;
 recording only the parent shell's version is insufficient. Independently repeat
-the reporter's runtime comparison using the published installer helpers, and
-retain the exact script and runtime builds with the results. The reported
+the reporter's supplied Windows PowerShell script, then repeat the comparison
+using the published installer helpers so environment-variable selection is
+also exercised. Retain the exact runtime builds and results, including those
+for PowerShell 7/.NET 10. The reported
 PowerShell 7 success does not establish that launching `uv self update` from
 PowerShell 7 fixes the issue: uv separately invokes `powershell`.
 Python/project configuration is not needed for this check.
@@ -245,6 +271,24 @@ requested the Rust-client feature implemented by astral-sh/uv#7503;
 astral-sh/uv#15696 was redirected to astral-sh/uv#10709. These do not establish
 an exact duplicate or a previously working Windows SOCKS5 self-update path.
 
+## Proposed upstream fix
+
+A contributor (texasich, comment ID 6327452750 on astral-sh/uv#22783) proposes
+changing `cargo-dist/templates/installer/installer.ps1.j2` in
+`axodotdev/cargo-dist`: inspect the selected proxy scheme and route SOCKS
+archive downloads through `curl.exe`, with a clear error if curl is unavailable.
+This is a concrete implementation proposal, not an accepted design, tested
+workaround, or linked pull request. The supplied discussion contains no
+maintainer approval or results from this approach.
+
+The proposed location matches the generated downloader already examined in
+the source investigation. A template change could help other tools using the
+same downloader under Windows PowerShell/.NET Framework, but the comment's
+claim that every cargo-dist-built tool is affected has not been verified.
+The contributor cites bundled Windows curl and SOCKS5H support as motivation;
+actual curl availability and supported proxy schemes need verification on the
+supported Windows versions before relying on this approach.
+
 ## Next step
 
 Use the reporter's Windows PowerShell 5.1/.NET Framework failure and
@@ -252,7 +296,10 @@ PowerShell 7/.NET 10 success to focus investigation on runtime compatibility
 of cargo-dist's PowerShell archive downloader. Independently verify the
 published helpers and the complete pinned Windows update before selecting a
 fix, and ensure regression coverage exercises the failing runtime rather than
-only modern PowerShell. An HTTP endpoint supplied by the same proxy service
+only modern PowerShell. Evaluate the proposed upstream `curl.exe` path against
+that reproduction, including SOCKS5/SOCKS5H behavior, unavailable curl, and the
+installer's existing proxy precedence and download fallback behavior. An HTTP
+endpoint supplied by the same proxy service
 may be a workaround when configured through `HTTPS_PROXY`, but that workaround
 was not independently tested. Running uv from PowerShell 7 alone is not an
 established workaround because the updater invokes `powershell` separately.
