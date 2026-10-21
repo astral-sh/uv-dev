@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "Confirmed on 2026-10-21 using read-only GitHub checks from Linux x86_64 with installed uv 0.13.4. The exact reported changelog commit lists 0.13.5 as released. `gh api repos/astral-sh/uv/releases/latest` returns 0.13.4; querying `repos/astral-sh/uv/releases/tags/0.13.5` returns HTTP 404. Installer HEAD requests return 404 for 0.13.5 and 200 for 0.13.4. Workflow 39535970462 reports `cancelled`. This reproduces the publication mismatch but does not establish the cancellation's reason or whether cancellation was incorrect. Updated $RUNNER_TEMP/issue-context/README.md with commands, evidence, and test-coverage limitations. No checkout or GitHub changes were made."
+}
