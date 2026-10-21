@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with uv 0.13.4 and CPython 3.14.7, running `uv lock --python 3.14.7 --default-index https://pypi.org/simple` with requires-python >=3.14, dependency sherpa-onnx-core==1.13.8, and tool.uv.environments = [\"sys_platform == 'android'\"] exits 1, reporting no Android-compatible wheels. PyPI confirms four Android wheels and zero sdists. The reported certifi-marker configuration succeeds with uv 0.12.13 but fails in the Android fork with 0.12.14 and 0.13.4, confirming the regression boundary. Removing only the environments setting succeeds on 0.13.4. Existing `lock_android` in crates/uv/tests/lock/lock.rs includes an sdist and does not cover this wheel-only failure. Updated $RUNNER_TEMP/issue-context/README.md with configurations, commands, results, and test coverage. No checkout files or GitHub state were changed."
+}

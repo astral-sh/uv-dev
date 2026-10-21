@@ -6,15 +6,32 @@ Classification: bug
 
 ## Summary
 
-`uv lock` rejects Android wheels for a package without a source distribution when the resolution requires Android coverage. The reporter uses `sherpa-onnx-core==1.13.8`, Python 3.14.7, and uv 0.13.4 on Linux x86_64. They report Android wheels for arm64_v8a, armeabi_v7a, x86, and x86_64.
+Both reported configurations reproduce with uv 0.13.4 and CPython 3.14.7 on Linux x86_64. `uv lock` rejects `sherpa-onnx-core==1.13.8` when Android coverage is required, despite the release publishing four Android wheels and no source distribution.
 
-There are two distinct cases: an explicit Android supported environment fails directly, and a dependency marker creates an Android fork that reportedly succeeds with uv 0.12.13 but fails with uv 0.12.14 and later. Source inspection confirms that Android tags are absent from resolver platform-marker inference, despite support in lockfile wheel filtering. No exact duplicate was found.
+The dependency-marker example also reproduces the reported regression boundary: uv 0.12.13 resolves successfully, while uv 0.12.14 and uv 0.13.4 fail in the Android fork. Removing `tool.uv.environments` from that example lets uv 0.13.4 resolve successfully. Neither reported configuration sets `required-environments`.
 
-astral-sh/uv#21672 explains the reported regression boundary, astral-sh/uv#14977 establishes the incomplete Android coverage, and astral-sh/uv#18451 explains the environments trigger. astral-sh/uv#17109 is a FreeBSD analogue. No exact duplicate found.
+## Classification
 
-## Reported reproductions
+Bug, with observed reproduction. The package inventory confirms that the rejected Android artifacts exist; this is not simply a request to resolve an unavailable platform. The failure concerns universal locking from a Linux host, not installation or execution on an Android device.
 
-For the first case, run `uv lock` with:
+The results are consistent with missing Android platform-marker inference in the resolver and the fork-specific coverage checks introduced by astral-sh/uv#21672. Source inspection supports that explanation, but no implementation change was made or tested to establish a fix. No exact duplicate was identified in the related-item research.
+
+## Reproduction
+
+Outcome: **reproducible**.
+
+### Environment and isolation
+
+- Reported: Linux 7.2.9 x86_64 GNU/Linux, uv 0.13.4, Python 3.14.7.
+- Observed: Linux 6.17.0-1022-azure x86_64, uv 0.13.4 (`x86_64-unknown-linux-gnu`), CPython 3.14.7. The different host kernel did not prevent reproduction.
+- The main reproduction used the installed executable on PATH: `/opt/hostedtoolcache/uv/0.13.4/x86_64/uv`.
+- uv 0.12.13 and uv 0.12.14 binaries were extracted into the temporary directory from their published PyPI Linux x86_64 wheels, after verifying their SHA-256 hashes against PyPI metadata. Both binaries reported the expected versions.
+- All project files, per-scenario caches, downloaded Python, comparison binaries, and command logs are under `/tmp/uv-22805-ycn_pcc_`. The runner used an explicit environment with temporary uv/XDG storage, an empty configuration directory and netrc, and disabled keyring lookup. No existing lockfile was supplied to any scenario.
+- Public PyPI was selected explicitly. No workspace, dependency groups, custom sources, or build backend is needed.
+
+### Explicit Android environment
+
+Create `pyproject.toml` in a fresh temporary directory:
 
 ```toml
 [project]
@@ -27,9 +44,27 @@ dependencies = ["sherpa-onnx-core==1.13.8"]
 environments = ["sys_platform == 'android'"]
 ```
 
-The reported error says the package has no `sys_platform == 'android'`-compatible wheels. The expected result is a successful lock retaining compatible Android wheels.
+With caches and Python storage redirected to temporary directories, run:
 
-For the fork-specific case, run `uv lock` with:
+```console
+uv lock --python 3.14.7 --default-index https://pypi.org/simple
+```
+
+uv 0.13.4 exits with status 1:
+
+```text
+Using CPython 3.14.7
+error: No solution found when resolving dependencies for split (markers: sys_platform == 'android')
+  cause: Because sherpa-onnx-core==1.13.8 has no `sys_platform == 'android'`-compatible wheels and your project depends on sherpa-onnx-core==1.13.8, we can conclude that your project's requirements are unsatisfiable.
+
+hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+```
+
+Expected: successful locking with the available Android wheels. The observed rejection matches the report. This direct case was tested on uv 0.13.4; its historical introduction was not measured.
+
+### Dependency-created Android fork and version comparison
+
+Create this independent `pyproject.toml` in a fresh temporary directory for each version:
 
 ```toml
 [project]
@@ -46,45 +81,84 @@ dependencies = [
 environments = ["python_version >= '3.14'"]
 ```
 
-The reported failure occurs in the split `python_full_version >= '3.14' and sys_platform == 'android'`, while the cause says the package has no `python_full_version >= '3.14'`-compatible wheels. Neither reproduction explicitly sets `required-environments`.
+Run the same command with each binary:
 
-## Draft response
+```console
+uv lock --python 3.14.7 --default-index https://pypi.org/simple
+/tmp/uv-22805-ycn_pcc_/versions/0.12.13/uv lock --python 3.14.7 --default-index https://pypi.org/simple
+/tmp/uv-22805-ycn_pcc_/versions/0.12.14/uv lock --python 3.14.7 --default-index https://pypi.org/simple
+```
 
-Your diagnosis matches the resolver code: Android wheel tags are missing from implied_platform_markers, while a compatible sdist supplies coverage for every environment and masks the omission in lock_android. astral-sh/uv#14977 added Android lockfile filtering; astral-sh/uv#21672 made coverage checks apply within each fork in uv 0.12.14, consistent with your reported regression. These checks also apply to tool.uv.environments. The next step is to add the Android wheel-to-marker mapping and regression tests without an sdist for both the explicit Android environment and the dependency-fork example.
+| uv version | Exit status | Observed result |
+| --- | --- | --- |
+| 0.12.13 | 0 | `Resolved 4 packages`; lockfile contains both certifi versions with their platform markers and all four Android sherpa wheels. |
+| 0.12.14 | 1 | Rejected sherpa in the Android fork with the error below. |
+| 0.13.4 | 1 | Same rejection and error as uv 0.12.14. |
 
-## Classification
+```text
+Using CPython 3.14.7
+error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.14' and sys_platform == 'android')
+  cause: Because sherpa-onnx-core==1.13.8 has no `python_full_version >= '3.14'`-compatible wheels and your project depends on sherpa-onnx-core==1.13.8, we can conclude that your project's requirements are unsatisfiable.
 
-The source confirms that implied_platform_markers omits Android, so Android wheels contribute no platform coverage; a compatible sdist masks the error. This incorrectly rejects available wheels. The reported regression from uv 0.12.13 to 0.12.14 aligns with astral-sh/uv#21672 and its release notes, although the reproductions were not executed. No existing item found tracks this Android failure closely enough to centralize it as a duplicate.
+hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+```
 
-The missing mapping is a correctness problem even though other discussions acknowledge limitations in platform inference. The FreeBSD report concerns a different platform mapping, and the Android installation-tag work did not fix this resolver path. There is no evidence that a previous Android marker-inference fix was subsequently reverted; the reported regression exposes an existing omission through stricter fork checks.
+A separate uv 0.13.4 control retained all three dependencies and removed only the `[tool.uv]` environments configuration. The same command exited 0, resolved four packages, and retained all four Android sherpa wheels. This confirms the reported environments trigger for this fixture; it does not validate installation on Android.
+
+### Published artifact inventory
+
+The public PyPI JSON response for `sherpa-onnx-core/1.13.8` lists 13 wheels and zero sdists. Four wheels have these filenames:
+
+```text
+sherpa_onnx_core-1.13.8-py3-none-android_24_arm64_v8a.whl
+sherpa_onnx_core-1.13.8-py3-none-android_24_armeabi_v7a.whl
+sherpa_onnx_core-1.13.8-py3-none-android_24_x86.whl
+sherpa_onnx_core-1.13.8-py3-none-android_24_x86_64.whl
+```
+
+Both pinned certifi releases are available with universal wheels. The sherpa inventory is retained as `sherpa-onnx-core-1.13.8-inventory.json` in the temporary artifact directory.
+
+### Existing test coverage
+
+Searched the relevant Rust integration tests under `crates/uv/tests/` and `crates/uv-client/tests/it/`, and read the matching setup and assertions.
+
+- `crates/uv/tests/lock/lock.rs`, `lock_android`, gated by `test-universal`: uses `test/scenarios/wheels/android.toml`, sets `environments = ["sys_platform == 'android'"]`, and expects a successful lock retaining Android wheels. Its snapshot also contains a deltachat-rpc-server sdist. It covers Android lockfile filtering with an sdist, not this wheel-only failure.
+- `crates/uv/tests/lock/lock.rs`, `lock_required_environment_wheel_url_fork`, also gated by `test-universal`: uses a wheel without an sdist whose tags combine Linux aarch64 and macOS x86_64. With an x86_64 environment and required Linux coverage, it expects a resolution error. It covers fork-specific architecture/platform coverage, not Android inference.
+
+No Android wheel-only regression test was found. Repository test suites were not executed; the evidence above comes from the installed and published uv binaries against isolated copies of the reported projects.
+
+### Retained command evidence
+
+The directories `android-current`, `fork-current`, `fork-0.12.13`, `fork-0.12.14`, and `control-no-environments` each contain the exact `pyproject.toml`, `command.txt`, `stdout.txt`, `stderr.txt`, and `exit-code.txt`; successful scenarios also contain `uv.lock`. The isolation runner is `/tmp/uv-22805-ycn_pcc_/run.py`.
 
 ## Related
 
-- astral-sh/uv#21672 — Scope required-environment checks to the current fork (merged pull request). Changed wheel-coverage checks to intersect the current resolver fork. Shipped in uv 0.12.14, matching the reported regression boundary: non-Android wheels can no longer satisfy coverage in the Android fork. This change exposes the missing Android mapping; it did not implement that mapping.
-- astral-sh/uv#14977 — Extend wheel filtering to Android tags (merged pull request). Added Android-aware lockfile wheel filtering and lock_android, but did not update the resolver's implied_platform_markers. The test includes an sdist, which supplies universal coverage and masks the reported omission.
-- astral-sh/uv#18451 — Enforce available distributions for supported environments (merged pull request). Extended artifact-availability checks to tool.uv.environments as well as required-environments. This explains why both reproductions exercise coverage checks without explicitly setting required-environments; the current lock configuration combines both lists.
-- astral-sh/uv#17109 — uv fails to find wheel for split index/dependency (open issue). Closest analogous failure: existing FreeBSD wheels are rejected under required-environments because their tags lack marker mappings. A maintainer confirms that these mappings are manual. It concerns FreeBSD and split indexes, not the Android mapping or the uv 0.12.14 regression.
+- astral-sh/uv#21672 — Scope required-environment checks to the current fork (merged pull request). Its resolver diff checks wheel coverage within the current fork. `changelogs/0.12.x.md` places it in uv 0.12.14, released September 15, 2026. The observed version boundary matches this change.
+- astral-sh/uv#14977 — Extend wheel filtering to Android tags (merged pull request). Added Android-aware lockfile wheel filtering and `lock_android`, but did not update resolver platform-marker inference. The test includes an sdist. Shipped in uv 0.8.4.
+- astral-sh/uv#18451 — Enforce available distributions for supported environments (merged pull request). Extended artifact checks to `tool.uv.environments` as well as `required-environments`, explaining why the reported fixtures exercise coverage checks without the latter. Shipped in uv 0.10.11.
+- astral-sh/uv#17109 — uv fails to find wheel for split index/dependency (open issue). Closest analogous failure: existing FreeBSD wheels are rejected under required environments because their tags lack marker mappings. It concerns a different platform and split indexes, not this Android regression.
 
-## Supporting evidence
+## Implementation evidence and next step
 
-- `crates/uv-resolver/src/prioritized_distribution.rs:1016`: `implied_platform_markers` starts with `MarkerTree::FALSE` and handles universal, Windows, macOS, and Linux tags. Android reaches the fallback that logs “Unknown platform tag in wheel tag” without adding coverage. A wheel carrying only Android platform tags therefore contributes false platform coverage.
-- `crates/uv-resolver/src/prioritized_distribution.rs:535`: inserting a compatible sdist sets Python and platform coverage to `MarkerTree::TRUE`. This explains why the no-sdist condition matters.
-- `crates/uv-lock-operations/src/lock.rs:638`: supported environments and required environments are combined into `artifact_environments`, which is passed to the resolver. The history in astral-sh/uv#18451 confirms that this is intentional and shipped in uv 0.10.11.
-- `crates/uv-resolver/src/resolver/mod.rs:1627`: registry candidates are checked for artifact coverage within the current fork. The direct-wheel path at line 1271 uses the same fork-sensitive principle. The diff for astral-sh/uv#21672 confirms this change; `changelogs/0.12.x.md:969` places it in uv 0.12.14, released September 15, 2026.
-- `crates/uv-lock/src/lock/mod.rs:152` defines Android markers, and line 10497 applies Android-specific filtering. The diff for astral-sh/uv#14977 added this filtering and the Android lock test, without changing resolver marker inference. It shipped in uv 0.8.4.
-- `crates/uv/tests/lock/lock.rs:43339`: `lock_android` uses `test/scenarios/wheels/android.toml`; its snapshot includes an sdist as well as Android wheels. astral-sh/uv#20602 migrated this test to Packse to avoid mutable PyPI state, without covering the wheel-only case.
-- Existing fork tests at `crates/uv/tests/lock/lock.rs:44014` and `crates/uv/tests/lock/lock.rs:44442` cover Python and architecture forks with Linux/Windows/macOS wheels. They do not cover the missing Android mapping.
+The checked-out implementation at commit `75698b1` is consistent with the observed failures:
 
-## Search coverage and excluded candidates
+- `crates/uv-resolver/src/prioritized_distribution.rs`, `implied_platform_markers`: starts with false coverage and handles universal, Windows, macOS, and Linux tags. Android reaches the fallback logging “Unknown platform tag in wheel tag” without adding coverage.
+- The same file's `insert_source` marks Python and platform coverage as universally satisfied when a compatible sdist exists. That explains the coverage gap in `lock_android`.
+- `crates/uv-lock-operations/src/lock.rs` combines supported and required environments into `artifact_environments`.
+- `crates/uv-resolver/src/resolver/mod.rs`, `fork_version_registry`: checks artifact coverage within the current fork. The inspected diff for astral-sh/uv#21672 introduces this fork-sensitive check.
+- `crates/uv-lock/src/lock/mod.rs` separately supports Android wheel filtering. Successful control lockfiles retain the Android artifacts.
 
-Used authenticated gh to search open and closed issues and open, closed, and merged PRs. Separated Android wheel-only rejection from the fork-specific version regression; searched sherpa-onnx-core, Android/sdist, sys_platform, compatible-wheels errors, Unknown platform tag in wheel tag, implied_platform_markers, required-environments/forks, and 0.12.14. Broadened to wheel coverage, platform-marker inference, source-distribution absence, and historical fixes. PR search omitted known matches, so supplemented it with paginated PR title/body searches and direct inspection of linked PRs, comments, timelines, diffs, and release notes. Ruled out astral-sh/uv#9711 (accepting incomplete resolutions), astral-sh/uv#17178 (Termux marker availability), astral-sh/uv#19911 (Requires-Python metadata), astral-sh/uv#22716 (genuinely absent Windows dependency wheels), and astral-sh/uv#14040 with astral-sh/uv#14041 (fixed Windows AMD64 mapping). Android support in astral-sh/uv#8029 and astral-sh/uv#15646 concerns installation tags, not this resolver omission.
+Investigate Android wheel-to-marker inference and add separate named integration tests for explicit Android coverage and a dependency-created Android fork, using wheel-only fixtures in the existing lock module and the neighboring `test-universal` gate. Check architecture mappings against Android interpreter marker values. No patch or native Android installation was tested.
 
-The comment chain from astral-sh/uv#17109 leads to astral-sh/uv#17382 and the open documentation PR astral-sh/uv#20383. Those describe the limited platform mappings; they do not implement Android coverage. The superseded astral-sh/uv#17118 led to merged astral-sh/uv#18451, establishing why supported environments now require artifacts.
+## Related-item search context
 
-Also inspected astral-sh/uv#18301 and astral-sh/uv#18302: those concern native Android interpreter recognition and integration testing. They do not address universal locking from a Linux host. Nearby resolver fixes astral-sh/uv#21753 and astral-sh/uv#21825 concern incompatible source artifacts and macOS release boundaries, respectively.
+Prior related-item research searched open and closed issues and pull requests for Android wheels without sdists, sherpa-onnx-core, platform-marker inference, required environments, fork checks, and the uv 0.12.14 boundary. It found no exact duplicate. The relevant implementation, release notes, tests, and astral-sh/uv#21672 resolver diff were inspected before selecting the reproduction fixtures.
 
-## Recommended next step and validation limits
+Other references retained from that research:
 
-Add Android wheel-to-marker inference, then cover the explicit Android environment and the dependency-created Android fork with separate named integration tests using packages without sdists. Use the existing lock test module, Packse fixtures, explicit invocations, and snapshots, with the neighboring `test-universal` feature gate. Check architecture mapping against Android interpreter marker values.
+- astral-sh/uv#20602 migrated `lock_android` to Packse to avoid mutable PyPI state; it did not add the wheel-only case.
+- astral-sh/uv#17382 and astral-sh/uv#20383 discuss/document limited platform mappings. Superseded astral-sh/uv#17118 led to merged astral-sh/uv#18451.
+- astral-sh/uv#8029 and astral-sh/uv#15646 concern Android installation tags. astral-sh/uv#18301 and astral-sh/uv#18302 concern native Android interpreter recognition and integration tests.
+- Excluded as different failures: astral-sh/uv#9711 (incomplete resolutions), astral-sh/uv#17178 (Termux markers), astral-sh/uv#19911 (Requires-Python metadata), astral-sh/uv#22716 (absent Windows wheels), astral-sh/uv#14040 and astral-sh/uv#14041 (Windows AMD64 mapping), astral-sh/uv#21753 (incompatible source artifacts), and astral-sh/uv#21825 (macOS release boundaries).
 
-The source, existing tests, relevant PR diffs, comments, and release notes were inspected. The reported commands were not executed, and the package file inventory and cross-version result were not independently verified. No checkout files or GitHub state were changed.
+No checkout files or GitHub state were changed. Only this issue-context README and temporary reproduction artifacts were written.
