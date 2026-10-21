@@ -6,6 +6,8 @@ Classification: bug
 
 ## Summary
 
+A focused fix is implemented in the working tree. Metadata inspection of conflict-bearing lockfiles now matches installed distributions to unambiguous locked name/version entries without enabling every alternative. Both parent regressions now assert success, and an additional regression covers incorrect package IDs with conflicting dependency groups. See Fix for validation.
+
 Both reported failures were reproduced with the supplied minimal configuration using the installed uv 0.13.4 on Ubuntu 24.04.5 LTS x86_64 and CPython 3.12.3. Syncing only extra `a` succeeds and installs `idna==3.9`. Workspace metadata then exits 2 with the reported conflicting-extras error, and `uv check --extra a` exits 1 with the same `warning[uv-metadata]` diagnostic. A separate `uv pip check` succeeds for the environment.
 
 The report supplies a complete minimal configuration. It does not specify a Python version or a last working uv version; no upgrade regression is established. The issue was open with no comments when the earlier issue-context review was performed.
@@ -16,9 +18,9 @@ The earlier related-work search found no direct duplicate. astral-sh/uv#20643 do
 
 The project explicitly declares two mutually exclusive extras and requests only one during synchronization and checking. Expected behavior is for metadata inspection to describe the valid environment without treating both alternatives as selected, and for `uv check --extra a` to avoid a metadata conflict diagnostic.
 
-Observed behavior matches the report: metadata fails while inspecting the existing environment, and ty propagates that failure through `uv check`. The separate “No python files found” warning also appears in the reproduction, but the diagnostic explicitly identifies the failed metadata subprocess and conflicting extras.
+Before the fix, observed behavior matches the report: metadata fails while inspecting the existing environment, and ty propagates that failure through `uv check`. The separate “No python files found” warning also appears in the reproduction, but the diagnostic explicitly identifies the failed metadata subprocess and conflicting extras.
 
-The documentation supports the bug classification independently of reproducing the error: `docs/concepts/resolution.md` permits declaring conflicting extras and installing one alternative, while `docs/reference/internals/metadata.md` describes metadata graphs containing multiple versions arising from declared conflicts. Neither failing command in this fixture requests all extras. No cross-platform or package-name/version variants were tested.
+The documentation supports the bug classification independently of reproducing the error: `docs/concepts/resolution.md` permits declaring conflicting extras and installing one alternative, while `docs/reference/internals/metadata.md` describes metadata graphs containing multiple versions arising from declared conflicts. Neither failing command in this fixture requests all extras. No cross-platform variants were tested. The fix investigation additionally checked conflicting dependency groups, as described below.
 
 ## Reproduction
 
@@ -91,31 +93,32 @@ Raw exit codes and stdout/stderr are retained in `sync.json`, `metadata.json`, `
 
 ### Existing test coverage
 
-Reviewed setup and assertions in the relevant integration tests; no declared-conflicting-extras case was found in `crates/uv/tests/workspace/workspace_metadata.rs` or `crates/uv/tests/project/check.rs`.
+The initial reproduction review found no declared-conflicting-extras case in the relevant integration modules. Parent regression pull request astral-sh/uv-dev#2915 subsequently added `workspace_metadata_conflicting_extras` and `check_conflicting_extras`, initially asserting the undesirable behavior. Both are retained and updated by this fix.
 
 - `crates/uv/tests/workspace/workspace_metadata.rs::workspace_metadata_includes_existing_environment` locks two locally generated wheel dependencies, installs only one, deletes the uninstalled wheel, and verifies that frozen metadata inspection succeeds without syncing. It checks installed-package and module-owner output, lockfile-only discovery, and an overridden environment. It has no extras or conflict declaration.
 - `crates/uv/tests/workspace/workspace_metadata.rs::workspace_metadata_module_owners_failure_is_error` deletes a locked wheel and snapshots exit 2 with `Failed to inspect environment` under `--frozen --sync`. Its failure is a missing distribution during synchronization, not conflicting-extra inspection.
 - `crates/uv/tests/project/check.rs::check_no_sync_frozen_uses_existing_lock_without_update` makes manifest requirements unresolvable after locking, then verifies frozen checking retains the lockfile and does not install the dependency. Its exit-1 `warning[uv-metadata]` is about missing module ownership/editable paths, not conflicting extras.
 
-No repository tests were added or executed. A regression test using public PyPI dependencies needs `test-pypi` gating; the project check module already requires both `test-python` and `test-r2`. Local wheel fixtures are available in the metadata module. Any added coverage should use the existing snapshot style and separate named tests for the two commands.
+The reproduction phase did not run repository tests. The fix phase ran the focused integration tests listed below. The metadata regressions retain `test-python` and `test-pypi` gates; the check regression retains its `test-pypi` gate inside the module gated by `test-python` and `test-r2`. Tests use neighboring snapshot conventions and explicit invocations.
 
 ## Classification
 
 Bug; runtime reproduction confirms both reported symptoms. Explicitly conflicting extras can be locked together and used one at a time. The successful single-extra sync and compatibility check demonstrate a valid installed environment, while metadata inspection rejects it as if both extras were enabled.
 
-Source inspection is consistent with the observed failure: the metadata environment-inspection path selects all extras and groups, then constructs a selected resolution before deciding whether to synchronize. Conflict validation can therefore reject the inspection even without `--sync`. Earlier metadata work acknowledged a no-conflicts assumption. This is an implementation limitation rather than an invalid conflict declaration.
+Pre-fix source inspection is consistent with the observed failure: the metadata environment-inspection path selects all extras and groups, then constructs a selected resolution before deciding whether to synchronize. Conflict validation can therefore reject the inspection even without `--sync`. Earlier metadata work acknowledged a no-conflicts assumption. This is an implementation limitation rather than an invalid conflict declaration.
 
-The related merged feature PRs provide implementation history; they do not track a fix for this failure. The report supplies no last working version, and this reproduction tested only uv 0.13.4. It establishes neither an upgrade regression nor the first affected release.
+The related merged feature PRs provide implementation history; they do not track a fix for this failure. The report supplies no last working version, and the original reproduction tested only installed uv 0.13.4. The fix is validated with debug builds of this checkout. It establishes neither an upgrade regression nor the first affected release.
 
 ## Related
 
+- astral-sh/uv-dev#2915 — Parent regression pull request. Added the two passing tests that snapshot the undesirable metadata and check behavior; both original test files are updated by this fix.
 - astral-sh/uv#20643 — Include best-effort `environment` info by default in `uv workspace metadata` (pull request, merged). Added inspection of an existing environment without --sync, specifically so uv check could retain its selected environment. The discussion explicitly assumed there were no conflicts. Its diff still computes package IDs using all extras before deciding whether to sync, directly explaining the unsupported case; it did not fix conflicting-extra inspection.
 - astral-sh/uv#22395 — Include installed packages in workspace metadata (pull request, merged). Updated the failing environment-inspection path and introduced the reported 'Failed to inspect environment' context. Released in uv 0.13.2, before the reported 0.13.4. Its diff retains the pre-existing all-extras selection, so it is relevant implementation history, not evidence of a fix or a newly introduced conflict-selection bug.
 - astral-sh/uv#14848 — incorrect extras conflict detection when using `uv sync` with `--package` and `--all-extras` (issue, open). Also concerns selecting conflicting extras beyond the intended installation. Maintainer comments discuss restricting --all-extras to selected packages. Unlike this report, it requires explicit --all-extras and --package during sync; it does not cover metadata inspection failing after a valid single-extra sync.
 
 ## Supporting evidence
 
-Source inspection was performed at checkout commit `dce03cb`. The runtime observations above used the installed uv 0.13.4 executable, not a binary built from this checkout.
+The following implementation-history notes describe the pre-fix source at checkout commit `dce03cb`. The runtime observations above used the installed uv 0.13.4 executable, not a binary built from this checkout.
 
 - `docs/concepts/resolution.md:612` documents explicitly conflicting extras as supported: they can be locked together but cannot be installed together.
 - `docs/reference/internals/metadata.md:67` explains that workspace metadata can describe multiple package versions arising from conflicts and exposes those conflicts in its output. A conflict declaration is therefore not inherently invalid metadata input.
@@ -127,7 +130,7 @@ Source inspection was performed at checkout commit `dce03cb`. The runtime observ
 - astral-sh/uv#20643 (merged July 23, 2026) extended collection to an existing environment without syncing. Its discussion explicitly describes the assumption that there are no conflicts. Its diff leaves all-extras package selection before the optional sync branch.
 - astral-sh/uv#19122 introduced module ownership collection with all extras and dependency groups. Its discussion and review comments address installed-package metadata and inspection semantics, but contain no fix for this conflict case.
 - astral-sh/uv#22395 (merged October 15, 2026) renamed the collection code and changed the outer error from `Failed to collect module owners` to `Failed to inspect environment`. Its diff retains the all-extras selection. `CHANGELOG.md:47` places this change in uv 0.13.2, released October 19, before the reported uv 0.13.4 release on October 20. The new wording alone does not establish a new regression.
-- Existing tests in `crates/uv/tests/workspace/workspace_metadata.rs` cover inspection of an existing environment, installed-package inventory, and module-inspection failures. No explicit declared-conflicting-extras scenario was found in that module.
+- The initial tests covered existing environments, installed-package inventory, and module-inspection failures. Explicit conflicting-extra coverage was subsequently added by the parent regression pull request and corrected here.
 
 ## Search scope and excluded candidates
 
@@ -148,8 +151,37 @@ Additional plausible candidates were excluded:
 - astral-sh/uv#21397 requests ownership information for packages absent from the lockfile. It led to relevant inspection history but is a different capability request.
 - astral-sh/uv#12541 requested the metadata command itself; its closing maintainer comment directs specific follow-up requests to new issues.
 
-## Recommended follow-up and validation limits
 
-Add regression coverage for metadata inspection of a valid single-extra environment and the downstream `uv check` invocation in the existing test modules. Inspection should respect declared conflicts without manufacturing a simultaneous selection of every extra. The exact selection and installed-package matching design remains implementation work.
+## Fix
 
-Both reported failures are now supported by runtime evidence. The historical GitHub search findings above are retained from the earlier context review; this reproduction did not repeat those searches. No other uv versions or platforms were tested, and no repository test suite or build was run. No checkout files, existing user state, or GitHub objects were changed. The only handoff document updated was this README; reproduction artifacts remain in the temporary directory.
+**Outcome: fixed in the working tree.** No commits or GitHub changes were made.
+
+### Confirmed cause and implementation
+
+`collect_environment` constructed an all-extras/all-groups installation resolution before inspecting the existing environment. That enabled mutually exclusive extras and raised conflict validation even though inspection requested no synchronization. In the closely related dependency-group configuration, resolution instead retained both alternatives and the name-keyed package-ID map assigned the last locked version to the installed distribution.
+
+`crates/uv-workspace-commands/src/environment.rs` now bypasses installation resolution only for non-sync inspection of a lockfile declaring conflicts. `crates/uv-lock/src/lock/export/metadata.rs` supplies a lookup that associates installed names and versions with unambiguous locked package IDs. Virtual packages are excluded; unmatched or ambiguous distributions retain the existing unmanaged-ID representation. This avoids guessing an original registry when multiple locked sources match installed metadata. The installation/synchronization path and conflict-free inspection keep their existing behavior.
+
+### Regressions and nearby coverage
+
+Both original parent tests were run before any edits and passed while asserting the undesirable errors. After changing them to the desired behavior, both failed for the reported conflicting-extras reason before production code was changed.
+
+- `workspace_metadata_conflicting_extras` now verifies successful inspection, the installed `idna==3.9` inventory entry, and its corresponding module-owner ID. It also retains an explicit snapshot showing that `workspace metadata --sync` rejects the invalid simultaneous-extra selection.
+- `check_conflicting_extras` now checks a real Python file importing and calling `idna` with extra `a`, expecting `All checks passed!`. This covers synchronization, metadata production, and ty consumption end to end.
+- New named test `workspace_metadata_conflicting_groups` covers a distinct demonstrated failure: default group `dev` installs `idna==3.9`, while mutually exclusive group `other` locks `idna==3.10`. Before the fix, metadata succeeded but assigned the 3.10 ID to both the 3.9 inventory entry and its modules. A standalone installed-uv reproduction and the debug regression both confirmed that mismatch. The test now requires the correct 3.9 IDs. There was no existing conflict-group metadata test to extend without replacing unrelated coverage.
+
+Neighboring wheel, marker-selection, existing-environment, script, duplicate-distribution, missing-module-record, and stale-package tests were inspected. In particular, `workspace_metadata_module_owners_after_dependency_changes` intentionally maps an older installed version to a unique selected package in a conflict-free project. That is outside the demonstrated conflicting-alternative failure and remains unchanged; its existing assertions pass. No other command aliases or speculative configuration matrices were added.
+
+### Successful focused validation
+
+All end-to-end tests used the debug/test profile on Ubuntu 24.04 x86_64 with Python 3.12 and ty 0.0.90 for the check regression.
+
+- `cargo test -p uv --test project check::check_conflicting_extras -- --exact`: passed.
+- `cargo test -p uv --test workspace -- workspace_metadata::workspace_metadata_conflicting workspace_metadata::workspace_metadata_includes_existing_environment workspace_metadata::workspace_metadata_module_owners workspace_metadata::workspace_metadata_script_includes_existing_environment workspace_metadata::workspace_metadata_installed_packages`: 11 passed. This includes both metadata regressions, sync-to-metadata paths, script inspection, environment inventory, marker-selected ownership, and error handling.
+- `RUSTUP_TOOLCHAIN=stable cargo fmt --all` and `RUSTUP_TOOLCHAIN=stable cargo fmt --all -- --check`: passed. The installed stable formatter is the same Rust 1.99.0 revision as the pinned compiler; the pinned toolchain itself lacks the rustfmt component.
+- `RUSTUP_TOOLCHAIN=stable cargo clippy -p uv-lock -p uv-workspace-commands --all-targets --locked -- -D warnings`: passed.
+- `git diff --check`: passed.
+
+Only the two affected production source files and the two original parent integration-test files are modified in the checkout. No dependency files, workflows, agent configuration, or unrelated repository files were changed. No release build or whole-suite run was performed. Historical related-work findings above were retained without repeating GitHub searches.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/2916

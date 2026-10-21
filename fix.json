@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Metadata inspection now matches installed distributions to unambiguous locked versions without activating mutually exclusive dependencies, fixing workspace metadata and uv check failures while retaining synchronization validation. Both parent regressions now assert success, and additional coverage verifies correct package IDs for conflicting dependency groups.",
+  "validation": [
+    "Both parent regressions passed before modification and failed with corrected expectations before the production fix.",
+    "11 focused metadata integration tests passed in the debug profile.",
+    "check::check_conflicting_extras passed end to end.",
+    "Focused Clippy checks passed with warnings denied.",
+    "cargo fmt --all, formatting verification, and git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2916"
+}
