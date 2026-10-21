@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::slice;
 use std::str::FromStr;
 
 use anyhow::Result;
@@ -12,12 +13,11 @@ use uv_configuration::{
     DryRun, ExtrasSpecification, InstallOptions, Modifications,
 };
 use uv_dispatch::UniversalState;
-use uv_environment_operations::environment::CachedEnvironment;
 use uv_environment_operations::install_target::{InstallTarget, PackageSelection};
 use uv_environment_operations::malware::MalwareCheckContext;
 use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
-    ProjectInterpreter, ScriptEnvironment, store_credentials_from_target, sync_from_lock,
+    ProjectInterpreter, ScriptEnvironment, sync_from_lock,
 };
 use uv_fs::normalize_path;
 use uv_install_operations::loggers::SummaryInstallLogger;
@@ -526,11 +526,17 @@ pub async fn check(
                 {
                     // A workspace checker may require a different Python version than the script.
                     let tool_groups = source.groups();
-                    let target = InstallTarget::Workspace {
-                        workspace: project.workspace(),
-                        project_name: project.project_name(),
-                        lock: &lock,
+                    // Select only the workspace root. A virtual root contributes groups without
+                    // selecting any workspace members.
+                    let roots = match project.project_name() {
+                        Some(name) => slice::from_ref(name),
+                        None => &[],
                     };
+                    let target = InstallTarget::from_project(
+                        &project,
+                        &lock,
+                        PackageSelection::Projects(roots),
+                    );
                     let project_python = ProjectPythonRequest::from_requirements(
                         None,
                         Some(project.workspace().install_path()),
@@ -562,39 +568,25 @@ pub async fn check(
                         &package_name,
                         &source,
                     )? {
-                        let base_interpreter =
-                            CachedEnvironment::base_interpreter(&interpreter, cache)?;
-                        let resolution = toolchain::resolution_from_lock(
+                        let (environment, _) = toolchain::prepare_locked_environment(
                             &project,
                             &lock,
+                            target,
                             &tool,
-                            &base_interpreter,
-                            &settings.resolver.build_options,
-                        )?;
-                        store_credentials_from_target(target, &client_builder)?;
-                        let tool_state = state.fork();
-                        let environment = match CachedEnvironment::from_locked_resolution(
-                            &resolution,
-                            lock.build_constraints(project.workspace().install_path()),
-                            &base_interpreter,
+                            &interpreter,
                             &settings,
                             &malware_settings,
                             &client_builder,
-                            &tool_state,
-                            Box::new(SummaryInstallLogger),
+                            &state,
                             installer_metadata,
                             &concurrency,
                             cache,
                             printer,
                             preview,
                         )
-                        .await
-                        {
-                            Ok(environment) => environment,
-                            Err(error) => return Err(UvError::from(error).into()),
-                        };
+                        .await?;
                         locked_ty_path = Some(
-                            PythonEnvironment::from(environment)
+                            environment
                                 .scripts()
                                 .join(format!("ty{}", std::env::consts::EXE_SUFFIX)),
                         );
@@ -752,41 +744,25 @@ pub async fn check(
             } else {
                 // Do not modify the selected environment when synchronization is disabled or the
                 // locked tool is excluded from it. Install only the locked `ty` subgraph.
-                let base_interpreter =
-                    CachedEnvironment::base_interpreter(lock_interpreter, cache)?;
-                let resolution = toolchain::resolution_from_lock(
+                let (environment, resolution) = toolchain::prepare_locked_environment(
                     project,
                     result.lock(),
+                    target,
                     &tool,
-                    &base_interpreter,
-                    &settings.resolver.build_options,
-                )?;
-                store_credentials_from_target(target, &client_builder)?;
-                let ty_state = state.fork();
-                let environment = match CachedEnvironment::from_locked_resolution(
-                    &resolution,
-                    result
-                        .lock()
-                        .build_constraints(project.workspace().install_path()),
-                    &base_interpreter,
+                    lock_interpreter,
                     &settings,
                     &malware_settings,
                     &client_builder,
-                    &ty_state,
-                    Box::new(SummaryInstallLogger),
+                    &state,
                     installer_metadata,
                     &concurrency,
                     cache,
                     printer,
                     preview,
                 )
-                .await
-                {
-                    Ok(environment) => environment,
-                    Err(err) => return Err(UvError::from(err).into()),
-                };
+                .await?;
                 malware_context.record_resolution(&resolution);
-                PythonEnvironment::from(environment)
+                environment
                     .scripts()
                     .join(format!("ty{}", std::env::consts::EXE_SUFFIX))
             });

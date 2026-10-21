@@ -2318,6 +2318,25 @@ fn check_script_uses_workspace_ty_from_check_group() -> Result<()> {
 
         [tool.uv.dependency-groups]
         check = { requires-python = ">=3.12" }
+
+        [tool.uv.workspace]
+        members = ["member"]
+    "#})?;
+    context
+        .temp_dir
+        .child("member")
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "member"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+
+        [dependency-groups]
+        check = ["iniconfig==2.0.0"]
+
+        [tool.uv.dependency-groups]
+        check = { requires-python = "<3.12" }
     "#})?;
     context
         .temp_dir
@@ -2373,7 +2392,7 @@ fn check_script_uses_workspace_ty_from_check_group() -> Result<()> {
     Ok(())
 }
 
-/// The workspace checker can use its required Python while the script uses a different version.
+/// A virtual root's checker requirements do not include unrelated member groups.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn check_script_uses_virtual_workspace_ty() -> Result<()> {
@@ -2386,6 +2405,9 @@ fn check_script_uses_virtual_workspace_ty() -> Result<()> {
         [dependency-groups]
         dev = ["ty==0.0.16"]
 
+        [tool.uv.dependency-groups]
+        dev = { requires-python = ">=3.12" }
+
         [tool.uv.workspace]
         members = ["member"]
     "#})?;
@@ -2394,8 +2416,14 @@ fn check_script_uses_virtual_workspace_ty() -> Result<()> {
         [project]
         name = "member"
         version = "0.1.0"
-        requires-python = ">=3.12"
+        requires-python = ">=3.11"
         dependencies = []
+
+        [dependency-groups]
+        dev = ["iniconfig==2.0.0"]
+
+        [tool.uv.dependency-groups]
+        dev = { requires-python = "<3.12" }
     "#})?;
     context
         .lock()

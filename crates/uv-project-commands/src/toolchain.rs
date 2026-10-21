@@ -1,13 +1,23 @@
 use anyhow::Result;
 
+use uv_cache::Cache;
+use uv_client::BaseClientBuilder;
+use uv_command_support::{Printer, UvError};
 use uv_configuration::{
-    BuildOptions, DependencyGroups, DependencyGroupsWithDefaults, InstallOptions,
+    BuildOptions, Concurrency, DependencyGroups, DependencyGroupsWithDefaults, InstallOptions,
 };
+use uv_dispatch::UniversalState;
 use uv_distribution_types::Resolution;
+use uv_environment_operations::environment::CachedEnvironment;
+use uv_environment_operations::install_target::InstallTarget;
+use uv_environment_operations::store_credentials_from_target;
+use uv_install_operations::loggers::SummaryInstallLogger;
 use uv_lock::{Lock, SelectedDependency};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultGroups, GroupName, PackageName};
-use uv_python_interpreter::Interpreter;
+use uv_preview::Preview;
+use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
+use uv_settings::{MalwareCheckSettings, ResolverInstallerSettings};
 use uv_workspace::VirtualProject;
 
 /// A locked package selected for use as a project tool.
@@ -164,8 +174,55 @@ pub(super) fn find_locked_workspace_tool<'lock>(
     }))
 }
 
+/// Materialize and install the locked tool subgraph with the same base interpreter.
+pub(super) async fn prepare_locked_environment(
+    project: &VirtualProject,
+    lock: &Lock,
+    target: InstallTarget<'_>,
+    tool: &LockedTool<'_>,
+    interpreter: &Interpreter,
+    settings: &ResolverInstallerSettings,
+    malware_settings: &MalwareCheckSettings,
+    client_builder: &BaseClientBuilder<'_>,
+    state: &UniversalState,
+    installer_metadata: bool,
+    concurrency: &Concurrency,
+    cache: &Cache,
+    printer: Printer,
+    preview: Preview,
+) -> Result<(PythonEnvironment, Resolution)> {
+    let base_interpreter = CachedEnvironment::base_interpreter(interpreter, cache)?;
+    let resolution = resolution_from_lock(
+        project,
+        lock,
+        tool,
+        &base_interpreter,
+        &settings.resolver.build_options,
+    )?;
+    store_credentials_from_target(target, client_builder)?;
+    let tool_state = state.fork();
+    let environment = CachedEnvironment::from_locked_resolution(
+        &resolution,
+        lock.build_constraints(project.workspace().install_path()),
+        &base_interpreter,
+        settings,
+        malware_settings,
+        client_builder,
+        &tool_state,
+        Box::new(SummaryInstallLogger),
+        installer_metadata,
+        concurrency,
+        cache,
+        printer,
+        preview,
+    )
+    .await
+    .map_err(UvError::from)?;
+    Ok((PythonEnvironment::from(environment), resolution))
+}
+
 /// Materialize the exact dependency subgraph for a locked tool selection.
-pub(super) fn resolution_from_lock(
+fn resolution_from_lock(
     project: &VirtualProject,
     lock: &Lock,
     tool: &LockedTool<'_>,
