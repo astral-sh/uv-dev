@@ -43441,7 +43441,11 @@ fn lock_android_wheel_only() -> Result<()> {
         wheel_tags = ["py3-none-android_21_arm64_v8a"]
     "#})?;
     let server = PackseServer::from_scenario(&scenario);
-    let context = uv_test::test_context!("3.14");
+    let context = uv_test::test_context!("3.14").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
     context
         .temp_dir
         .child("pyproject.toml")
@@ -43456,15 +43460,53 @@ fn lock_android_wheel_only() -> Result<()> {
         environments = ["sys_platform == 'android'"]
     "#})?;
 
-    // Android wheel tags are incorrectly treated as providing no platform coverage:
-    // astral-sh/uv#22805.
     uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No solution found when resolving dependencies for split (markers: sys_platform == 'android')
-      cause: Because a==1.0.0 has no `sys_platform == 'android'`-compatible wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+    Resolved 2 packages in [TIME]
+    ");
 
-    hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.14"
+        resolution-markers = [
+            "sys_platform == 'android'",
+        ]
+        supported-markers = [
+            "sys_platform == 'android'",
+        ]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-android_21_arm64_v8a.whl", hash = "sha256:[SHA256:a-1.0.0-py3-none-android_21_arm64_v8a.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a", specifier = "==1.0.0" }]
+        "#);
+    });
+
+    // Validate the serialized lockfile without cached metadata or network access.
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache").arg("--index-url").arg(server.index_url()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
     ");
 
     Ok(())
@@ -43493,7 +43535,11 @@ fn lock_android_wheel_only_fork() -> Result<()> {
         sdist = false
     "#})?;
     let server = PackseServer::from_scenario(&scenario);
-    let context = uv_test::test_context!("3.14");
+    let context = uv_test::test_context!("3.14").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
     context
         .temp_dir
         .child("pyproject.toml")
@@ -43512,15 +43558,90 @@ fn lock_android_wheel_only_fork() -> Result<()> {
         environments = ["python_version >= '3.14'"]
     "#})?;
 
-    // The Android fork incorrectly rejects a compatible wheel because its platform tag is ignored:
-    // astral-sh/uv#22805.
     uv_snapshot!(context.filters(), context.lock().arg("--index-url").arg(server.index_url()), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No solution found when resolving dependencies for split (markers: python_full_version >= '3.14' and sys_platform == 'android')
-      cause: Because a==1.0.0 has no `python_full_version >= '3.14'`-compatible wheels and your project depends on a==1.0.0, we can conclude that your project's requirements are unsatisfiable.
+    Resolved 4 packages in [TIME]
+    ");
 
-    hint: The resolution failed for an environment that is not the current one, consider limiting the environments with `tool.uv.environments`.
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.14"
+        resolution-markers = [
+            "sys_platform != 'android'",
+            "sys_platform == 'android'",
+        ]
+        supported-markers = [
+        ]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-android_21_arm64_v8a.whl", hash = "sha256:[SHA256:a-1.0.0-py3-none-android_21_arm64_v8a.whl]", upload-time = "2024-03-24T00:00:00Z" },
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:[SHA256:a-1.0.0-py3-none-manylinux_2_17_x86_64.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "b"
+        version = "1.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform != 'android'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/b-1.0.0-py3-none-any.whl", hash = "sha256:[SHA256:b-1.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "b"
+        version = "2.0.0"
+        source = { registry = "http://[LOCALHOST]/simple/" }
+        resolution-markers = [
+            "sys_platform == 'android'",
+        ]
+        wheels = [
+            { url = "http://[LOCALHOST]/files/b-2.0.0-py3-none-any.whl", hash = "sha256:[SHA256:b-2.0.0-py3-none-any.whl]", upload-time = "2024-03-24T00:00:00Z" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+            { name = "b", version = "1.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform != 'android'" },
+            { name = "b", version = "2.0.0", source = { registry = "http://[LOCALHOST]/simple/" }, marker = "sys_platform == 'android'" },
+        ]
+
+        [package.metadata]
+        requires-dist = [
+            { name = "a", specifier = "==1.0.0" },
+            { name = "b", marker = "sys_platform != 'android'", specifier = "==1.0.0" },
+            { name = "b", marker = "sys_platform == 'android'", specifier = "==2.0.0" },
+        ]
+        "#);
+    });
+
+    // Export the platform-specific pins from the lockfile without resolving again.
+    uv_snapshot!(context.filters(), context.export()
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--no-cache")
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .arg("--no-hashes"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    a==1.0.0
+    b==1.0.0 ; sys_platform != 'android'
+    b==2.0.0 ; sys_platform == 'android'
     ");
 
     Ok(())
@@ -43543,7 +43664,11 @@ fn lock_android_wheel_url_required_environment() -> Result<()> {
         wheel_tags = ["py3-none-android_21_arm64_v8a"]
     "#})?;
     let server = PackseServer::from_scenario(&scenario);
-    let context = uv_test::test_context!("3.14");
+    let context = uv_test::test_context!("3.14").with_filters(
+        server
+            .files()
+            .map(|(filename, hash)| (hash.to_owned(), format!("[SHA256:{filename}]"))),
+    );
     context
         .temp_dir
         .child("pyproject.toml")
@@ -43558,13 +43683,50 @@ fn lock_android_wheel_url_required_environment() -> Result<()> {
         required-environments = ["sys_platform == 'android'"]
     "#, server.file_url("a-1.0.0-py3-none-android_21_arm64_v8a.whl")})?;
 
-    // The Android wheel is incorrectly rejected for the platform it targets: astral-sh/uv#22805.
     uv_snapshot!(context.filters(), context.lock(), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stderr -----
-    error: No solution found when resolving dependencies
-      cause: Because only a==1.0.0 is available and a==1.0.0 has no `sys_platform == 'android'`-compatible wheels, we can conclude that all versions of a cannot be used.
-             And because your project depends on a, we can conclude that your project's requirements are unsatisfiable.
+    Resolved 2 packages in [TIME]
+    ");
+
+    insta::with_settings!({ filters => context.filters() }, {
+        assert_snapshot!(context.read("uv.lock"), @r#"
+        version = 1
+        revision = 5
+        requires-python = ">=3.14"
+        required-markers = [
+            "sys_platform == 'android'",
+        ]
+
+        [options]
+        exclude-newer = "2024-03-25T00:00:00Z"
+
+        [[package]]
+        name = "a"
+        version = "1.0.0"
+        source = { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-android_21_arm64_v8a.whl" }
+        wheels = [
+            { url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-android_21_arm64_v8a.whl", hash = "sha256:[SHA256:a-1.0.0-py3-none-android_21_arm64_v8a.whl]" },
+        ]
+
+        [[package]]
+        name = "project"
+        version = "0.1.0"
+        source = { virtual = "." }
+        dependencies = [
+            { name = "a" },
+        ]
+
+        [package.metadata]
+        requires-dist = [{ name = "a", url = "http://[LOCALHOST]/files/a-1.0.0-py3-none-android_21_arm64_v8a.whl" }]
+        "#);
+    });
+
+    // Validate the serialized lockfile without cached metadata or network access.
+    uv_snapshot!(context.filters(), context.lock().arg("--locked").arg("--offline").arg("--no-cache"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
     ");
 
     Ok(())
