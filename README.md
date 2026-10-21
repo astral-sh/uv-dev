@@ -2,7 +2,7 @@
 
 Issue: astral-sh/uv#22783
 
-Classification: bug (reported; Windows runtime reproduction remains unverified)
+Classification: bug (reporter reproduced the Windows PowerShell failure; independent Windows verification remains outstanding)
 
 ## Summary
 
@@ -23,17 +23,24 @@ The published 0.13.4 PowerShell installer was retrieved and inspected. It has a
 separate WebClient/WebProxy archive downloader. However, that downloader's
 helpers successfully downloaded the actual Windows archive through a working
 SOCKS5 proxy on the available Linux PowerShell 7.6.7/.NET 10.0.13 runtime. SOCKS5 support in this download path therefore depends on the runtime.
-Windows PowerShell, which uv invokes on Windows, was not available;
-the reported Windows failure is neither independently confirmed nor disproved.
+The reporter additionally reproduced the same exception using WebClient/WebProxy
+under Windows PowerShell 5.1/.NET Framework, while the same download succeeded
+under PowerShell 7/.NET 10. This supports a runtime-specific failure and agrees
+with the successful Linux control. Windows PowerShell, which uv invokes on
+Windows, was unavailable on the investigation runner; independent Windows
+verification remains outstanding.
 
 ## Classification
 
 Retain the bug classification for the reported failure of a Windows update
-under a SOCKS5 configuration. The available evidence suggests investigating the
-Windows PowerShell/.NET Framework download path, but does not confirm the
-exception's cause in the reporter's runtime. The installed `powershell.exe`
-and .NET versions are missing from the report and are relevant to the next
-verification.
+under a SOCKS5 configuration. The reporter's isolated comparison now identifies
+Windows PowerShell 5.1/.NET Framework as a failing runtime and PowerShell 7/.NET 10
+as a successful runtime for the same WebClient/WebProxy download. Together with
+the verified invocation of `powershell` by uv, this strengthens the evidence
+for a runtime-specific installer networking failure. The comparison is reported
+evidence, not an independently executed Windows reproduction. Exact runtime
+builds, the standalone download test script, and the executable resolved by the
+failing updater are not provided.
 
 No previously working Windows SOCKS5 self-update version or same-problem
 duplicate has been established. Historical Rust-client SOCKS support and
@@ -42,11 +49,12 @@ failure should not be classified as a demonstrated regression of those fixes.
 
 ## Reproduction
 
-**Outcome: `needs_more_information`.** A faithful Windows run is still needed.
-The available Linux controls cannot establish whether the Windows-only
-ServicePointManager failure reproduces. In particular, success under modern
-PowerShell does not justify a `not_reproducible` conclusion for Windows
-PowerShell.
+**Independent reproduction outcome: `needs_more_information`.** The recorded
+Linux controls remain unchanged. The reporter has now reproduced the exception
+in a separate Windows PowerShell 5.1 WebClient/WebProxy test and reports success
+under PowerShell 7/.NET 10. Independent verification of the Windows downloader
+and full update remains outstanding. Success under modern PowerShell does not
+justify a `not_reproducible` conclusion for Windows PowerShell.
 
 ### Reported minimal scenario
 
@@ -64,6 +72,22 @@ and cannot reproduce that stage. Record whether `HTTPS_PROXY` is set, without
 exposing its credentials: the published installer prefers it over `ALL_PROXY`.
 For an isolated test, unset competing proxy variables and use an unauthenticated
 loopback proxy. This Windows scenario was not executed on this Linux runner.
+
+### Reporter-provided runtime comparison
+
+In the follow-up on astral-sh/uv#22783 (comment ID 6309873243, 2026-10-21), the
+reporter describes a separate download test using `System.Net.WebClient` and
+`System.Net.WebProxy` with `ALL_PROXY=socks5://127.0.0.1:9050`:
+
+| Runtime | Reported result |
+| --- | --- |
+| Windows PowerShell 5.1 / .NET Framework | `System.NotSupportedException: The ServicePointManager does not support proxies with the socks5 scheme.` |
+| PowerShell 7 / .NET 10 | The same download succeeds. |
+
+The failure matches the original updater exception and isolates the comparison
+to the downloader APIs used by the installer. The comment does not include the
+exact script, download URL, or full runtime build numbers. It reports a separate
+API-level test, not a new full self-update run or a tested updater workaround.
 
 ### Executed controls and observations
 
@@ -156,9 +180,12 @@ proxy, an isolated standalone installation, and competing proxy settings
 removed. Capture the version and CLR/runtime of the `powershell.exe` actually
 resolved by the updater, as well as the uv exit status and sanitized installer
 output. The parent shell may be PowerShell 7 while uv starts Windows PowerShell;
-recording only the parent shell's version is insufficient. A comparison of the
-same download helper under Windows PowerShell and PowerShell 7 would test the
-runtime hypothesis. Python/project configuration is not needed for this check.
+recording only the parent shell's version is insufficient. Independently repeat
+the reporter's runtime comparison using the published installer helpers, and
+retain the exact script and runtime builds with the results. The reported
+PowerShell 7 success does not establish that launching `uv self update` from
+PowerShell 7 fixes the issue: uv separately invokes `powershell`.
+Python/project configuration is not needed for this check.
 
 ## Related
 
@@ -190,8 +217,9 @@ The checkout examined is commit `5477928f71f0634db593a8a10a8012044fe02349`.
   the report nor the controls establish a last known-good Windows version.
 
 The separate download paths and proxy selection are verified from source and
-the release artifact. Runtime success is established only for the Linux
-controls above. The Windows exception and two failing upgrade pairs remain
+the release artifact. Independently observed runtime success is limited to the
+Linux controls above. The Windows exception, two failing upgrade pairs, and
+separate Windows PowerShell 5.1 versus PowerShell 7 download comparison remain
 reporter observations.
 
 ## Search scope and excluded candidates
@@ -219,9 +247,12 @@ an exact duplicate or a previously working Windows SOCKS5 self-update path.
 
 ## Next step
 
-Obtain the Windows runtime verification described above before asserting a
-confirmed root cause or choosing a fix. If Windows PowerShell rejects the
-scheme, investigate a SOCKS-capable archive downloader in cargo-dist's
-PowerShell installer. An HTTP endpoint supplied by the same proxy service may
-be a workaround when configured through `HTTPS_PROXY`, but that workaround
-was not independently tested.
+Use the reporter's Windows PowerShell 5.1/.NET Framework failure and
+PowerShell 7/.NET 10 success to focus investigation on runtime compatibility
+of cargo-dist's PowerShell archive downloader. Independently verify the
+published helpers and the complete pinned Windows update before selecting a
+fix, and ensure regression coverage exercises the failing runtime rather than
+only modern PowerShell. An HTTP endpoint supplied by the same proxy service
+may be a workaround when configured through `HTTPS_PROXY`, but that workaround
+was not independently tested. Running uv from PowerShell 7 alone is not an
+established workaround because the updater invokes `powershell` separately.
