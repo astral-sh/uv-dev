@@ -25,7 +25,25 @@ Maintainer zanieb questions coupling version-file discovery to `--no-project`: i
 inherently tied to a project root. This adds a design objection to treating a pin as
 project-owned based on its location. It is consistent with the discovery implementation
 described below, but does not constitute a final acceptance or rejection of the request.
-The enhancement classification remains appropriate; no new reproduction details were supplied.
+The enhancement classification remains appropriate. The reporter now supplies a concrete
+invocation and workflow, described below, but no observed output or complete reproduction
+fixture.
+
+## Reported workflow
+
+The reporter explains in astral-sh/uv#22768 (comment ID 6308310131) that they want Codex
+to execute Python snippets directly without creating script files, always using the version
+selected by `uv python pin --global`. Their example invokes `uv run --no-project python -`
+with a shell here-document supplying Python code on standard input. This clarifies that
+the desired interpreter should follow the global pin even when the invoking directory has
+a local pin; the request is not limited to running a saved script or one with inline
+metadata.
+
+This is a reported use case, not a verified reproduction. The example contains only a
+placeholder for the Python code and supplies no pin values, interpreter output, uv version,
+platform, or directory fixture. The request to avoid creating files describes how the
+reporter wants to supply the snippet; it does not establish that uv performs no filesystem
+writes. No runtime test was performed.
 
 ## Requested alternatives and design scope
 
@@ -40,10 +58,10 @@ to `--no-project`. They propose these alternatives:
   pins or select the global pin explicitly.
 - Extend `--python` or `--python-preference` with a way to select the global pin.
 
-These are reporter proposals, not accepted designs or available workarounds. Maintainer
-zanieb asks the reporter to explain their use case in astral-sh/uv#22768 (comment ID
-6308123313). The supplied discussion does not yet include that explanation or a decision
-on the alternatives, and adds no affected version, platform, or reproduction fixture.
+These are reporter proposals, not accepted designs or available workarounds. The reporter
+has answered maintainer zanieb's request for a use-case explanation with the stdin-based
+workflow above. The supplied discussion contains no subsequent maintainer assessment of
+that workflow or decision on the alternatives.
 
 Skipping only the current directory would not by itself guarantee use of the global pin:
 `PythonVersionFile::discover` searches ancestor directories before falling back to the
@@ -135,10 +153,10 @@ Additional distinctions from inspected candidates:
 
 ## Maintainer next step
 
-Await the reporter's use-case explanation requested by the maintainer. The concrete
-workflow motivating global-pin selection is still missing; the proposed flags alone do
-not establish that context. Use that information to assess whether a behavior change or
-an additional selector is warranted.
+Assess the clarified workflow: executing Python code from standard input without creating
+a script file, while selecting the globally pinned interpreter independently of local
+pins. The requested use-case explanation is now available; a maintainer assessment of
+whether it warrants a behavior change or an additional selector remains outstanding.
 
 Decide whether to change `--no-project` semantics or provide an explicit way to select
 the global pin. A change to `--no-project` still needs to address the maintainer's
@@ -152,8 +170,10 @@ explicit-`--python` precedence and specify its interaction with any new selector
 should be defined from both the workspace root and a member directory.
 
 For immediate use, the reporter can pass the desired version explicitly with
-`uv run --no-project --python <version> ...`. Neither `--isolated` nor `--no-config`
-alone supplies the requested local-pin suppression with global-pin fallback.
+`uv run --no-project --python <version> ...`, including when the command is `python -`.
+That override selects a specified version; it does not automatically follow later changes
+to the global pin. Neither `--isolated` nor `--no-config` alone supplies the requested
+local-pin suppression with global-pin fallback.
 
 Only this handoff was written. No code, tests, or other checkout files were changed,
 and no GitHub state was modified.
