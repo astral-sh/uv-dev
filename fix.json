@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Infer Android platform and architecture coverage from wheel tags so packages without sdists resolve correctly. Update all three parent regressions to require successful locking, verify retained wheels and dependency markers, and exercise lockfile validation and frozen export.",
+  "validation": [
+    "Four focused Android integration tests passed.",
+    "Two neighboring fork-coverage integration tests passed.",
+    "Clippy passed for uv, uv-resolver, and uv-platform-tags with warnings denied.",
+    "cargo fmt --all, formatting verification, and git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2928"
+}
