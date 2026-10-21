@@ -1490,6 +1490,35 @@ impl Metadata {
         .to_flat())
     }
 
+    /// Find an unambiguous locked package node for an installed distribution.
+    ///
+    /// Conflicting alternatives cannot be selected together in an installation resolution.
+    /// Match the installed version instead, leaving ambiguous sources unmanaged because installed
+    /// metadata does not always identify the original registry.
+    pub fn installed_package_node_id(
+        workspace_root: &PortablePathBuf,
+        lock: &Lock,
+        dist: &InstalledDist,
+    ) -> Option<String> {
+        let mut candidates = lock.packages().iter().filter(|package| {
+            if let Source::Virtual(_) = &package.id.source {
+                return false;
+            }
+            package.name() == dist.name()
+                && package
+                    .version()
+                    .is_none_or(|version| version == dist.version())
+        });
+        let package = candidates.next()?;
+        if candidates.next().is_some() {
+            return None;
+        }
+        Some(
+            MetadataNodeId::from_package_id(workspace_root, &package.id, MetadataNodeKind::Package)
+                .to_flat(),
+        )
+    }
+
     /// Return the package node ID for an unmanaged distribution.
     ///
     /// Installed metadata may not identify the original source, such as the registry, so the

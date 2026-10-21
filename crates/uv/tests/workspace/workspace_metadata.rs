@@ -290,10 +290,34 @@ fn workspace_metadata_conflicting_extras() -> Result<()> {
      + idna==3.9
     ");
 
-    // Metadata incorrectly enables both extras despite only `a` being installed:
-    // astral-sh/uv#22796.
+    let output = context.workspace_metadata().assert().success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "installed_packages": metadata["environment"]["packages"],
+            "idna": metadata["module_owners"]["idna"],
+        }), @r#"
+        {
+          "idna": [
+            {
+              "package_id": "idna==3.9@registry+https://pypi.org/simple"
+            }
+          ],
+          "installed_packages": {
+            "idna==3.9@registry+https://pypi.org/simple": {
+              "editable": false,
+              "name": "idna",
+              "path": "[SITE_PACKAGES]/idna-3.9.dist-info",
+              "version": "3.9"
+            }
+          }
+        }
+        "#);
+    });
+
+    // Synchronizing all extras still requires a valid selection.
     uv_snapshot!(context.filters(), context.workspace_metadata().args([
-        "--preview-features", "workspace-metadata"
+        "--sync", "--preview-features", "workspace-metadata"
     ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
@@ -301,6 +325,65 @@ fn workspace_metadata_conflicting_extras() -> Result<()> {
     error: Failed to inspect environment
       cause: Found conflicting extras `mre[a]` and `mre[b]` enabled simultaneously
     ");
+
+    Ok(())
+}
+
+/// Conflicting groups must associate modules with the installed alternative, not the last locked version.
+#[test]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+fn workspace_metadata_conflicting_groups() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-02-15T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+
+        [dependency-groups]
+        dev = ["idna==3.9"]
+        other = ["idna==3.10"]
+
+        [tool.uv]
+        conflicts = [[{ group = "dev" }, { group = "other" }]]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync(), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + idna==3.9
+    ");
+
+    let output = context.workspace_metadata().assert().success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "installed_packages": metadata["environment"]["packages"],
+            "idna": metadata["module_owners"]["idna"],
+        }), @r#"
+        {
+          "idna": [
+            {
+              "package_id": "idna==3.9@registry+https://pypi.org/simple"
+            }
+          ],
+          "installed_packages": {
+            "idna==3.9@registry+https://pypi.org/simple": {
+              "editable": false,
+              "name": "idna",
+              "path": "[SITE_PACKAGES]/idna-3.9.dist-info",
+              "version": "3.9"
+            }
+          }
+        }
+        "#);
+    });
 
     Ok(())
 }
