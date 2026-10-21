@@ -16,8 +16,16 @@ No duplicate found. astral-sh/uv#6361 and astral-sh/uv#12115 establish the curre
 
 The issue was opened on 2026-10-20. It provides no uv version, platform, command output,
 directory fixture, or indication that a previously working release changed behavior.
-There are no issue comments at the time of review. The reported selection order is
-supported by the current source; a runtime reproduction was not performed.
+The reported selection order is supported by the inspected source; a runtime reproduction
+was not performed.
+
+Maintainer zanieb questions coupling version-file discovery to `--no-project`: in the
+2026-10-21 comment on astral-sh/uv#22768 (comment ID 6307777480), they point out that
+`.python-version` files can appear anywhere in the directory hierarchy and are not
+inherently tied to a project root. This adds a design objection to treating a pin as
+project-owned based on its location. It is consistent with the discovery implementation
+described below, but does not constitute a final acceptance or rejection of the request.
+The enhancement classification remains appropriate; no new reproduction details were supplied.
 
 ## Draft response
 
@@ -102,7 +110,9 @@ Additional distinctions from inspected candidates:
 
 ## Maintainer next step
 
-Decide whether the requested policy belongs in `--no-project` and whether it should skip
+Resolve the maintainer's objection before choosing an implementation: a proposal needs
+to explain why disabling project discovery should also suppress version files that are
+not inherently project-owned. If a policy change is accepted, define whether it skips
 only the workspace-root file or all local/ancestor pins. Those scopes are different:
 the existing `no_local` option skips all local files. Any accepted change should retain
 global fallback and explicit-request precedence, and should define behavior from both the
