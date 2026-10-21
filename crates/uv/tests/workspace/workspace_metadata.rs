@@ -8,6 +8,7 @@ use async_zip::{Compression, ZipEntryBuilder};
 use futures::executor::block_on;
 use indoc::{formatdoc, indoc};
 
+use uv_fs::create_symlink;
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::{copy_dir_ignore, uv_snapshot};
@@ -362,7 +363,7 @@ fn workspace_metadata_conflicting_extras() -> Result<()> {
     Ok(())
 }
 
-/// Installed paths distinguish locked packages with the same name and version.
+/// Installed source paths, including directory aliases, distinguish packages with the same name and version.
 #[test]
 #[cfg(feature = "test-python")]
 fn workspace_metadata_conflicting_sources() -> Result<()> {
@@ -409,6 +410,21 @@ fn workspace_metadata_conflicting_sources() -> Result<()> {
     "#})?;
 
     context.sync().arg("--extra=first").assert().success();
+    let alias = context.temp_dir.child("first-alias");
+    create_symlink(first.path(), alias.path())?;
+    let installed_url =
+        SafeUrl::from_file_path(alias.child("module_owner-0.1.0-py3-none-any.whl").path())
+            .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
+    fs_err::write(
+        context
+            .site_packages()
+            .join("module_owner-0.1.0.dist-info/direct_url.json"),
+        serde_json::json!({
+            "url": installed_url.as_str(),
+            "archive_info": {},
+        })
+        .to_string(),
+    )?;
     let output = context.workspace_metadata().assert().success();
     let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
     insta::with_settings!({ filters => context.filters() }, {

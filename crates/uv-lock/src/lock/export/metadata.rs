@@ -8,7 +8,7 @@ use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     InstalledDist, InstalledDistKind, Name, Requirement, RequiresPython, ResolvedDist, UrlString,
 };
-use uv_fs::{PortablePathBuf, normalize_path};
+use uv_fs::{PortablePathBuf, is_same_file_allow_missing, normalize_path};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerEnvironment, MarkerTree, StringVersion};
@@ -1053,7 +1053,11 @@ fn package_source_matches_installed(root: &Path, package: &Package, dist: &Insta
                 return false;
             };
             url.to_file_path().is_ok_and(|installed_path| {
-                normalize_path(root.join(path)) == normalize_path(installed_path)
+                is_same_file_allow_missing(
+                    &normalize_path(root.join(path)),
+                    &normalize_path(installed_path),
+                )
+                .unwrap_or(false)
             })
         }
         Source::Directory(path) | Source::Editable(path) => {
@@ -1065,11 +1069,20 @@ fn package_source_matches_installed(root: &Path, package: &Package, dist: &Insta
                     };
                     dist.editable == editable
                         && url.to_file_path().is_ok_and(|installed_path| {
-                            normalize_path(root.join(path)) == normalize_path(installed_path)
+                            is_same_file_allow_missing(
+                                &normalize_path(root.join(path)),
+                                &normalize_path(installed_path),
+                            )
+                            .unwrap_or(false)
                         })
                 }
                 InstalledDistKind::LegacyEditable(dist) => {
-                    editable && normalize_path(root.join(path)).as_ref() == dist.target.as_ref()
+                    editable
+                        && is_same_file_allow_missing(
+                            &normalize_path(root.join(path)),
+                            &normalize_path(dist.target.as_ref()),
+                        )
+                        .unwrap_or(false)
                 }
                 InstalledDistKind::Registry(_)
                 | InstalledDistKind::EggInfoFile(_)
