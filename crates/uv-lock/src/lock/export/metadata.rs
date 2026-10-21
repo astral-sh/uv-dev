@@ -11,7 +11,7 @@ use uv_distribution_types::{
 use uv_fs::{PortablePathBuf, is_same_file_allow_missing, normalize_path};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
-use uv_pep508::{MarkerTree, StringVersion};
+use uv_pep508::{MarkerEnvironment, MarkerTree, StringVersion};
 use uv_pypi_types::{
     ConflictItem, ConflictKind, ConflictSet, Conflicts, DirectUrl, HashDigest, ModuleName,
     ResolverMarkerEnvironment, VcsKind,
@@ -1615,6 +1615,29 @@ impl Metadata {
         .to_flat())
     }
 
+    /// Return reachable packages for an interpreter, including mutually exclusive variants.
+    pub fn packages_for_environment<'a>(
+        &'a self,
+        lock: &'a Lock,
+        marker_env: &'a MarkerEnvironment,
+    ) -> impl Iterator<Item = (String, &'a Package)> {
+        lock.packages().iter().filter_map(move |package| {
+            if let Source::Virtual(_) = package.id.source {
+                return None;
+            }
+            let id = MetadataNodeId::from_package_id(
+                &self.workspace_root,
+                &package.id,
+                MetadataNodeKind::Package,
+            )
+            .to_flat();
+            self.reachability
+                .get(&id)
+                .is_some_and(|marker| marker.without_extras().evaluate(marker_env, &[]))
+                .then_some((id, package))
+        })
+    }
+
     /// Match an installed distribution to a locked package without selecting conflicting extras.
     pub fn installed_package_node_id(
         &self,
@@ -1644,7 +1667,7 @@ impl Metadata {
             .peekable();
         let first = candidates.next()?;
         let package = if candidates.peek().is_none() {
-            // A single candidate owns modules by name even when the installed version or source differs.
+            // A single candidate identifies an installed package by name even when its version or source differs.
             first
         } else {
             let mut matches = once(first).chain(candidates).filter(|package| {
@@ -1703,9 +1726,10 @@ impl Metadata {
                 let owners = owners
                     .into_iter()
                     .filter(|package_id| {
-                        self.environment.as_ref().is_some_and(|environment| {
-                            environment.packages.contains_key(package_id)
-                        })
+                        self.resolution.contains_key(package_id)
+                            || self.environment.as_ref().is_some_and(|environment| {
+                                environment.packages.contains_key(package_id)
+                            })
                     })
                     .map(|package_id| MetadataModuleOwner { package_id })
                     .collect::<Vec<_>>();

@@ -8,7 +8,6 @@ use uv_configuration::{
     ExtrasSpecificationWithDefaults, HashCheckingMode, InstallOptions, Modifications, TargetTriple,
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
-use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{Dist, Resolution, ResolvedDist, SourceDist};
 use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::InstallLogger;
@@ -23,13 +22,12 @@ use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_resolver::FlatIndex;
 use uv_settings::InstallerSettingsRef;
 use uv_types::{BuildIsolation, HashStrategy, SourceTreeEditablePolicy};
+use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::Source;
-use uv_workspace::{DiscoveryOptions, MemberDiscovery, Workspace, WorkspaceCache};
 
 use crate::install_target::InstallTarget;
 use crate::malware::{MalwareCheckContext, maybe_check_malware};
 use crate::{EnvironmentError, detect_conflicts};
-use uv_requirements::script_extra_build_requires;
 
 /// Install the selected packages from a lockfile into an environment.
 ///
@@ -76,73 +74,16 @@ pub async fn sync_from_lock(
         sources,
     } = settings;
 
-    // Lower the extra build dependencies with source resolution.
-    let extra_build_requires = match &target {
-        InstallTarget::Workspace { workspace, .. }
-        | InstallTarget::Project { workspace, .. }
-        | InstallTarget::Projects { workspace, .. }
-        | InstallTarget::NonProjectWorkspace { workspace, .. } => {
-            LoweredExtraBuildDependencies::from_workspace(
-                extra_build_dependencies.clone(),
-                workspace,
-                index_locations,
-                &sources,
-                cache,
-                workspace_cache,
-                client_builder.credentials_cache(),
-            )
-            .await?
-        }
-        InstallTarget::Lockfile {
-            root,
-            project_name,
-            lock,
-            ..
-        } => {
-            let member = project_name.and_then(|name| {
-                lock.workspace_member_paths()
-                    .find_map(|(member, path)| (member == name).then(|| root.join(path)))
-            });
-            if let Some(member) = member.filter(|path| {
-                !extra_build_dependencies.is_empty() && path.join("pyproject.toml").is_file()
-            }) {
-                let workspace = Workspace::discover(
-                    &member,
-                    &DiscoveryOptions {
-                        members: MemberDiscovery::Existing,
-                        stop_discovery_at: Some(root.to_path_buf()),
-                    },
-                    cache,
-                    workspace_cache,
-                )
-                .await?;
-                LoweredExtraBuildDependencies::from_workspace(
-                    extra_build_dependencies.clone(),
-                    &workspace,
-                    index_locations,
-                    &sources,
-                    cache,
-                    workspace_cache,
-                    client_builder.credentials_cache(),
-                )
-                .await?
-            } else {
-                LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
-            }
-        }
-        InstallTarget::Script { script, .. } => {
-            script_extra_build_requires(
-                (*script).into(),
-                &sources,
-                index_locations,
-                cache,
-                workspace_cache,
-                client_builder.credentials_cache(),
-            )
-            .await?
-        }
-    }
-    .into_inner();
+    let extra_build_requires = target
+        .extra_build_requires(
+            extra_build_dependencies,
+            index_locations,
+            &sources,
+            cache,
+            workspace_cache,
+            client_builder,
+        )
+        .await?;
 
     let client_builder = client_builder.clone().keyring(keyring_provider);
     // Save an authenticated builder for the malware check before moving the

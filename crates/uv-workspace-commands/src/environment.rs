@@ -28,7 +28,7 @@ use uv_settings::{InstallerSettingsRef, MalwareCheckSettings, ResolverSettings};
 use uv_warnings::warn_user;
 use uv_workspace::WorkspaceCache;
 
-/// Installed distributions and their module ownership.
+/// Installed distributions and module ownership for unmanaged packages.
 pub(super) struct CollectedEnvironment {
     /// Installed distributions keyed by their selected or unmanaged package IDs.
     pub(super) packages: BTreeMap<String, InstalledDist>,
@@ -43,6 +43,7 @@ pub(super) struct CollectedEnvironment {
 pub(super) async fn collect_environment(
     target: InstallTarget<'_>,
     metadata: &Metadata,
+    include_module_owners: bool,
     venv: &PythonEnvironment,
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
@@ -56,7 +57,7 @@ pub(super) async fn collect_environment(
 ) -> Result<CollectedEnvironment> {
     if sync.is_none() && !target.lock().conflicts().is_empty() {
         let marker_env = resolution_markers(None, None, venv.interpreter());
-        return inspect_environment(venv, |dist| {
+        return inspect_environment(venv, include_module_owners, |dist| {
             metadata.installed_package_node_id(target.lock(), dist, &marker_env)
         });
     }
@@ -116,10 +117,12 @@ pub(super) async fn collect_environment(
     }
 
     let package_ids = package_ids.unwrap_or_default();
-    inspect_environment(venv, |dist| package_ids.get(dist.name()).cloned())
+    inspect_environment(venv, include_module_owners, |dist| {
+        package_ids.get(dist.name()).cloned()
+    })
 }
 
-/// Select the package IDs that can own modules in the target resolution.
+/// Select the package IDs used to identify installed distributions.
 fn selected_package_ids(
     target: InstallTarget<'_>,
     venv: &PythonEnvironment,
@@ -153,9 +156,10 @@ fn selected_package_ids(
     Ok(Some(package_ids))
 }
 
-/// Collect installed distributions and associate their modules with selected or unmanaged package IDs.
+/// Collect installed distributions and discover modules for unmanaged packages.
 fn inspect_environment(
     venv: &PythonEnvironment,
+    include_module_owners: bool,
     package_id: impl Fn(&InstalledDist) -> Option<String>,
 ) -> Result<CollectedEnvironment> {
     let site_packages = SitePackages::from_environment(venv)?;
@@ -177,11 +181,15 @@ fn inspect_environment(
                 continue;
             }
         };
+        if !include_module_owners || is_managed {
+            continue;
+        }
+
         // TODO: Editable installs often only record a `.pth` file; we'll
         // need to handle them specially.
         let modules = match dist.read_modules(venv.interpreter().extension_suffixes()) {
             Ok(modules) => modules,
-            Err(err) if !is_managed => {
+            Err(err) => {
                 // Incomplete module metadata in an unmanaged package should not prevent
                 // inventory collection or module discovery for other packages.
                 tracing::warn!(
@@ -190,7 +198,6 @@ fn inspect_environment(
                 );
                 continue;
             }
-            Err(err) => return Err(err.into()),
         };
         for module in modules {
             owners.entry(module).or_default().insert(package_id.clone());

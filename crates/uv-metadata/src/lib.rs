@@ -3,6 +3,7 @@
 //! This module reads all fields exhaustively. The fields are defined in the [Core metadata
 //! specification](https://packaging.python.org/en/latest/specifications/core-metadata/).
 
+use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 
@@ -13,9 +14,9 @@ use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use uv_distribution_filename::{VariantLabel, WheelFilename};
-use uv_distribution_types::{VariantsJsonContent, VariantsJsonParseError};
+use uv_distribution_types::{VariantsJsonContent, VariantsJsonParseError, read_wheel_modules};
 use uv_normalize::InvalidNameError;
-use uv_pypi_types::ResolutionMetadata;
+use uv_pypi_types::{ModuleName, ResolutionMetadata};
 
 pub use dist_info_stem::DistInfoStem;
 
@@ -24,6 +25,9 @@ mod dist_info_stem;
 /// The caller is responsible for attaching the path or url we failed to read.
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error(transparent)]
+    Record(#[from] uv_install_wheel::Error),
+
     #[error("Failed to read `dist-info` metadata from built wheel")]
     DistInfo,
     #[error("No .dist-info directory found")]
@@ -311,6 +315,22 @@ pub async fn read_metadata_async_stream<R: futures::AsyncRead + Unpin>(
     } else {
         Err(Error::MissingDistInfo)
     }
+}
+
+/// Read the runtime modules provided by an unzipped wheel before installation.
+pub fn read_flat_wheel_modules(
+    filename: &WheelFilename,
+    wheel: &Path,
+    extension_suffixes: &[Box<str>],
+) -> Result<BTreeSet<ModuleName>, Error> {
+    let dist_info = find_flat_dist_info(filename, wheel)?;
+    let record = fs_err::File::open(wheel.join(format!("{dist_info}.dist-info/RECORD")))
+        .map_err(Error::Io)?;
+    Ok(read_wheel_modules(
+        record,
+        dist_info.as_str(),
+        extension_suffixes,
+    )?)
 }
 
 /// Read the [`ResolutionMetadata`] from an unzipped wheel.

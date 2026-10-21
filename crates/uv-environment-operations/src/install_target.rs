@@ -6,11 +6,17 @@ use std::str::FromStr;
 use itertools::Either;
 use rustc_hash::FxHashSet;
 
+use uv_cache::Cache;
+use uv_client::BaseClientBuilder;
 use uv_configuration::{
     BuildOptions, Constraints, DependencyGroupsWithDefaults, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions, InstallTarget as InstallOptionTarget,
+    NoSources,
 };
-use uv_distribution_types::{Index, RequiresPython, Resolution};
+use uv_distribution::LoweredExtraBuildDependencies;
+use uv_distribution_types::{
+    ExtraBuildRequires, Index, IndexLocations, RequiresPython, Resolution,
+};
 use uv_lock::{Installable, InstallableRootKind, Lock, LockError, Package};
 use uv_normalize::{DEV_DEPENDENCIES, ExtraName, GroupName, PackageName};
 use uv_platform_tags::Tags;
@@ -20,9 +26,13 @@ use uv_pypi_types::{
 };
 use uv_python_discovery::ProjectPythonRequirement;
 use uv_python_discovery::PythonRequirementSource;
+use uv_requirements::script_extra_build_requires;
 use uv_scripts::Pep723Script;
-use uv_workspace::pyproject::{Source, Sources, ToolUvSources};
-use uv_workspace::{RequiresPythonDeclaration, RequiresPythonSources, VirtualProject, Workspace};
+use uv_workspace::pyproject::{ExtraBuildDependencies, Source, Sources, ToolUvSources};
+use uv_workspace::{
+    DiscoveryOptions, MemberDiscovery, RequiresPythonDeclaration, RequiresPythonSources,
+    VirtualProject, Workspace, WorkspaceCache,
+};
 
 use crate::EnvironmentError;
 
@@ -612,6 +622,86 @@ impl<'lock> InstallTarget<'lock> {
             )),
             Self::Lockfile { .. } => Either::Right(Either::Right(std::iter::empty())),
         }
+    }
+
+    /// Resolve additional build requirements using the target's source configuration.
+    pub async fn extra_build_requires(
+        &self,
+        extra_build_dependencies: &ExtraBuildDependencies,
+        index_locations: &IndexLocations,
+        sources: &NoSources,
+        cache: &Cache,
+        workspace_cache: &WorkspaceCache,
+        client_builder: &BaseClientBuilder<'_>,
+    ) -> Result<ExtraBuildRequires, EnvironmentError> {
+        Ok(match self {
+            InstallTarget::Workspace { workspace, .. }
+            | InstallTarget::Project { workspace, .. }
+            | InstallTarget::Projects { workspace, .. }
+            | InstallTarget::NonProjectWorkspace { workspace, .. } => {
+                LoweredExtraBuildDependencies::from_workspace(
+                    extra_build_dependencies.clone(),
+                    workspace,
+                    index_locations,
+                    sources,
+                    cache,
+                    workspace_cache,
+                    client_builder.credentials_cache(),
+                )
+                .await?
+            }
+            InstallTarget::Lockfile {
+                root,
+                project_name,
+                lock,
+                ..
+            } => {
+                let member = project_name.and_then(|name| {
+                    lock.workspace_member_paths()
+                        .find_map(|(member, path)| (member == name).then(|| root.join(path)))
+                });
+                if let Some(member) = member.filter(|path| {
+                    !extra_build_dependencies.is_empty() && path.join("pyproject.toml").is_file()
+                }) {
+                    let workspace = Workspace::discover(
+                        &member,
+                        &DiscoveryOptions {
+                            members: MemberDiscovery::Existing,
+                            stop_discovery_at: Some(root.to_path_buf()),
+                        },
+                        cache,
+                        workspace_cache,
+                    )
+                    .await?;
+                    LoweredExtraBuildDependencies::from_workspace(
+                        extra_build_dependencies.clone(),
+                        &workspace,
+                        index_locations,
+                        sources,
+                        cache,
+                        workspace_cache,
+                        client_builder.credentials_cache(),
+                    )
+                    .await?
+                } else {
+                    LoweredExtraBuildDependencies::from_non_lowered(
+                        extra_build_dependencies.clone(),
+                    )
+                }
+            }
+            InstallTarget::Script { script, .. } => {
+                script_extra_build_requires(
+                    (*script).into(),
+                    sources,
+                    index_locations,
+                    cache,
+                    workspace_cache,
+                    client_builder.credentials_cache(),
+                )
+                .await?
+            }
+        }
+        .into_inner())
     }
 
     pub(crate) fn build_constraints(&self) -> Constraints {
