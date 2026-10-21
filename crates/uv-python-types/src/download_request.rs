@@ -442,7 +442,7 @@ impl PythonDownloadRequest {
     }
 
     /// Whether this download request opts-in to alternative Python implementations.
-    pub(crate) fn allows_alternative_implementations(&self) -> bool {
+    pub fn allows_alternative_implementations(&self) -> bool {
         self.implementation
             .is_some_and(|implementation| !matches!(implementation, ImplementationName::CPython))
             || self.os.is_some_and(|os| os.is_emscripten())
