@@ -2749,6 +2749,81 @@ fn workspace_metadata_cached_editable_modules() -> Result<()> {
     Ok(())
 }
 
+/// Artifact builds use a compatible interpreter while inventory describes the existing incompatible environment.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_compatible_build_interpreter() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12", "3.11"]);
+    context.venv().args(["--python", "3.11"]).assert().success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "module-owner"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    write_wheel(
+        context
+            .temp_dir
+            .child("module_owner-0.1.0-py3-none-any.whl")
+            .path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("module_owner.py", "")],
+    )?;
+    context.temp_dir.child("backend.py").write_str(indoc! {r#"
+        import pathlib
+        import shutil
+        import sys
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            assert sys.version_info >= (3, 12)
+            name = "module_owner-0.1.0-py3-none-any.whl"
+            shutil.copyfile(pathlib.Path(__file__).parent / name, pathlib.Path(wheel_directory) / name)
+            return name
+    "#})?;
+    context.lock().assert().success();
+
+    let output = context.workspace_metadata().assert().success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "installed_python": metadata["environment"]["python"]["version"],
+            "installed_packages": metadata["environment"]["packages"],
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "installed_packages": {},
+          "installed_python": "3.11.[X]",
+          "module_owners": {
+            "module_owner": [
+              {
+                "package_id": "module-owner==0.1.0@editable+[TEMP_DIR]/"
+              }
+            ]
+          }
+        }
+        "#);
+    });
+
+    fs_err::remove_dir_all(&context.cache_dir)?;
+    let output = context
+        .workspace_metadata()
+        .args(["--frozen", "--offline"])
+        .assert()
+        .success();
+    let frozen: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    assert_eq!(frozen, metadata);
+    Ok(())
+}
+
 /// A `match-runtime` build dependency uses the locked runtime distribution without installing the project environment.
 #[test]
 #[cfg(feature = "test-python")]
@@ -3542,7 +3617,10 @@ fn workspace_metadata_installed_packages_with_duplicate_names() -> Result<()> {
 
 #[test]
 fn workspace_metadata_installed_packages_without_modules() -> Result<()> {
-    let context = uv_test::test_context!("3.12").with_filtered_missing_file_error();
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_missing_file_error()
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
     let pyproject = context.temp_dir.child("pyproject.toml");
     pyproject.write_str(indoc! {r#"
         [project]
@@ -3634,7 +3712,7 @@ fn workspace_metadata_installed_packages_without_modules() -> Result<()> {
       "environment": {
         "root": "[VENV]/",
         "python": {
-          "path": "[VENV]/bin/python",
+          "path": "[VENV]/[BIN]/[PYTHON]",
           "version": "3.12.[X]",
           "implementation": "cpython"
         },

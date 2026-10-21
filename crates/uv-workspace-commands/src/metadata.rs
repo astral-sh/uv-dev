@@ -324,7 +324,8 @@ pub async fn metadata(
     }
 
     if include_module_owners {
-        let interpreter = if let Some(environment) = &environment {
+        let interpreter = if let Some(environment) = environment.as_ref().filter(|_| sync.is_some())
+        {
             environment.interpreter().clone()
         } else if let Some(interpreter) = resolved_interpreter {
             interpreter
