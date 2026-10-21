@@ -7665,7 +7665,6 @@ dependencies = [
  "url",
  "uv-auth",
  "uv-cache",
- "uv-cache-key",
  "uv-client",
  "uv-configuration",
  "uv-console",
