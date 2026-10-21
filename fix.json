@@ -1,0 +1,12 @@
+{
+  "outcome": "fixed",
+  "summary": "Normalize version containment markers before constructing ranges, preventing local-version exclusions combined with upper bounds from panicking. Update all three parent regressions to assert normal results and add coverage for a demonstrated lockfile round-trip panic.",
+  "validation": [
+    "All three updated parent integration regressions passed.",
+    "Lockfile round-trip and neighboring version-marker integration tests passed.",
+    "Three existing marker evaluation and simplification tests passed.",
+    "cargo fmt --all",
+    "git diff --check"
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2926"
+}
