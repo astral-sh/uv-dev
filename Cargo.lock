@@ -7583,6 +7583,7 @@ dependencies = [
  "indoc",
  "insta",
  "itertools 0.14.0",
+ "memchr",
  "owo-colors",
  "reqwest",
  "same-file",
