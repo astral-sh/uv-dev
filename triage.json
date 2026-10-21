@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 6172,
+        "title": "Add support for `python_version in ...` markers",
+        "url": "https://github.com/astral-sh/uv/pull/6172",
+        "state": "merged",
+        "reason": "Introduced version-field containment support with deliberately limited, whitespace-separated exact-version semantics. Its discussion explicitly covers python_full_version; it establishes the relevant implementation history but does not address local-version exclusions combined with bounds."
+      },
+      {
+        "kind": "issue",
+        "number": 21310,
+        "title": "uv-pep508 evaluates python_version in a,b,c as always true",
+        "url": "https://github.com/astral-sh/uv/issues/21310",
+        "state": "closed",
+        "reason": "Nearby containment-marker correctness report. Comma-separated versions were ignored and evaluated as true; the discussion declined broader support because version-field containment is deprecated. It reports neither local-version bounds nor a panic."
+      },
+      {
+        "kind": "pull_request",
+        "number": 21311,
+        "title": "fix: Allow commas as python_version string separators",
+        "url": "https://github.com/astral-sh/uv/pull/21311",
+        "state": "open",
+        "reason": "Proposes a parser change for astral-sh/uv#21310. Maintainer comments explain why containment support should not be expanded. It remains unmerged and concerns separators, not the local-version range-rendering panic, so it is not a duplicate or a fix for this report."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open/closed issues and open/closed/merged PRs for OperatorLocalCombo, VersionSpecifierBuildError, from_release_only_bounds, version_specifier.rs, python_full_version/not in, marker panic/crash/simplification, local versions/segments, and version bounds. Searched lock --offline, universal pip compile, and frozen export panic paths separately, without package/version/platform restrictions. PR keyword searches omitted known historical PRs; supplemented them with the 1,500 most recent PRs across all states and direct inspection of linked issues, PRs, and comments. Ruled out astral-sh/uv#1855 and astral-sh/uv#2430 (package-version equality), astral-sh/uv#2478 (local package range support), astral-sh/uv#16406 (missing export root), astral-sh/uv#22034 (trace logging of false constraints), and astral-sh/uv#22727 (invalid --python-version request). Also inspected astral-sh/uv#22651's recent marker-rendering rewrite; no evidence establishes this panic as a regression of a previously fixed bug."
+  },
+  "type": "bug",
+  "type_reason": "The reported process abort is incorrect behavior, and the source confirms an unchecked conversion from a local-version range bound to a forbidden ordered PEP 440 specifier. Limited or deprecated containment syntax does not justify a panic. No inspected issue or PR tracks this same failure, and no prior fix or regression was established.",
+  "summary": "No duplicate found. astral-sh/uv#6172 provides the containment-marker implementation history; astral-sh/uv#21310 and astral-sh/uv#21311 discuss adjacent parsing limitations, not this panic.",
+  "draft_response": "Your example exposes a bug in marker handling. The current source retains the local suffix for `not in` ranges, then unwraps an error when rendering an ordered comparison against that local version. Version-field containment has deliberately limited support, as discussed in astral-sh/uv#21311, but it should not abort the process. The next step is regression coverage for your bounded exclusion and a change that handles or rejects the local-version bound without panicking, including the reported compile and export paths."
+}
