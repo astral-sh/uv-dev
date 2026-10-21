@@ -39,14 +39,14 @@ pub(super) async fn collect_modules(
     workspace_cache: &WorkspaceCache,
     preview: Preview,
 ) -> Result<BTreeMap<ModuleName, Vec<String>>> {
+    let marker_env = resolution_markers(None, None, interpreter);
     let packages = metadata
-        .packages_for_environment(target.lock(), interpreter.markers())
+        .packages_for_environment(target.lock(), &marker_env)
         .collect::<Vec<_>>();
     if packages.is_empty() {
         return Ok(BTreeMap::new());
     }
 
-    let marker_env = resolution_markers(None, None, interpreter);
     let tags = resolution_tags(None, None, interpreter)?;
     let packages = packages
         .into_iter()

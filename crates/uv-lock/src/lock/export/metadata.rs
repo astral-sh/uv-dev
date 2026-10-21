@@ -11,7 +11,7 @@ use uv_distribution_types::{
 use uv_fs::{PortablePathBuf, is_same_file_allow_missing, normalize_path};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
-use uv_pep508::{MarkerEnvironment, MarkerTree, StringVersion};
+use uv_pep508::{MarkerTree, StringVersion};
 use uv_pypi_types::{
     ConflictItem, ConflictKind, ConflictSet, Conflicts, DirectUrl, HashDigest, ModuleName,
     ResolverMarkerEnvironment, VcsKind,
@@ -1619,7 +1619,7 @@ impl Metadata {
     pub fn packages_for_environment<'a>(
         &'a self,
         lock: &'a Lock,
-        marker_env: &'a MarkerEnvironment,
+        marker_env: &'a ResolverMarkerEnvironment,
     ) -> impl Iterator<Item = (String, &'a Package)> {
         lock.packages().iter().filter_map(move |package| {
             if let Source::Virtual(_) = package.id.source {
