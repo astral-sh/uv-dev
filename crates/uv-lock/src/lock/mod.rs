@@ -6639,7 +6639,7 @@ pub struct Package {
 #[derive(Debug, Clone)]
 pub struct LockedArtifact {
     pub kind: LockedArtifactKind,
-    pub url: DisplaySafeUrl,
+    pub url: SafeUrl,
     pub hash: Option<HashDigest>,
     pub size: Option<u64>,
 }
@@ -6675,10 +6675,8 @@ impl Package {
                 (Source::Direct(url, _), _) => url.to_url().map_err(LockErrorKind::InvalidUrl)?,
                 (Source::Path(path), _) => {
                     let path = absolute_path(root, path)?;
-                    DisplaySafeUrl::from_file_path(&path).map_err(|()| {
-                        LockErrorKind::PathToUrl {
-                            path: path.into_boxed_path(),
-                        }
+                    SafeUrl::from_file_path(&path).map_err(|()| LockErrorKind::PathToUrl {
+                        path: path.into_boxed_path(),
                     })?
                 }
                 _ => continue,

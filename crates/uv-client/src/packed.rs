@@ -20,7 +20,7 @@ use uv_fs::write_atomic;
 use uv_normalize::PackageName;
 use uv_pep440::Version;
 use uv_pypi_types::{HashAlgorithm, HashDigest};
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 
 use crate::httpcache::{BeforeRequest, CachePolicy, CachePolicyBuilder};
 use crate::{
@@ -63,7 +63,7 @@ pub struct PackedArchiveEntry {
     cache: Cache,
     entry: CacheEntry,
     name: PackageName,
-    url: DisplaySafeUrl,
+    url: SafeUrl,
     index: Option<IndexUrl>,
 }
 
@@ -73,7 +73,7 @@ impl PackedArchiveEntry {
         cache: &Cache,
         index: Option<&IndexUrl>,
         name: &PackageName,
-        url: &DisplaySafeUrl,
+        url: &SafeUrl,
         key: &str,
     ) -> Self {
         let source = if let Some(index) = index {
@@ -105,7 +105,7 @@ impl PackedArchiveEntry {
     pub fn wheel(
         cache: &Cache,
         index: Option<&IndexUrl>,
-        url: &DisplaySafeUrl,
+        url: &SafeUrl,
         filename: &WheelFilename,
     ) -> Self {
         Self::new(
@@ -122,7 +122,7 @@ impl PackedArchiveEntry {
         cache: &Cache,
         registry: Option<(&IndexUrl, &Version)>,
         name: &PackageName,
-        url: &DisplaySafeUrl,
+        url: &SafeUrl,
         extension: SourceDistExtension,
     ) -> Self {
         let (index, key) = if let Some((index, version)) = registry {
@@ -223,7 +223,7 @@ impl PackedArchiveEntry {
 
         let mut request = client
             .uncached_client(&self.url)
-            .get(self.url.as_str())
+            .get(self.url.clone())
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
             .build()?;
         let cache_control = self.cache_control(client)?;
@@ -704,7 +704,7 @@ mod tests {
     use uv_cache::{Cache, Refresh};
     use uv_cache_info::Timestamp;
     use uv_distribution_filename::WheelFilename;
-    use uv_redacted::DisplaySafeUrl;
+    use uv_redacted::SafeUrl;
 
     use crate::{BaseClientBuilder, CacheControl, RegistryClientBuilder};
 
@@ -718,7 +718,7 @@ mod tests {
         let client =
             RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone()).build()?;
         let filename: WheelFilename = "example-1.0.0-py3-none-any.whl".parse()?;
-        let url = DisplaySafeUrl::parse(&format!(
+        let url = SafeUrl::parse(&format!(
             "{server_url}/{filename}",
             server_url = server.uri()
         ))?;
@@ -739,7 +739,7 @@ mod tests {
 
         let request = client
             .uncached_client(&url)
-            .get(url.as_str())
+            .get(url.clone())
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
             .build()?;
         let revision = match entry

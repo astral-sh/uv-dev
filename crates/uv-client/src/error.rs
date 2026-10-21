@@ -495,7 +495,7 @@ pub enum ErrorKind {
         "Hash mismatch for packed archive at `{url}`\n\nExpected:\n  {expected}\n\nComputed:\n  {actual}"
     )]
     PackedArchiveHashMismatch {
-        url: DisplaySafeUrl,
+        url: SafeUrl,
         expected: HashDigest,
         actual: HashDigest,
     },

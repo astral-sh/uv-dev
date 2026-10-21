@@ -1186,13 +1186,13 @@ impl RegistryClient {
     async fn packed_wheel_metadata(
         &self,
         filename: &WheelFilename,
-        url: &DisplaySafeUrl,
+        url: &SafeUrl,
         index: Option<&IndexUrl>,
     ) -> Result<PackedWheelMetadata, Error> {
         let entry = PackedArchiveEntry::wheel(&self.cache, index, url, filename);
         let request = self
             .uncached_client(url)
-            .get(url.as_str())
+            .get(url.clone())
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
             .build()
             .map_err(|err| {

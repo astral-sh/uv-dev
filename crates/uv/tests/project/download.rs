@@ -9,13 +9,14 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_cache::{Cache, CacheBucket, WheelCache};
 use uv_distribution_types::IndexUrl;
-use uv_redacted::DisplaySafeUrl;
+use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
 use uv_test::archive::write_tar_gz;
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot};
 
 fn packed_url_shard(context: &TestContext, url: &str) -> Result<std::path::PathBuf> {
-    let url = DisplaySafeUrl::parse(url)?;
+    let url = SafeUrl::parse(url)?;
     Ok(context
         .cache_dir
         .join("packed-v1")
@@ -40,18 +41,11 @@ fn digest(bytes: &[u8]) -> String {
 }
 
 fn wheel(revision: &str) -> Result<Vec<u8>> {
-    let (_, wheel) = uv_test::packse::generate_wheel_with_files(
-        &"basic-package".parse()?,
-        &"0.1.0".parse()?,
-        &[],
-        &std::collections::BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[(
-            "basic_package/revision.py",
-            &format!("REVISION = {revision:?}\n"),
-        )],
-    );
+    let name = "basic-package".parse()?;
+    let version = "0.1.0".parse()?;
+    let contents = format!("REVISION = {revision:?}\n");
+    let files = [("basic_package/revision.py", contents.as_str())];
+    let (_, wheel) = WheelBuilder::new(&name, &version).files(&files).build();
     Ok(wheel)
 }
 
@@ -622,25 +616,16 @@ async fn download_refresh_metadata() -> Result<()> {
 
     let links = context.temp_dir.child("links");
     links.create_dir_all()?;
-    let (filename, dependency) = uv_test::packse::generate_wheel(
-        &"dependency".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &std::collections::BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let dependency_name = "dependency".parse()?;
+    let dependency_version = "1.0.0".parse()?;
+    let (filename, dependency) = WheelBuilder::new(&dependency_name, &dependency_version).build();
     links.child(filename).write_binary(&dependency)?;
-    let (_, replacement) = uv_test::packse::generate_wheel(
-        &"basic-package".parse()?,
-        &"0.1.0".parse()?,
-        &["dependency==1".parse()?],
-        &std::collections::BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let name = "basic-package".parse()?;
+    let version = "0.1.0".parse()?;
+    let requirements = ["dependency==1".parse()?];
+    let (_, replacement) = WheelBuilder::new(&name, &version)
+        .requires(&requirements)
+        .build();
     Mock::given(method("HEAD"))
         .and(path("/basic_package-0.1.0-py3-none-any.whl"))
         .respond_with(
@@ -1421,7 +1406,7 @@ async fn download_local_revision() -> Result<()> {
     let context = uv_test::test_context!("3.13");
     let filename = "basic_package-0.1.0-py3-none-any.whl";
     let path = context.temp_dir.join(filename);
-    let url = DisplaySafeUrl::from_file_path(&path).expect("absolute file path");
+    let url = SafeUrl::from_file_path(&path).expect("absolute file path");
     let shard = context
         .cache_dir
         .join("packed-v1")
@@ -1899,7 +1884,7 @@ fn download_prunes_unreferenced_local_payloads() -> Result<()> {
     let context = uv_test::test_context!("3.13");
     let filename = "basic_package-0.1.0-py3-none-any.whl";
     let path = context.temp_dir.child(filename);
-    let url = DisplaySafeUrl::from_file_path(path.path()).expect("absolute file path");
+    let url = SafeUrl::from_file_path(path.path()).expect("absolute file path");
     let cache = Cache::from_path(context.cache_dir.path());
     let shard = cache
         .bucket(CacheBucket::Packed)
