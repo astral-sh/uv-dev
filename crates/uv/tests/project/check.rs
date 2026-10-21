@@ -3150,7 +3150,7 @@ fn check_with_declared_dependency() -> Result<()> {
     Ok(())
 }
 
-/// Selecting one extra still lets the metadata query enable mutually exclusive extras.
+/// Checking a selected extra can inspect metadata containing mutually exclusive extras.
 #[test]
 #[cfg(feature = "test-pypi")]
 fn check_conflicting_extras() -> Result<()> {
@@ -3172,25 +3172,18 @@ fn check_conflicting_extras() -> Result<()> {
         conflicts = [[{ extra = "a" }, { extra = "b" }]]
     "#})?;
 
+    context
+        .temp_dir
+        .child("main.py")
+        .write_str("import idna\n")?;
     context.sync().arg("--extra").arg("a").assert().success();
-
-    // A valid environment should not fail checking because metadata enables both extras:
-    // astral-sh/uv#22796.
     uv_snapshot!(context.filters(), context.check()
         .arg("--preview-features").arg("check-command")
         .arg("--extra").arg("a")
         .arg("--ty-version").arg("0.0.90"), @"
-    exit_code: 1 (failure)
+    exit_code: 0 (success)
     ----- stdout -----
-    warning[uv-metadata]: `uv workspace metadata` failed with `exit status: 2`
-    --> pyproject.toml:1:1
-    info: Failed to inspect environment
-      cause: Found conflicting extras `mre[a]` and `mre[b]` enabled simultaneously
-
-    Found 1 diagnostic
-
-    ----- stderr -----
-    WARN No python files found under the given path(s)
+    All checks passed!
     ");
 
     Ok(())

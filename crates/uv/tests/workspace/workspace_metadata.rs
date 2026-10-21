@@ -290,17 +290,284 @@ fn workspace_metadata_conflicting_extras() -> Result<()> {
      + idna==3.9
     ");
 
-    // Metadata incorrectly enables both extras despite only `a` being installed:
-    // astral-sh/uv#22796.
+    let output = context
+        .workspace_metadata()
+        .arg("--preview-features=workspace-metadata")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "packages": metadata["environment"]["packages"],
+            "idna": metadata["module_owners"]["idna"],
+        }), @r#"
+        {
+          "idna": [
+            {
+              "package_id": "idna==3.9@registry+https://pypi.org/simple"
+            }
+          ],
+          "packages": {
+            "idna==3.9@registry+https://pypi.org/simple": {
+              "editable": false,
+              "name": "idna",
+              "path": "[SITE_PACKAGES]/idna-3.9.dist-info",
+              "version": "3.9"
+            }
+          }
+        }
+        "#);
+    });
+
+    context.sync().arg("--extra").arg("b").assert().success();
+    let output = context
+        .workspace_metadata()
+        .args(["--frozen", "--preview-features=workspace-metadata"])
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "packages": metadata["environment"]["packages"],
+            "idna": metadata["module_owners"]["idna"],
+        }), @r#"
+        {
+          "idna": [
+            {
+              "package_id": "idna==3.10@registry+https://pypi.org/simple"
+            }
+          ],
+          "packages": {
+            "idna==3.10@registry+https://pypi.org/simple": {
+              "editable": false,
+              "name": "idna",
+              "path": "[SITE_PACKAGES]/idna-3.10.dist-info",
+              "version": "3.10"
+            }
+          }
+        }
+        "#);
+    });
+
+    // Synchronization still requires a compatible selection of extras.
     uv_snapshot!(context.filters(), context.workspace_metadata().args([
-        "--preview-features", "workspace-metadata"
+        "--sync", "--frozen", "--preview-features=workspace-metadata"
     ]), @"
     exit_code: 2 (failure)
     ----- stderr -----
-    Resolved 3 packages in [TIME]
     error: Failed to inspect environment
       cause: Found conflicting extras `mre[a]` and `mre[b]` enabled simultaneously
     ");
+
+    Ok(())
+}
+
+/// Installed paths distinguish locked packages with the same name and version.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_conflicting_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let first = context.temp_dir.child("first");
+    first.create_dir_all()?;
+    let first_wheel = first.child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        first_wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("first_module.py", "")],
+    )?;
+    let second = context.temp_dir.child("second");
+    second.create_dir_all()?;
+    let second_wheel = second.child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        second_wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("second_module.py", "")],
+    )?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+
+        [project.optional-dependencies]
+        first = ["module-owner"]
+        second = ["module-owner"]
+
+        [tool.uv]
+        conflicts = [[{ extra = "first" }, { extra = "second" }]]
+
+        [tool.uv.sources]
+        module-owner = [
+            { path = "first/module_owner-0.1.0-py3-none-any.whl", extra = "first" },
+            { path = "second/module_owner-0.1.0-py3-none-any.whl", extra = "second" },
+        ]
+    "#})?;
+
+    context.sync().arg("--extra=first").assert().success();
+    let output = context.workspace_metadata().assert().success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "packages": metadata["environment"]["packages"],
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "module_owners": {
+            "first_module": [
+              {
+                "package_id": "module-owner==0.1.0@path+[TEMP_DIR]/first/module_owner-0.1.0-py3-none-any.whl"
+              }
+            ]
+          },
+          "packages": {
+            "module-owner==0.1.0@path+[TEMP_DIR]/first/module_owner-0.1.0-py3-none-any.whl": {
+              "editable": false,
+              "name": "module-owner",
+              "path": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info",
+              "version": "0.1.0"
+            }
+          }
+        }
+        "#);
+    });
+
+    // A distribution from neither locked source must keep its own unmanaged identity.
+    let other_wheel = context
+        .temp_dir
+        .child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        other_wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("other_module.py", "")],
+    )?;
+    context
+        .pip_install()
+        .arg(other_wheel.path())
+        .assert()
+        .success();
+    let output = context.workspace_metadata().assert().success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "packages": metadata["environment"]["packages"],
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "module_owners": {
+            "other_module": [
+              {
+                "package_id": "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info"
+              }
+            ]
+          },
+          "packages": {
+            "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info": {
+              "editable": false,
+              "name": "module-owner",
+              "path": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info",
+              "version": "0.1.0"
+            }
+          }
+        }
+        "#);
+    });
+
+    Ok(())
+}
+
+/// Installed metadata cannot distinguish same-version packages from different indexes.
+#[test]
+#[cfg(feature = "test-python")]
+fn workspace_metadata_conflicting_indexes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let wheel = context
+        .temp_dir
+        .child("module_owner-0.1.0-py3-none-any.whl");
+    write_wheel(
+        wheel.path(),
+        "module-owner",
+        "module_owner-0.1.0",
+        &[("installed_module.py", "")],
+    )?;
+    context
+        .pip_install()
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(context.temp_dir.path())
+        .arg("module-owner==0.1.0")
+        .assert()
+        .success();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    context.temp_dir.child("uv.lock").write_str(indoc! {r#"
+        version = 1
+        revision = 3
+        requires-python = ">=3.12"
+        conflicts = [[{ package = "mre", extra = "first" }, { package = "mre", extra = "second" }]]
+
+        [[package]]
+        name = "module-owner"
+        version = "0.1.0"
+        source = { registry = "https://first.example/simple" }
+
+        [[package]]
+        name = "module-owner"
+        version = "0.1.0"
+        source = { registry = "https://second.example/simple" }
+
+        [[package]]
+        name = "mre"
+        version = "0.1.0"
+        source = { virtual = "." }
+
+        [package.optional-dependencies]
+        first = [{ name = "module-owner", version = "0.1.0", source = { registry = "https://first.example/simple" } }]
+        second = [{ name = "module-owner", version = "0.1.0", source = { registry = "https://second.example/simple" } }]
+    "#})?;
+
+    let output = context
+        .workspace_metadata()
+        .arg("--frozen")
+        .assert()
+        .success();
+    let metadata: serde_json::Value = serde_json::from_slice(&output.get_output().stdout)?;
+    insta::with_settings!({ filters => context.filters() }, {
+        insta::assert_json_snapshot!(serde_json::json!({
+            "packages": metadata["environment"]["packages"],
+            "module_owners": metadata["module_owners"],
+        }), @r#"
+        {
+          "module_owners": {
+            "installed_module": [
+              {
+                "package_id": "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info"
+              }
+            ]
+          },
+          "packages": {
+            "module-owner==0.1.0@unmanaged+[SITE_PACKAGES]/module_owner-0.1.0.dist-info": {
+              "editable": false,
+              "name": "module-owner",
+              "path": "[SITE_PACKAGES]/module_owner-0.1.0.dist-info",
+              "version": "0.1.0"
+            }
+          }
+        }
+        "#);
+    });
 
     Ok(())
 }
