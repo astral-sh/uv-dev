@@ -115,6 +115,9 @@ pub(crate) fn from_state(
         }
     }
 
+    drop(inverse);
+    drop(seen);
+
     // Compute and apply the marker reachability.
     let mut reachability = marker_reachability(&graph, &fork_markers);
 
