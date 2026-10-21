@@ -20945,15 +20945,11 @@ fn include_build_dependencies_removes_replaced_source_requirements() -> Result<(
     let server = PackseServer::from_scenario(&scenario);
     let links = context.temp_dir.child("links");
     links.create_dir_all()?;
-    let (filename, wheel) = generate_wheel(
+    let (filename, wheel) = WheelBuilder::new(
         &PackageName::from_str("alpha")?,
         &Version::from_str("1.0.0")?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    )
+    .build();
     links.child(filename).write_binary(&wheel)?;
     let mut source = Vec::new();
     write_tar_gz(
@@ -21994,28 +21990,21 @@ fn include_build_dependencies_reconciles_backend_hooks() -> Result<()> {
 #[test]
 fn include_build_dependencies_direct_url_root() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (helper_filename, helper) = generate_wheel(
+    let (helper_filename, helper) = WheelBuilder::new(
         &PackageName::from_str("helper")?,
         &Version::from_str("1.0.0")?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    )
+    .build();
     let helper_path = context.temp_dir.child(helper_filename);
     helper_path.write_binary(&helper)?;
     let helper_url = SafeUrl::from_file_path(helper_path.path())
         .map_err(|()| anyhow!("invalid helper wheel path"))?;
-    let (backend_filename, backend) = generate_wheel(
+    let (backend_filename, backend) = WheelBuilder::new(
         &PackageName::from_str("backend")?,
         &Version::from_str("1.0.0")?,
-        &[Requirement::from_str(&format!("helper @ {helper_url}"))?],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    )
+    .requires(&[Requirement::from_str(&format!("helper @ {helper_url}"))?])
+    .build();
     let backend_path = context.temp_dir.child(backend_filename);
     backend_path.write_binary(&backend)?;
     let backend_url = SafeUrl::from_file_path(backend_path.path())
@@ -22123,28 +22112,21 @@ fn include_build_dependencies_reports_constraint_conflict() -> Result<()> {
 #[test]
 fn include_build_dependencies_direct_url_constraint() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (helper_filename, helper) = generate_wheel(
+    let (helper_filename, helper) = WheelBuilder::new(
         &PackageName::from_str("helper")?,
         &Version::from_str("1.0.0")?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    )
+    .build();
     let helper_path = context.temp_dir.child(helper_filename);
     helper_path.write_binary(&helper)?;
     let helper_url = SafeUrl::from_file_path(helper_path.path())
         .map_err(|()| anyhow!("invalid helper wheel path"))?;
-    let (backend_filename, backend) = generate_wheel(
+    let (backend_filename, backend) = WheelBuilder::new(
         &PackageName::from_str("backend")?,
         &Version::from_str("1.0.0")?,
-        &[Requirement::from_str(&format!("helper @ {helper_url}"))?],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    )
+    .requires(&[Requirement::from_str(&format!("helper @ {helper_url}"))?])
+    .build();
     let backend_path = context.temp_dir.child(backend_filename);
     backend_path.write_binary(&backend)?;
     let backend_url = SafeUrl::from_file_path(backend_path.path())
@@ -22197,28 +22179,21 @@ fn include_build_dependencies_direct_url_constraint() -> Result<()> {
 #[test]
 fn include_build_dependencies_selected_direct_url_backend() -> Result<()> {
     let context = uv_test::test_context!("3.12");
-    let (helper_filename, helper) = generate_wheel(
+    let (helper_filename, helper) = WheelBuilder::new(
         &PackageName::from_str("helper")?,
         &Version::from_str("1.0.0")?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    )
+    .build();
     let helper_path = context.temp_dir.child(helper_filename);
     helper_path.write_binary(&helper)?;
     let helper_url = SafeUrl::from_file_path(helper_path.path())
         .map_err(|()| anyhow!("invalid helper wheel path"))?;
-    let (backend_filename, backend) = generate_wheel(
+    let (backend_filename, backend) = WheelBuilder::new(
         &PackageName::from_str("backend")?,
         &Version::from_str("1.0.0")?,
-        &[Requirement::from_str(&format!("helper @ {helper_url}"))?],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    )
+    .requires(&[Requirement::from_str(&format!("helper @ {helper_url}"))?])
+    .build();
     let backend_path = context.temp_dir.child(backend_filename);
     backend_path.write_binary(&backend)?;
     let backend_url = SafeUrl::from_file_path(backend_path.path())
