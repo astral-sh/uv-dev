@@ -875,8 +875,8 @@ async fn python_list_remote_python_downloads_ndjson_url() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&[]).with_collapsed_whitespace();
     let server = MockServer::start().await;
 
-    let remote_ndjson = r#"{"version":"3.14.1+20260420","artifacts":[{"url":"https://custom.com/cpython-3.14.1-aarch64-apple-darwin-install_only.tar.gz","platform":"aarch64-apple-darwin","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"},{"url":"https://custom.com/cpython-3.14.1-aarch64-apple-darwin-install_only_stripped.tar.gz","platform":"aarch64-apple-darwin","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only_stripped"}]}
-{"version":"3.13.2+20260420","artifacts":[{"url":"https://custom.com/cpython-3.13.2-x86_64-unknown-linux-gnu-freethreaded-pgo-lto-full.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","variant":"freethreaded+pgo+lto+full"}]}
+    let remote_ndjson = r#"{"version":"3.14.1+20260420","artifacts":[{"url":"https://custom.com/cpython-3.14.1-aarch64-apple-darwin-install_only.tar.gz","platform":"aarch64-apple-darwin","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","variant":"install_only"},{"url":"https://custom.com/cpython-3.14.1-aarch64-apple-darwin-install_only_stripped.tar.gz","platform":"aarch64-apple-darwin","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","variant":"install_only_stripped"},{"url":"https://custom.com/cpython-3.14.1-aarch64-apple-darwin-pgo-lto-install_only_stripped.tar.gz","platform":"aarch64-apple-darwin","variant":"pgo+lto+custom-build+install_only_stripped"},{"url":"https://custom.com/a-equally-preferred.tar.gz","platform":"aarch64-apple-darwin","variant":"pgo+lto+install_only_stripped"}]}
+{"version":"3.13.2+20260420","artifacts":[{"url":"https://custom.com/cpython-3.13.2-x86_64-unknown-linux-gnu-freethreaded-pgo-lto-full.tar.gz","platform":"x86_64-unknown-linux-gnu","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","variant":"freethreaded+pgo+lto+custom-build"}]}
 {"version":"3.10.0+20211017","artifacts":[{"url":"https://custom.com/cpython-3.10.0-x86_64-unknown-linux-gnu-pgo-lto-full.tar.zst","platform":"x86_64-unknown-linux-gnu","sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","variant":"pgo+lto+full"}]}
 "#;
 
@@ -904,7 +904,7 @@ async fn python_list_remote_python_downloads_ndjson_url() -> Result<()> {
         .arg("--python-downloads-json-url").arg(format!("{}/versions.ndjson", server.uri())), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.14.1-macos-aarch64-none https://custom.com/cpython-3.14.1-aarch64-apple-darwin-install_only_stripped.tar.gz
+    cpython-3.14.1-macos-aarch64-none https://custom.com/cpython-3.14.1-aarch64-apple-darwin-pgo-lto-install_only_stripped.tar.gz
     cpython-3.13.2+freethreaded-linux-x86_64-gnu https://custom.com/cpython-3.13.2-x86_64-unknown-linux-gnu-freethreaded-pgo-lto-full.tar.gz
     cpython-3.10.0-linux-x86_64-gnu https://custom.com/cpython-3.10.0-x86_64-unknown-linux-gnu-pgo-lto-full.tar.zst
 
@@ -920,7 +920,7 @@ async fn python_list_remote_python_downloads_ndjson_url() -> Result<()> {
         .arg("--python-downloads-json-url").arg(format!("{}/versions.ndjson?token=secret", server.uri())), @"
     exit_code: 0 (success)
     ----- stdout -----
-    cpython-3.14.1-macos-aarch64-none https://custom.com/cpython-3.14.1-aarch64-apple-darwin-install_only_stripped.tar.gz
+    cpython-3.14.1-macos-aarch64-none https://custom.com/cpython-3.14.1-aarch64-apple-darwin-pgo-lto-install_only_stripped.tar.gz
     cpython-3.13.2+freethreaded-linux-x86_64-gnu https://custom.com/cpython-3.13.2-x86_64-unknown-linux-gnu-freethreaded-pgo-lto-full.tar.gz
     cpython-3.10.0-linux-x86_64-gnu https://custom.com/cpython-3.10.0-x86_64-unknown-linux-gnu-pgo-lto-full.tar.zst
 
