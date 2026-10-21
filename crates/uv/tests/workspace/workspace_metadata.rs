@@ -572,7 +572,7 @@ fn workspace_metadata_conflicting_indexes() -> Result<()> {
     Ok(())
 }
 
-/// Inactive dependency markers keep installed packages unmanaged despite declared conflicts.
+/// A package reachable only through an inactive dependency remains unmanaged when conflicts are declared.
 #[test]
 #[cfg(all(feature = "test-python", not(windows)))]
 fn workspace_metadata_conflicting_inactive_dependency() -> Result<()> {
@@ -644,7 +644,7 @@ fn workspace_metadata_conflicting_inactive_dependency() -> Result<()> {
     Ok(())
 }
 
-/// Git LFS distinguishes locked sources sharing a repository, version, and commit.
+/// Installed Git LFS metadata distinguishes packages with the same repository, version, and commit.
 #[test]
 #[cfg(feature = "test-python")]
 fn workspace_metadata_conflicting_git_lfs() -> Result<()> {
