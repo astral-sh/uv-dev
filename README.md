@@ -40,9 +40,10 @@ to `--no-project`. They propose these alternatives:
   pins or select the global pin explicitly.
 - Extend `--python` or `--python-preference` with a way to select the global pin.
 
-These are reporter proposals, not accepted designs or available workarounds. The supplied
-discussion contains no maintainer response to these alternatives and adds no affected
-version, platform, or reproduction fixture.
+These are reporter proposals, not accepted designs or available workarounds. Maintainer
+zanieb asks the reporter to explain their use case in astral-sh/uv#22768 (comment ID
+6308123313). The supplied discussion does not yet include that explanation or a decision
+on the alternatives, and adds no affected version, platform, or reproduction fixture.
 
 Skipping only the current directory would not by itself guarantee use of the global pin:
 `PythonVersionFile::discover` searches ancestor directories before falling back to the
@@ -133,6 +134,11 @@ Additional distinctions from inspected candidates:
   caching. Shared discovery terminology does not make them duplicates.
 
 ## Maintainer next step
+
+Await the reporter's use-case explanation requested by the maintainer. The concrete
+workflow motivating global-pin selection is still missing; the proposed flags alone do
+not establish that context. Use that information to assess whether a behavior change or
+an additional selector is warranted.
 
 Decide whether to change `--no-project` semantics or provide an explicit way to select
 the global pin. A change to `--no-project` still needs to address the maintainer's
