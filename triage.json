@@ -1,0 +1,51 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22767,
+        "title": "Update CA certificates in Alpine Docker images",
+        "url": "https://github.com/astral-sh/uv/pull/22767",
+        "state": "open",
+        "reason": "Closest parallel remediation for the same CA incident. This draft explicitly upgrades Alpine certificate packages; its Dockerfile condition excludes Debian images, so it does not track the requested Trixie rebuild."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22760,
+        "title": "Bump webpki-root-certs to 1.0.10",
+        "url": "https://github.com/astral-sh/uv/pull/22760",
+        "state": "merged",
+        "reason": "The certificate fix shipped in uv 0.13.4 removes emSign ECC Root CA - G3 from uv's bundled roots. It changes only Cargo.lock and does not update the Docker base image's system certificate package."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22777,
+        "title": "Update rustls-webpki after the eMudhra incident",
+        "url": "https://github.com/astral-sh/uv/pull/22777",
+        "state": "merged",
+        "reason": "Adds rejection of compromised intermediate public keys in uv's Rust certificate verifier. This further addresses the same incident but does not patch the system trust store used by other programs in derived images."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22773,
+        "title": "Stop updating EOL Python 3.9 and 3.10 docker images",
+        "url": "https://github.com/astral-sh/uv/pull/22773",
+        "state": "merged",
+        "reason": "Explicitly cites compromised-CA fixes as a reason to stop publishing variants whose upstream images no longer receive security updates. It concerns retired Python 3.9/3.10 tags, whereas this report concerns supported Python 3.11/Trixie images awaiting a refresh."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22787,
+        "title": "Bump version to 0.13.5",
+        "url": "https://github.com/astral-sh/uv/pull/22787",
+        "state": "merged",
+        "reason": "The version bump requested as an alternative had already merged before this issue opened. The release API still lists 0.13.4 as latest and returns 404 for 0.13.5; the merged bump alone does not establish that refreshed Docker images were published."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Separated stale system certificates, Docker rebuild/publication, and possible additional Debian variants. Literal queries included GHSA-hq85-5cpj-mr62, eMudhra/emSign, ca-certificates, 20250419, Trixie, and 0.13.4; conceptual queries covered root certificates, vulnerable/outdated base images, security updates, rebuild/refresh/republish, and internal:releases. PR searches returned no hits even for known matches, so supplemented them with the latest 1,000 PRs across all states, changelog references, and direct inspection of candidate bodies, comments, and relevant diffs. Ruled out astral-sh/uv#19236 and its fix astral-sh/uv#19253 (an unrelated CRL advisory), astral-sh/uv#15262 (missing image tags), and astral-sh/uv#12462 (a new Chainguard variant). The Alpine-only scope of astral-sh/uv#22767 rules it out as a duplicate."
+  },
+  "type": "bug",
+  "type_reason": "The reported published image retains a system trust package containing an affected CA after uv's bundled-root fix. The Docker workflow confirms that derived images inherit upstream system packages without upgrading them; the advisory confirms that system trust stores require separate remediation. This is a security defect in a distributed image, not a request for new functionality. Image contents and broader variant impact remain to be independently verified. No existing item found tracks the Debian rebuild, and this is not a regression of the bundled-root fix.",
+  "summary": "The closest work is the Alpine-only certificate update in astral-sh/uv#22767. Merged uv certificate fixes and the 0.13.5 version bump do not establish remediation of Debian image system certificates; no duplicate tracking that rebuild was found.",
+  "draft_response": "Your package-version comparison identifies a separate gap from the uv 0.13.4 fix: derived images inherit their system certificates from the base image, while astral-sh/uv#22760 updated uv's bundled roots. The Alpine update in astral-sh/uv#22767 does not cover Debian. The 0.13.5 version bump has merged in astral-sh/uv#22787, but refreshed image publication is not yet confirmed.\n\nThe next step is to verify the affected Debian variants and rebuild against patched bases, checking the resulting certificate packages on both architectures. In the meantime, you can use a freshly pulled, patched upstream Python image and copy /uv and /uvx from ghcr.io/astral-sh/uv:0.13.4, following the documented Docker installation pattern."
+}
