@@ -4,17 +4,21 @@ Issue: astral-sh/uv#22756
 
 Classification: question
 
+Status: closed on 2026-10-21 at 10:01:02 UTC; reporter reports success with `UV_SYSTEM_CERTS=1`.
+
 ## Summary
+
+The reporter reports that several tests with `UV_SYSTEM_CERTS=1` appear to work and closed astral-sh/uv#22756. This provides a reported resolution through system-certificate selection, not evidence of a Python-version bug or an upgrade fix. No detailed successful-run logs, successful-run uv version, or explicit `UV_SYSTEM_CERTS=0` result were supplied.
 
 The reporter runs `uv sync --no-build-isolation-package internal_package` with uv 0.13.0, installed from an internal PyPI mirror. On Azure DevOps `windows-latest` / Windows Server 2025, downloading the x86_64 CPython 3.15.0 build from the python-build-standalone 20261009 release fails with `client error (Connect)` and `invalid peer certificate: UnknownIssuer`. Ubuntu successfully downloads Python and creates the environment. The reporter asks whether uv 0.13.1 fixes this.
 
-Reproduction outcome: **needs_more_information**. On the available Linux x86_64 runner, installed uv 0.13.1 successfully completed a minimal Python 3.15.0 sync and downloaded the exact Windows archive named in the report, with both bundled and system certificates. Adding a deliberately nonexistent `SSL_CERT_FILE` produced the reported `UnknownIssuer` chain even with `--system-certs`. This confirms a possible configuration-dependent mechanism, but that override is not established on the reporter's runner. Linux download success does not establish Windows certificate behavior or an upgrade fix.
+Earlier local reproduction outcome: **needs_more_information** (unchanged; separate from the reporter's subsequent successful tests). On the available Linux x86_64 runner, installed uv 0.13.1 successfully completed a minimal Python 3.15.0 sync and downloaded the exact Windows archive named in the report, with both bundled and system certificates. Adding a deliberately nonexistent `SSL_CERT_FILE` produced the reported `UnknownIssuer` chain even with `--system-certs`. This confirms a possible configuration-dependent mechanism, but that override is not established on the reporter's runner. Linux download success does not establish Windows certificate behavior or an upgrade fix.
 
-Closest matches concern Windows certificate trust and certificate-file overrides, including a Windows CI configuration fix. Python 3.15 support was already present in uv 0.13.0; no matching 0.13.1 TLS fix or confirmed duplicate was found. The reporter clarified that Python downloads were deliberately configured to use GitHub because network policy blocks an Astral server URI. The exact configuration and blocked endpoint were not supplied. A corporate TLS proxy, certificate overrides, and use of system certificates remain unknown; a network-policy block does not by itself establish TLS interception or explain the GitHub certificate error. Installing uv from an internal package mirror does not identify the certificate chain presented by the separate GitHub download request.
+Closest matches concern Windows certificate trust and certificate-file overrides, including a Windows CI configuration fix. Python 3.15 support was already present in uv 0.13.0; no matching 0.13.1 TLS fix or confirmed duplicate was found. The reporter clarified that Python downloads were deliberately configured to use GitHub because network policy blocks an Astral server URI. The exact configuration and blocked endpoint were not supplied. The reporter now reports success with system certificates enabled; a corporate TLS proxy, certificate overrides, and the original effective trust settings remain unknown; a network-policy block does not by itself establish TLS interception or explain the GitHub certificate error. Installing uv from an internal package mirror does not identify the certificate chain presented by the separate GitHub download request.
 
 ## Reproduction
 
-**Outcome: needs_more_information.** The Windows-only failure has not been established in this environment. The report omits the failing runner's certificate-source and proxy configuration, and no Windows execution environment was available. An intentionally invalid certificate override can produce the same error, but it cannot be attributed to this issue without evidence from the failing runner.
+**Earlier local outcome: needs_more_information.** The reporter subsequently reported success with `UV_SYSTEM_CERTS=1`; no new local reproduction was performed for that follow-up. The Windows-only failure has not been established in this environment. The report omits the failing runner's certificate-source and proxy configuration, and no Windows execution environment was available. An intentionally invalid certificate override can produce the same error, but it cannot be attributed to this issue without evidence from the failing runner.
 
 ### Environment and isolation
 
@@ -97,9 +101,11 @@ Read the relevant setup, helper assertions, feature gates, and snapshots; did no
 - `crates/uv/tests/it/network.rs::invalid_ssl_cert_file_warns_default_roots_are_disabled` snapshots the missing-file warning while a local HTTP server returns 500. It covers warning rendering; its HTTP fixture does not test TLS validation.
 - `crates/uv/tests/python/python_install.rs::python_install`, enabled by `test-python-managed` in `crates/uv/tests/python/main.rs`, installs the default Python 3.15, checks executable aliases, executes the interpreter, and checks reinstall/uninstall behavior, including Windows-specific paths. It has no custom certificate/proxy setup and does not cover the reported TLS failure.
 
-No test reproducing this exact Windows/Azure/GitHub certificate condition was identified. The missing information is an isolated fresh-download result on the failing Windows runner, its effective certificate and proxy settings, and a sanitized error chain. A last-known-good Windows run under the same configuration would help assess regression claims; none is supplied.
+No test reproducing this exact Windows/Azure/GitHub certificate condition was identified. The successful Windows tests are reporter-supplied and lack fresh-download logs and effective certificate/proxy settings. These limits prevent identifying the precise trust-chain difference, but do not negate the reported resolution. No last-known-good Windows run under identical settings was supplied to establish a regression.
 
-## Draft response
+## Archived draft response
+
+The following draft predates the reporter's successful system-certificate tests and closure. Its diagnostic requests are no longer pending; it is retained only as prior triage context and is not a proposed follow-up response.
 
 Python 3.15 is supported in uv 0.13.0 through astral-sh/uv#22400. Your log shows a TLS certificate trust failure while connecting to GitHub; the 0.13.1 release notes do not list a fix for this. A similar Windows Python-download failure was resolved by using system certificates in astral-sh/uv#8832.
 
@@ -107,9 +113,9 @@ Please try `uv --system-certs python install 3.15.0` on the failing runner with 
 
 ## Classification
 
-The report establishes a TLS trust failure and asks whether upgrading resolves it, but does not establish that uv rejects a valid certificate chain under the intended trust configuration. Reproduction checks leave the classification as a question: the exact archive downloads on Linux, and the matching failure was observed only after deliberately adding a certificate override that is unconfirmed on the reported Windows runner. Python 3.15 support already shipped in 0.13.0. Related reports have confirmed proxy or certificate-override conditions absent here, so neither an exact duplicate nor a regression of the historical TLS fix is established.
+Classification remains question. The reporter reports success after enabling system certificates and closed the issue, supporting resolution through trust configuration. The specific certificate-chain difference, any TLS-inspecting proxy, and any certificate-source override remain unconfirmed. The reported success does not establish a uv correctness defect, a regression, or a 0.13.1 fix. Python 3.15 support already shipped in uv 0.13.0.
 
-The existing GitHub bug label is not evidence of a confirmed correctness defect. The proposed classification reflects the current support question and unresolved trust configuration. A failure with a valid, intended trust configuration would warrant investigating a bug; reproduction of a previously fixed mechanism would warrant regression classification. No such mechanism is established here.
+The local reproduction findings remain unchanged: the exact archive downloaded on Linux, and a matching failure was observed only after deliberately adding a certificate override. That artificial override has not been established on the reporter's runner. The similar resolution in astral-sh/uv#8832 is relevant, but its confirmed corporate-proxy mechanism is not established here. The reporter's secondary preference for `pyproject.toml` configuration does not change the classification of this resolved download-support question.
 
 ## Related
 
@@ -121,6 +127,7 @@ The existing GitHub bug label is not evidence of a confirmed correctness defect.
 
 ## Supporting evidence
 
+- In the 2026-10-21 resolution comment on astral-sh/uv#22756 (comment ID 6313262894), the reporter states that `UV_SYSTEM_CERTS=1` appears to work after several tests and says they are closing the issue. Read-only GitHub issue metadata confirms state `CLOSED` and closure at 2026-10-21T10:01:02Z. The successful-run details and explicit disabled-mode result were not supplied.
 - In the reporter's 2026-10-20 follow-up on astral-sh/uv#22756 (comment ID 6288444697), they state that GitHub was selected explicitly because network policy blocks an Astral server URI. This is reporter-supplied configuration context, not an independently verified policy or a confirmed cause of `UnknownIssuer`. No setting name, exact blocked URI, or comparison of the two runners' download-source settings was provided.
 - `crates/uv-settings/src/settings.rs` defines `python-install-mirror`, and `crates/uv-static/src/env_vars.rs` documents `UV_PYTHON_INSTALL_MIRROR` and its precedence over `UV_ASTRAL_MIRROR_URL` for CPython downloads. These are relevant configuration mechanisms to check; the comment does not identify which mechanism the reporter used.
 - The reported failure occurs while connecting to the Python archive URL, before Python can be downloaded or the internal package can be built. The log does not show a missing download entry, HTTP 404, archive extraction failure, or build-isolation failure.
@@ -135,7 +142,7 @@ The existing GitHub bug label is not evidence of a confirmed correctness defect.
 
 - astral-sh/uv#22439 concerned `No download found` for final Python 3.15.0 in uv 0.12.24, before the catalog update and uv 0.13.0 release. This reporter already reaches the correct version's archive URL.
 - astral-sh/uv#16696 concerned missing default executable aliases for Python 3.15 prereleases after installation, not certificate validation or downloads.
-- astral-sh/uv#9243 and astral-sh/uv#17355 discussed Windows certificate-chain failures despite enabling native/system certificates. Follow-up users reported success with uv 0.11.0. astral-sh/uv#18550 introduced the platform verifier and the `--system-certs` name, merged on 2026-03-23 and documented in `changelogs/0.11.x.md`. This report neither confirms use of system certificates nor demonstrates recurrence of that mechanism. The reqwest version discussion in astral-sh/uv#17427 is about a dependency upgrade, not a TLS fix newly shipping in uv 0.13.1.
+- astral-sh/uv#9243 and astral-sh/uv#17355 discussed Windows certificate-chain failures despite enabling native/system certificates. Follow-up users reported success with uv 0.11.0. astral-sh/uv#18550 introduced the platform verifier and the `--system-certs` name, merged on 2026-03-23 and documented in `changelogs/0.11.x.md`. This reporter now reports success with system certificates enabled, not recurrence of that failure mechanism. The reqwest version discussion in astral-sh/uv#17427 is about a dependency upgrade, not a TLS fix newly shipping in uv 0.13.1.
 - astral-sh/uv#16474 concerns a specific certificate bundle rejected on both Windows and Linux; the reporter confirmed system certificates worked after clearing `SSL_CERT_FILE`. That condition remains unconfirmed here. Its comments link astral-sh/uv#16473, which documents override precedence and adds `SSL_CERT_DIR` support.
 
 ## Search scope
@@ -144,11 +151,17 @@ Searched astral-sh/uv open and closed issues for UnknownIssuer, invalid peer cer
 
 PR search queries did not yield usable PR candidates, so the review also scanned the complete paginated REST pull-request listing across all states and inspected relevant candidates directly with authenticated `gh`.
 
-## Next information needed
+## Resolution and remaining uncertainty
 
-Maintainer zanieb requested a comparison with `UV_SYSTEM_CERTS=1` and `UV_SYSTEM_CERTS=0` on the failing Azure runner in the 2026-10-21 comment on astral-sh/uv#22756 (comment ID 6306086700). No results for either setting have been supplied. The maintainer suspects the runner's certificates; this is a diagnostic hypothesis, not a confirmed cause or workaround. Explicitly disabling system certificates is distinct from leaving the setting unset: `changelogs/0.12.x.md` records support for a false environment value overriding `system-certs = true` in configuration.
+The maintainer requested a comparison of `UV_SYSTEM_CERTS=1` and `UV_SYSTEM_CERTS=0`. The reporter supplied a successful result for the enabled setting and closed the issue; the disabled-setting result remains unspecified. There is no outstanding diagnostic request needed to record this reported resolution. The original certificate issuer, proxy involvement, certificate-source overrides, exact GitHub mirror configuration, and uv version used in the successful tests remain unknown. The evidence does not establish which certificate authority or chain element accounts for the difference.
 
-The non-secret download-source configuration used to select GitHub (setting or environment-variable name and public base URL), the blocked Astral endpoint without credentials or sensitive query parameters, and whether Windows and Ubuntu use the same download-source settings. Separate isolated Python-install attempts on the failing Windows runner with fresh temporary cache/install directories, retaining the intended GitHub download source and otherwise identical settings, once with `UV_SYSTEM_CERTS=1` and once with `UV_SYSTEM_CERTS=0`. Avoid a command-line certificate-selection flag overriding this comparison. Nonempty `SSL_CERT_FILE` or `SSL_CERT_DIR` overrides take precedence over either mode, so their presence must be recorded before interpreting the results as a comparison of system and bundled trust roots. Record the uv version for each attempt, whether `SSL_CERT_FILE` or `SSL_CERT_DIR` is set, whether each path exists and is intentional, and whether `UV_SYSTEM_CERTS` or a TLS-inspecting proxy is in use. Share only sanitized diagnostics with credentials removed. The presented certificate issuer and whether its CA is trusted in the Windows store would help distinguish an override from a missing trust root. No internal package source or credentials are needed. If an earlier Windows run succeeded, identify its uv/Python versions and whether runner/network/trust settings were the same.
+If the failure recurs, useful diagnostics remain separate fresh-download attempts with `UV_SYSTEM_CERTS=1` and `UV_SYSTEM_CERTS=0`, retaining the intended GitHub download source and otherwise identical settings, with sanitized error chains and the uv version. Explicit certificate-file/directory overrides take precedence over either mode and must be accounted for when interpreting results. The earlier Linux checks do not substitute for a failing Windows request.
+
+## Persistent configuration clarification
+
+The reporter would prefer `system-certs = true` in `pyproject.toml` and is considering setting `UV_SYSTEM_CERTS` in `Taskfile.yml` to cover pipeline stages. That Taskfile change is a proposal, not a reported implementation or tested result.
+
+Repository evidence supports the `pyproject.toml` limitation: `crates/uv-settings/src/settings.rs:288` marks `system-certs` as `uv_toml_only`, and `docs/concepts/authentication/certificates.md` documents the environment variable, command-line flag, and `uv.toml` setting. However, `uv.toml` is not restricted to system-wide configuration. `docs/concepts/configuration-files.md` documents discovery of project-local `uv.toml` in the current or nearest parent directory, as well as user- and system-level files. A project-local `uv.toml` is therefore an available persistent configuration location for project commands such as `uv sync`. When both files are present in the same directory, `uv.toml` takes precedence and the accompanying `[tool.uv]` section in `pyproject.toml` is ignored. These are source-backed configuration facts, not additional tests on the reporter's pipeline.
 
 ## Scope of work
 
