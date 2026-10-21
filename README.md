@@ -14,6 +14,10 @@ Public PyPI metadata confirms the distinction. This is an existing universal-res
 
 The reporter says manually downloading a wheel from the PyQt5 PyPI files page and installing it works. The exact wheel, installation command, target environment, and resulting dependency versions were not supplied; this is a reported workaround, not a verified reproduction or evidence that uv failed to discover the PyQt5 wheel.
 
+## Reporter disposition
+
+After the explanation of the separate PyQt5-Qt5 dependency, the reporter agrees that astral-sh/uv#22716 can be closed. This is the reporter's stated disposition, not a maintainer decision or confirmation of the issue's actual closed state; the supplied issue snapshot does not include a state field. It does not establish that `tool.uv.required-environments` was tried, that the original `uv add PyQt5` command now succeeds, or that the underlying resolver behavior was fixed. The duplicate classification and existing technical findings remain applicable.
+
 ## Draft response
 
 The Windows wheel you found is for `PyQt5`; the error concerns its dependency `PyQt5-Qt5==5.15.19`. PyPI lists only Linux/macOS wheels and no source distribution for that dependency version.
@@ -54,7 +58,7 @@ The new report supplies no project configuration or lockfile and does not say th
 
 ## Reported workaround and remaining reproduction details
 
-The reporter reports a successful installation using a wheel manually downloaded from https://pypi.org/project/PyQt5/#files, but still interprets the original failure as uv not knowing that wheel exists. The comment does not identify the downloaded filename or version, the installer or command used, whether the installation targeted the original project environment, or the installed `PyQt5-Qt5` version. It also does not confirm that `tool.uv.required-environments` was tried.
+The reporter reports a successful installation using a wheel manually downloaded from https://pypi.org/project/PyQt5/#files and initially interpreted the original failure as uv not knowing that wheel exists. The comment does not identify the downloaded filename or version, the installer or command used, whether the installation targeted the original project environment, or the installed `PyQt5-Qt5` version. It also does not confirm that `tool.uv.required-environments` was tried.
 
 This outcome is compatible with the already established distinction between the PyQt5 bindings and their Qt runtime dependency. The original error names `PyQt5-Qt5==5.15.19`, so successful installation of a manually downloaded PyQt5 wheel does not by itself demonstrate a discovery or ABI-compatibility failure for the parent package. How the successful installation satisfied the runtime dependency remains unknown; neither an older dependency selection nor reuse of an installed dependency has been established for this attempt. The duplicate classification remains unchanged.
 
