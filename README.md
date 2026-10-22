@@ -17,6 +17,14 @@ The issue was opened on 2026-10-22 and has no comments. It does not provide the 
 installation command, full traceback, selected interpreter path, virtual-environment setup,
 or script-launch method.
 
+The reported errors were reproduced on Linux x86_64 with the installed uv 0.13.4,
+uv-managed CPython 3.14.8, and pip 26.2.1. Running pip against the managed base
+interpreter emitted the exact reported error and message. Installing NLTK 3.10.4 into a
+virtual environment succeeded; importing it with that environment succeeded, while importing
+it with the base interpreter still raised the reported `ModuleNotFoundError`. This demonstrates
+expected environment isolation, not an NLTK installation defect. Windows 11, uv 0.12.17,
+and VS Code were not exercised, and the reporter's actual interpreter selection remains unknown.
+
 astral-sh/uv#12204 explains the restriction introduced by astral-sh/uv#4312. astral-sh/uv#12604 and astral-sh/uv#9637 cover adjacent pip and VS Code environment confusion; no confirmed duplicate or regression was established.
 
 ## Draft response
@@ -46,10 +54,87 @@ pip, and the editor discussion describes failure after interpreter selection. Ne
 condition is documented here, so those discussions are supporting context rather than an established
 duplicate.
 
-A missing import alone does not establish an installer defect. The reported environment mismatch
-has not been independently verified. The recommended commands target one interpreter explicitly and
-provide a direct import check; any remaining failure would need its full output and the VS Code
-interpreter and launch method.
+A missing import alone does not establish an installer defect. The reproduction demonstrates
+how a package can import successfully in a virtual environment and remain unavailable in its base
+interpreter. It does not identify which interpreter the reporter's pip or VS Code selected.
+The recommended commands target one interpreter explicitly and provide a direct import check;
+any remaining failure would need its full output and the VS Code interpreter and launch method.
+
+## Reproduction
+
+**Outcome: reproducible.** Both reported errors occurred in a targeted reproduction, and the
+virtual-environment installation/import workflow succeeded. The managed-base installation
+restriction is intentional; reproducing it does not establish a uv bug.
+
+### Environment and isolation
+
+- Reported: Windows 11 x86_64, Python 3.14 (patch version unspecified), VS Code, and
+  uv 0.12.17 (635500036, 2026-09-18). No exact pip command or pip version was supplied.
+- Tested: Linux x86_64, installed `uv 0.13.4 (x86_64-unknown-linux-gnu)`, freshly downloaded
+  uv-managed CPython 3.14.8, bundled pip 26.2.1, and NLTK 3.10.4 from PyPI.
+- All reproduction files, Python installations, virtual environments, temporary files, and caches
+  are under `/tmp/uv-22845-8VAZpG`. Commands ran there with a clean subprocess environment,
+  `UV_NO_CONFIG=1`, isolated uv/XDG/pip directories, user site packages disabled, and
+  `PIP_CONFIG_FILE=/dev/null`. Python installation used `--no-bin --no-registry`.
+- Windows 11, VS Code, and uv 0.12.17 were not available in this reproduction. No upgrade
+  regression was alleged, and no comparison with an earlier uv release was performed.
+
+### Minimal commands and observations
+
+With `UV_PYTHON_INSTALL_DIR` and `UV_CACHE_DIR` pointing to fresh temporary directories,
+the following reproduces the tested command sequence on Linux. `base_python` explicitly
+selects the managed base interpreter, avoiding ambiguity about which pip is invoked.
+
+```sh
+uv python install 3.14 --no-bin --no-registry
+base_python="$(uv python find 3.14 --managed-python)"
+"$base_python" -m pip install nltk
+"$base_python" -c "import nltk"
+uv venv --python "$base_python" .venv
+uv pip install --python .venv/bin/python nltk
+.venv/bin/python -c "import sys, nltk; print(sys.executable); print(nltk.__version__)"
+"$base_python" -c "import nltk"
+```
+
+The first pip install exited 1 with:
+
+```text
+error: externally-managed-environment
+
+× This environment is externally managed
+╰─> This Python installation is managed by uv and should not be modified.
+```
+
+The base interpreter's `EXTERNALLY-MANAGED` file was present in its standard-library directory
+and contained that same uv message. The first import exited 1 with
+`ModuleNotFoundError: No module named 'nltk'`.
+
+Creating `.venv` and installing NLTK with `uv pip install --python .venv/bin/python nltk`
+both exited 0. The install resolved and installed seven packages, including NLTK 3.10.4.
+The virtual-environment import exited 0 and printed
+`/tmp/uv-22845-8VAZpG/.venv/bin/python` and `3.10.4`. Repeating the import with the base
+interpreter after this installation still exited 1 with `ModuleNotFoundError`.
+Thus, installing into one environment does not make the package available to another interpreter.
+Per-command output and exit codes are retained as numbered JSON files in the reproduction directory.
+
+### Existing test coverage and limits
+
+Searches covered `crates/uv/tests/` and `crates/uv-client/tests/it/` for the externally managed
+marker/message, NLTK, and related installation flags. The setup and snapshot of
+`crates/uv/tests/pip_install/pip_install.rs::install_with_system_interpreter` were inspected.
+It downloads a managed Python 3.12 installation and runs `uv pip install --system anyio`,
+asserting exit code 2 and the uv-managed-installation message. The test is gated by
+`test-python-managed` and `not(windows)`; its module also requires `test-python` and
+`test-pypi`. This covers uv's rejection of a managed base installation, not standalone pip's
+error formatting, NLTK on Python 3.14, or VS Code interpreter selection. No direct test of the
+complete reported workflow was found. No repository tests were added or run; the installed uv
+and Python executables were exercised directly.
+
+The reproduced mismatch does not establish the reporter's precise cause. Bare pip falling back
+outside a virtual environment remains a hypothesis, not an observed part of their workflow.
+If the explicit Windows commands in the draft response still fail, request the exact install
+and script-launch commands, full error output, pip version, Python patch version,
+`sys.executable` from the failing script, and the interpreter path selected in VS Code.
 
 ## Related
 
@@ -122,12 +207,12 @@ Additional inspected candidates help distinguish similar errors:
 
 ## Validation and next step
 
-This is an evidence-based support assessment, not a Windows reproduction. No package installation,
-build, or integration test was run. The proposed response asks the reporter to install and import
-NLTK using one explicit virtual-environment interpreter, then select that interpreter in VS Code.
-If it fails, the command output and editor launch details will distinguish an installation problem
-from an interpreter-selection problem.
+The Linux reproduction confirms the reported error text and verifies that NLTK installs and imports
+successfully with one explicitly targeted Python 3.14 virtual environment. The draft response gives
+the Windows equivalent and recommends selecting that same interpreter in VS Code. Its editor steps
+remain guidance, not a tested Windows result. If that workflow fails, the full command output and
+interpreter/launch details are needed to investigate further.
 
-The only authored artifact is this handoff. No GitHub changes were made. The checkout was not
-modified; its observed pre-existing status lists `agents/codex/config.toml` as modified and
-`.issue-triage-event.json` as untracked.
+Only this handoff and temporary reproduction artifacts were authored. No GitHub changes were made.
+The checkout was not modified; its observed pre-existing status lists `agents/codex/config.toml` as
+modified and `.issue-triage-event.json` as untracked.
