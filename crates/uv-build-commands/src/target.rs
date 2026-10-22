@@ -9,12 +9,15 @@ use async_zip::base::read::seek::ZipFileReader;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use serde::Deserialize;
-use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use tokio::io::{BufReader, copy};
+use tokio_util::compat::{
+    FuturesAsyncWriteCompatExt, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt,
+};
 use walkdir::WalkDir;
 
 use uv_configuration::TargetTriple;
 use uv_distribution_filename::{ExpandedTags, WheelFilename};
-use uv_distribution_types::CachedDist;
+use uv_distribution_types::{CachedDist, RequiresPython};
 use uv_install_wheel::WheelFile;
 use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
 use uv_platform_tags::{Arch, Os, Tags, TagsOptions};
@@ -23,8 +26,8 @@ use uv_python_interpreter::Interpreter;
 
 pub(crate) struct BuildTarget {
     details: Option<(PathBuf, Vec<u8>)>,
-    pub(crate) markers: MarkerEnvironment,
-    pub(crate) tags: Tags,
+    markers: MarkerEnvironment,
+    tags: Tags,
 }
 
 impl BuildTarget {
@@ -150,6 +153,14 @@ impl BuildTarget {
         self.details.as_ref().map(|(path, _)| path.as_path())
     }
 
+    pub(crate) fn markers(&self) -> &MarkerEnvironment {
+        &self.markers
+    }
+
+    pub(crate) fn tags(&self) -> &Tags {
+        &self.tags
+    }
+
     pub(crate) fn check_unchanged(&self) -> Result<()> {
         if let Some((path, contents)) = &self.details {
             ensure!(
@@ -172,7 +183,7 @@ impl BuildTarget {
             "Built wheel `{filename}` is incompatible with the target"
         );
         let file = fs_err::tokio::File::open(path).await?;
-        let mut reader = ZipFileReader::new(tokio::io::BufReader::new(file).compat()).await?;
+        let mut reader = ZipFileReader::new(BufReader::new(file).compat()).await?;
         let (index, stem) = uv_metadata::find_archive_dist_info(
             filename,
             reader
@@ -194,7 +205,8 @@ impl BuildTarget {
             metadata.name == filename.name && metadata.version == filename.version,
             "Built wheel filename and metadata disagree"
         );
-        if let Some(requires_python) = &metadata.requires_python {
+        if let Some(requires_python) = metadata.requires_python {
+            let requires_python = RequiresPython::from_specifiers(requires_python);
             ensure!(
                 requires_python.contains(&self.markers.python_full_version().version),
                 "Built wheel requires Python `{requires_python}`, but the target is Python {}",
@@ -266,17 +278,21 @@ pub(crate) async fn wheel_archives(
                 .to_str()
                 .context("Non-UTF-8 path in target wheel")?
                 .replace('\\', "/");
-            let contents = if entry.file_type().is_dir() {
+            if entry.file_type().is_dir() {
                 name.push('/');
-                Vec::new()
-            } else {
-                fs_err::tokio::read(entry.path()).await?
-            };
+            }
             let builder = ZipEntryBuilder::new(name.into(), Compression::Stored);
             #[cfg(unix)]
             let builder =
                 builder.unix_permissions(u16::try_from(entry.metadata()?.permissions().mode())?);
-            writer.write_entry_whole(builder, &contents).await?;
+            if entry.file_type().is_dir() {
+                writer.write_entry_whole(builder, &[]).await?;
+            } else {
+                let mut file = fs_err::tokio::File::open(entry.path()).await?;
+                let mut entry_writer = writer.write_entry_seekable(builder).await?.compat_write();
+                copy(&mut file, &mut entry_writer).await?;
+                entry_writer.into_inner().close().await?;
+            }
         }
         writer.close().await?;
         paths.push(path);

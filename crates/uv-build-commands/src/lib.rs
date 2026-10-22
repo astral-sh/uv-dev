@@ -1360,7 +1360,7 @@ async fn build_wheel(
                     }
                     if let Some(target) = target.or(native_target.as_ref()) {
                         let wheels = build_dispatch
-                            .target_wheels(&requirements, &target.markers, &target.tags)
+                            .target_wheels(&requirements, target.markers(), target.tags())
                             .await
                             .map_err(Error::TargetBuild)?;
                         let paths = wheel_archives(wheels, &builder.target_wheel_directory())

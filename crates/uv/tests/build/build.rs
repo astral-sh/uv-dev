@@ -4550,6 +4550,46 @@ fn cross_build_rejects_incompatible_wheel() -> Result<()> {
     Ok(())
 }
 
+/// uv checks `Requires-Python` for target dependencies and the built wheel against the target's
+/// release version, so `3.14.0rc1` satisfies `>=3.14`.
+#[test]
+fn cross_build_prerelease_target() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    let path = context.temp_dir.child("build-details.json");
+    let mut details: serde_json::Value = serde_json::from_str(&fs_err::read_to_string(&path)?)?;
+    details["implementation"]["version"]["releaselevel"] = "candidate".into();
+    details["implementation"]["version"]["serial"] = 1.into();
+    path.write_str(&serde_json::to_string(&details)?)?;
+    let (filename, wheel) = WheelBuilder::new(&"cross-library".parse()?, &"1.0.0".parse()?)
+        .tag("cp314-cp314-manylinux_2_28_aarch64")
+        .requires_python(Some(&">=3.14".parse()?))
+        .build();
+    context
+        .temp_dir
+        .child("wheels")
+        .child(filename)
+        .write_binary(&wheel)?;
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "--find-links", "wheels",
+        "-C", "target-requirement=cross-library==1.0.0", "-C", "requires-python=>=3.14",
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/cross_build_poc-0.1.0-py3-none-any.whl
+    ");
+    context
+        .temp_dir
+        .child("dist/cross_build_poc-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::is_file());
+    Ok(())
+}
+
 /// The bundled uv-build fast path must validate the target's Requires-Python, too.
 #[test]
 fn cross_build_uv_backend_requires_python() -> Result<()> {
