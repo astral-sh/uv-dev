@@ -1,0 +1,11 @@
+{
+  "outcome": "fixed",
+  "summary": "Preserve the installed Python variant when constructing download requests so bare upgrades include free-threaded builds and reinstalls retain them. Update both parent regressions to assert correct behavior and verify the resulting interpreters.",
+  "validation": [
+    "Both original parent regressions passed; corrected expectations failed before the production fix.",
+    "Seven focused debug-profile integration tests passed after the fix.",
+    "cargo +stable fmt --all and formatting check passed.",
+    "git diff --check passed."
+  ],
+  "pull_request": "https://github.com/astral-sh/uv-dev/pull/2939"
+}

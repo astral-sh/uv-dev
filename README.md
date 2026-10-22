@@ -6,7 +6,13 @@ Classification: bug
 
 ## Summary
 
-The reported behavior is reproducible. With both standard and free-threaded
+The reported behavior is reproducible and a focused fix is now present in the
+checkout. Download requests retain the installed Python variant, correcting
+both bare upgrades and free-threaded reinstalls. Both parent regression tests
+assert the corrected behavior and pass, along with five related integration
+tests.
+
+Before the fix, with both standard and free-threaded
 CPython 3.14.7 installed, bare `uv python upgrade` installs only the newer
 standard build and leaves the free-threaded installation at 3.14.7. A second
 bare upgrade reports that all versions are current. Explicitly requesting
@@ -16,8 +22,10 @@ The reporter uses uv 0.13.5 on Ubuntu 24.04 under WSL, with Linux x86_64 GNU
 managed CPython installations, and expects both variants to upgrade to 3.14.9.
 The runner provides uv 0.13.4. Its bundled catalog reproduced the behavior with
 3.14.8, and a separate fresh installation using the checkout's download catalog
-reproduced the reported 3.14.7-to-3.14.9 transition. The uv 0.13.5 executable was
-not run; the catalog override does not change the uv executable's version.
+reproduced the reported 3.14.7-to-3.14.9 transition. The released uv 0.13.5 executable was
+not run in that reproduction; the catalog override does not change the uv
+executable's version. The subsequent fix validation built and tested the
+checkout's uv 0.13.5 in the debug profile.
 
 Removing old interpreters is a separate request tracked by astral-sh/uv#15805.
 Retaining the old installations after upgrading is documented behavior because
@@ -31,9 +39,11 @@ skipped free-threaded CPython build is available and installs successfully when
 explicitly selected. The limitations for upgrading PyPy, GraalPy, and Pyodide do
 not explain this CPython behavior.
 
-The source is consistent with the observed loss of the variant: conversion from
-a managed installation constructs a request using `PythonVariant::Default`, and
-the automatic upgrade path drops the patch component and deduplicates requests.
+The pre-fix integration failures confirm the loss of the variant: conversion
+from a managed installation constructed a request using
+`PythonVariant::Default`, and the automatic upgrade path drops the patch
+component and deduplicates requests. The fix uses the installation key's variant
+instead. The same conversion also constructs reinstall requests.
 The related implementation-preservation fix in astral-sh/uv#16420 addresses
 PyPy versus CPython, not free-threaded versus standard CPython. No prior fix or
 canonical duplicate for this exact variant issue was identified in the earlier
@@ -42,8 +52,10 @@ first appeared; it is already present in the runner's uv 0.13.4.
 
 ## Reproduction
 
-**Outcome: reproducible.** All installation, upgrade, and listing commands
-completed with exit status 0.
+**Outcome: reproducible before the fix.** The following records the initial
+installed-executable reproduction. All installation, upgrade, and listing
+commands completed with exit status 0. Checkout regression tests and fix
+validation are recorded in the Fix section.
 
 ### Environment and isolation
 
@@ -128,12 +140,15 @@ Observed results:
    then reported `Python 3.14.9`. Both old 3.14.7 installations remained.
 
 The explicit selector is a verified workaround in this environment. Neither
-WSL nor the uv 0.13.5 executable was tested directly. These limitations do not
+WSL nor the released uv 0.13.5 executable was tested directly in that initial
+reproduction. These limitations do not
 prevent reproducing the skipped-variant behavior with the installed uv.
 
 ### Existing test coverage
 
-The relevant test setup and assertions were read; no tests were added or run.
+The initial reproduction reviewed the existing tests without running them.
+The parent regression PR subsequently added two tests, now updated and executed
+as described in the Fix section.
 
 - `crates/uv/tests/python/python_upgrade.rs`,
   `python_upgrade_without_version`: installs standard CPython 3.11.8, 3.12.8,
@@ -142,11 +157,16 @@ The relevant test setup and assertions were read; no tests were added or run.
   It does not install a free-threaded variant.
 - In the same module, `python_upgrade_implementation` installs only PyPy 3.11
   and verifies that bare upgrade does not install CPython. It does not test
-  CPython variant preservation. No free-threaded scenario is present in this
-  upgrade module.
+  CPython variant preservation. The parent PR added
+  `python_upgrade_freethreaded` to cover both variants; it now expects both
+  latest patches and executes the upgraded free-threaded interpreter.
 - `crates/uv/tests/python/python_install.rs`, `python_install_freethreaded`,
   covers explicit free-threaded installation and selection, executable links,
   and virtual-environment use, not upgrading both installed variants.
+- `crates/uv/tests/python/python_install.rs`, `python_reinstall_freethreaded`,
+  was also added by the parent PR. It now expects replacement of the
+  free-threaded installation and executes its Python binary to verify
+  `Py_GIL_DISABLED` is 1.
 - `crates/uv-python-types/src/download_request.rs`,
   `upgrade_request_preserves_variant`, starts with an already free-threaded
   request and verifies that removing defaults and the patch yields
@@ -162,9 +182,89 @@ catalog run; `reported/available.log`, `reported/install.log`,
 `reported/after-explicit.log` record the 3.14.9 run. The wrappers are
 `uv-isolated` and `uv-reported-catalog`.
 
+## Fix
+
+**Outcome: fixed.** The checkout contains a one-line production fix and updates
+to both regression tests from astral-sh/uv-dev#2938. No new test function was
+needed.
+
+### Root cause and implementation
+
+`From<&ManagedPythonInstallation> for PythonDownloadRequest` in
+`crates/uv-python-managed/src/managed.rs` replaced the installed variant with
+`PythonVariant::Default`. Bare upgrade uses this conversion before dropping the
+patch and deduplicating requests, so standard and free-threaded installations
+collapsed into a standard-only request. The separate reinstall branch in
+`crates/uv-python-commands/src/install.rs` also uses this conversion through
+`PythonRequest::Key(installation.into())`, causing explicit free-threaded
+reinstalls to download a standard build instead.
+
+The conversion now passes `key.variant` to `VersionRequest::from_components`.
+Version, implementation, architecture, OS, libc, and prerelease handling remain
+unchanged. Inspection confirmed that `only_minor()`, request matching, minor
+installation keys, and upgrade selection already retain or compare variants.
+Neighboring install, debug/free-threaded selection, list, uninstall, standard
+reinstall, and implementation-preservation fixtures were inspected. No other
+contradictory expectation requiring correction was found. No additional command
+aliases or speculative variant matrix were added.
+
+### Regression evidence and validation
+
+With the production code unchanged, both original parent tests passed while
+asserting the undesirable behavior. Their snapshots were then changed to expect
+both upgraded variants and a free-threaded replacement on reinstall. Both tests
+failed at those snapshots before production code was changed: upgrade installed
+only standard 3.14.9, and reinstall added standard 3.14.7 instead of replacing
+the free-threaded installation. The failure transcript is
+`/tmp/uv-22831-red.log`.
+
+The updated `python_upgrade_freethreaded` also verifies the upgraded executable
+reports the latest patch and both subsequent bare and explicit free-threaded
+upgrades are no-ops. The updated `python_reinstall_freethreaded` executes the
+reinstalled binary and verifies its free-threaded build configuration. Both
+remain under the existing `test-python-managed` module gate.
+
+After the production fix, the following debug-profile command passed all seven
+selected integration tests (no ignored tests):
+
+```sh
+UV_PYTHON_CACHE_DIR=/tmp/uv-22831-test-python-cache INSTA_UPDATE=no \
+  cargo test -p uv --test python --features test-python-managed -- \
+  python_upgrade::python_upgrade_freethreaded \
+  python_upgrade::python_upgrade_without_version \
+  python_upgrade::python_upgrade_implementation \
+  python_install::python_reinstall \
+  python_install::python_install_freethreaded
+```
+
+The reinstall filter selects `python_reinstall`, `python_reinstall_patch`, and
+`python_reinstall_freethreaded`; the other filters each select one test. This
+covers the two corrected parent regressions, interpreter execution, standard
+single/multiple/patch reinstalls, bare upgrades across minor versions, explicit
+free-threaded install/find/virtual-environment use, and PyPy implementation
+preservation. The successful transcript is `/tmp/uv-22831-green.log`.
+
+The initial baseline command encountered the runner's read-only default archive
+cache before reaching the regression. Setting `UV_PYTHON_CACHE_DIR` to `/tmp`
+resolved that environment limitation for baseline, failing-expectation, and
+fixed runs. The pinned Rust 1.99.0 toolchain lacks rustfmt and its installation
+is read-only, so formatting used the installed stable toolchain:
+`cargo +stable fmt --all` and
+`RUSTUP_TOOLCHAIN=stable cargo fmt --all -- --check` both succeeded.
+`git diff --check` also passed.
+
+Only `crates/uv-python-managed/src/managed.rs`,
+`crates/uv/tests/python/python_upgrade.rs`, and
+`crates/uv/tests/python/python_install.rs` were changed in the checkout. No full
+suite, release build, Windows/WSL execution, commits, or GitHub changes were
+performed.
+
 ## Related
 
-- astral-sh/uv#16420 — Check for matching Python implementation during `uv python upgrade` (pull request, merged). Changed bare upgrades to construct requests from managed installations, the same conversion that currently replaces the installed variant with PythonVariant::Default. Merged on 2025-10-23 to fix implementation preservation; its regression test covers PyPy, not free-threaded CPython.
+- astral-sh/uv-dev#2938 — Parent regression PR. Added the upgrade and reinstall
+  regressions; both are retained and updated to require correct variant preservation.
+
+- astral-sh/uv#16420 — Check for matching Python implementation during `uv python upgrade` (pull request, merged). Changed bare upgrades to construct requests from managed installations, the same conversion that replaced the installed variant with PythonVariant::Default before this fix. Merged on 2025-10-23 to fix implementation preservation; its regression test covers PyPy, not free-threaded CPython.
 - astral-sh/uv#16416 — `uv python upgrade` installs cpython-3.11 if pypy-3.11 exists (issue, closed). Historical bug in the same automatic upgrade-request construction. Maintainer diagnosis identified lost implementation information; astral-sh/uv#16420 fixed that. This report concerns lost CPython variant information, so it is not a duplicate of the resolved PyPy problem.
 - astral-sh/uv#15805 — A way to remove old Python versions (issue, open). Tracks the reporter's secondary cleanup request, including retaining the latest free-threaded versions. Maintainers discuss pruning and existing virtual-environment references. It does not track skipped free-threaded upgrades.
 - astral-sh/uv#18770 — Add `--outdated` to `uv python uninstall` and `--uninstall` to `uv python upgrade` (pull request, open). Proposes the cleanup requested in astral-sh/uv#15805, rebasing astral-sh/uv#16018 and adding cleanup after upgrades. It remains unmerged and does not fix the variant loss in automatic upgrade requests.
@@ -179,11 +279,11 @@ catalog run; `reported/available.log`, `reported/install.log`,
   and deduplicates them in an `IndexSet`. Explicit targets use a separate
   parsing branch.
 - `crates/uv-python-managed/src/managed.rs`,
-  `From<&ManagedPythonInstallation> for PythonDownloadRequest`, supplies
-  `PythonVariant::Default` when constructing the version request.
+  `From<&ManagedPythonInstallation> for PythonDownloadRequest`, supplied
+  `PythonVariant::Default` before the fix and now supplies `key.variant`.
   `crates/uv-python-types/src/request.rs` retains the supplied variant in
-  `only_minor()`. This explains why the two installed variants can become the
-  same standard-CPython upgrade request.
+  `only_minor()`. The defective conversion made the two installed variants
+  become the same standard-CPython upgrade request.
 - The earlier issue-context review inspected the same upgrade loop and
   hardcoded variant at tag `0.13.5` through the GitHub contents API. That is
   source evidence for the reported release, separate from the executable
@@ -196,10 +296,9 @@ catalog run; `reported/available.log`, `reported/install.log`,
   with standard and free-threaded Python support, closing astral-sh/uv#12977.
   The stabilization discussion in astral-sh/uv#16637 was later closed as stable.
 
-A focused regression test would install older standard and free-threaded patches
-in the existing Python upgrade module, run bare upgrade, and assert that both
-new variants are installed. It would exercise the managed-installation
-conversion missing from the existing coverage.
+The updated parent regressions now cover the managed-installation conversion
+through both automatic upgrade and explicit reinstall, including execution of
+the resulting free-threaded interpreter.
 
 ## Search scope and exclusions
 
@@ -229,6 +328,8 @@ Additional inspected candidates were excluded for these reasons:
   successor astral-sh/uv#18770 rebases it and adds cleanup after upgrades; neither
   resolves variant loss during automatic request construction.
 
-No repository checkout files or existing user installations were modified, no
-builds were performed, and no GitHub changes were made. Only this handoff and
-temporary reproduction artifacts were written.
+The initial reproduction left the checkout unchanged. The subsequent fix
+changes only the three production/integration-test files listed above and this
+handoff. Existing user Python installations and GitHub state were not modified.
+
+Pull request: https://github.com/astral-sh/uv-dev/pull/2939
