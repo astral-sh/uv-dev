@@ -4465,6 +4465,66 @@ fn cross_build_unsupported_backend() -> Result<()> {
     Ok(())
 }
 
+/// Direct wheel requirements bypass index filtering but still need target tag validation.
+#[test]
+fn cross_build_target_wheel_incompatible_platform() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    let (filename, wheel) = WheelBuilder::new(&"cross-library".parse()?, &"1.0.0".parse()?)
+        .tag("cp314-cp314-manylinux_2_28_x86_64")
+        .requires_python(Some(&">=3.14".parse()?))
+        .build();
+    let path = context.temp_dir.child("wheels").child(filename);
+    path.write_binary(&wheel)?;
+    let requirement = format!(
+        "target-requirement=cross-library @ {}",
+        SafeUrl::from_file_path(path.path()).map_err(|()| anyhow!("invalid wheel path"))?
+    );
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "-C", &requirement,
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Target wheel `cross_library-1.0.0-cp314-cp314-manylinux_2_28_x86_64.whl` is incompatible with the target
+    ");
+    context
+        .temp_dir
+        .child("protocol.json")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
+#[test]
+fn cross_build_rejects_malformed_metadata_tag() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index",
+        "-C", "metadata-tag=1-py3-none-any",
+    ]), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: The wheel tag "1-py3-none-any" contains too many segments
+    "#);
+    context
+        .temp_dir
+        .child("dist/cross_build_poc-0.1.0-py3-none-any.whl")
+        .assert(predicate::path::missing());
+    Ok(())
+}
+
 #[test]
 fn cross_build_rejects_incompatible_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");

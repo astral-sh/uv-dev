@@ -42,6 +42,10 @@ pub enum Error {
         "`build-system.target-requires` requires a backend with `get_requires_for_target_wheel`"
     )]
     TargetRequirementsUnsupported,
+    #[error(
+        "Target inputs cannot be configured more than once or after metadata preparation or a build starts"
+    )]
+    TargetAlreadyConfigured,
     #[error("Failed to create temporary virtualenv")]
     Virtualenv(#[from] uv_virtualenv::Error),
     // Build backend errors
@@ -80,13 +84,14 @@ impl IsBuildBackendError for Error {
             Self::RequirementsResolve(_, error) | Self::RequirementsInstall(_, error) => {
                 error.is_user_failure()
             }
-            Self::Io(_) | Self::Virtualenv(_) => false,
+            Self::Io(_) | Self::Virtualenv(_) | Self::TargetAlreadyConfigured => false,
         }
     }
 
     fn is_build_backend_error(&self) -> bool {
         match self {
             Self::Io(_)
+            | Self::TargetAlreadyConfigured
             | Self::TargetRequirementsUnsupported
             | Self::Lowering(_)
             | Self::InvalidSourceDist(_)

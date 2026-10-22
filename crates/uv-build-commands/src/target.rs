@@ -1,10 +1,8 @@
 //! Target descriptions and artifact checks for the experimental cross-build protocol.
 
-use std::collections::BTreeSet;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use anyhow::{Context, Result, bail, ensure};
 use async_zip::base::read::seek::ZipFileReader;
@@ -15,7 +13,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use walkdir::WalkDir;
 
 use uv_configuration::TargetTriple;
-use uv_distribution_filename::WheelFilename;
+use uv_distribution_filename::{ExpandedTags, WheelFilename};
 use uv_distribution_types::CachedDist;
 use uv_install_wheel::WheelFile;
 use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
@@ -230,36 +228,19 @@ impl BuildTarget {
                 "Built WHEEL metadata differs from prepared metadata"
             );
         }
-        let mut metadata_tags = BTreeSet::new();
-        for tag in wheel
-            .tags()
-            .context("Built wheel has no compatibility tags")?
-        {
-            metadata_tags.extend(expanded_tags(&WheelFilename::from_str(&format!(
-                "target-0-{tag}.whl"
-            ))?));
-        }
+        let metadata_tags = ExpandedTags::parse(
+            wheel
+                .tags()
+                .context("Built wheel has no compatibility tags")?
+                .iter()
+                .map(String::as_str),
+        )?;
         ensure!(
-            metadata_tags == expanded_tags(filename),
+            metadata_tags.matches_filename(filename),
             "Built wheel filename and WHEEL tags disagree"
         );
         Ok(())
     }
-}
-
-fn expanded_tags(filename: &WheelFilename) -> BTreeSet<String> {
-    filename
-        .python_tags()
-        .iter()
-        .flat_map(|python| {
-            filename.abi_tags().iter().flat_map(move |abi| {
-                filename
-                    .platform_tags()
-                    .iter()
-                    .map(move |platform| format!("{python}-{abi}-{platform}"))
-            })
-        })
-        .collect()
 }
 
 /// Repackage cached wheel contents, including the cached RECORD, without installing them.

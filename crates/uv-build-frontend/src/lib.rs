@@ -13,7 +13,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::str::FromStr;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::{env, iter};
 
 use fs_err as fs;
@@ -290,7 +290,8 @@ pub struct SourceBuild {
     /// Runner for Python scripts.
     runner: PythonRunner,
     /// Target inputs are supplied only after the backend opts into the cross-build protocol.
-    target_inputs: Option<TargetInputs>,
+    /// Metadata preparation and builds freeze the configuration, including absent target inputs.
+    target_inputs: OnceLock<Option<TargetInputs>>,
 }
 
 struct TargetInputs {
@@ -553,7 +554,7 @@ impl SourceBuild {
             environment_variables,
             modified_path,
             runner,
-            target_inputs: None,
+            target_inputs: OnceLock::new(),
         })
     }
 
@@ -664,17 +665,24 @@ impl SourceBuild {
         self.temp_dir.path().join("target-wheels")
     }
 
-    /// Supply resolved target artifacts without adding them to the build environment.
-    pub fn set_target(&mut self, build_details: Option<PathBuf>, wheels: Vec<PathBuf>) {
-        self.target_inputs = Some(TargetInputs {
-            build_details,
-            wheels,
-        });
+    /// Configure target inputs once, before metadata preparation or a build starts.
+    pub fn set_target(
+        &mut self,
+        build_details: Option<PathBuf>,
+        wheels: Vec<PathBuf>,
+    ) -> Result<(), Error> {
+        self.target_inputs
+            .set(Some(TargetInputs {
+                build_details,
+                wheels,
+            }))
+            .map_err(|_| Error::TargetAlreadyConfigured)
     }
 
     fn target_arguments(&self) -> String {
         self.target_inputs
-            .as_ref()
+            .get()
+            .and_then(Option::as_ref)
             .map_or_else(String::new, |inputs| {
                 let target = inputs
                     .build_details
@@ -1005,6 +1013,7 @@ impl SourceBuild {
     /// Try calling `prepare_metadata_for_build_wheel` to get the metadata without executing the
     /// actual build.
     async fn get_metadata_without_build(&mut self) -> Result<Option<PathBuf>, Error> {
+        self.target_inputs.get_or_init(|| None);
         // We've already called this method; return the existing result.
         if let Some(metadata_dir) = &self.metadata_directory {
             return Ok(Some(metadata_dir.clone()));
@@ -1124,6 +1133,7 @@ impl SourceBuild {
     /// <https://packaging.python.org/en/latest/specifications/source-distribution-format/>
     #[instrument(skip_all, fields(version_id = self.version_id))]
     pub async fn build(&self, wheel_dir: &Path) -> Result<String, Error> {
+        self.target_inputs.get_or_init(|| None);
         // The build scripts run with the extracted root as cwd, so they need the absolute path.
         let wheel_dir = std::path::absolute(wheel_dir)?;
         let filename = self.pep517_build(&wheel_dir).await?;

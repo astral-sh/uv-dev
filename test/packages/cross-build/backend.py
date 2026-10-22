@@ -110,6 +110,7 @@ def build_wheel(
     ]
     Path("protocol.json").write_text(json.dumps(trace))
     tag = settings.get("wheel-tag", "py3-none-any")
+    metadata_tag = settings.get("metadata-tag", tag)
     name = f"cross_build_poc-0.1.0-{tag}.whl"
     contents = metadata(settings)
     if settings.get("change-metadata"):
@@ -117,7 +118,7 @@ def build_wheel(
     entries = {
         "cross_build_poc/__init__.py": "",
         "cross_build_poc-0.1.0.dist-info/METADATA": contents,
-        "cross_build_poc-0.1.0.dist-info/WHEEL": f"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: {tag}\n",
+        "cross_build_poc-0.1.0.dist-info/WHEEL": f"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: {metadata_tag}\n",
     }
     record = []
     with zipfile.ZipFile(Path(wheel_directory) / name, "w") as wheel:

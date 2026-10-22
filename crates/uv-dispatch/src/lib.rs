@@ -6,7 +6,7 @@ use std::ffi::{OsStr, OsString};
 use std::future::{self, Future};
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 use futures::FutureExt;
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
@@ -441,11 +441,16 @@ impl<'a> BuildDispatch<'a> {
             let ResolvedDist::Installable { dist, .. } = distribution else {
                 bail!("Target requirements must resolve to wheel artifacts");
             };
-            let Dist::Built(_) = dist.as_ref() else {
+            let Dist::Built(built) = dist.as_ref() else {
                 bail!(
                     "Target requirement `{dist}` needs a source build; only target wheels are supported"
                 );
             };
+            ensure!(
+                built.wheel_filename().is_compatible(tags),
+                "Target wheel `{}` is incompatible with the target",
+                built.wheel_filename()
+            );
             let wheel = database
                 .get_or_build_wheel(
                     dist,

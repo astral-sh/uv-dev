@@ -1367,7 +1367,7 @@ async fn build_wheel(
                             .await
                             .map_err(Error::TargetBuild)?;
                         target.check_unchanged().map_err(Error::TargetBuild)?;
-                        builder.set_target(target.path().map(Path::to_path_buf), paths);
+                        builder.set_target(target.path().map(Path::to_path_buf), paths)?;
                         metadata_directory =
                             builder.metadata().await.map_err(Error::BuildDispatch)?;
                         target.check_unchanged().map_err(Error::TargetBuild)?;

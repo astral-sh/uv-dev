@@ -1,13 +1,15 @@
+use std::collections::BTreeSet;
 use std::str::FromStr;
 
 use memchr::memchr;
 use thiserror::Error;
 
 use uv_platform_tags::{
-    AbiTag, IncompatibleTag, LanguageTag, ParseAbiTagError, ParseLanguageTagError,
+    AbiTag, CompressedTags, IncompatibleTag, LanguageTag, ParseAbiTagError, ParseLanguageTagError,
     ParsePlatformTagError, PlatformTag, TagCompatibility, Tags,
 };
 
+use crate::WheelFilename;
 use crate::splitter::MemchrSplitter;
 use crate::wheel_tag::{WheelTag, WheelTagLarge, WheelTagSmall};
 
@@ -40,6 +42,22 @@ impl ExpandedTags {
             .any(|tag| compatible_tags.is_compatible(tag.compressed_tags()))
     }
 
+    /// Return whether these tags and a wheel filename describe the same combinations.
+    pub fn matches_filename(&self, filename: &WheelFilename) -> bool {
+        let tags: BTreeSet<_> = self
+            .0
+            .iter()
+            .flat_map(|tag| expanded_tags(tag.compressed_tags()))
+            .collect();
+        let filename_tags: BTreeSet<_> = expanded_tags(CompressedTags {
+            python_tags: filename.python_tags(),
+            abi_tags: filename.abi_tags(),
+            platform_tags: filename.platform_tags(),
+        })
+        .collect();
+        tags == filename_tags
+    }
+
     /// Return the Python tags in this expanded tag set.
     pub fn python_tags(&self) -> impl Iterator<Item = &LanguageTag> {
         self.0.iter().flat_map(WheelTag::python_tags)
@@ -67,6 +85,18 @@ impl ExpandedTags {
             .max()
             .unwrap_or(TagCompatibility::Incompatible(IncompatibleTag::Invalid))
     }
+}
+
+fn expanded_tags(
+    tags: CompressedTags<'_>,
+) -> impl Iterator<Item = (&LanguageTag, &AbiTag, &PlatformTag)> {
+    tags.python_tags.iter().flat_map(move |python| {
+        tags.abi_tags.iter().flat_map(move |abi| {
+            tags.platform_tags
+                .iter()
+                .map(move |platform| (python, abi, platform))
+        })
+    })
 }
 
 #[derive(Error, Debug)]
@@ -155,6 +185,26 @@ mod tests {
     use uv_platform_tags::{Arch, Os, Platform, TagsOptions};
 
     use super::*;
+
+    #[test]
+    fn matches_filename_ignores_order_and_duplicate_rows() -> Result<(), Box<dyn Error>> {
+        let filename = WheelFilename::from_str("example-1.0-py2.py3-none-any.whl")?;
+        let tags = ExpandedTags::parse(["py3-none-any", "py2-none-any", "py3-none-any"])?;
+        assert!(tags.matches_filename(&filename));
+        assert!(ExpandedTags::parse(["py3.py2-none-any"])?.matches_filename(&filename));
+        assert!(!ExpandedTags::parse(["py3-none-any"])?.matches_filename(&filename));
+        Ok(())
+    }
+
+    #[test]
+    fn matches_filename_keeps_distinct_rows_separate() -> Result<(), Box<dyn Error>> {
+        let filename = WheelFilename::from_str(
+            "example-1.0-cp312.cp313-cp312.cp313-win_amd64.linux_x86_64.whl",
+        )?;
+        let tags = ExpandedTags::parse(["cp312-cp312-win_amd64", "cp313-cp313-linux_x86_64"])?;
+        assert!(!tags.matches_filename(&filename));
+        Ok(())
+    }
 
     #[test]
     fn compatibility_does_not_combine_distinct_expanded_rows() -> Result<(), Box<dyn Error>> {
