@@ -334,6 +334,7 @@ fn python_reinstall_patch() {
     ");
 }
 
+/// Reinstall requests must retain the installed interpreter's free-threaded variant.
 #[test]
 fn python_reinstall_freethreaded() {
     let context = uv_test::test_context_with_versions!(&[])
@@ -348,13 +349,22 @@ fn python_reinstall_freethreaded() {
      + cpython-3.14.7+freethreaded-[PLATFORM] (python3.14t)
     ");
 
-    // Deriving a request from an installed interpreter loses its variant, so reinstalling
-    // free-threaded Python incorrectly installs standard Python instead: astral-sh/uv#22831.
+    // Replace the free-threaded installation without installing standard Python.
     uv_snapshot!(context.filters(), context.python_install().arg("3.14.7t").arg("--reinstall"), @"
     exit_code: 0 (success)
     ----- stderr -----
     Installed Python 3.14.7 in [TIME]
-     + cpython-3.14.7-[PLATFORM] (python3.14)
+     ~ cpython-3.14.7+freethreaded-[PLATFORM] (python3.14t)
+    ");
+
+    let bin_python = context
+        .bin_dir
+        .child(format!("python3.14t{}", std::env::consts::EXE_SUFFIX));
+    uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str())
+        .arg("-c").arg("import sysconfig; print(sysconfig.get_config_var('Py_GIL_DISABLED'))"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1
     ");
 }
 

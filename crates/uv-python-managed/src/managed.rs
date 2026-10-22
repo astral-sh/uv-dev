@@ -1096,7 +1096,7 @@ impl From<&ManagedPythonInstallation> for PythonDownloadRequest {
                 key.minor,
                 key.patch,
                 key.prerelease,
-                PythonVariant::Default,
+                key.variant,
             )),
             Some(installation.key_implementation()),
             Some(ArchRequest::Explicit(*key.arch())),

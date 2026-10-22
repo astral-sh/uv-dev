@@ -124,6 +124,7 @@ fn python_upgrade_without_version() {
     ");
 }
 
+/// Standard and free-threaded installations need distinct upgrade requests.
 #[test]
 fn python_upgrade_freethreaded() {
     let context = uv_test::test_context_with_versions!(&[])
@@ -140,12 +141,12 @@ fn python_upgrade_freethreaded() {
      + cpython-3.14.7-[PLATFORM] (python3.14)
     ");
 
-    // Installed variants are lost when deriving upgrade requests, leaving free-threaded Python
-    // outdated even though a newer patch is available: astral-sh/uv#22831.
+    // Upgrade both installed variants to the latest patch.
     uv_snapshot!(context.filters(), context.python_upgrade(), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed Python 3.14.[LATEST] in [TIME]
+    Installed 2 versions in [TIME]
+     + cpython-3.14.[LATEST]+freethreaded-[PLATFORM] (python3.14t)
      + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
     ");
 
@@ -155,22 +156,21 @@ fn python_upgrade_freethreaded() {
     uv_snapshot!(context.filters(), Command::new(bin_python.as_os_str()).arg("--version"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    Python 3.14.7
+    Python 3.14.[LATEST]
     ");
 
-    // The outdated free-threaded installation is also ignored when checking for further upgrades.
+    // Both variants are now up to date.
     uv_snapshot!(context.filters(), context.python_upgrade(), @"
     exit_code: 0 (success)
     ----- stderr -----
     All versions already on latest supported patch release
     ");
 
-    // An explicit variant request finds and installs the available upgrade.
+    // Explicitly requesting the free-threaded variant is also a no-op.
     uv_snapshot!(context.filters(), context.python_upgrade().arg("3.14t"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed Python 3.14.[LATEST] in [TIME]
-     + cpython-3.14.[LATEST]+freethreaded-[PLATFORM] (python3.14t)
+    Python 3.14+freethreaded is already on the latest supported patch release
     ");
 }
 
