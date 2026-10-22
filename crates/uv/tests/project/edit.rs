@@ -1872,7 +1872,7 @@ async fn add_git_lfs_offline_http_endpoint() -> Result<()> {
     git(repository.path(), &["add", "."])?;
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     context
         .temp_dir
@@ -1963,7 +1963,7 @@ fn add_git_lfs_custom_endpoint() -> Result<()> {
         .output()?
         .assert()
         .success();
-    let endpoint_url = Url::from_directory_path(endpoint.path())
+    let endpoint_url = SafeUrl::from_directory_path(endpoint.path())
         .map_err(|()| anyhow!("invalid LFS endpoint path"))?;
     git(repository.path(), &["init", "--template="])?;
     git(repository.path(), &["config", "user.name", "Alice"])?;
@@ -1999,7 +1999,7 @@ fn add_git_lfs_custom_endpoint() -> Result<()> {
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
     fs_err::rename(repository.child(".git/lfs"), endpoint.child(".git/lfs"))?;
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     context
         .temp_dir
@@ -2146,7 +2146,7 @@ fn add_git_lfs_old_version_cache_recovery() -> Result<()> {
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     context
         .temp_dir
