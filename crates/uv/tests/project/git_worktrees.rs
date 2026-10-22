@@ -7,12 +7,12 @@ use anyhow::{Result, anyhow};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
 use indoc::{formatdoc, indoc};
-use url::Url;
 
 use uv_cache::{Cache, CacheBucket};
 use uv_cache_key::{RepositoryUrl, cache_digest};
 use uv_git::supports_relative_worktrees;
 use uv_git_types::GitOid;
+use uv_redacted::SafeUrl;
 #[cfg(any(unix, all(feature = "test-git-lfs", feature = "test-pypi")))]
 use uv_static::EnvVars;
 use uv_test::uv_snapshot;
@@ -65,7 +65,7 @@ fn worktrees_share_and_reuse_checkouts() -> Result<()> {
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = revision.parse::<GitOid>()?.as_short_str().to_owned();
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     let ident = cache_digest(&RepositoryUrl::parse(url.as_str())?);
     context
@@ -196,7 +196,7 @@ fn partial_worktree_recovers_after_cache_move() -> Result<()> {
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = revision.parse::<GitOid>()?.as_short_str().to_owned();
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     let ident = cache_digest(&RepositoryUrl::parse(url.as_str())?);
     context
@@ -286,7 +286,7 @@ fn missing_revision_preserves_database() -> Result<()> {
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = revision.parse::<GitOid>()?.as_short_str().to_owned();
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     let ident = cache_digest(&RepositoryUrl::parse(url.as_str())?);
     context
@@ -374,7 +374,7 @@ fn incomplete_database_is_reinitialized() -> Result<()> {
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = revision.parse::<GitOid>()?.as_short_str().to_owned();
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     let ident = cache_digest(&RepositoryUrl::parse(url.as_str())?);
     context
@@ -431,7 +431,7 @@ fn database_open_error_preserves_worktree() -> Result<()> {
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = revision.parse::<GitOid>()?.as_short_str().to_owned();
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     let ident = cache_digest(&RepositoryUrl::parse(url.as_str())?);
     context
@@ -512,7 +512,7 @@ fn submodules_use_clone_checkout() -> Result<()> {
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = revision.parse::<GitOid>()?.as_short_str().to_owned();
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     let ident = cache_digest(&RepositoryUrl::parse(url.as_str())?);
     context
@@ -567,7 +567,7 @@ fn disabling_worktrees_uses_legacy_cache() -> Result<()> {
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
     let short_revision = revision.parse::<GitOid>()?.as_short_str().to_owned();
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     let ident = cache_digest(&RepositoryUrl::parse(url.as_str())?);
     context
@@ -644,7 +644,7 @@ fn older_git_falls_back_to_partial_clones() -> Result<()> {
     git(repository.path(), &["add", "."])?;
     git(repository.path(), &["commit", "-m", "Initial version"])?;
     let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
-    let url = Url::from_directory_path(repository.path())
+    let url = SafeUrl::from_directory_path(repository.path())
         .map_err(|()| anyhow!("invalid repository path"))?;
     let ident = cache_digest(&RepositoryUrl::parse(url.as_str())?);
     context
