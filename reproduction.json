@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Linux x86_64 with installed uv 0.13.4, running `uv run probe.py` beside `.python-versions` containing `3.14.9` reproduced exit code 2 and the exact reported interpreter error and update hint. The minimal script declares PEP 723 `requires-python = \">=3.12\"` and prints its Python version. Using the previous 3.14.8 pin succeeds; keeping 3.14.9 and setting UV_PYTHON_DOWNLOADS_JSON_URL to the checkout’s download metadata also succeeds. The live versions manifest contains 327 records, including 0.13.4 but no 0.13.5. This confirms the interpreter failure and manifest omission; complete setup-uv and publishing workflows were not executed. Updated $RUNNER_TEMP/issue-context/README.md with commands, controls, existing test coverage, and findings. No checkout or GitHub changes were made."
+}
