@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 22810,
+        "title": "Use checked-in Python download metadata for releases",
+        "url": "https://github.com/astral-sh/uv/pull/22810",
+        "state": "merged",
+        "reason": "Fixed the same uv 0.13.4/Python 3.14.9 metadata mismatch in release planning, wheel checks, and signed-artifact assembly before the reported run. Its description explains that reusable workflows need their own environment setting. The diff omitted publish-versions.yml and publish-docs.yml, which still fail; this is the closest prior fix, not a completed fix for manifest publication."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22802,
+        "title": "Update to include Python 3.15.1, 3.14.9, 3.13.17",
+        "url": "https://github.com/astral-sh/uv/pull/22802",
+        "state": "merged",
+        "reason": "Changed the first entry in .python-versions from 3.14.8 to 3.14.9 and added the new download metadata. It configured several checking workflows to use that metadata but omitted the publishing workflows, which still install uv 0.13.4. This establishes the triggering change rather than an existing fix for the missing uv manifest entry."
+      },
+      {
+        "kind": "issue",
+        "number": 22793,
+        "title": "uv 0.13.5 listed in CHANGELOG but release appears to have been canceled",
+        "url": "https://github.com/astral-sh/uv/issues/22793",
+        "state": "closed",
+        "reason": "Concerns the earlier 0.13.5 release attempt. A maintainer confirmed that run was intentionally canceled because of a Python miscompilation. The current report concerns a later run that published the release but failed to publish its manifest and documentation; it is not a duplicate of that cancellation question."
+      }
+    ],
+    "search_scope": "Used authenticated gh to search open and closed issues and open, closed, and merged PRs separately for the missing manifest/setup-uv failure, interpreter failure, and documentation failure. Literal searches included 0.13.5, uv.ndjson, astral-sh/versions, publish-versions, publish-docs, 3.14.9, and both reported errors. Broader searches covered release publication, missing artifacts, interpreter discovery, Python metadata, and internal:releases; fix-oriented searches covered merged release/metadata changes. PR keyword searches missed known PRs, so supplemented them with 600 recent PRs across all states, an open-PR listing, and publish-versions file history. Inspected candidate bodies, comments, diffs, and referenced fixes. Ruled out astral-sh/uv#18701 (proxy/TLS failure fetching the manifest), astral-sh/uv#18913 and astral-sh/uv#18917 (missing Python catalog entries in a shipped release), and astral-sh/uv#18813 (dry-run dist-manifest synthesis). No existing tracker for the remaining publication failure was found."
+  },
+  "type": "bug",
+  "type_reason": "The published 0.13.5 release is absent from the live versions manifest, and job logs confirm both publishing workflows fail to find Python 3.14.9 with uv 0.13.4. This is incorrect release publication behavior. The merged astral-sh/uv#22810 fixed earlier release stages but omitted these reusable publishing workflows; the evidence shows an incomplete fix across workflows, not that its corrected stages regressed. astral-sh/uv#22793 concerns a separate canceled run, and no existing issue or open PR was found tracking this remaining failure.",
+  "summary": "The closest prior fix is astral-sh/uv#22810, which omitted manifest and documentation publishing. astral-sh/uv#22802 introduced the Python 3.14.9 requirement; astral-sh/uv#22793 explains the separate earlier cancellation.",
+  "draft_response": "Confirmed: 0.13.5 is published, but `v1/uv.ndjson` still ends at 0.13.4. Both publishing jobs installed uv 0.13.4 and failed to find Python 3.14.9.\n\nastral-sh/uv#22810 configured the checkout’s Python download metadata for release planning and assembly, but the separate manifest and documentation workflows lack that setting. The next step is to apply that configuration to both workflows and complete publication for 0.13.5. This is separate from the canceled run discussed in astral-sh/uv#22793.\n\nYou can temporarily keep setup-uv pinned to 0.13.4 while the manifest is corrected."
+}
