@@ -38,6 +38,13 @@ jobs:
           ref: ${{ github.sha }}
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          # renovate: datasource=github-release-attachments depName=astral-sh/uv
+          version: "0.13.4"
+          checksum: "2b428396f12572d4429cf210ca234dd599a33b3af0958a4d5ed569d63e3f344f"
+          enable-cache: false
       - name: Compare test inventories
         id: report
         env:
@@ -46,7 +53,7 @@ jobs:
           RUN_ATTEMPT: ${{ inputs.run_attempt }}
           HEAD_SHA: ${{ inputs.head_sha }}
         run: >-
-          python3 scripts/publish_test_inventory.py prepare
+          uv run --no-project --python 3.12 scripts/publish_test_inventory.py prepare
           --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --head-sha "$HEAD_SHA"
 
   publish:
@@ -67,6 +74,13 @@ jobs:
           ref: ${{ github.sha }}
           sparse-checkout: scripts
           persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          # renovate: datasource=github-release-attachments depName=astral-sh/uv
+          version: "0.13.4"
+          checksum: "2b428396f12572d4429cf210ca234dd599a33b3af0958a4d5ed569d63e3f344f"
+          enable-cache: false
       - name: Read the stored comment ID
         id: comment-state
         uses: astral-sh/github-actions/key-value-store/get@9ece8e1afa7e9485a0bc35c40e34e1fa495ae454
@@ -97,7 +111,7 @@ jobs:
           STORED_COMMENT_ID: ${{ steps.comment-state.outputs.value }}
           STORED_COMMENT_FOUND: ${{ steps.comment-state.outputs.found }}
         run: >-
-          python3 scripts/publish_test_inventory.py publish
+          uv run --no-project --python 3.12 scripts/publish_test_inventory.py publish
           --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --head-sha "$HEAD_SHA"
       - name: Store the comment ID
         if: steps.publish.outputs.comment-id != ''
