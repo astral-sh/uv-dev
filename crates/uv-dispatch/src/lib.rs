@@ -5,6 +5,7 @@
 use std::ffi::{OsStr, OsString};
 use std::future::{self, Future};
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Result, bail, ensure};
 use futures::FutureExt;
@@ -393,9 +394,20 @@ impl<'a> BuildDispatch<'a> {
         {
             return Ok(Vec::new());
         }
+        if self.require_build_hashes() {
+            bail!("Target requirements do not yet support required hashes");
+        }
+        let verification = match self.base_hasher.verification() {
+            HashVerification::None => HashVerification::None,
+            HashVerification::IfPresent(_) => HashVerification::IfPresent(Arc::default()),
+            HashVerification::Required(_) => {
+                bail!("Target requirements do not yet support required hashes");
+            }
+        };
         let build_options = BuildOptions::new(NoBinary::None, NoBuild::All);
         let constraints = Constraints::default();
-        let hasher = HashStrategy::default();
+        let hasher =
+            HashStrategy::collect(self.base_hasher.collection()).with_verification(verification);
         let dispatch = BuildDispatch {
             build_options: &build_options,
             constraints: &constraints,
@@ -403,14 +415,6 @@ impl<'a> BuildDispatch<'a> {
             shared_state: self.shared_state.fork(),
             ..self.clone()
         };
-        if self.require_build_hashes()
-            || matches!(
-                self.base_hasher.verification(),
-                HashVerification::Required(_)
-            )
-        {
-            bail!("Target requirements do not yet support required hashes");
-        }
         let build_stack = BuildStack::default();
         let python_requirement = PythonRequirement::from_marker_environment(
             markers,
@@ -431,7 +435,7 @@ impl<'a> BuildDispatch<'a> {
             &dispatch,
             self.concurrency.downloads_semaphore.clone(),
         );
-        let mut wheels = Vec::new();
+        let mut distributions = Vec::new();
         for distribution in requirements.resolution().distributions() {
             if self.build_options.no_binary_package(distribution.name()) {
                 bail!(
@@ -451,16 +455,22 @@ impl<'a> BuildDispatch<'a> {
                 "Target wheel `{}` is incompatible with the target",
                 built.wheel_filename()
             );
-            let wheel = database
-                .get_or_build_wheel(
-                    dist,
-                    tags,
-                    requirements.hasher().archive_policy(dist.as_ref()),
-                )
-                .await?;
-            wheels.push(CachedDist::from(wheel));
+            distributions.push(Arc::clone(dist));
         }
-        Ok(wheels)
+        let preparer = Preparer::new(
+            self.cache,
+            tags,
+            requirements.hasher(),
+            &build_options,
+            database,
+        );
+        Ok(preparer
+            .prepare(
+                distributions,
+                &dispatch.shared_state.in_flight,
+                requirements.resolution(),
+            )
+            .await?)
     }
 
     /// Query target requirements using the same source and credential configuration as the build.

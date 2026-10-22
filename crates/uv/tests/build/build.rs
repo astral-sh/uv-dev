@@ -4500,6 +4500,80 @@ fn cross_build_target_wheel_incompatible_platform() -> Result<()> {
     Ok(())
 }
 
+/// By default, target wheel URL hashes are checked even when the archive was cached without
+/// verification.
+#[test]
+fn cross_build_target_wheel_hashes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    copy_dir_ignore(
+        context.workspace_root.join("test/packages/cross-build"),
+        &context.temp_dir,
+    )?;
+    let (filename, wheel) = WheelBuilder::new(&"cross-library".parse()?, &"1.0.0".parse()?).build();
+    let hash = hex::encode(Sha256::digest(&wheel));
+    let context = context.with_filter((hash.clone(), "[WHEEL_HASH]"));
+    let path = context.temp_dir.child("wheels").child(filename);
+    path.write_binary(&wheel)?;
+    let url = SafeUrl::from_file_path(path.path()).map_err(|()| anyhow!("invalid wheel path"))?;
+    let incorrect_hash = "0".repeat(64);
+    let requirement = format!("cross-library @ {url}#sha256={incorrect_hash}");
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str(&requirement)?;
+
+    uv_snapshot!(context.filters(), context.pip_compile()
+        .arg("requirements.in")
+        .args(["--generate-hashes", "--no-index", "--quiet"])
+        .args(["--output-file", "requirements.txt"]), @"exit_code: 0 (success)");
+
+    let setting = format!("target-requirement={requirement}");
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "-C", &setting,
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Building wheel...
+    error: Failed to build `[TEMP_DIR]/`
+      cause: Failed to read `cross-library @ file://[TEMP_DIR]/wheels/cross_library-1.0.0-py3-none-any.whl#sha256=0000000000000000000000000000000000000000000000000000000000000000`
+      cause: Hash mismatch for `cross-library @ file://[TEMP_DIR]/wheels/cross_library-1.0.0-py3-none-any.whl#sha256=0000000000000000000000000000000000000000000000000000000000000000`
+
+             Expected:
+               sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+             Computed:
+               sha256:[WHEEL_HASH]
+    ");
+    context
+        .temp_dir
+        .child("protocol.json")
+        .assert(predicate::path::missing());
+
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "--no-verify-hashes",
+        "-C", &setting,
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/cross_build_poc-0.1.0-py3-none-any.whl
+    ");
+
+    let setting = format!("target-requirement=cross-library @ {url}#sha256={hash}");
+    uv_snapshot!(context.filters(), context.build().args([
+        "--wheel", "--preview-features", "cross-builds", "--target", "build-details.json",
+        "--python-platform", "aarch64-unknown-linux-gnu", "--no-index", "-C", &setting,
+    ]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Building wheel...
+    Successfully built dist/cross_build_poc-0.1.0-py3-none-any.whl
+    ");
+    Ok(())
+}
+
 #[test]
 fn cross_build_rejects_malformed_metadata_tag() -> Result<()> {
     let context = uv_test::test_context!("3.12");

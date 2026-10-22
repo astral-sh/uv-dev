@@ -38,7 +38,7 @@ use uv_distribution_types::{
     NameRequirementSpecification, PackageConfigSettings, Requirement, SourceDist,
 };
 use uv_errors::{Hinted, Hints};
-use uv_fs::{Simplified, normalize_path, relative_to};
+use uv_fs::{Simplified, normalize_path, relative_to, rename_with_retry};
 use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
@@ -1436,10 +1436,11 @@ async fn build_wheel(
             ..
         } = &mut build_message
     {
-        fs_err::rename(
+        rename_with_retry(
             staging.path().join(&*raw_filename),
             destination.join(&*raw_filename),
-        )?;
+        )
+        .await?;
         *output_dir = destination.to_path_buf();
     }
     Ok(build_message)
