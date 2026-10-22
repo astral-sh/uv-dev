@@ -1,0 +1,109 @@
+name: Publish test inventory changes
+
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: Completed CI run ID
+        type: string
+        required: true
+      run_attempt:
+        description: Completed CI run attempt
+        type: string
+        required: true
+      head_sha:
+        description: Pull request head tested by CI
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  prepare:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.repository == 'astral-sh/uv' || github.repository == 'astral-sh/uv-dev')
+    runs-on: github-ubuntu-24.04-x86_64-2
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      pull-request: ${{ steps.report.outputs.pull-request }}
+      report: ${{ steps.report.outputs.report }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Compare test inventories
+        id: report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run }}
+          RUN_ATTEMPT: ${{ inputs.run_attempt }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: >-
+          python3 scripts/publish_test_inventory.py prepare
+          --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --head-sha "$HEAD_SHA"
+
+  publish:
+    needs: prepare
+    if: needs.prepare.outputs.report != ''
+    runs-on: github-ubuntu-24.04-x86_64-2
+    environment: automations
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: test-inventory-comment-${{ needs.prepare.outputs.pull-request }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Read the stored comment ID
+        id: comment-state
+        uses: astral-sh/github-actions/key-value-store/get@9ece8e1afa7e9485a0bc35c40e34e1fa495ae454
+        with:
+          service-url: ${{ secrets.KV_API_URL }}
+          scope: workflow
+          key: report-comment-test-inventory-${{ needs.prepare.outputs.pull-request }}
+          mask-value: "false"
+      - name: Get a report publishing token
+        id: token
+        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
+        with:
+          exchange-url: ${{ secrets.STS_API_URL }}/exchange
+          audience: ${{ secrets.STS_API_URL }}
+          repository: ${{ github.repository }}
+          permissions: |
+            actions: read
+            contents: read
+            pull_requests: write
+      - name: Publish the report
+        id: publish
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          RUN_ID: ${{ inputs.run }}
+          RUN_ATTEMPT: ${{ inputs.run_attempt }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          REPORT: ${{ needs.prepare.outputs.report }}
+          STORED_COMMENT_ID: ${{ steps.comment-state.outputs.value }}
+          STORED_COMMENT_FOUND: ${{ steps.comment-state.outputs.found }}
+        run: >-
+          python3 scripts/publish_test_inventory.py publish
+          --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" --head-sha "$HEAD_SHA"
+      - name: Store the comment ID
+        if: steps.publish.outputs.comment-id != ''
+        uses: astral-sh/github-actions/key-value-store/put@9ece8e1afa7e9485a0bc35c40e34e1fa495ae454
+        with:
+          service-url: ${{ secrets.KV_API_URL }}
+          scope: workflow
+          key: report-comment-test-inventory-${{ needs.prepare.outputs.pull-request }}
+          value: ${{ steps.publish.outputs.comment-id }}

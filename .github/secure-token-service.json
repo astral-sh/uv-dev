@@ -30,7 +30,9 @@
       "caller_workflow": "ci.yml",
       "reusable_workflow": "astral-sh/uv-dev/.github/workflows/publish-binary-size.yml@373da20ba8956b8b585d29d706ebb2f5d565432b",
       "on": ["pull_request"],
-      "permissions": { "pull_requests": "write" },
+      "permissions": {
+        "pull_requests": "write"
+      },
       "target": "uv"
     },
     {
@@ -40,7 +42,9 @@
       "caller_workflow": "ci.yml",
       "reusable_workflow": "astral-sh/uv-dev/.github/workflows/publish-binary-size.yml@373da20ba8956b8b585d29d706ebb2f5d565432b",
       "on": ["pull_request"],
-      "permissions": { "pull_requests": "write" },
+      "permissions": {
+        "pull_requests": "write"
+      },
       "target": "uv-dev"
     },
     {
@@ -48,7 +52,9 @@
       "environment": "automations",
       "caller_workflow": "import-codspeed-profiles.yml",
       "on": ["push", "workflow_dispatch"],
-      "permissions": { "actions": "read" },
+      "permissions": {
+        "actions": "read"
+      },
       "target": "uv"
     },
     {
@@ -56,7 +62,10 @@
       "environment": "automations",
       "caller_workflow": "release-prepare.yml",
       "on": ["workflow_dispatch"],
-      "permissions": { "contents": "write", "pull_requests": "write" },
+      "permissions": {
+        "contents": "write",
+        "pull_requests": "write"
+      },
       "target": "uv"
     },
     {
@@ -90,7 +99,10 @@
       "environment": "automations",
       "caller_workflow": "issue-triage.yml",
       "on": ["issues", "workflow_dispatch"],
-      "permissions": { "contents": "write", "issues": "write" },
+      "permissions": {
+        "contents": "write",
+        "issues": "write"
+      },
       "targets": ["uv", "uv-dev"],
       "installation": "automations"
     },
@@ -99,7 +111,9 @@
       "environment": "automations",
       "caller_workflow": "update-issue-context.yml",
       "on": ["issue_comment"],
-      "permissions": { "contents": "write" },
+      "permissions": {
+        "contents": "write"
+      },
       "target": "uv-dev"
     },
     {
@@ -108,7 +122,10 @@
       "caller_workflow": "issue-triage.yml",
       "reusable_workflow": "reproduce-bug.yml",
       "on": ["issues", "workflow_dispatch"],
-      "permissions": { "contents": "write", "pull_requests": "write" },
+      "permissions": {
+        "contents": "write",
+        "pull_requests": "write"
+      },
       "target": "uv-dev"
     },
     {
@@ -117,7 +134,10 @@
       "caller_workflow": "issue-triage.yml",
       "reusable_workflow": "fix-bug.yml",
       "on": ["issues", "workflow_dispatch"],
-      "permissions": { "contents": "write", "pull_requests": "write" },
+      "permissions": {
+        "contents": "write",
+        "pull_requests": "write"
+      },
       "target": "uv-dev"
     },
     {
@@ -125,7 +145,10 @@
       "environment": "automations",
       "caller_workflow": "reproduce-bug.yml",
       "on": ["workflow_dispatch"],
-      "permissions": { "contents": "write", "pull_requests": "write" },
+      "permissions": {
+        "contents": "write",
+        "pull_requests": "write"
+      },
       "target": "uv-dev"
     },
     {
@@ -133,7 +156,10 @@
       "environment": "automations",
       "caller_workflow": "sync-python-releases.yml",
       "on": ["schedule", "workflow_dispatch"],
-      "permissions": { "contents": "write", "pull_requests": "write" },
+      "permissions": {
+        "contents": "write",
+        "pull_requests": "write"
+      },
       "target": "uv"
     },
     {
@@ -141,7 +167,10 @@
       "environment": "automations",
       "caller_workflow": "sync-uv-dev.yml",
       "on": ["push", "workflow_dispatch"],
-      "permissions": { "contents": "write", "workflows": "write" },
+      "permissions": {
+        "contents": "write",
+        "workflows": "write"
+      },
       "target": "uv-dev"
     },
     {
@@ -149,7 +178,10 @@
       "environment": "automations",
       "caller_workflow": "sync-uv-security.yml",
       "on": ["push", "workflow_dispatch"],
-      "permissions": { "contents": "write", "workflows": "write" },
+      "permissions": {
+        "contents": "write",
+        "workflows": "write"
+      },
       "target": "uv-security"
     },
     {
@@ -159,7 +191,9 @@
       "caller_workflow": "ci.yml",
       "reusable_workflow": "astral-sh/github-actions/.github/workflows/pull-request-security-review.yml@f11dbff15181b71f2cc5e8487b1ac7d7bb03ea7d",
       "on": ["pull_request"],
-      "permissions": { "pull_requests": "write" },
+      "permissions": {
+        "pull_requests": "write"
+      },
       "target": "uv"
     },
     {
@@ -169,7 +203,9 @@
       "caller_workflow": "ci.yml",
       "reusable_workflow": "check-crates-policies.yml",
       "on": ["pull_request"],
-      "permissions": { "pull_requests": "write" },
+      "permissions": {
+        "pull_requests": "write"
+      },
       "target": "uv"
     },
     {
@@ -179,7 +215,9 @@
       "caller_workflow": "ci.yml",
       "reusable_workflow": "pull-request-code-quality-review.yml",
       "on": ["pull_request"],
-      "permissions": { "pull_requests": "write" },
+      "permissions": {
+        "pull_requests": "write"
+      },
       "target": "uv-dev"
     },
     {
@@ -188,7 +226,10 @@
       "caller_workflow": "pull-request-conflicts.yml",
       "reusable_workflow": "rebase-conflicted-pull-request.yml",
       "on": ["push", "workflow_dispatch"],
-      "permissions": { "contents": "write", "workflows": "write" },
+      "permissions": {
+        "contents": "write",
+        "workflows": "write"
+      },
       "target": "uv-dev"
     },
     {
@@ -197,7 +238,10 @@
       "caller_workflow": "pull-request-conflicts.yml",
       "reusable_workflow": "rebase-conflicted-pull-request.yml",
       "on": ["push", "workflow_dispatch"],
-      "permissions": { "contents": "write", "workflows": "write" },
+      "permissions": {
+        "contents": "write",
+        "workflows": "write"
+      },
       "targets": ["uv", "uv-dev"],
       "installation": "automations"
     },
@@ -218,7 +262,9 @@
       "environment": "automations",
       "caller_workflow": "pull-request-labels.yml",
       "on": ["workflow_dispatch"],
-      "permissions": { "pull_requests": "write" },
+      "permissions": {
+        "pull_requests": "write"
+      },
       "target": "uv-dev"
     },
     {
@@ -226,7 +272,9 @@
       "environment": "automations",
       "caller_workflow": "pull-request-labels.yml",
       "on": ["workflow_dispatch"],
-      "permissions": { "pull_requests": "write" },
+      "permissions": {
+        "pull_requests": "write"
+      },
       "target": "uv"
     },
     {
@@ -252,6 +300,32 @@
         "pull_requests": "write"
       },
       "target": "uv"
+    },
+    {
+      "caller": "uv",
+      "environment": "automations",
+      "caller_ref": "refs/heads/main",
+      "caller_workflow": "publish-test-inventory.yml",
+      "on": ["workflow_dispatch"],
+      "permissions": {
+        "actions": "read",
+        "contents": "read",
+        "pull_requests": "write"
+      },
+      "target": "uv"
+    },
+    {
+      "caller": "uv-dev",
+      "environment": "automations",
+      "caller_ref": "refs/heads/main",
+      "caller_workflow": "publish-test-inventory.yml",
+      "on": ["workflow_dispatch"],
+      "permissions": {
+        "actions": "read",
+        "contents": "read",
+        "pull_requests": "write"
+      },
+      "target": "uv-dev"
     }
   ]
 }
