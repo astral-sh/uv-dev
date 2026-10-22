@@ -1,0 +1,4 @@
+{
+  "reproduction": "reproducible",
+  "reason": "On Ubuntu 24.04 x86_64 GNU with installed uv 0.13.4 and isolated temporary directories, ran `uv python install 3.14.7 3.14.7t`, then `uv python upgrade`. Only standard Python upgraded to 3.14.8, despite 3.14.8t being available. A fresh fixture using the checkout’s download catalog reproduced the reported 3.14.9 target: free-threaded Python remained at 3.14.7. Repeating bare upgrade reported all versions current. Explicit `uv python upgrade 3.14t` successfully installed 3.14.9t. The uv 0.13.5 executable and WSL were not tested. Updated $RUNNER_TEMP/issue-context/README.md with reproduction details and test-coverage findings."
+}
