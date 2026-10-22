@@ -177,57 +177,9 @@ jobs:
 
   publish:
     needs: report
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.repository == 'astral-sh/uv' || github.repository == 'astral-sh/uv-dev')
-    runs-on: github-ubuntu-24.04-x86_64-2
-    environment: automations
-    timeout-minutes: 5
+    uses: astral-sh/uv-dev/.github/workflows/publish-binary-size.yml@373da20ba8956b8b585d29d706ebb2f5d565432b
+    with:
+      report-json: ${{ needs.report.outputs.comment }}
+    secrets: inherit
     permissions:
-      id-token: write # for the pull request comment credential broker
-    steps:
-      - name: "Get pull request comment token"
-        id: token
-        uses: open-security-tools/ost-simple-sts@9e012247e07c39080fb6a832dbfbcfeacebc19c4
-        with:
-          exchange-url: ${{ secrets.STS_API_URL }}/exchange
-          audience: ${{ secrets.STS_API_URL }}
-          repository: ${{ github.repository }}
-          permissions: |
-            pull_requests: write
-
-      - name: "Update binary-size report"
-        env:
-          GH_TOKEN: ${{ steps.token.outputs.token }}
-          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          MERGE_SHA: ${{ github.sha }}
-          REPORT_JSON: ${{ needs.report.outputs.comment }}
-          AUTOMATIONS_BOT_ID: "305554984"
-        run: |
-          pull_request="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER")"
-          if ! jq --exit-status --arg head "$HEAD_SHA" --arg merge "$MERGE_SHA" \
-            '.state == "open" and .head.sha == $head and .merge_commit_sha == $merge and any(.labels[]; .name == "build:binary-size")' \
-            <<< "$pull_request" > /dev/null; then
-            echo "The pull request changed or no longer requests a binary-size report."
-            exit 0
-          fi
-
-          marker="<!-- uv-binary-size -->"
-          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
-          jq --null-input --argjson report "$REPORT_JSON" --arg marker "$marker" --arg run_url "$run_url" \
-            '{body: ($marker + "\n" + $report + "\n[CI run](" + $run_url + ").\n")}' \
-            > "$RUNNER_TEMP/binary-size-comment.json"
-
-          comments="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/comments" --paginate --slurp)"
-          comment_id="$(jq --raw-output --arg marker "$marker" --argjson bot_id "$AUTOMATIONS_BOT_ID" \
-            '[.[][] | select(.user.id == $bot_id and (.body | startswith($marker))) | .id] | last // empty' \
-            <<< "$comments")"
-          if [ -n "$comment_id" ]; then
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" \
-              --input "$RUNNER_TEMP/binary-size-comment.json" --silent
-          else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PULL_REQUEST_NUMBER/comments" \
-              --input "$RUNNER_TEMP/binary-size-comment.json" --silent
-          fi
+      id-token: write
