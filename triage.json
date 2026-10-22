@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 16420,
+        "title": "Check for matching Python implementation during `uv python upgrade`",
+        "url": "https://github.com/astral-sh/uv/pull/16420",
+        "state": "merged",
+        "reason": "Changed bare upgrades to construct requests from managed installations, the same conversion that currently replaces the installed variant with PythonVariant::Default. Merged on 2025-10-23 to fix implementation preservation; its regression test covers PyPy, not free-threaded CPython."
+      },
+      {
+        "kind": "issue",
+        "number": 16416,
+        "title": "`uv python upgrade` installs cpython-3.11 if pypy-3.11 exists",
+        "url": "https://github.com/astral-sh/uv/issues/16416",
+        "state": "closed",
+        "reason": "Historical bug in the same automatic upgrade-request construction. Maintainer diagnosis identified lost implementation information; astral-sh/uv#16420 fixed that. This report concerns lost CPython variant information, so it is not a duplicate of the resolved PyPy problem."
+      },
+      {
+        "kind": "issue",
+        "number": 15805,
+        "title": "A way to remove old Python versions",
+        "url": "https://github.com/astral-sh/uv/issues/15805",
+        "state": "open",
+        "reason": "Tracks the reporter's secondary cleanup request, including retaining the latest free-threaded versions. Maintainers discuss pruning and existing virtual-environment references. It does not track skipped free-threaded upgrades."
+      },
+      {
+        "kind": "pull_request",
+        "number": 18770,
+        "title": "Add `--outdated` to `uv python uninstall` and `--uninstall` to `uv python upgrade`",
+        "url": "https://github.com/astral-sh/uv/pull/18770",
+        "state": "open",
+        "reason": "Proposes the cleanup requested in astral-sh/uv#15805, rebasing astral-sh/uv#16018 and adding cleanup after upgrades. It remains unmerged and does not fix the variant loss in automatic upgrade requests."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using literal python upgrade/free-threaded/freethreaded, 3.14, 3.14t, and 3.14.9+freethreaded terms; conceptual update, nogil/no-GIL, variant, skip, and managed-interpreter terms; and separate old-version removal, outdated, and prune searches. Searched PythonDownloadRequest and variant-preservation identifiers separately from symptoms. PR search returned no matches, so additionally enumerated all 13,224 PR titles and inspected relevant bodies, comments, reviews, and diffs. Followed historical fix and cleanup references. Ruled out astral-sh/uv#20434 (explicit equality parsing), astral-sh/uv#18795 and astral-sh/uv#19012 (Windows registry listing), astral-sh/uv#21323 (replacement of same-version build revisions), and astral-sh/uv#16675 (non-CPython transparent upgrades). No existing tracker for this exact defect or prior fix of it was found."
+  },
+  "type": "bug",
+  "type_reason": "Bare uv python upgrade is documented to upgrade all installed managed Python versions. In both the checkout and the 0.13.5 source, converting a managed installation into an upgrade request hardcodes PythonVariant::Default, losing the free-threaded variant and collapsing the reporter's two installations into one standard-CPython request. The requested free-threaded download exists in bundled metadata. The historical implementation fix addresses a different defect; no duplicate or previously fixed instance of this variant bug was found.",
+  "summary": "Source confirms a free-threaded variant-preservation bug. The closest history is astral-sh/uv#16416 and astral-sh/uv#16420; cleanup is separately tracked by astral-sh/uv#15805 and astral-sh/uv#18770.",
+  "draft_response": "You're right: `uv python upgrade` should upgrade both installed variants. In 0.13.5, the automatic upgrade path drops the free-threaded variant when constructing requests, so it requests only the standard build in your example. The 3.14.9 free-threaded download is present.\n\nFor now, explicitly target it with `uv python upgrade 3.14t`. The fix needs to preserve the installed variant and add coverage for upgrading both variants together.\n\nRemoving old installations is tracked separately in astral-sh/uv#15805, with an open implementation in astral-sh/uv#18770. Older installations are currently retained because virtual environments may still reference them."
+}
