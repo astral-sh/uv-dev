@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 12204,
+        "title": "`uv pip install --system` fails because python installation is managed by uv?",
+        "url": "https://github.com/astral-sh/uv/issues/12204",
+        "state": "open",
+        "reason": "Reports the identical uv-managed-installation message. A maintainer confirms that protecting the base environment is intentional and recommends a virtual environment. Its request concerns global installation for multiple users, unlike this project and editor setup question."
+      },
+      {
+        "kind": "issue",
+        "number": 12604,
+        "title": "Improve ux when `pip` is not present in virtual environments",
+        "url": "https://github.com/astral-sh/uv/issues/12604",
+        "state": "open",
+        "reason": "Canonical discussion of bare pip falling back to another environment when a uv-created virtual environment lacks pip. Relevant to the installation/import mismatch, but this report does not establish an activated virtual environment or that fallback mechanism."
+      },
+      {
+        "kind": "issue",
+        "number": 9637,
+        "title": "Selecting .venv/bin/python as an active interpreter in VSCode doesn't enable IDE features",
+        "url": "https://github.com/astral-sh/uv/issues/9637",
+        "state": "closed",
+        "reason": "Discusses VS Code interpreter selection and missing imports, with maintainer guidance on editor configuration. Unlike this report, it describes failure after explicitly selecting the virtual environment; it does not establish a shared editor defect here."
+      },
+      {
+        "kind": "pull_request",
+        "number": 4312,
+        "title": "Add `EXTERNALLY-MANAGED` markers to managed toolchains",
+        "url": "https://github.com/astral-sh/uv/pull/4312",
+        "state": "merged",
+        "reason": "Merged on 2024-06-17, closing astral-sh/uv#4240 and intentionally protecting managed base installations, including Windows. This explains the restriction; it is not a fix for an NLTK installation regression."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separately searched installation errors (externally-managed-environment, EXTERNALLY-MANAGED, the exact managed-installation message, nltk) and import/editor symptoms (ModuleNotFoundError, VS Code, vscode, Select Interpreter). Broadened to externally managed, wrong/different environment, pip fallback, virtual environments, and interpreter selection without package/version/platform constraints. Checked closed issues for Python 3.14 and uv 0.12.17 and PR searches for managed environments, interpreters, pip/venv, and 3.14. Keyword PR searches returned no candidates; reference chains identified merged astral-sh/uv#4312 and astral-sh/uv#7934. Read candidate discussions and followed astral-sh/uv#12604 to astral-sh/uv#6593, and astral-sh/uv#16454 to astral-sh/uv#9637. Ruled out astral-sh/uv#18639 (Windows 11/Python 3.14, but VS Code rejects a working interpreter), astral-sh/uv#16198 (Poetry/virtualenv-specific failure), and astral-sh/uv#7934 (uv interpreter-preference validation, not standalone pip). No matching regression fix was found."
+  },
+  "type": "question",
+  "type_reason": "The report asks for package-installation and VS Code setup guidance. Source and maintainer comments confirm that the base-interpreter restriction is intentional; incorrect uv behavior has not been established. Related discussions concern deliberate global installation, pip fallback from an activated virtual environment, or editor failure after selecting an interpreter, none of which is established as the same underlying problem here. There is no evidence of a Python 3.14 or uv 0.12.17 regression.",
+  "summary": "astral-sh/uv#12204 explains the restriction introduced by astral-sh/uv#4312. astral-sh/uv#12604 and astral-sh/uv#9637 cover adjacent pip and VS Code environment confusion; no confirmed duplicate or regression was established.",
+  "draft_response": "uv-managed base Python installations are intentionally protected from package installs (see astral-sh/uv#12204). Install NLTK into a virtual environment, then select that same environment in VS Code.\n\nFrom your project folder in PowerShell:\n\n```powershell\nuv venv --python 3.14\nuv pip install --python .venv\\Scripts\\python.exe nltk\n.\\.venv\\Scripts\\python.exe -c \"import sys, nltk; print(sys.executable); print(nltk.__version__)\"\n```\n\nIn VS Code, open that project folder, then use **Python: Select Interpreter** from the Command Palette and select `<project>\\.venv\\Scripts\\python.exe`. Use **Enter interpreter path** if it is not listed. Run your script with **Python: Run Python File in Terminal**.\n\nThe commands above do not require activation or pip installed in the virtual environment. If the import still fails, please share the full command output, the interpreter path selected in VS Code, and how you launch the script."
+}
