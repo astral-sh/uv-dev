@@ -92,7 +92,10 @@ class InventoryTests(unittest.TestCase):
                 publisher.inventory(xml)
 
     def test_rejects_oversized_members_before_reading(self):
-        with archive([("junit.xml", b"12345")]) as zipped, self.assertRaises(ValueError):
+        with (
+            archive([("junit.xml", b"12345")]) as zipped,
+            self.assertRaises(ValueError),
+        ):
             publisher.read_member(zipped, zipped.infolist()[0], 4)
 
     def test_reads_members_without_extracting_paths(self):
@@ -121,6 +124,14 @@ class InventoryTests(unittest.TestCase):
             self.assertRaises(ValueError),
         ):
             publisher.read_inventory(REPOSITORY, [{}])
+
+    def test_rejects_utf16_entity_declarations(self):
+        document = (
+            '<!DOCTYPE testsuite [<!ENTITY injected "text">]><testsuite name="suite"/>'
+        )
+        for encoding in ["utf-16", "utf-16-le", "utf-16-be"]:
+            with self.subTest(encoding=encoding), self.assertRaises(ValueError):
+                publisher.inventory(document.encode(encoding))
 
     def test_counts_changes_and_escapes_artifact_text(self):
         body, changed = publisher.render(
@@ -161,6 +172,48 @@ The matching CI test inventories differ from the <code>stack&lt;base&gt;</code> 
 
 
 class SourceTests(unittest.TestCase):
+    def test_stale_revision_does_not_choose_a_baseline(self):
+        with (
+            patch.object(publisher, "current_run", return_value=RUN),
+            patch.object(publisher, "matching_pull", return_value=PULL),
+            patch.object(
+                publisher,
+                "artifacts",
+                return_value={"test-inventory-revision": {"id": 1}},
+            ),
+            patch.object(
+                publisher,
+                "revision",
+                return_value={"merge": BASE, "base": BASE, "head": HEAD},
+            ),
+            patch.object(publisher, "baseline_run") as baseline,
+        ):
+            self.assertIsNone(publisher.prepare(REPOSITORY, 200, 2, HEAD))
+            baseline.assert_not_called()
+
+    def test_fabricated_base_is_rejected(self):
+        with (
+            patch.object(publisher, "current_run", return_value=RUN),
+            patch.object(publisher, "matching_pull", return_value=PULL),
+            patch.object(
+                publisher,
+                "artifacts",
+                return_value={"test-inventory-revision": {"id": 1}},
+            ),
+            patch.object(
+                publisher,
+                "revision",
+                return_value={"merge": MERGE, "base": BASE, "head": HEAD},
+            ),
+            patch.object(
+                publisher,
+                "api",
+                return_value={"parents": [{"sha": "e" * 40}, {"sha": HEAD}]},
+            ),
+            self.assertRaises(ValueError),
+        ):
+            publisher.prepare(REPOSITORY, 200, 2, HEAD)
+
     def test_run_requires_current_successful_attempt_and_expected_source(self):
         for changes, raises in [
             ({"run_attempt": 3}, False),

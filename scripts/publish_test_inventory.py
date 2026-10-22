@@ -167,9 +167,10 @@ def revision(repository: str, artifact: dict) -> dict:
 
 
 def inventory(contents: bytes) -> dict[str, set[tuple[str, str]]]:
-    if b"<!DOCTYPE" in contents or b"<!ENTITY" in contents:
+    document = contents.decode("utf-8")
+    if "<!DOCTYPE" in document or "<!ENTITY" in document or "\0" in document:
         raise ValueError("JUnit reports must not declare entities or document types.")
-    root = ET.fromstring(contents)
+    root = ET.fromstring(document)
     if root.tag not in {"testsuites", "testsuite"}:
         raise ValueError("Expected a JUnit test suite.")
     result = {}
@@ -273,7 +274,8 @@ def render(baseline: dict, current: dict, branch: str) -> tuple[str, bool]:
             False,
         )
     body = (
-        title + f"The matching CI test inventories differ from the {base} base revision.\n\n"
+        title
+        + f"The matching CI test inventories differ from the {base} base revision.\n\n"
         f"- Added tests: **{sum(len(added) for _, added, _ in diffs)}**\n"
         f"- Removed tests: **{sum(len(removed) for _, _, removed in diffs)}**\n"
         f"- Changed suites: **{len(diffs)}**"

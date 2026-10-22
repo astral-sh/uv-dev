@@ -258,9 +258,7 @@
       "environment": "automations",
       "caller_ref": "refs/heads/main",
       "caller_workflow": "publish-test-inventory.yml",
-      "on": [
-        "workflow_dispatch"
-      ],
+      "on": ["workflow_dispatch"],
       "permissions": {
         "actions": "read",
         "contents": "read",
@@ -273,9 +271,7 @@
       "environment": "automations",
       "caller_ref": "refs/heads/main",
       "caller_workflow": "publish-test-inventory.yml",
-      "on": [
-        "workflow_dispatch"
-      ],
+      "on": ["workflow_dispatch"],
       "permissions": {
         "actions": "read",
         "contents": "read",
