@@ -4,13 +4,15 @@ Issue: astral-sh/uv#22789
 
 Classification: bug
 
+Status: closed; reporter confirms resolution with 0.13.5.
+
 ## Summary
 
-The reported stale system certificate package is **reproducible** in the published `linux/amd64` image `ghcr.io/astral-sh/uv:0.13.4-python3.11-trixie-slim`. Its installed package database contains `ca-certificates 20250419`, and its generated system CA bundle still trusts `emSign ECC Root CA - G3`. The current upstream `python:3.11-slim-trixie` image contains `20250419+deb13u1` and excludes that root. Both images identify Python 3.11.17 and Debian 13 (Trixie).
+The reported stale system certificate package is **reproducible** in the published `linux/amd64` image `ghcr.io/astral-sh/uv:0.13.4-python3.11-trixie-slim`. Its installed package database contains `ca-certificates 20250419`, and its generated system CA bundle still trusts `emSign ECC Root CA - G3`. The upstream `python:3.11-slim-trixie` image inspected on 2026-10-21 contains `20250419+deb13u1` and excludes that root. Both images identify Python 3.11.17 and Debian 13 (Trixie).
 
 This independently confirms the concrete package comparison in the report and retention of the affected root. uv 0.13.4 updated its bundled roots; that update does not replace the system trust store inherited by derived Docker images. Other Debian variants and `linux/arm64` remain unverified. No live connection using a compromised intermediate was attempted.
 
-The closest parallel work is the Alpine-only certificate update in astral-sh/uv#22767. The 0.13.5 version bump has merged, but the release API still reports 0.13.4 as latest and returns 404 for 0.13.5. A version bump alone does not demonstrate refreshed image publication.
+The reporter confirms that 0.13.5 fixes the issue, and GitHub records the issue as closed on 2026-10-22 at 15:17:18 UTC. The release API independently confirms that 0.13.5 was published on 2026-10-22 at 01:35:54 UTC. This supersedes the earlier pending-release status. The 0.13.5 image package versions and trust bundles have not been independently inspected; the confirmation does not establish that 0.13.4 tags were rebuilt or that every variant and architecture was checked. The closest parallel work identified during triage remains the Alpine-only certificate update in astral-sh/uv#22767.
 
 ## Classification
 
@@ -114,11 +116,11 @@ These tests are gated by `test-pypi`; they cover trust-source selection, not fre
 
 ## Related
 
-- astral-sh/uv#22767 — Update CA certificates in Alpine Docker images (open, draft; status rechecked). Closest parallel remediation for the same CA incident. Its certificate-package upgrade condition excludes Debian images, so it does not track the requested Trixie rebuild.
+- astral-sh/uv#22767 — Update CA certificates in Alpine Docker images (open, draft at the 2026-10-21 inspection). Closest parallel remediation for the same CA incident. Its certificate-package upgrade condition excludes Debian images, so it does not track the requested Trixie rebuild.
 - astral-sh/uv#22760 — Bump webpki-root-certs to 1.0.10 (merged). The certificate fix shipped in uv 0.13.4 removes emSign ECC Root CA - G3 from uv’s bundled roots. It changes only Cargo.lock and does not update the Docker base image’s system certificate package.
 - astral-sh/uv#22777 — Update rustls-webpki after the eMudhra incident (merged). Adds rejection of compromised intermediate public keys in uv’s Rust certificate verifier. This further addresses the same incident but does not patch the system trust store used by other programs in derived images.
 - astral-sh/uv#22773 — Stop updating EOL Python 3.9 and 3.10 docker images (merged). Cites compromised-CA fixes as a reason to stop publishing variants whose upstream images no longer receive security updates. It concerns retired Python tags, whereas this report concerns supported Python 3.11/Trixie images.
-- astral-sh/uv#22787 — Bump version to 0.13.5 (merged). The requested alternative version bump merged before this issue opened. The release API still lists 0.13.4 as latest and returns 404 for 0.13.5; the bump alone does not establish publication of refreshed Docker images.
+- astral-sh/uv#22787 — Bump version to 0.13.5 (merged). The requested alternative version bump merged before this issue opened. Release 0.13.5 is now confirmed published, and the reporter says it fixes the issue. The version bump itself does not establish the exact package or trust-bundle contents of the resulting images.
 
 ## Supporting evidence
 
@@ -134,7 +136,9 @@ The published advisory GHSA-hq85-5cpj-mr62 states that uv 0.13.4 removes emSign 
 
 ### Release-status caveat
 
-astral-sh/uv#22787 merged on 2026-10-21 at 02:55:36 UTC, before the issue opened. Although the checkout’s changelog includes 0.13.5, the release API rechecked during reproduction returns 404 for that tag and lists 0.13.4, published on 2026-10-20 at 15:24:59 UTC, as latest. Registry contents of any 0.13.5 tags were not inspected.
+astral-sh/uv#22787 merged on 2026-10-21 at 02:55:36 UTC, before the issue opened. During reproduction on 2026-10-21, the release API returned 404 for 0.13.5 and listed 0.13.4 as latest. A fresh API check on 2026-10-22 confirms that 0.13.5 was published at 01:35:54 UTC that day and is neither a draft nor a prerelease. Release: https://github.com/astral-sh/uv/releases/tag/0.13.5
+
+Publication is independently verified; resolution of the reported Docker problem is confirmed by the reporter. Registry contents of 0.13.5 tags were not inspected. The historical 0.13.4 reproduction remains valid for its recorded immutable digests.
 
 The changelog also describes a managed-Python update from astral-sh/uv#22786. Its metadata change was subsequently reverted by astral-sh/uv#22788 because of an interpreter crash; the checkout again references python-build-standalone 20261013. Neither change upgrades Debian’s system certificate package. The managed-Python changelog paragraph is not evidence of remediation for this Docker image.
 
@@ -144,16 +148,16 @@ The context-gathering search covered astral-sh/uv open and closed issues and pul
 
 Excluded astral-sh/uv#19236 and its fix astral-sh/uv#19253 (an unrelated CRL advisory), astral-sh/uv#15262 (missing image tags), and astral-sh/uv#12462 (a new Chainguard variant). Also inspected astral-sh/uv#13727 (application dependency caching) and astral-sh/uv#12871 (requests/certifi bundle selection), whose maintainer discussions concern different behavior. The Alpine-only scope of astral-sh/uv#22767 rules it out as a duplicate. No canonical Debian rebuild discussion was found; this search is not an exhaustive guarantee.
 
-## Draft response
+## Resolution status
 
-Confirmed for the published linux/amd64 Python 3.11 Trixie slim image: uv 0.13.4 contains ca-certificates 20250419 and still includes emSign ECC Root CA - G3 in its system trust bundle. The current upstream Python image contains 20250419+deb13u1 and removes that root. This is separate from the bundled-root fix in astral-sh/uv#22760, and the Alpine update in astral-sh/uv#22767 does not cover Debian.
+On 2026-10-22 at 15:17:18 UTC, the original reporter, UnknownPlatypus, explicitly stated that 0.13.5 fixes the issue. This is a resolution report, not merely an acknowledgment. The issue API reports `CLOSED` with the same closure timestamp. The comment does not provide a new image digest, package-version output, architecture, or trust-bundle measurement, so it should not be treated as independent verification of all published images or a rebuild of older tags.
 
-The 0.13.5 version bump has merged in astral-sh/uv#22787, but refreshed image publication is not confirmed. The affected image needs a refresh against a patched base, with other Debian variants and both architectures checked before treating the broader request as resolved. The documented alternative is to start from a freshly pulled, verified patched Python base and copy /uv and /uvx from the uv 0.13.4 distroless image.
+The prior recommendation to choose between rebuilding 0.13.4 and publishing 0.13.5 is superseded by the published release and reporter confirmation. The classification remains bug, with the original defect independently reproduced at the recorded 0.13.4 digest. The older structured triage and reproduction files describe the earlier investigation; this README incorporates the resolution status.
 
 ## Recommended next steps
 
-1. Verify the remaining supported Debian-derived variants and `linux/arm64`; the reported `linux/amd64` Python 3.11 slim variant is confirmed affected at the recorded digest.
-2. Decide whether to republish affected 0.13.4 tags or publish refreshed images with 0.13.5. Verify both installed package versions and actual generated trust bundles before considering the issue resolved.
-3. Coordinate with the Alpine remediation while tracking Debian verification separately. A patched upstream Python base plus copied uv binaries is the documented composition pattern; no replacement image was built during reproduction.
+1. Treat the reported case as resolved by 0.13.5 based on the reporter confirmation and closed issue state; the handoff no longer calls for a new release solely to address this report.
+2. If broader release verification is needed, inspect the 0.13.5 Debian-derived image digests, installed certificate packages, and generated trust bundles on both architectures. Other variants and `linux/arm64` remain outside the independent reproduction scope.
+3. Do not infer that 0.13.4 tags were republished. The recorded digest remains evidence of the original defect. The documented composition alternative remains a verified patched upstream Python base plus copied uv binaries.
 
-Only this issue-context README was updated outside the checkout. Temporary registry downloads and inspection files remain under `/tmp/uv-22789.8F3orU`. No repository files, existing Docker state, or GitHub state were changed, and no containers or builds were run.
+Only this issue-context README was updated outside the checkout. The earlier reproduction recorded its temporary registry downloads and inspection files under `/tmp/uv-22789.8F3orU`; those artifacts were not rechecked during this context update. No repository files, existing Docker state, or GitHub state were changed, and no containers or builds were run.
