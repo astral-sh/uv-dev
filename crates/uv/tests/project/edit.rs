@@ -864,6 +864,287 @@ fn add_git_lfs() -> Result<()> {
     Ok(())
 }
 
+/// Missing LFS objects in a submodule must prevent the checkout from becoming ready.
+#[test]
+#[cfg(feature = "test-git-lfs")]
+fn git_lfs_submodule_missing_objects() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filter((r"\b[0-9a-f]{40}\b", "[COMMIT]"));
+    let submodule = context.temp_dir.child("submodule");
+    submodule.create_dir_all()?;
+    git(submodule.path(), &["init", "--template="])?;
+    git(submodule.path(), &["config", "user.name", "Alice"])?;
+    git(
+        submodule.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(submodule.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        submodule.path(),
+        &["lfs", "install", "--local", "--skip-repo"],
+    )?;
+    submodule
+        .child(".gitattributes")
+        .write_str("module.py filter=lfs diff=lfs merge=lfs -text\n")?;
+    submodule
+        .child("module.py")
+        .write_str("SUBMODULE = True\n")?;
+    git(submodule.path(), &["add", "."])?;
+    git(submodule.path(), &["commit", "-m", "Submodule LFS file"])?;
+
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        repository.path(),
+        &["lfs", "install", "--local", "--skip-repo"],
+    )?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    repository
+        .child(".gitattributes")
+        .write_str("module.py filter=lfs diff=lfs merge=lfs -text\n")?;
+    repository.child("module.py").write_str("ROOT = True\n")?;
+    git(
+        repository.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "../submodule",
+            "submodule",
+        ],
+    )?;
+    git(repository.path(), &["add", "."])?;
+    git(
+        repository.path(),
+        &["commit", "-m", "Root LFS file and submodule"],
+    )?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
+    let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
+    let url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository path"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dependency"]
+
+        [tool.uv.sources]
+        dependency = {{ git = "{url}", rev = "{revision}", lfs = true }}
+    "#})?;
+    let repository_url = RepositoryUrl::parse(url.as_str())?;
+    let checkout = context
+        .cache_dir
+        .child("git-v1/checkouts")
+        .child(cache_digest(&repository_url.with_lfs(Some(true))))
+        .child(&short_revision);
+
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-preview", "--offline"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" }), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `dependency @ git+file://[TEMP_DIR]/repository/@[COMMIT]#lfs=true`
+      cause: The source distribution `git+file://[TEMP_DIR]/repository/@[COMMIT]#lfs=true` is missing Git LFS artifacts.
+      cause: Is Git LFS configured? Run `git lfs install` to initialize Git LFS.
+    ");
+    assert!(!checkout.path().with_extension("ok").exists());
+    assert_eq!(
+        fs_err::read_to_string(checkout.child("module.py"))?,
+        "ROOT = True\n"
+    );
+    assert!(
+        fs_err::read_to_string(checkout.child("submodule/module.py"))?
+            .starts_with("version https://git-lfs.github.com/spec/v1\n")
+    );
+    Ok(())
+}
+
+/// A ready marker must not hide missing LFS objects in a cached submodule.
+#[test]
+#[cfg(feature = "test-git-lfs")]
+fn git_lfs_submodule_ready_checkout() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_git_lfs_config()
+        .with_filter((r"\b[0-9a-f]{40}\b", "[COMMIT]"));
+    let submodule = context.temp_dir.child("submodule");
+    submodule.create_dir_all()?;
+    git(submodule.path(), &["init", "--template="])?;
+    git(submodule.path(), &["config", "user.name", "Alice"])?;
+    git(
+        submodule.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(submodule.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        submodule.path(),
+        &["lfs", "install", "--local", "--skip-repo"],
+    )?;
+    submodule
+        .child(".gitattributes")
+        .write_str("module.py filter=lfs diff=lfs merge=lfs -text\n")?;
+    submodule
+        .child("module.py")
+        .write_str("SUBMODULE = True\n")?;
+    // Give the submodule its own endpoint while the parent remote is overridden during cloning.
+    let submodule_url = SafeUrl::from_directory_path(submodule.path())
+        .map_err(|()| anyhow!("invalid submodule path"))?;
+    submodule
+        .child(".lfsconfig")
+        .write_str(&format!("[lfs]\nurl = {submodule_url}\n"))?;
+    git(submodule.path(), &["add", "."])?;
+    git(submodule.path(), &["commit", "-m", "Submodule LFS file"])?;
+
+    let repository = context.temp_dir.child("repository");
+    repository.create_dir_all()?;
+    git(repository.path(), &["init", "--template="])?;
+    git(repository.path(), &["config", "user.name", "Alice"])?;
+    git(
+        repository.path(),
+        &["config", "user.email", "alice@example.com"],
+    )?;
+    git(repository.path(), &["config", "commit.gpgsign", "false"])?;
+    git(
+        repository.path(),
+        &["lfs", "install", "--local", "--skip-repo"],
+    )?;
+    repository.child("pyproject.toml").write_str(indoc! {r#"
+        [project]
+        name = "dependency"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+    "#})?;
+    repository
+        .child(".gitattributes")
+        .write_str("module.py filter=lfs diff=lfs merge=lfs -text\n")?;
+    repository.child("module.py").write_str("ROOT = True\n")?;
+    git(
+        repository.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "../submodule",
+            "submodule",
+        ],
+    )?;
+    git(repository.path(), &["add", "."])?;
+    git(
+        repository.path(),
+        &["commit", "-m", "Root LFS file and submodule"],
+    )?;
+    let revision = git(repository.path(), &["rev-parse", "HEAD"])?;
+    let short_revision = git(repository.path(), &["rev-parse", "--short", "HEAD"])?;
+    let url = SafeUrl::from_directory_path(repository.path())
+        .map_err(|()| anyhow!("invalid repository path"))?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["dependency"]
+
+        [tool.uv.sources]
+        dependency = {{ git = "{url}", rev = "{revision}", lfs = true }}
+    "#})?;
+    let repository_url = RepositoryUrl::parse(url.as_str())?;
+    let checkout = context
+        .cache_dir
+        .child("git-v1/checkouts")
+        .child(cache_digest(&repository_url.with_lfs(Some(true))))
+        .child(&short_revision);
+
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-preview", "--offline"]), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(
+        fs_err::read_to_string(checkout.child("submodule/module.py"))?,
+        "SUBMODULE = True\n"
+    );
+    assert!(checkout.path().with_extension("ok").exists());
+
+    // Cached submodule objects can materialize pointers even without configured smudge filters.
+    let pointer = git(submodule.path(), &["show", "HEAD:module.py"])?;
+    checkout
+        .child("submodule/module.py")
+        .write_str(&format!("{pointer}\n"))?;
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-preview", "--offline"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" }), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    ");
+    assert_eq!(
+        fs_err::read_to_string(checkout.child("submodule/module.py"))?,
+        "SUBMODULE = True\n"
+    );
+    assert!(checkout.path().with_extension("ok").exists());
+
+    // Missing objects must invalidate the ready marker even when the root objects are complete.
+    checkout
+        .child("submodule/module.py")
+        .write_str(&format!("{pointer}\n"))?;
+    let submodule_objects = git(
+        checkout.child("submodule").path(),
+        &["rev-parse", "--git-path", "lfs/objects"],
+    )?;
+    fs_err::remove_dir_all(checkout.child("submodule").path().join(submodule_objects))?;
+    fs_err::remove_file(context.temp_dir.child("uv.lock"))?;
+    fs_err::remove_dir_all(
+        Cache::from_path(context.cache_dir.path()).bucket(CacheBucket::SourceDistributions),
+    )?;
+
+    uv_snapshot!(context.filters(), context.lock()
+        .args(["--no-preview", "--offline"])
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" }), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to download and build `dependency @ git+file://[TEMP_DIR]/repository/@[COMMIT]#lfs=true`
+      cause: The source distribution `git+file://[TEMP_DIR]/repository/@[COMMIT]#lfs=true` is missing Git LFS artifacts.
+      cause: Is Git LFS configured? Run `git lfs install` to initialize Git LFS.
+    ");
+    assert!(!checkout.path().with_extension("ok").exists());
+    assert_eq!(
+        fs_err::read_to_string(checkout.child("module.py"))?,
+        "ROOT = True\n"
+    );
+    assert!(
+        fs_err::read_to_string(checkout.child("submodule/module.py"))?
+            .starts_with("version https://git-lfs.github.com/spec/v1\n")
+    );
+    Ok(())
+}
+
 #[test]
 #[cfg(feature = "test-git")]
 fn git_partial_fetches_preview() -> Result<()> {

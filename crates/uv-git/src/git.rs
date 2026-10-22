@@ -266,23 +266,7 @@ impl GitRepository {
             .cwd(&self.path)
             .exec_with_output();
 
-        match result {
-            Ok(_) => true,
-            Err(err) => {
-                let lfs_error = err.to_string();
-                if lfs_error.contains("unknown flag: --objects") {
-                    warn_user_once!(
-                        "Skipping Git LFS validation as Git LFS extension is outdated. \
-                        Upgrade to `git-lfs>=3.0.2` or manually verify git-lfs objects were \
-                        properly fetched after the current operation finishes."
-                    );
-                    true
-                } else {
-                    debug!("Git LFS validation failed: {err}");
-                    false
-                }
-            }
-        }
+        lfs_validation_result(result.map(drop))
     }
 }
 
@@ -409,9 +393,13 @@ impl GitDatabase {
         {
             Some(co) => {
                 if self.lfs_ready == Some(true) {
+                    GitCheckout::invalidate_ready(&co.repo.path)?;
                     if co.repo.lfs_fsck_objects(rev.as_str()) {
-                        co.materialize_lfs()?;
-                        co.with_lfs_ready(Some(true))
+                        let lfs_ready = co.materialize_lfs()?;
+                        if lfs_ready {
+                            paths::create(co.repo.path.with_extension(CHECKOUT_READY_EXTENSION))?;
+                        }
+                        co.with_lfs_ready(Some(lfs_ready))
                     } else {
                         let lfs_ready = self.copy_lfs_to(&co)?;
                         let lfs_ready = co.reset(lfs_ready, self.remote.url(), settings)?;
@@ -565,8 +553,8 @@ impl GitCheckout {
         }
     }
 
-    /// Replace LFS pointers using local objects, including when smudge filters are absent.
-    fn materialize_lfs(&self) -> Result<()> {
+    /// Materialize available local LFS objects and validate initialized submodules recursively.
+    fn materialize_lfs(&self) -> Result<bool> {
         let mut command = GIT_LFS
             .as_ref()
             .map_err(|_| GitError::GitLfsNotFound)?
@@ -580,7 +568,29 @@ impl GitCheckout {
             .env_remove(EnvVars::GIT_LFS_SKIP_SMUDGE)
             .cwd(&self.repo.path)
             .exec_with_output()?;
-        Ok(())
+
+        if !self.repo.path.join(".gitmodules").exists() {
+            return Ok(true);
+        }
+
+        // Checkout skips missing objects without failing, so each submodule also needs validation.
+        let mut command = GIT.as_ref().cloned()?;
+        append_git_config(&mut command, "filter.lfs.clean", "git-lfs clean -- %f");
+        command
+            .arg("submodule")
+            .arg("foreach")
+            .arg("--quiet")
+            .arg("--recursive")
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .env(EnvVars::GIT_ALLOW_PROTOCOL, "file")
+            .env_remove(EnvVars::GIT_LFS_SKIP_SMUDGE)
+            .cwd(&self.repo.path);
+        // Materialize every submodule before older Git LFS versions can skip validation.
+        command.clone().arg("git lfs checkout").exec_with_output()?;
+        let result = command
+            .arg("git lfs fsck --objects HEAD")
+            .exec_with_output();
+        Ok(lfs_validation_result(result.map(drop)))
     }
 
     /// Indicates Git LFS artifacts have been initialized (when requested).
@@ -707,8 +717,7 @@ impl GitCheckout {
             None => None,
             Some(false) => Some(false),
             Some(true) => {
-                self.materialize_lfs()?;
-                Some(self.repo.lfs_fsck_objects(self.revision.as_str()))
+                Some(self.materialize_lfs()? && self.repo.lfs_fsck_objects(self.revision.as_str()))
             }
         };
 
@@ -720,6 +729,27 @@ impl GitCheckout {
         }
 
         Ok(lfs_validation)
+    }
+}
+
+/// Interpret object validation consistently for repositories and their submodules.
+fn lfs_validation_result(result: Result<()>) -> bool {
+    match result {
+        Ok(()) => true,
+        Err(err) => {
+            let lfs_error = err.to_string();
+            if lfs_error.contains("unknown flag: --objects") {
+                warn_user_once!(
+                    "Skipping Git LFS validation as Git LFS extension is outdated. \
+                    Upgrade to `git-lfs>=3.0.2` or manually verify git-lfs objects were \
+                    properly fetched after the current operation finishes."
+                );
+                true
+            } else {
+                debug!("Git LFS validation failed: {err}");
+                false
+            }
+        }
     }
 }
 
