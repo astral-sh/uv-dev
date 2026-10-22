@@ -59,6 +59,7 @@ static DEFAULT_BACKEND: LazyLock<Pep517Backend> = LazyLock::new(|| Pep517Backend
     requirements: vec![Requirement::from(
         uv_pep508::Requirement::from_str("setuptools >= 40.8.0").unwrap(),
     )],
+    target_requirements: Vec::new(),
 });
 
 /// A `pyproject.toml` as specified in PEP 517.
@@ -95,6 +96,9 @@ struct Project {
 struct BuildSystem {
     /// PEP 508 dependencies required to execute the build system.
     requires: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
+    /// Dependencies whose artifacts are consumed for the target Python installation.
+    #[serde(default)]
+    target_requires: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
     /// A string naming a Python object that will be used to perform the build.
     build_backend: Option<String>,
     /// Specifies that backend code is hosted in-tree, this key contains a list of directories.
@@ -173,6 +177,7 @@ struct Pep517Backend {
     backend: String,
     /// `build-backend.requirements` in pyproject.toml
     requirements: Vec<Requirement>,
+    target_requirements: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
     /// <https://peps.python.org/pep-0517/#in-tree-build-backends>
     backend_path: Option<BackendPath>,
 }
@@ -284,6 +289,13 @@ pub struct SourceBuild {
     environment_variables: FxHashMap<OsString, OsString>,
     /// Runner for Python scripts.
     runner: PythonRunner,
+    /// Target inputs are supplied only after the backend opts into the cross-build protocol.
+    target_inputs: Option<TargetInputs>,
+}
+
+struct TargetInputs {
+    build_details: Option<PathBuf>,
+    wheels: Vec<PathBuf>,
 }
 
 impl SourceBuild {
@@ -541,12 +553,140 @@ impl SourceBuild {
             environment_variables,
             modified_path,
             runner,
+            target_inputs: None,
         })
     }
 
     /// Return the caller-provided environment when build isolation is disabled for this package.
     pub fn shared_environment(&self) -> Option<&PythonEnvironment> {
         (!self.isolated).then_some(&self.venv)
+    }
+
+    /// Query target requirements after the executable build requirements have been installed.
+    ///
+    /// A callable hook opts the backend into target keyword arguments, including for native
+    /// builds. A missing hook must never turn an explicit cross-build into a native build.
+    pub async fn get_requires_for_target_wheel(
+        &self,
+        build_context: &impl BuildContext,
+        install_path: &Path,
+        sources: NoSources,
+        credentials_cache: &CredentialsCache,
+    ) -> Result<Option<Vec<Requirement>>, Error> {
+        let _lock = self.acquire_lock().await?;
+        let outfile = self
+            .temp_dir
+            .path()
+            .join("get_requires_for_target_wheel.json");
+        let script = formatdoc! {
+            r#"
+            {}
+            import json
+
+            hook = getattr(backend, "get_requires_for_target_wheel", None)
+            if callable(hook):
+                requires = hook({})
+                if not isinstance(requires, list) or any(not isinstance(item, str) for item in requires):
+                    raise TypeError("get_requires_for_target_wheel must return a list of strings")
+            else:
+                requires = None
+            with open({}, "w") as fp:
+                json.dump(requires, fp)
+            "#,
+            self.pep517_backend.backend_import(),
+            self.config_settings.escape_for_python(),
+            outfile.escape_for_python(),
+        };
+        let output = self
+            .runner
+            .run_script(
+                &self.venv,
+                &script,
+                &self.source_tree,
+                &self.environment_variables,
+                &self.modified_path,
+            )
+            .await?;
+        if !output.status.success() {
+            return Err(Error::from_command_output(
+                "Call to `get_requires_for_target_wheel` failed".to_string(),
+                output,
+                self.level,
+                self.package_name.as_ref(),
+                self.package_version.as_ref(),
+                self.version_id.as_deref(),
+            ));
+        }
+        let requirements: Option<Vec<uv_pep508::Requirement<VerbatimParsedUrl>>> =
+            serde_json::from_slice(&fs::read(outfile)?).map_err(|err| {
+                Error::from_command_output(
+                    format!("Invalid result from `get_requires_for_target_wheel`: {err}"),
+                    output,
+                    self.level,
+                    self.package_name.as_ref(),
+                    self.package_version.as_ref(),
+                    self.version_id.as_deref(),
+                )
+            })?;
+        let Some(mut requirements) = requirements else {
+            if !self.pep517_backend.target_requirements.is_empty() {
+                return Err(Error::TargetRequirementsUnsupported);
+            }
+            return Ok(None);
+        };
+        requirements.extend(self.pep517_backend.target_requirements.iter().cloned());
+        if sources.all() {
+            return Ok(Some(
+                requirements.into_iter().map(Requirement::from).collect(),
+            ));
+        }
+        let requirements = BuildRequires::from_project_maybe_workspace(
+            uv_pypi_types::BuildRequires {
+                name: self.package_name.clone(),
+                requires_dist: requirements,
+            },
+            install_path,
+            build_context.locations(),
+            &sources,
+            false,
+            None,
+            build_context.cache(),
+            build_context.workspace_cache(),
+            credentials_cache,
+        )
+        .await
+        .map_err(Error::Lowering)?;
+        Ok(Some(requirements.requires_dist))
+    }
+
+    /// Directory for target wheel archives, kept alive for the entire hook sequence.
+    pub fn target_wheel_directory(&self) -> PathBuf {
+        self.temp_dir.path().join("target-wheels")
+    }
+
+    /// Supply resolved target artifacts without adding them to the build environment.
+    pub fn set_target(&mut self, build_details: Option<PathBuf>, wheels: Vec<PathBuf>) {
+        self.target_inputs = Some(TargetInputs {
+            build_details,
+            wheels,
+        });
+    }
+
+    fn target_arguments(&self) -> String {
+        self.target_inputs
+            .as_ref()
+            .map_or_else(String::new, |inputs| {
+                let target = inputs
+                    .build_details
+                    .as_deref()
+                    .map_or_else(|| "None".to_string(), |path| path.escape_for_python());
+                let wheels = inputs
+                    .wheels
+                    .iter()
+                    .map(PythonExt::escape_for_python)
+                    .join(", ");
+                format!(", target={target}, target_wheels=[{wheels}]")
+            })
     }
 
     /// Return the declared and configured requirements needed to invoke the backend.
@@ -819,6 +959,7 @@ impl SourceBuild {
                     .unwrap_or_else(|| "setuptools.build_meta:__legacy__".to_string()),
                 backend_path: build_system.backend_path,
                 requirements,
+                target_requirements: build_system.target_requires,
             }
         } else {
             // If a `pyproject.toml` is present, but `[build-system]` is missing, proceed
@@ -922,7 +1063,7 @@ impl SourceBuild {
 
             prepare_metadata_for_build = getattr(backend, "prepare_metadata_for_build_{}", None)
             if prepare_metadata_for_build:
-                dirname = prepare_metadata_for_build({}, {})
+                dirname = prepare_metadata_for_build({}, {}{})
             else:
                 dirname = None
 
@@ -933,6 +1074,7 @@ impl SourceBuild {
             self.build_kind,
             metadata_directory.escape_for_python(),
             self.config_settings.escape_for_python(),
+            self.target_arguments(),
             outfile.escape_for_python(),
         };
         let span = info_span!(
@@ -1041,7 +1183,7 @@ impl SourceBuild {
                     r#"
                     {}
 
-                    wheel_filename = backend.build_{}({}, {}, {})
+                    wheel_filename = backend.build_{}({}, {}, {}{})
                     with open({}, "w") as fp:
                         fp.write(wheel_filename)
                     "#,
@@ -1050,6 +1192,7 @@ impl SourceBuild {
                     output_dir.escape_for_python(),
                     self.config_settings.escape_for_python(),
                     metadata_directory,
+                    self.target_arguments(),
                     outfile.escape_for_python()
                 }
             }

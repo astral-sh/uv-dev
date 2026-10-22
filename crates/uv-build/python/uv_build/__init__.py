@@ -81,8 +81,12 @@ def build_wheel(
     wheel_directory: str,
     config_settings: "Mapping[Any, Any] | None" = None,
     metadata_directory: "str | None" = None,
+    *,
+    target: "str | None" = None,
+    target_wheels: "list[str] | None" = None,
 ) -> str:
     """PEP 517 hook `build_wheel`."""
+    _check_target_inputs(target, target_wheels)
     args = ["build-wheel", wheel_directory]
     if metadata_directory:
         args.extend([metadata_directory])
@@ -105,10 +109,39 @@ def get_requires_for_build_wheel(
     return []
 
 
+def get_requires_for_target_wheel(
+    config_settings: "Mapping[Any, Any] | None" = None,
+) -> "list[str]":
+    """Opt into the experimental target-aware wheel protocol."""
+    warn_config_settings(config_settings)
+    return []
+
+
+def _check_target_inputs(
+    target: "str | None", target_wheels: "list[str] | None"
+) -> None:
+    # uv-build emits platform-independent pure Python wheels. Target artifacts do not affect
+    # their contents or tags, but a cross-build still requires an explicit artifact list.
+    if target is not None and target_wheels is None:
+        raise ValueError("target_wheels must be provided when target is set")
+    if target is not None:
+        import json
+
+        with open(target, encoding="utf-8") as file:
+            details = json.load(file)
+        if not isinstance(details, dict) or details.get("schema_version") != "1.0":
+            raise ValueError("Only build-details.json version 1.0 is supported")
+
+
 def prepare_metadata_for_build_wheel(
-    metadata_directory: str, config_settings: "Mapping[Any, Any] | None" = None
+    metadata_directory: str,
+    config_settings: "Mapping[Any, Any] | None" = None,
+    *,
+    target: "str | None" = None,
+    target_wheels: "list[str] | None" = None,
 ) -> str:
     """PEP 517 hook `prepare_metadata_for_build_wheel`."""
+    _check_target_inputs(target, target_wheels)
     args = ["prepare-metadata-for-build-wheel", metadata_directory]
     return call(args, config_settings)
 

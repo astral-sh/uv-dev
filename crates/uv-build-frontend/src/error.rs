@@ -38,6 +38,10 @@ pub enum Error {
     RequirementsResolve(&'static str, #[source] AnyErrorBuild),
     #[error("Failed to install requirements from {0}")]
     RequirementsInstall(&'static str, #[source] AnyErrorBuild),
+    #[error(
+        "`build-system.target-requires` requires a backend with `get_requires_for_target_wheel`"
+    )]
+    TargetRequirementsUnsupported,
     #[error("Failed to create temporary virtualenv")]
     Virtualenv(#[from] uv_virtualenv::Error),
     // Build backend errors
@@ -61,6 +65,7 @@ impl IsBuildBackendError for Error {
     fn is_user_failure(&self) -> bool {
         match self {
             Self::InvalidSourceDist(_)
+            | Self::TargetRequirementsUnsupported
             | Self::InvalidPyprojectTomlSyntax(_)
             | Self::InvalidPyprojectTomlSchema(_)
             | Self::InvalidBackendPath(_)
@@ -82,6 +87,7 @@ impl IsBuildBackendError for Error {
     fn is_build_backend_error(&self) -> bool {
         match self {
             Self::Io(_)
+            | Self::TargetRequirementsUnsupported
             | Self::Lowering(_)
             | Self::InvalidSourceDist(_)
             | Self::InvalidPyprojectTomlSyntax(_)

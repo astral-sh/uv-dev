@@ -451,6 +451,9 @@ pub enum PreviewFeature {
     /// backend-reported, and transitive build requirements. This reports missing or incompatible
     /// build dependencies before building; use `--skip-dependency-check` to skip the check.
     BuildDependencyCheck,
+    /// `uv build` supports target requirements and an explicit `build-details.json` for
+    /// cross-builds. This is an experimental extension to PEP 517.
+    CrossBuilds,
     /// uv enables lazy imports when invoking build backends on CPython 3.15 and later. This can
     /// reduce the work performed by imports during a build, but can also change import-time side
     /// effects in third-party build backends.
