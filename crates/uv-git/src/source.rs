@@ -15,7 +15,8 @@ use uv_redacted::SafeUrl;
 
 use crate::GitFetchSettings;
 use crate::credentials::GIT_STORE;
-use crate::git::{GitDatabase, GitRemote};
+use crate::git::{GitDatabase, GitRemote, supports_relative_worktrees};
+use crate::resolver::GitCheckoutStrategy;
 
 /// A remote Git source that can be checked out locally.
 pub(crate) struct GitSource {
@@ -69,11 +70,23 @@ impl GitSource {
             self.settings.partial_fetches && !has_credentials && !self.settings.disable_ssl,
         );
 
+        let settings = match settings.checkout {
+            GitCheckoutStrategy::Clone => settings,
+            GitCheckoutStrategy::Worktree if supports_relative_worktrees() => settings,
+            GitCheckoutStrategy::Worktree => settings.with_worktrees(false),
+        };
+
         // Older cache readers require complete repositories, including historical trees.
         let cache = if settings.partial_fetches {
             self.cache.join("partial")
         } else {
             self.cache
+        };
+
+        // Relative worktrees enable an extension that older Git versions cannot read.
+        let cache = match settings.checkout {
+            GitCheckoutStrategy::Clone => cache,
+            GitCheckoutStrategy::Worktree => cache.join("worktrees"),
         };
 
         // The path to the repo, within the Git database.
@@ -84,7 +97,15 @@ impl GitSource {
         // it easier to short-circuit this in the cases where we do have the commit.
         let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {
             let git_remote = GitRemote::new(remote.clone().into_owned());
-            let maybe_db = git_remote.db_at(&db_path).ok();
+            let maybe_db = match settings.checkout {
+                // Recreating an unreadable database would invalidate existing worktrees.
+                GitCheckoutStrategy::Worktree if db_path.join(".git/worktrees").try_exists()? => {
+                    Some(git_remote.db_at(&db_path)?)
+                }
+                GitCheckoutStrategy::Clone | GitCheckoutStrategy::Worktree => {
+                    git_remote.db_at(&db_path).ok()
+                }
+            };
 
             // If we have a locked revision, and we have a pre-existing database which has that
             // revision, then no update needs to happen.
@@ -127,9 +148,12 @@ impl GitSource {
         // Validate the resolved commit before checking out its contents.
         let git = self.git.clone().with_precise(actual_rev)?;
 
-        // Don’t use the full hash, in order to contribute less to reaching the
-        // path length limit on Windows.
-        let short_id = db.to_short_id(actual_rev)?;
+        // Keep checkout paths short for Windows. Worktree databases accumulate fetched objects,
+        // so Git's automatic abbreviation length can grow and invalidate earlier checkout paths.
+        let short_id = match settings.checkout {
+            GitCheckoutStrategy::Clone => db.to_short_id(actual_rev)?,
+            GitCheckoutStrategy::Worktree => actual_rev.as_short_str().to_owned(),
+        };
 
         // Compute the canonical URL for the repository checkout.
         let canonical = git.repository().clone().with_lfs(Some(lfs_requested));

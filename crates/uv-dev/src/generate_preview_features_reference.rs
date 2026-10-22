@@ -250,6 +250,10 @@ mod tests {
 
         Repositories using URL credentials or `--allow-insecure-host` use full fetches.
 
+        ### `git-worktrees` {#git-worktrees}
+
+        Shares Git objects across source checkouts using worktrees with Git 2.48 or later.
+
         ### `index-by-name` {#index-by-name}
 
         The `--index` and `--default-index` options accept the names of configured package indexes

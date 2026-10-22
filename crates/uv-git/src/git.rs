@@ -17,6 +17,7 @@ use uv_static::EnvVars;
 use uv_warnings::warn_user_once;
 
 use crate::GitFetchSettings;
+use crate::resolver::GitCheckoutStrategy;
 
 /// Extension for the marker beside a completed checkout.
 /// See [`GitCheckout::reset`] for why we need this.
@@ -71,6 +72,37 @@ pub static GIT: LazyLock<Result<ProcessBuilder, GitError>> = LazyLock::new(|| {
 
     Ok(cmd)
 });
+
+/// Whether Git can create worktrees that remain valid when the cache is moved.
+pub fn supports_relative_worktrees() -> bool {
+    static SUPPORTED: LazyLock<bool> = LazyLock::new(|| {
+        let Ok(mut git) = GIT.as_ref().cloned() else {
+            return false;
+        };
+        let Ok(output) = git.arg("--version").exec_with_output() else {
+            return false;
+        };
+        let Ok(version) = str::from_utf8(&output.stdout) else {
+            return false;
+        };
+        git_version_supports_relative_worktrees(version)
+    });
+    *SUPPORTED
+}
+
+fn git_version_supports_relative_worktrees(version: &str) -> bool {
+    let Some(version) = version.trim().strip_prefix("git version ") else {
+        return false;
+    };
+    let mut components = version.split('.');
+    let major = components
+        .next()
+        .and_then(|value| value.parse::<u32>().ok());
+    let minor = components
+        .next()
+        .and_then(|value| value.parse::<u32>().ok());
+    major.zip(minor).is_some_and(|version| version >= (2, 48))
+}
 
 /// Strategy when fetching refspecs for a [`GitReference`]
 enum RefspecStrategy {
@@ -354,7 +386,12 @@ impl GitRemote {
             fetch(&mut db.repo, &self.url, reference, settings)
                 .with_context(|| format!("failed to fetch into: {}", into.user_display()))?;
 
-            if let Ok(rev) = db.repo.resolve(reference) {
+            // Worktree databases must remain intact when revision resolution fails.
+            let rev = match settings.checkout {
+                GitCheckoutStrategy::Clone => db.repo.resolve(reference).ok(),
+                GitCheckoutStrategy::Worktree => Some(db.repo.resolve(reference)?),
+            };
+            if let Some(rev) = rev {
                 if with_lfs {
                     let lfs_ready = fetch_lfs(
                         &db.repo,
@@ -372,9 +409,7 @@ impl GitRemote {
             }
         }
 
-        // Otherwise start from scratch to handle corrupt git repositories.
-        // After our fetch (which is interpreted as a clone now) we do the same
-        // resolution to figure out what we cloned.
+        // Recreate the database and retry revision resolution.
         match fs_err::remove_dir_all(into) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -457,6 +492,11 @@ impl GitDatabase {
                     co.with_lfs_ready(self.lfs_ready)
                 }
             }
+            None if settings.checkout == GitCheckoutStrategy::Worktree
+                && !self.has_submodules(rev, settings)? =>
+            {
+                GitCheckout::worktree_into(destination, self, rev, settings)?
+            }
             None => GitCheckout::clone_into(destination, self, rev, settings)?,
         };
         Ok(checkout)
@@ -482,6 +522,29 @@ impl GitDatabase {
                 .map(Some)
             }
         }
+    }
+
+    /// Whether the revision has submodule metadata.
+    ///
+    /// Git does not fully support submodules in multiple worktrees, so repositories
+    /// with a `.gitmodules` file use ordinary checkout clones.
+    fn has_submodules(&self, revision: GitOid, settings: GitFetchSettings) -> Result<bool> {
+        let mut command = GIT.as_ref().cloned()?;
+        configure_git_network(
+            &mut command,
+            self.remote.url(),
+            settings.disable_ssl,
+            settings.offline,
+        );
+        let output = command
+            .arg("ls-tree")
+            .arg(revision.as_str())
+            .arg("--")
+            .arg(".gitmodules")
+            .cwd(&self.repo.path)
+            .exec_with_output()
+            .map_err(|err| git_command_error(err, self.remote.url(), settings.offline))?;
+        Ok(!output.stdout.is_empty())
     }
 
     /// Get a short OID for a `revision`, usually 7 chars or more if ambiguous.
@@ -546,6 +609,62 @@ impl GitCheckout {
         }
     }
 
+    /// Remove an incomplete checkout and create its parent directory.
+    fn prepare_directory(into: &Path) -> Result<()> {
+        Self::invalidate_ready(into)?;
+        let parent = into
+            .parent()
+            .context("Git checkout destination has no parent")?;
+        fs_err::create_dir_all(parent)?;
+        match fs_err::remove_dir_all(into) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Create a checkout that shares the database's Git objects.
+    fn worktree_into(
+        into: &Path,
+        database: &GitDatabase,
+        revision: GitOid,
+        settings: GitFetchSettings,
+    ) -> Result<Self> {
+        Self::prepare_directory(into)?;
+
+        // Remove registrations left by interrupted or externally removed checkouts.
+        GIT.as_ref()
+            .cloned()?
+            .arg("worktree")
+            .arg("prune")
+            .arg("--expire=now")
+            .cwd(&database.repo.path)
+            .exec_with_output()?;
+
+        let into = absolute(into)?;
+        let mut add = GIT.as_ref().cloned()?;
+        configure_git_network(
+            &mut add,
+            database.remote.url(),
+            settings.disable_ssl,
+            settings.offline,
+        );
+        add.arg("worktree")
+            .arg("add")
+            .arg("--detach")
+            .arg("--no-checkout")
+            .arg("--relative-paths")
+            .arg(into.simplified_display().to_string())
+            .arg(revision.as_str())
+            .cwd(&database.repo.path)
+            .exec_with_output()
+            .map_err(|err| git_command_error(err, database.remote.url(), settings.offline))?;
+
+        let checkout = Self::new(revision, GitRepository::open(&into)?);
+        let lfs_ready = checkout.reset(database.lfs_ready, database.remote.url(), settings)?;
+        Ok(checkout.with_lfs_ready(lfs_ready))
+    }
+
     /// Clone a repo for a `revision` into a local path from a `database`.
     /// This is a filesystem-to-filesystem clone.
     fn clone_into(
@@ -554,15 +673,7 @@ impl GitCheckout {
         revision: GitOid,
         settings: GitFetchSettings,
     ) -> Result<Self> {
-        Self::invalidate_ready(into)?;
-
-        let dirname = into.parent().unwrap();
-        fs_err::create_dir_all(dirname)?;
-        match fs_err::remove_dir_all(into) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-        }
+        Self::prepare_directory(into)?;
 
         // Perform a local clone of the repository, which will attempt to use
         // hardlinks to set up the repository. This should speed up the clone operation
@@ -1304,6 +1415,23 @@ mod tests {
     use indoc::indoc;
 
     use super::*;
+
+    #[test]
+    fn relative_worktree_version() {
+        assert!(!git_version_supports_relative_worktrees(
+            "git version 2.47.3"
+        ));
+        assert!(git_version_supports_relative_worktrees(
+            "git version 2.48.0"
+        ));
+        assert!(git_version_supports_relative_worktrees(
+            "git version 2.49.0.windows.1"
+        ));
+        assert!(git_version_supports_relative_worktrees("git version 3.0.0"));
+        assert!(!git_version_supports_relative_worktrees(
+            "unexpected version"
+        ));
+    }
 
     #[test]
     fn submodule_update_config_strips_credentials_from_origin_override() {

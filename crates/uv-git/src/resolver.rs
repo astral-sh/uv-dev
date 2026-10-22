@@ -65,6 +65,15 @@ pub struct GitFetchSettings {
     pub(crate) disable_ssl: bool,
     pub(crate) offline: bool,
     pub(crate) partial_fetches: bool,
+    pub(crate) checkout: GitCheckoutStrategy,
+}
+
+/// How a source checkout obtains its Git object database.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub(crate) enum GitCheckoutStrategy {
+    #[default]
+    Clone,
+    Worktree,
 }
 
 impl GitFetchSettings {
@@ -86,6 +95,17 @@ impl GitFetchSettings {
     #[must_use]
     pub fn with_partial_fetches(mut self, partial_fetches: bool) -> Self {
         self.partial_fetches = partial_fetches;
+        self
+    }
+
+    /// Configure whether source checkouts should share Git objects through worktrees.
+    #[must_use]
+    pub fn with_worktrees(mut self, worktrees: bool) -> Self {
+        self.checkout = if worktrees {
+            GitCheckoutStrategy::Worktree
+        } else {
+            GitCheckoutStrategy::Clone
+        };
         self
     }
 }
