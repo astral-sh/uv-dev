@@ -269,11 +269,11 @@ def render(baseline: dict, current: dict, branch: str) -> tuple[str, bool]:
     if not diffs:
         return (
             title
-            + f"This PR no longer changes the tests compared with the {base} base revision.",
+            + f"No differences were found in the matching CI test inventories for this PR and the {base} base revision.",
             False,
         )
     body = (
-        title + f"This PR changes the tests compared with the {base} base revision.\n\n"
+        title + f"The matching CI test inventories differ from the {base} base revision.\n\n"
         f"- Added tests: **{sum(len(added) for _, added, _ in diffs)}**\n"
         f"- Removed tests: **{sum(len(removed) for _, _, removed in diffs)}**\n"
         f"- Changed suites: **{len(diffs)}**"

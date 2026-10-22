@@ -125,9 +125,7 @@
         "pull_request": ["labeled"]
       },
       "conditions": {
-        "/label/name": {
-          "one_of": ["bot:promote", "bot:automerge"]
-        },
+        "/label/name": { "one_of": ["bot:promote", "bot:automerge"] },
         "/sender/type": "User"
       },
       "allow_draft": true,
@@ -154,9 +152,7 @@
         "pull_request": ["edited"]
       },
       "conditions": {
-        "/changes/base/ref/from": {
-          "exists": true
-        }
+        "/changes/base/ref/from": { "exists": true }
       },
       "allow_draft": true,
       "workflow": "pull-request-conflicts.yml",
@@ -214,7 +210,9 @@
     {
       "repository": "uv",
       "on": {
-        "workflow_run": ["completed"]
+        "workflow_run": [
+          "completed"
+        ]
       },
       "conditions": {
         "/workflow_run/event": "pull_request",
@@ -231,7 +229,9 @@
     {
       "repository": "uv-dev",
       "on": {
-        "workflow_run": ["completed"]
+        "workflow_run": [
+          "completed"
+        ]
       },
       "conditions": {
         "/workflow_run/event": "pull_request",

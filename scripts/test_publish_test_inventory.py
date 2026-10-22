@@ -58,7 +58,7 @@ def archive(members):
 
 
 class InventoryTests(unittest.TestCase):
-    def test_deduplicates_test_ids_across_suites_and_shards(self):
+    def test_deduplicates_test_ids_within_suite_across_reports(self):
         xml = b"""<testsuites>
           <testsuite name="suite"><testcase classname="module" name="same" />
             <testcase name="unqualified" /></testsuite>
@@ -133,7 +133,7 @@ class InventoryTests(unittest.TestCase):
             body,
             """## uv test inventory changes
 
-This PR changes the tests compared with the <code>stack&lt;base&gt;</code> base revision.
+The matching CI test inventories differ from the <code>stack&lt;base&gt;</code> base revision.
 
 - Added tests: **1**
 - Removed tests: **1**
@@ -236,7 +236,7 @@ class SourceTests(unittest.TestCase):
         self.assertTrue(report["changed"])
         self.assertEqual(report["merge_sha"], MERGE)
 
-    def test_missing_baseline_updates_only_existing_reports(self):
+    def test_missing_baseline_prepares_unavailable_report(self):
         with (
             patch.object(publisher, "current_run", return_value=RUN),
             patch.object(publisher, "matching_pull", return_value=PULL),
