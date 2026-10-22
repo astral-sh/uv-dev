@@ -95,7 +95,7 @@ jobs:
       matrix:
         include:
           - index: 1
-            suites: "uv workspace_discovery"
+            suites: "uv workspace_discovery uv_pep508"
             filter: ""
           - index: 2
             suites: git_fetch
