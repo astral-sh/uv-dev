@@ -47,15 +47,13 @@ minor version, or ABI. The target interpreter need not be executable on the buil
 Keep executable build-requirement discovery unchanged:
 
 ```python
-def get_requires_for_build_wheel(config_settings=None) -> list[str]:
-    ...
+def get_requires_for_build_wheel(config_settings=None) -> list[str]: ...
 ```
 
 Add a separate hook for target requirement additions:
 
 ```python
-def get_requires_for_target_wheel(config_settings=None) -> list[str]:
-    ...
+def get_requires_for_target_wheel(config_settings=None) -> list[str]: ...
 ```
 
 Extend the existing metadata and wheel hooks with keyword-only arguments:
@@ -67,8 +65,7 @@ def prepare_metadata_for_build_wheel(
     *,
     target: str | None = None,
     target_wheels: list[str] | None = None,
-):
-    ...  # Return the .dist-info directory basename.
+): ...  # Return the .dist-info directory basename.
 
 
 def build_wheel(
@@ -78,8 +75,7 @@ def build_wheel(
     *,
     target: str | None = None,
     target_wheels: list[str] | None = None,
-):
-    ...  # Return the wheel basename.
+): ...  # Return the wheel basename.
 ```
 
 The annotations describe the protocol's types; backends need not use these annotations or require a
@@ -113,7 +109,9 @@ For example:
 build_wheel(
     wheel_directory="/work/dist",
     target="/sdk/cpython-aarch64/build-details.json",
-    target_wheels=["/work/target-dependencies/numpy-2.3.0-cp314-cp314-manylinux_2_28_aarch64.whl"],
+    target_wheels=[
+        "/work/target-dependencies/numpy-2.3.0-cp314-cp314-manylinux_2_28_aarch64.whl"
+    ],
     config_settings=backend_toolchain_settings,
 )
 ```
