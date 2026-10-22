@@ -149,6 +149,7 @@ jobs:
           version: "0.13.0"
           checksum: "1468ebd5a5541121837c5a2817b9972ba6090fa6caa3d142620850a47fb75154"
           enable-cache: false
+          python-version: "3.11"
       - name: "Summarize binary sizes"
         id: report
         shell: bash
