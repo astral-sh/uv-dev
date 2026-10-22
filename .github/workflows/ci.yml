@@ -157,7 +157,7 @@ jobs:
         run: ./scripts/install-mold.sh
       - name: Install Rust toolchain
         run: rustup toolchain install --profile minimal
-      - uses: astral-sh/github-actions/rust-workspace-cache@7eaa7b9d1a13059d7b5305c2dab921fdc2c9cad3
+      - uses: astral-sh/github-actions/rust-workspace-cache@374b3d54bd4be0644dd1bb437decde17acd776b8
         with:
           prefix-key: uv-input-mtime-20261022-v1-mtimes
           key: linux-${{ hashFiles('Cargo.toml') }}
@@ -338,7 +338,7 @@ jobs:
         run: ./scripts/install-mold.sh
       - name: Install Rust toolchain
         run: rustup toolchain install --profile minimal
-      - uses: astral-sh/github-actions/rust-workspace-cache@7eaa7b9d1a13059d7b5305c2dab921fdc2c9cad3
+      - uses: astral-sh/github-actions/rust-workspace-cache@374b3d54bd4be0644dd1bb437decde17acd776b8
         with:
           prefix-key: uv-input-mtime-20261022-v1-mtimes
           profile: no-debug-nightly
