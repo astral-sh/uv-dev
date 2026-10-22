@@ -1,0 +1,35 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "pull_request",
+        "number": 11421,
+        "title": "retry local clones without hardlinks if they fail",
+        "url": "https://github.com/astral-sh/uv/pull/11421",
+        "state": "merged",
+        "reason": "Introduced the exact --local to --no-hardlinks fallback seen in this report. Merged on 2025-02-12 to fix astral-sh/uv#11420, with successful reporter validation. Its diff changes clone retry behavior only; copying still reads the same database and does not prevent concurrent maintenance."
+      },
+      {
+        "kind": "issue",
+        "number": 11420,
+        "title": "installing git repository ignores UV_LINK_MODE, breaks on some filesystems",
+        "url": "https://github.com/astral-sh/uv/issues/11420",
+        "state": "closed",
+        "reason": "Same cache-database-to-checkout clone path, but the failure was 'Operation not permitted' on BeeGFS without hardlink support. Maintainers clarified that UV_LINK_MODE does not control these internal links and resolved it through astral-sh/uv#11421. Disappearing pack files during maintenance are a different failure."
+      },
+      {
+        "kind": "pull_request",
+        "number": 5051,
+        "title": "fix(git): lock cache on resolve",
+        "url": "https://github.com/astral-sh/uv/pull/5051",
+        "state": "merged",
+        "reason": "Fixed a confirmed Git-cache clone race between multiple uv processes resolving branch references, producing 'destination path ... already exists'. Merged on 2024-07-16 after maintainer reproduction and verification. The repository lock remains in current source; it coordinates uv operations, not Git's detached maintenance, so this report does not establish a regression of that fix."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs using authenticated gh. Separately searched missing-file symptoms ('failed to copy file', 'No such file or directory', 'multi-pack-index.lock', 'failed to create link', 'no-hardlinks'); proposed causes and remedies ('git maintenance', 'repack', 'garbage collection', 'maintenance.auto', 'maintenance.autoDetach', '--no-auto-gc', '--no-auto-maintenance', 'fetch_with_cli'); and conceptual/version variants (Git race, concurrent access, cache corruption, area:cache, Git 2.54/2.55), including closed-fix searches. PR keyword searches omitted even a known historical match, so additionally scanned all 13,224 PR titles through the paginated all-state API and inspected relevant bodies, comments, reviews, and diffs. Followed issue-to-fix and canonical-discussion links. Ruled out astral-sh/uv#10758 (directory-removal existence checks), astral-sh/uv#5645 (older checkout/index.lock failures without a confirmed matching mechanism), astral-sh/uv#6484 (DNS/ref-fetch errors and a missing restored repository), and astral-sh/uv#4378 with astral-sh/uv#4698 (incorrect commit-presence checks). Also distinguished CI revision-resolution failures and Windows/container cache-access discussions from disappearing Git pack files. No existing discussion or fix for the maintenance overlap was found."
+  },
+  "type": "bug",
+  "type_reason": "The current source permits automatic maintenance during fetch and then performs a local clone from the same database; Git documents that maintenance may detach and local cloning can race with concurrent source modification. Intermittent checkout failure is incorrect behavior, even without a deterministic reproduction. The reporter's successful overlap traces support the mechanism but do not prove it caused the two CI failures. No duplicate was found, and the historical hardlink and inter-process-locking fixes address different problems rather than a previously fixed maintenance race.",
+  "summary": "No duplicate found. astral-sh/uv#11420 and astral-sh/uv#11421 explain the hardlink fallback; astral-sh/uv#5051 addresses concurrent uv processes. None addresses detached Git maintenance during checkout.",
+  "draft_response": "The current code leaves automatic maintenance enabled during fetch, then locally clones the same database. The --no-hardlinks fallback from astral-sh/uv#11421 still copies files from that database, so it does not prevent concurrent repacking. This is consistent with the overlap you traced, although it does not confirm maintenance caused the two CI failures.\n\nPlease share the minimal script and maintenance settings used to capture that overlap; it need not reproduce the failure reliably. The next step is to test disabling automatic maintenance for uv's fetches and add regression coverage. Your per-process maintenance.auto=false and gc.auto=0 workaround is reasonable in the meantime."
+}
