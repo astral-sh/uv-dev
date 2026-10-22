@@ -223,6 +223,8 @@ def latest_run(repository: str, branch: str, sha: str, events: set[str]):
             run
             for run in runs
             if run["event"] in events
+            and run["status"] == "completed"
+            and run["conclusion"] == "success"
             and run["head_sha"] == sha
             and run["head_branch"] == branch
             and run["repository"]["id"] == REPOSITORIES[repository]

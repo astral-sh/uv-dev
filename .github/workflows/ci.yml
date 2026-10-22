@@ -150,7 +150,7 @@ jobs:
 
   test-inventory-revision:
     needs: plan
-    if: github.event_name == 'pull_request' && needs.plan.outputs.test-code == 'true'
+    if: github.event_name == 'pull_request'
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:

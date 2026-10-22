@@ -314,6 +314,65 @@ class SourceTests(unittest.TestCase):
         self.assertFalse(report["changed"])
         self.assertIn("unavailable", report["body"])
 
+    def test_baseline_requires_a_completed_successful_run(self):
+        baseline = RUN | {"event": "push", "head_branch": "main", "head_sha": BASE}
+        for changes in [
+            {"conclusion": "cancelled"},
+            {"conclusion": "failure"},
+            {"conclusion": "timed_out"},
+            {"conclusion": "skipped"},
+            {"status": "in_progress"},
+        ]:
+            with self.subTest(changes=changes):
+                interrupted = baseline | changes
+                with patch.object(publisher, "pages", return_value=[interrupted]):
+                    self.assertIsNone(
+                        publisher.latest_run(REPOSITORY, "main", BASE, {"push"})
+                    )
+                with patch.object(
+                    publisher, "pages", return_value=[interrupted, baseline]
+                ):
+                    self.assertEqual(
+                        publisher.latest_run(REPOSITORY, "main", BASE, {"push"}),
+                        baseline,
+                    )
+
+    def test_metadata_only_run_updates_an_existing_report(self):
+        with (
+            patch.object(publisher, "current_run", return_value=RUN),
+            patch.object(publisher, "matching_pull", return_value=PULL),
+            patch.object(
+                publisher,
+                "artifacts",
+                side_effect=[
+                    {"test-inventory-revision": {"id": 1}},
+                    {"junit-results-linux": {"id": 2}},
+                ],
+            ),
+            patch.object(
+                publisher,
+                "revision",
+                return_value={"merge": MERGE, "base": BASE, "head": HEAD},
+            ),
+            patch.object(publisher, "baseline_run", return_value={"id": 100}),
+            patch.object(
+                publisher,
+                "api",
+                side_effect=[
+                    {"parents": [{"sha": BASE}, {"sha": HEAD}]},
+                    COMMENT,
+                    {},
+                ],
+            ) as api,
+        ):
+            report = publisher.prepare(REPOSITORY, 200, 2, HEAD)
+            self.assertFalse(report["changed"])
+            self.assertEqual(
+                publisher.publish(REPOSITORY, 200, 2, HEAD, report, 456), 456
+            )
+        self.assertEqual(api.call_args.kwargs["method"], "PATCH")
+        self.assertIn("unavailable", api.call_args.kwargs["body"])
+
     def test_stacked_base_requires_ci_for_its_exact_merge(self):
         producing = copy.deepcopy(PULL) | {
             "merged_at": "2026-10-01",
