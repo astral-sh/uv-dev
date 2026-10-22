@@ -1,0 +1,59 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 14664,
+        "title": "Use `nvml` to detect CUDA driver version",
+        "url": "https://github.com/astral-sh/uv/issues/14664",
+        "state": "open",
+        "reason": "Canonical discussion of the same detection request. Comments cover static musl builds that cannot dlopen, working cuda-compat containers without NVML or nvidia-smi, Python subprocess costs, WSL, and compute-capability discovery through driver interfaces or hardware mappings."
+      },
+      {
+        "kind": "pull_request",
+        "number": 14743,
+        "title": "Directly ask the NVIDIA kernel driver what version it is",
+        "url": "https://github.com/astral-sh/uv/pull/14743",
+        "state": "open",
+        "reason": "Prototype linked from astral-sh/uv#14664 adds a /dev/nvidiactl ioctl probe before nvidia-smi, targeting speed and installations without the CLI. Its patch detects the kernel driver version only; compute-capability queries remain discussion, and it does not resolve cuda-compat user-mode version selection."
+      },
+      {
+        "kind": "pull_request",
+        "number": 22690,
+        "title": "Implement a vendored nvidia variant provider",
+        "url": "https://github.com/astral-sh/uv/pull/22690",
+        "state": "merged",
+        "reason": "Merged on October 22, 2026, before this report, and introduced the relevant wheel-variant provider. Source still queries nvidia-smi for CUDA user-mode version and compute capability. Review explicitly discusses missing nvidia-smi, static-build dlopen constraints, and deferred CUDA_VISIBLE_DEVICES filtering; this is implementation context, not a completed fix."
+      },
+      {
+        "kind": "issue",
+        "number": 14742,
+        "title": "`--torch-backend=auto` ignores CUDA compute capability when installing `torch` for GTX 1080 Ti",
+        "url": "https://github.com/astral-sh/uv/issues/14742",
+        "state": "open",
+        "reason": "Demonstrates why compute capability matters: automatic selection installs cu128 wheels that cannot run on an sm_61 GPU, while cu126 works. Maintainer discussion considers NVML. It concerns compatibility-aware Torch wheel selection, whereas this report focuses on obtaining capabilities reliably."
+      },
+      {
+        "kind": "issue",
+        "number": 14647,
+        "title": "`--torch-backend=auto` fails on systems with multiple GPUs and without `/proc/driver/nvidia/version`",
+        "url": "https://github.com/astral-sh/uv/issues/14647",
+        "state": "closed",
+        "reason": "Historical WSL/multi-GPU failure in the same nvidia-smi fallback: repeated driver-version lines caused a version parse error. Fixed by astral-sh/uv#15460. This report requests broader detection and does not show that parsing bug recurring."
+      },
+      {
+        "kind": "pull_request",
+        "number": 15460,
+        "title": "Respect multi-GPU outputs in nvidia-smi",
+        "url": "https://github.com/astral-sh/uv/pull/15460",
+        "state": "merged",
+        "reason": "Merged November 2, 2025, fixing astral-sh/uv#14647; current source parses the first driver-version line. The author explicitly omitted NVIDIA_VISIBLE_DEVICES masking. It fixes multiline parsing, not CLI-independent detection or GPU-visibility handling."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separate literal searches covered nvidia-smi, compute capability, cuda-compat, /sys/module/nvidia/version, libcuda.so.1, nvcuda.dll, sm_arch, CUDA_VISIBLE_DEVICES, and both NV_VARIANT_PROVIDER_FORCE overrides. Conceptual searches covered NVML, CUDA/dlopen/static builds, GPU detection, forward compatibility, WSL, torch-backend auto, and wheel variants. Checked closed detection reports and historical fixes; followed comments, review threads, and timeline references to astral-sh/uv#14743, astral-sh/uv#15460, and astral-sh/uv#22690. PR keyword searches returned no hits even for known matching PRs, so supplemented them with a 1,000-PR all-state listing and direct reads of linked PRs. Ruled out astral-sh/uv#17236 as a duplicate: uv pip detection worked, and the remaining problem was unsupported torch-backend configuration in uv sync. Broader wheel-variant discussions astral-sh/uv#16522 and astral-sh/uv#22043 were less specific."
+  },
+  "type": "duplicate",
+  "type_reason": "Open astral-sh/uv#14664 already tracks the same unresolved request, including the static-linking, missing userspace tools, cuda-compat, and compute-capability constraints. The new platform-specific proposals extend that discussion and can be centralized there. No return of the separately fixed multiline-output bug is established; astral-sh/uv#22690 predates this report and does not solve the requested detection improvements.",
+  "summary": "Duplicate of astral-sh/uv#14664, with an open ioctl prototype in astral-sh/uv#14743. Merged astral-sh/uv#22690 provides the current wheel-variant implementation; astral-sh/uv#14742 documents the compute-capability selection problem. The historical multi-GPU parsing failure was fixed separately.",
+  "draft_response": "This detection work is already tracked in astral-sh/uv#14664, including static builds, cuda-compat environments without NVML or nvidia-smi, and compute-capability discovery. The provider added in astral-sh/uv#22690 still uses nvidia-smi for CUDA-version and compute-capability detection; astral-sh/uv#14743 explores direct kernel-driver queries. Please add your platform-specific findings to astral-sh/uv#14664 so we can keep the API and support-scope discussion together."
+}
