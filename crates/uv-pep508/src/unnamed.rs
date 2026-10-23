@@ -377,46 +377,7 @@ fn parse_unnamed_url<Url: UnnamedRequirementUrl>(
     cursor.eat_whitespace();
 
     // <URI_reference>
-    let (start, len) = {
-        let start = cursor.pos();
-        let mut len = 0;
-        let mut depth = 0u32;
-        while let Some((_, c)) = cursor.next() {
-            // If we see a line break, we're done.
-            if matches!(c, '\r' | '\n') {
-                break;
-            }
-
-            // Track the depth of brackets.
-            if c == '[' {
-                depth = depth.saturating_add(1);
-            } else if c == ']' {
-                depth = depth.saturating_sub(1);
-            }
-
-            // If we see top-level whitespace, check if it's followed by a semicolon or hash. If so,
-            // end the URL at the last non-whitespace character.
-            if depth == 0 && c.is_whitespace() {
-                let mut cursor = cursor.clone();
-                cursor.eat_whitespace();
-                if matches!(cursor.peek_char(), None | Some(';' | '#')) {
-                    break;
-                }
-            }
-
-            len += c.len_utf8();
-
-            // If we see a top-level semicolon or hash followed by whitespace, we're done.
-            if depth == 0 && cursor.peek_char().is_some_and(|c| matches!(c, ';' | '#')) {
-                let mut cursor = cursor.clone();
-                cursor.next();
-                if cursor.peek_char().is_some_and(char::is_whitespace) {
-                    break;
-                }
-            }
-        }
-        (start, len)
-    };
+    let (start, len) = crate::parse_url_span(cursor, true);
 
     let url = cursor.slice(start, len);
     if url.is_empty() {
