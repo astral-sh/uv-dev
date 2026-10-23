@@ -250,7 +250,7 @@ fn unpack_sdist_many_files(c: &mut Criterion<WallTime>) {
                 )
             },
             |(mut archive, extracted_sdist)| {
-                let (extracted_sdist, files) = runtime
+                let extracted_sdist = runtime
                     .block_on(uv_extract::stream::archive(
                         &mut archive,
                         SourceDistExtension::TarGz,
@@ -261,7 +261,7 @@ fn unpack_sdist_many_files(c: &mut Criterion<WallTime>) {
                 drop(archive);
                 let source_tree = uv_extract::strip_component(extracted_sdist.path())
                     .expect("Failed to strip top-level sdist directory");
-                black_box((files, extracted_sdist, source_tree))
+                black_box((extracted_sdist, source_tree))
             },
             BatchSize::PerIteration,
         );
