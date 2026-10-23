@@ -66,8 +66,10 @@ project-level settings appearing earlier in the merged array.
 Settings provided via environment variables take precedence over persistent configuration, and
 settings provided via the command line take precedence over both.
 
-uv accepts a `--no-config` command-line argument which, when provided, disables the discovery of any
-persistent configuration.
+uv accepts a `--no-config` command-line argument which, when provided, disables the discovery of
+persistent uv configuration. This does not prevent project commands from reading `pyproject.toml`
+for project metadata. To run a command without using the current project, use
+[`uv run --no-project`](../reference/cli.md#uv-run--no-project).
 
 uv also accepts a `--config-file` command-line argument, which accepts a path to a `uv.toml` to use
 as the configuration file. When provided, this file will be used in place of _any_ discovered
