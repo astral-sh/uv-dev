@@ -7508,6 +7508,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "same-file",
+ "serde_json",
  "temp-env",
  "tempfile",
  "test-log",
