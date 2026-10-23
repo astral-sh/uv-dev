@@ -7065,6 +7065,7 @@ dependencies = [
  "indoc",
  "shellexpand",
  "temp-env",
+ "tempfile",
  "thiserror",
 ]
 
