@@ -28,7 +28,7 @@ use uv_redacted::SafeUrl;
 use uv_types::InstalledPackagesProvider;
 use uv_warnings::warn_user;
 
-use crate::satisfies::{BuildSettings, RequirementSatisfaction};
+use crate::satisfies::{BuildInfoCache, BuildSettings, RequirementSatisfaction};
 
 /// An index over the packages installed in an environment.
 ///
@@ -499,6 +499,7 @@ impl SitePackages {
         let mut stack = Vec::with_capacity(requirements.size_hint().0);
         let mut seen =
             FxHashSet::with_capacity_and_hasher(requirements.size_hint().0, FxBuildHasher);
+        let mut build_info = build_settings.map(BuildInfoCache::new);
 
         // Add the direct requirements to the queue.
         for requirement in requirements.flat_map(|requirement| {
@@ -530,7 +531,7 @@ impl SitePackages {
                         None,
                         installation,
                         tags,
-                        build_settings,
+                        build_info.as_mut(),
                     ) {
                         RequirementSatisfaction::Mismatch
                         | RequirementSatisfaction::OutOfDate
@@ -550,7 +551,7 @@ impl SitePackages {
                                 None,
                                 installation,
                                 tags,
-                                build_settings,
+                                build_info.as_mut(),
                             ) {
                                 RequirementSatisfaction::Mismatch
                                 | RequirementSatisfaction::OutOfDate
