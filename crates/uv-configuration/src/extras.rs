@@ -203,7 +203,8 @@ impl ExtrasSpecificationHistory {
     /// If a flag was provided multiple times (e.g. `--extra A --extra B`) this will
     /// elide the arguments and just show the flag once (e.g. just yield "--extra").
     ///
-    /// Default extras are omitted because they do not come from CLI flags.
+    /// Applied default extras are omitted because they do not come from CLI flags. Use
+    /// [`ExtrasSpecificationInner::is_empty`] to test whether the specification has no effect.
     pub fn as_flags_pretty(&self) -> Vec<Cow<'_, str>> {
         let Self {
             extra,
