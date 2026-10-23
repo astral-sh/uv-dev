@@ -1,0 +1,60 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["PASS", "FINDINGS", "INCONCLUSIVE", "NOT_APPLICABLE"]
+    },
+    "summary": { "type": "string" },
+    "binary_version": { "type": "string" },
+    "scenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "commands": { "type": "string" },
+          "expected": { "type": "string" },
+          "observed": { "type": "string" },
+          "outcome": {
+            "type": "string",
+            "enum": ["PASS", "FAIL", "BLOCKED"]
+          }
+        },
+        "required": ["name", "commands", "expected", "observed", "outcome"]
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": { "type": "string" },
+          "body": { "type": "string" },
+          "priority": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "scenario": { "type": "string" }
+        },
+        "required": ["title", "body", "priority", "scenario"]
+      }
+    },
+    "coverage_gaps": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": [
+    "outcome",
+    "summary",
+    "binary_version",
+    "scenarios",
+    "findings",
+    "coverage_gaps"
+  ]
+}
