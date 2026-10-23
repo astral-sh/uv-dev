@@ -117,7 +117,8 @@ Ok(
             overrides: {},
             excludes: {},
             build_constraints: {},
-            dependency_metadata: {},
+            dependency_metadata: [],
+            dependency_metadata_ordered: false,
         },
     },
 )
