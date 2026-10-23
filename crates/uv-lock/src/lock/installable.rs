@@ -535,7 +535,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if seen.insert((package_index, None)) {
                     queue.push_back((package_index, None));
                 }
-                for extra in &dependency.extras {
+                for extra in dependency.extras() {
                     add_reachability(
                         &mut conflict_reachability,
                         (package_index, Some(extra)),
@@ -616,7 +616,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 // handling in the package-level `dependency_groups` loop above; without this,
                 // conflict markers on transitive dependencies gated by the activated extra
                 // would not evaluate to `true` during the graph traversals below.
-                for extra in &dependency.extras {
+                for extra in dependency.extras() {
                     let key = (&dist.id.name, extra);
                     if !activated_extras.contains(&key) {
                         activated_extras.push(key);
@@ -632,7 +632,7 @@ trait InstallableExt<'lock>: Installable<'lock> {
                 if seen.insert((package_index, None)) {
                     queue.push_back((package_index, None));
                 }
-                for extra in &dependency.extras {
+                for extra in dependency.extras() {
                     add_reachability(
                         &mut conflict_reachability,
                         (package_index, Some(extra)),

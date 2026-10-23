@@ -126,6 +126,7 @@ impl<T> ForkMap<T> {
 mod tests {
     use std::path::PathBuf;
     use std::str::FromStr;
+    use uv_distribution_types::RequirementSelection;
 
     use uv_distribution_types::{RequirementScope, RequirementSource};
     use uv_normalize::{GroupName, PackageName};
@@ -141,8 +142,7 @@ mod tests {
         let conflict = ConflictItem::from((project_name.clone(), group.clone()));
         let requirement = Requirement {
             name: package_name.clone(),
-            extras: Box::default(),
-            groups: Box::default(),
+            selection: RequirementSelection::Extras(Box::default()),
             marker: MarkerTree::TRUE,
             source: RequirementSource::Directory {
                 install_path: PathBuf::from("/tmp/demo").into_boxed_path(),
