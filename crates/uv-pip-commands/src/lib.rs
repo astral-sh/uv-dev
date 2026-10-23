@@ -15,6 +15,7 @@ pub mod tree;
 pub mod uninstall;
 
 mod install_report;
+mod install_requirements;
 mod pylock;
 mod reporters;
 
