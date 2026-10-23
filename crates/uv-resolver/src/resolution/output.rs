@@ -77,7 +77,7 @@ impl<'a> ResolutionGraphBuilder<'a> {
     }
 
     /// Consume a completed fork, retaining artifacts and metadata only for new nodes.
-    pub(crate) fn push(&mut self, resolution: Resolution<'_>) -> Result<(), ResolveError> {
+    pub(crate) fn push(&mut self, resolution: Resolution) -> Result<(), ResolveError> {
         if self.fork_markers.is_empty() {
             self.graph.reserve_nodes(resolution.nodes.len());
             self.graph.reserve_edges(resolution.edges.len());

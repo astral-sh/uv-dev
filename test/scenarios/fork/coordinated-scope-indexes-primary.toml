@@ -1,0 +1,40 @@
+name = "coordinated-scope-indexes-primary"
+description = '''
+Common parents and sentinel dependencies for two disjoint explicit indexes.
+The earlier parent permits either shared version; the delayed parent requires
+shared 1. The selected shared distributions come from separate indexes with
+different dependency metadata.
+'''
+
+[testgen]
+disable = true
+
+[expected]
+satisfiable = true
+
+[root]
+requires_python = ">=3.12,<3.14"
+requires = [
+  "flexible; python_version < '3.13'",
+  "delayed; python_version >= '3.13'",
+]
+
+[packages.flexible.versions."1.0.0"]
+requires = ["shared>=1.0.0,<=2.0.0"]
+
+[packages.delayed.versions."1.0.0"]
+requires = ["delay-one"]
+
+[packages.delay-one.versions."1.0.0"]
+requires = ["delay-two"]
+
+[packages.delay-two.versions."1.0.0"]
+requires = ["constrained"]
+
+[packages.constrained.versions."1.0.0"]
+requires = ["shared==1.0.0"]
+
+[packages.left-only.versions."1.0.0"]
+[packages.left-old-only.versions."1.0.0"]
+[packages.right-only.versions."1.0.0"]
+[packages.right-new-only.versions."1.0.0"]

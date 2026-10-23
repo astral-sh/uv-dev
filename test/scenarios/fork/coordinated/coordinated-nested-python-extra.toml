@@ -1,0 +1,116 @@
+name = "coordinated-nested-python-extra"
+description = '''
+`parent[feature]` belongs to a completed platform fork. Reusing the delayed
+sibling's `shared` and `aux` versions requires backtracking both `parent` and
+its `feature` extra to an older release. That extra introduces disjoint Python
+requirements on `branch`, so the replacement must retain the extra's dependency
+edges across new Python forks while narrowing each child's supported Python range.
+'''
+
+[testgen]
+kind = "lock"
+
+[environment]
+python = "3.12"
+
+[resolver_options]
+universal = true
+fork_strategy = "fewest"
+environments = ["sys_platform == 'win32'", "sys_platform != 'win32'"]
+
+[expected]
+satisfiable = true
+explanation = '''
+`parent[feature]==1` is selected only on Windows. `shared==1` and `aux==1` are
+used on every platform. On Windows, `branch==1` covers Python below 3.13 and
+`branch==2` covers Python 3.13 and later. The older `parent` introduces one
+duplicate while removing the two duplicates of `shared` and `aux`.
+'''
+
+[expected.packages]
+parent = "1.0.0"
+shared = "1.0.0"
+aux = "1.0.0"
+
+[root]
+requires_python = ">=3.12,<3.14"
+requires = [
+  "parent[feature]; sys_platform == 'win32'",
+  "delayed; sys_platform != 'win32'",
+]
+
+[packages.parent.versions."1.0.0"]
+sdist = false
+requires = ["shared==1.0.0", "aux==1.0.0"]
+
+[packages.parent.versions."1.0.0".extras]
+feature = [
+  "branch==1.0.0; python_version < '3.13'",
+  "branch==2.0.0; python_version >= '3.13'",
+]
+
+[packages.parent.versions."2.0.0"]
+sdist = false
+requires = ["shared==2.0.0", "aux==2.0.0"]
+
+[packages.parent.versions."2.0.0".extras]
+feature = []
+
+[packages.shared.versions."1.0.0"]
+sdist = false
+
+[packages.shared.versions."2.0.0"]
+sdist = false
+
+[packages.aux.versions."1.0.0"]
+sdist = false
+
+[packages.aux.versions."2.0.0"]
+sdist = false
+
+[packages.branch.versions."1.0.0"]
+sdist = false
+
+[packages.branch.versions."2.0.0"]
+sdist = false
+requires_python = ">=3.13"
+
+[packages.delayed.versions."1.0.0"]
+sdist = false
+requires = ["delay-one"]
+
+[packages.delay-one.versions."1.0.0"]
+sdist = false
+requires = ["delay-two"]
+
+[packages.delay-two.versions."1.0.0"]
+sdist = false
+requires = ["delay-three"]
+
+[packages.delay-three.versions."1.0.0"]
+sdist = false
+requires = ["delay-four"]
+
+[packages.delay-four.versions."1.0.0"]
+sdist = false
+requires = ["delay-five"]
+
+[packages.delay-five.versions."1.0.0"]
+sdist = false
+requires = ["delay-six"]
+
+[packages.delay-six.versions."1.0.0"]
+sdist = false
+requires = ["delay-seven"]
+
+[packages.delay-seven.versions."1.0.0"]
+sdist = false
+requires = ["delay-eight"]
+
+[packages.delay-eight.versions."1.0.0"]
+sdist = false
+requires = ["constrained"]
+
+[packages.constrained.versions."1.0.0"]
+sdist = false
+requires = ["shared==1.0.0", "aux==1.0.0"]

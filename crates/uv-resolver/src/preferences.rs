@@ -172,6 +172,20 @@ pub(crate) struct Entry {
 }
 
 impl Entry {
+    /// Create a source-scoped preference from another resolver fork.
+    pub(crate) fn from_resolver(
+        index: IndexUrl,
+        marker: UniversalMarker,
+        version: Version,
+    ) -> Self {
+        Self {
+            marker,
+            index: PreferenceIndex::Explicit(index),
+            pin: version.into(),
+            source: PreferenceSource::Resolver,
+        }
+    }
+
     /// Return the [`UniversalMarker`] associated with the entry.
     pub(crate) fn marker(&self) -> &UniversalMarker {
         &self.marker
