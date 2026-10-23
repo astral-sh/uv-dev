@@ -795,6 +795,15 @@ impl PubGrubReportFormatter<'_> {
                                 options,
                                 output_hints,
                             );
+
+                            if let Some(hint) = Self::quarantine_hint(
+                                name,
+                                index,
+                                fork_indexes,
+                                available_indexes.get(name),
+                            ) {
+                                output_hints.insert(hint);
+                            }
                         }
 
                         // Check for no versions due to no `--find-links` flat index.
@@ -862,6 +871,15 @@ impl PubGrubReportFormatter<'_> {
                                 options,
                                 output_hints,
                             );
+
+                            if let Some(hint) = Self::quarantine_hint(
+                                name,
+                                index,
+                                fork_indexes,
+                                available_indexes.get(name),
+                            ) {
+                                output_hints.insert(hint);
+                            }
                         }
 
                         // Check for no versions due to no `--find-links` flat index.
@@ -1203,6 +1221,35 @@ impl PubGrubReportFormatter<'_> {
         }
     }
 
+    fn quarantine_hint(
+        name: &PackageName,
+        index: &InMemoryIndex,
+        fork_indexes: &ForkIndexes,
+        available_indexes: Option<&BTreeSet<IndexUrl>>,
+    ) -> Option<PubGrubHint> {
+        // Only use index responses visited by the resolver at the time of failure.
+        let available_indexes = available_indexes?;
+        let response = if let Some(url) = fork_indexes.get(name).map(IndexMetadata::url) {
+            index.explicit().get(&(name.clone(), url.clone()))
+        } else {
+            index.implicit().get(name)
+        }?;
+        let VersionsResponse::Found(version_maps) = &*response else {
+            return None;
+        };
+        version_maps
+            .iter()
+            .any(|version_map| {
+                version_map
+                    .index()
+                    .is_some_and(|index| available_indexes.contains(index))
+                    && version_map.is_quarantined()
+            })
+            .then(|| PubGrubHint::QuarantinedPackage {
+                package: name.clone(),
+            })
+    }
+
     fn index_hints(
         name: &PackageName,
         set: &Range<Version>,
@@ -1531,6 +1578,8 @@ pub enum PubGrubHint {
         // excluded from `PartialEq` and `Hash`
         range: Range<Version>,
     },
+    /// An index used during resolution marked this package as quarantined.
+    QuarantinedPackage { package: PackageName },
     /// Requirements were unavailable due to lookups in the index being disabled and no extra
     /// index was provided via `--find-links`
     NoIndex,
@@ -1719,6 +1768,9 @@ enum PubGrubHintCore {
     BuildPrereleaseRequested {
         package: PackageName,
     },
+    QuarantinedPackage {
+        package: PackageName,
+    },
     NoIndex,
     Offline,
     InvalidPackageMetadata {
@@ -1806,6 +1858,7 @@ impl From<PubGrubHint> for PubGrubHintCore {
             PubGrubHint::BuildPrereleaseRequested { name: package, .. } => {
                 Self::BuildPrereleaseRequested { package }
             }
+            PubGrubHint::QuarantinedPackage { package } => Self::QuarantinedPackage { package },
             PubGrubHint::NoIndex => Self::NoIndex,
             PubGrubHint::Offline => Self::Offline,
             PubGrubHint::InvalidPackageMetadata { package, .. } => {
@@ -1947,6 +2000,11 @@ impl std::fmt::Display for PubGrubHint {
                         .cyan(),
                 )
             }
+            Self::QuarantinedPackage { package } => write!(
+                f,
+                "A package index used during resolution marked `{}` as quarantined",
+                package.cyan(),
+            ),
             Self::NoIndex => {
                 write!(
                     f,
@@ -2798,6 +2856,9 @@ fn padded<'a, T: std::fmt::Display + ?Sized>(
         Ok(())
     })
 }
+
+#[cfg(test)]
+mod quarantine_tests;
 
 #[cfg(test)]
 mod tests {
