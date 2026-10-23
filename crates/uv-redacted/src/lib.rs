@@ -515,6 +515,38 @@ impl<P: SerializationPolicy> SafeUrl<P> {
         Cow::Owned(url)
     }
 
+    /// Return a URL with the same credential and query redaction as [`Display`], retaining its
+    /// serialization policy.
+    ///
+    /// Use this before passing a URL to an error type that displays it directly. Conversion to a
+    /// raw URL still requires [`Self::into_unsafe_url`]. Redaction does not make an
+    /// [`Unserializable`] URL serializable:
+    ///
+    /// ```compile_fail
+    /// use uv_redacted::SafeUrl;
+    ///
+    /// let url = SafeUrl::parse("https://user:password@example.com/file?sig=signature")?;
+    /// serde_json::to_string(&url.to_redacted_url())?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn to_redacted_url(&self) -> Self {
+        let mut url = self.clone();
+        let (username, password) = redacted_credentials(&self.0);
+        if username != self.0.username() {
+            let _ = url.0.set_username(username);
+        }
+        if password != self.0.password() {
+            let _ = url.0.set_password(password);
+        }
+        if let Some(query) = self.0.query()
+            && let Cow::Owned(query) = redacted_query(query, self.0.query_pairs())
+        {
+            url.0.set_query(Some(&query));
+        }
+        url
+    }
+
     /// Returns [`Display`] implementation that doesn't mask credentials.
     #[inline]
     pub fn displayable_with_credentials(&self) -> impl Display {
@@ -733,6 +765,26 @@ mod tests {
             SafeUrl::parse_relaxed("https://").unwrap_err(),
             url::ParseError::EmptyHost
         );
+        Ok(())
+    }
+
+    #[test]
+    fn redacted_url() -> Result<(), SafeUrlError> {
+        for input in [
+            "https://user:fake-password@example.com/archive?X-Amz-Signature=fake-signature",
+            "https://fake-token@example.com/archive?SIG=fake-signature&sig=another-signature",
+            "https://user%40name:fake-password@example.com/archive?X-Amz-Credential=fake-credential&X-Amz-Security-Token=fake-token",
+            "https://example.com/archive?%73ig=fake-signature&safe=a%20b#fragment",
+            "https://example.com/archive?token=public&safe=a%20b#fragment",
+            "ssh://git@example.com/repository",
+            "git+ssh://git@example.com/repository",
+            "file:///archive?sig=fake-signature",
+            "mailto:user@example.com?sig=fake-signature",
+        ] {
+            let url = SafeUrl::parse(input)?;
+            assert_eq!(url.to_redacted_url().as_str(), url.to_string());
+            assert_eq!(url.as_str(), input);
+        }
         Ok(())
     }
 

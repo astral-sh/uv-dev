@@ -620,8 +620,10 @@ impl WrappedReqwestError {
         error: reqwest_middleware::Error,
         problem_details: Option<ProblemDetails>,
     ) -> Self {
+        let mut error = Self::filter_retries_from_error(error);
+        Self::redact_error_url(&mut error);
         Self {
-            error: Self::filter_retries_from_error(error),
+            error,
             context: problem_details
                 .map(WrappedReqwestErrorContext::ProblemDetails)
                 .map(Box::new),
@@ -664,6 +666,26 @@ impl WrappedReqwestError {
                 }
             }
             error @ reqwest_middleware::Error::Reqwest(_) => error,
+        }
+    }
+
+    /// Redact URLs on [`reqwest::Error`] values accessible through middleware wrappers.
+    fn redact_error_url(error: &mut reqwest_middleware::Error) {
+        match error {
+            reqwest_middleware::Error::Reqwest(error) => {
+                if let Some(url) = error.url_mut() {
+                    *url = SafeUrl::ref_cast(url).to_redacted_url().into_unsafe_url();
+                }
+            }
+            reqwest_middleware::Error::Middleware(error) => {
+                if let Some(error) = error.downcast_mut::<reqwest::Error>()
+                    && let Some(url) = error.url_mut()
+                {
+                    *url = SafeUrl::ref_cast(url).to_redacted_url().into_unsafe_url();
+                } else if let Some(error) = error.downcast_mut::<reqwest_middleware::Error>() {
+                    Self::redact_error_url(error);
+                }
+            }
         }
     }
 
@@ -731,20 +753,13 @@ impl WrappedReqwestError {
 
 impl From<reqwest::Error> for WrappedReqwestError {
     fn from(error: reqwest::Error) -> Self {
-        Self {
-            // No need to filter retries as this error does not have retries.
-            error: error.into(),
-            context: None,
-        }
+        Self::from(reqwest_middleware::Error::from(error))
     }
 }
 
 impl From<reqwest_middleware::Error> for WrappedReqwestError {
     fn from(error: reqwest_middleware::Error) -> Self {
-        Self {
-            error: Self::filter_retries_from_error(error),
-            context: None,
-        }
+        Self::with_problem_details(error, None)
     }
 }
 
@@ -796,7 +811,115 @@ impl std::error::Error for WrappedReqwestError {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
+    use anyhow::Context;
+    use reqwest::{ResponseBuilderExt, StatusCode};
+    use reqwest_retry::Retryable;
+
     use super::*;
+    use crate::retryable_on_request_failure;
+
+    #[test]
+    fn wrapped_reqwest_error_redacts_url() -> anyhow::Result<()> {
+        let response = reqwest::Response::from(
+            http::Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .url("https://user:fake-password@example.com/archive?X-Amz-Signature=fake-signature&token=public".parse()?)
+                .body("")?,
+        );
+        let error = WrappedReqwestError::from(response.error_for_status().expect_err("HTTP 403"));
+
+        assert!(error.is_status());
+        assert_eq!(error.status(), Some(StatusCode::FORBIDDEN));
+        assert!(retryable_on_request_failure(&error).is_none());
+        assert!(error.source().is_none());
+        insta::assert_snapshot!(error, @"HTTP status client error (403 Forbidden) for url (https://user:****@example.com/archive?X-Amz-Signature=****&token=public)");
+        insta::assert_debug_snapshot!(error, @r#"
+        WrappedReqwestError {
+            error: Reqwest(
+                reqwest::Error {
+                    kind: Status(
+                        403,
+                        None,
+                    ),
+                    url: "https://user:****@example.com/archive?X-Amz-Signature=****&token=public",
+                },
+            ),
+            context: None,
+        }
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn wrapped_reqwest_error_redacts_context_chain() -> anyhow::Result<()> {
+        let response = reqwest::Response::from(
+            http::Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .url(
+                    "https://fake-token@example.com/archive?sig=fake-signature&safe=value"
+                        .parse()?,
+                )
+                .body("")?,
+        );
+        let error = response.error_for_status().expect_err("HTTP 503");
+        let error = reqwest_middleware::Error::Middleware(
+            anyhow::Error::new(error).context("Downloading archive"),
+        );
+        let error = WrappedReqwestError::from(reqwest_middleware::Error::Middleware(
+            anyhow::Error::new(error).context("Installing Python"),
+        ));
+
+        assert_eq!(
+            error.inner().and_then(reqwest::Error::status),
+            Some(StatusCode::SERVICE_UNAVAILABLE)
+        );
+        assert!(retryable_on_request_failure(&error) == Some(Retryable::Transient));
+        assert!(
+            error
+                .source()
+                .context("middleware error source")?
+                .downcast_ref::<reqwest_middleware::Error>()
+                .context("middleware error")?
+                .source()
+                .context("request error source")?
+                .is::<reqwest::Error>()
+        );
+        insta::assert_snapshot!(format!("{:#}", anyhow::Error::new(error)), @"Installing Python: Downloading archive: HTTP status server error (503 Service Unavailable) for url (https://****@example.com/archive?sig=****&safe=value)");
+        Ok(())
+    }
+
+    #[test]
+    fn wrapped_reqwest_error_redacts_problem_details_source() -> anyhow::Result<()> {
+        let response = reqwest::Response::from(
+            http::Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .url("https://example.com/archive?X-Amz-Credential=fake-credential".parse()?)
+                .body("")?,
+        );
+        let error = reqwest_middleware::Error::middleware(reqwest_retry::RetryError::WithRetries {
+            retries: 2,
+            err: response.error_for_status().expect_err("HTTP 404").into(),
+        });
+        let error = WrappedReqwestError::with_problem_details(
+            error,
+            Some(serde_json::from_str(r#"{"title": "Archive unavailable"}"#)?),
+        );
+
+        assert!(error.is_user_failure());
+        assert!(error.is_status());
+        assert_eq!(error.status(), Some(StatusCode::NOT_FOUND));
+        assert!(retryable_on_request_failure(&error).is_none());
+        assert!(
+            error
+                .source()
+                .context("request error source")?
+                .is::<reqwest_middleware::Error>()
+        );
+        insta::assert_snapshot!(format!("{:#}", anyhow::Error::new(error)), @"Server message: Archive unavailable: HTTP status client error (404 Not Found) for url (https://example.com/archive?X-Amz-Credential=****)");
+        Ok(())
+    }
 
     #[test]
     fn test_problem_details_parsing() {

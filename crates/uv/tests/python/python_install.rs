@@ -25,6 +25,48 @@ use uv_fs::Simplified;
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 use walkdir::WalkDir;
+use wiremock::matchers::{method, path, path_regex};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// Status errors redact the final URL's password and recognized signed query values, even when
+/// the original mirror URL contains no credentials.
+#[tokio::test]
+async fn python_install_redacts_redirected_status_error() {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs()
+        .without_python_download_cache()
+        .with_filter((r"/mirror/[^`\s]+", "/mirror/[ARCHIVE]"));
+    let server = MockServer::start().await;
+    let location = format!(
+        "http://user:fake-password@{}/denied?X-Amz-Signature=fake-signature&safe=value",
+        server.address()
+    );
+
+    Mock::given(method("GET"))
+        .and(path_regex("^/mirror/"))
+        .respond_with(ResponseTemplate::new(302).insert_header("Location", location))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/denied"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.python_install()
+        .arg("3.15.0")
+        .env(EnvVars::UV_PYTHON_INSTALL_MIRROR, format!("{}/mirror", server.uri()))
+        .env(EnvVars::UV_HTTP_RETRIES, "0"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install cpython-3.15.0-[PLATFORM]
+      cause: Failed to download `http://[LOCALHOST]/mirror/[ARCHIVE]`
+      cause: HTTP status client error (403 Forbidden) for url (http://user:****@[LOCALHOST]/denied?X-Amz-Signature=****&safe=value)
+    ");
+}
 
 #[test]
 fn python_install() {
