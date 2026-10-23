@@ -1,5 +1,9 @@
 //! Edit project and script metadata while preserving TOML formatting.
 
+mod upgrade;
+
+pub use upgrade::{ProposeSpecifiersError, propose_specifiers, relax_specifiers};
+
 use std::path::Path;
 use std::str::FromStr;
 use std::{fmt, mem};
