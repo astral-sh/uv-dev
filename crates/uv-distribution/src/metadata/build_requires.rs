@@ -13,7 +13,7 @@ use uv_workspace::{
     DiscoveryOptions, MemberDiscovery, ProjectWorkspace, Workspace, WorkspaceCache,
 };
 
-use crate::metadata::{LoweredRequirement, MetadataError};
+use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
 
 /// Lowered requirements from a `[build-system.requires]` field in a `pyproject.toml` file.
 #[derive(Debug, Clone)]
@@ -262,6 +262,7 @@ impl LoweredExtraBuildDependencies {
     pub async fn from_workspace(
         extra_build_dependencies: ExtraBuildDependencies,
         workspace: &Workspace,
+        git_member: Option<&GitWorkspaceMember<'_>>,
         index_locations: &IndexLocations,
         source_strategy: &NoSources,
         cache: &Cache,
@@ -311,7 +312,7 @@ impl LoweredExtraBuildDependencies {
                                 None,
                                 index_locations,
                                 workspace,
-                                None,
+                                git_member,
                                 true,
                                 cache,
                                 workspace_cache,

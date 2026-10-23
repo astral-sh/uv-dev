@@ -74,6 +74,16 @@ pub(crate) enum ToolLockError {
     FlatIndex(Box<uv_client::FlatIndexError>),
     #[error(transparent)]
     HashStrategy(#[from] uv_types::HashStrategyError),
+    #[error(transparent)]
+    Distribution(#[from] uv_distribution::Error),
+    #[error(transparent)]
+    Lock(#[from] uv_lock_operations::LockError),
+    #[error(transparent)]
+    Environment(#[from] EnvironmentError),
+    #[error(transparent)]
+    Settings(#[from] uv_settings::Error),
+    #[error(transparent)]
+    Anyhow(#[from] anyhow::Error),
 }
 
 impl From<uv_client::FlatIndexError> for ToolLockError {

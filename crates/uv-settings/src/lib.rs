@@ -7,7 +7,7 @@ use tracing::info_span;
 use uv_client::{DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT, DEFAULT_READ_TIMEOUT_UPLOAD};
 use uv_configuration::{RequiredVersion, RequirementsInput, RequirementsInputError};
 use uv_dirs::{system_config_file, user_config_dir};
-use uv_distribution_types::{IndexUrlError, Origin};
+use uv_distribution_types::{IndexName, IndexSourceError, IndexUrlError, Origin};
 use uv_flags::EnvironmentFlags;
 use uv_fs::Simplified;
 use uv_normalize::{GroupName, PackageName};
@@ -23,6 +23,8 @@ pub use crate::resolved::*;
 pub use crate::settings::*;
 
 mod combine;
+mod index;
+pub use index::IndexArg;
 mod resolved;
 mod settings;
 
@@ -47,6 +49,89 @@ impl Deref for FilesystemOptions {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+/// Resolver options for a tool install, retaining their precedence layers for source projects.
+#[derive(Clone)]
+pub struct ToolInstallOptions {
+    options: ResolverInstallerOptions,
+    cli_environment: ResolverInstallerOptions,
+    filesystem: ResolverInstallerOptions,
+    discover_project: bool,
+    pending_indexes: Option<Vec<IndexArg>>,
+}
+
+impl std::fmt::Debug for ToolInstallOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(indexes) = self.pending_indexes.as_ref() {
+            formatter
+                .debug_struct("ToolInstallOptions")
+                .field("options", &self.options)
+                .field("pending_indexes", indexes)
+                .finish_non_exhaustive()
+        } else {
+            std::fmt::Debug::fmt(&self.options, formatter)
+        }
+    }
+}
+
+impl ToolInstallOptions {
+    /// Create tool install options from their precedence layers.
+    pub fn new(
+        cli_environment: ResolverInstallerOptions,
+        filesystem: ResolverInstallerOptions,
+        discover_project: bool,
+        pending_indexes: Option<Vec<IndexArg>>,
+    ) -> Self {
+        let options = cli_environment.clone().combine(filesystem.clone());
+        Self {
+            options,
+            cli_environment,
+            filesystem,
+            discover_project,
+            pending_indexes,
+        }
+    }
+
+    /// Return the normally resolved tool options.
+    pub fn into_options(self) -> ResolverInstallerOptions {
+        self.options
+    }
+
+    /// Resolve options using CLI/environment, source-project, then user/system precedence.
+    pub fn for_project(
+        &self,
+        project_root: &Path,
+        stop_discovery_at: Option<&Path>,
+    ) -> Result<ResolverInstallerOptions, Error> {
+        let project = if self.discover_project {
+            FilesystemOptions::find_up_to(project_root, stop_discovery_at)?
+                .map(FilesystemOptions::into_options)
+                .map(|options| ResolverInstallerOptions::from(options.top_level))
+                .unwrap_or_default()
+        } else {
+            ResolverInstallerOptions::default()
+        };
+        let configured = project.combine(self.filesystem.clone());
+        let mut cli_environment = self.cli_environment.clone();
+        if let Some(indexes) = self.pending_indexes.as_ref() {
+            let indexes = IndexOptions {
+                index: Some(
+                    indexes
+                        .iter()
+                        .cloned()
+                        .map(|index| {
+                            index.resolve(configured.indexes.index.as_deref().unwrap_or_default())
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+                ..IndexOptions::default()
+            }
+            .relative_to(&std::env::current_dir()?)?;
+            cli_environment.indexes.index = indexes.index;
+        }
+        Ok(cli_environment.combine(configured))
     }
 }
 
@@ -100,7 +185,15 @@ impl FilesystemOptions {
     /// The search starts at the given path and goes up the directory tree until a `uv.toml` file or
     /// `pyproject.toml` file is found.
     pub fn find(path: &Path) -> Result<Option<Self>, Error> {
-        for ancestor in path.ancestors() {
+        Self::find_up_to(path, None)
+    }
+
+    /// Search ancestors without crossing the optional discovery boundary.
+    fn find_up_to(path: &Path, stop_discovery_at: Option<&Path>) -> Result<Option<Self>, Error> {
+        for ancestor in path
+            .ancestors()
+            .take_while(|ancestor| Some(*ancestor) != stop_discovery_at)
+        {
             match Self::from_directory(ancestor) {
                 Ok(Some(options)) => {
                     return Ok(Some(options));
@@ -685,6 +778,12 @@ fn warn_uv_toml_masked_fields(options: &Options) {
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("Could not find an index named `{0}`")]
+    UnknownIndex(IndexName),
+
+    #[error(transparent)]
+    IndexSource(#[from] IndexSourceError),
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 

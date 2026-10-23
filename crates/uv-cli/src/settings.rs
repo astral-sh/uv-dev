@@ -46,7 +46,7 @@ use uv_settings::{
     IndexOptions, LockCheck, LockedFlag, LockedSource, MalwareCheckSettings, Options, PipOptions,
     PreviewFeaturesOption, PreviewOption, PublishOptions, PythonInstallMirrors, PythonListKinds,
     ResolverInstallerOptions, ResolverInstallerSchema, ResolverInstallerSettings, ResolverOptions,
-    ResolverSettings, resolve_build_hash_checking, resolve_prerelease,
+    ResolverSettings, ToolInstallOptions, resolve_build_hash_checking, resolve_prerelease,
 };
 use uv_static::EnvVars;
 use uv_torch::{AmdGpuArchitecture, TorchMode};
@@ -1056,10 +1056,11 @@ pub struct ToolInstallSettings {
     pub python: Option<String>,
     pub python_platform: Option<TargetTriple>,
     pub refresh: Refresh,
-    pub options: ResolverInstallerOptions,
+    pub options: ToolInstallOptions,
     pub settings: ResolverInstallerSettings,
     pub force: bool,
     pub editable: bool,
+    pub locked: LockCheck,
     pub install_mirrors: PythonInstallMirrors,
 }
 
@@ -1069,10 +1070,12 @@ impl ToolInstallSettings {
         args: ToolInstallArgs,
         filesystem: Option<FilesystemOptions>,
         environment: EnvironmentOptions,
+        discover_project: bool,
     ) -> anyhow::Result<Self> {
         let ToolInstallArgs {
             package,
             editable,
+            locked,
             from,
             with,
             with_editable,
@@ -1086,7 +1089,7 @@ impl ToolInstallSettings {
                     build_constraints,
                 },
             lfs,
-            installer,
+            mut installer,
             force,
             build,
             refresh,
@@ -1095,9 +1098,16 @@ impl ToolInstallSettings {
             torch_backend,
         } = args;
 
+        let locked = resolve_lock_check(locked, false, LockedFlag::Locked, environment.locked);
+        let pending_indexes = if matches!(locked, LockCheck::Enabled(_)) {
+            installer.index_args.take_indexes()
+        } else {
+            None
+        };
+
         let filesystem_options = filesystem.map(FilesystemOptions::into_options);
 
-        let options = resolver_installer_options_with_environment(
+        let cli_environment_options = resolver_installer_options_with_environment(
             resolver_installer_options(
                 installer,
                 build,
@@ -1107,13 +1117,16 @@ impl ToolInstallSettings {
                     .unwrap_or_default(),
             )?,
             &environment,
-        )
-        .combine(ResolverInstallerOptions::from(
+        );
+        let resolver_filesystem_options = ResolverInstallerOptions::from(
             filesystem_options
                 .as_ref()
                 .map(|options| options.top_level.clone())
                 .unwrap_or_default(),
-        ));
+        );
+        let options = cli_environment_options
+            .clone()
+            .combine(resolver_filesystem_options.clone());
 
         let filesystem_install_mirrors = filesystem_options
             .map(|options| options.install_mirrors.clone())
@@ -1156,8 +1169,14 @@ impl ToolInstallSettings {
             python_platform,
             force,
             editable,
+            locked,
             refresh: Refresh::try_from(refresh)?,
-            options,
+            options: ToolInstallOptions::new(
+                cli_environment_options,
+                resolver_filesystem_options,
+                discover_project,
+                pending_indexes,
+            ),
             settings,
             install_mirrors: environment
                 .install_mirrors
