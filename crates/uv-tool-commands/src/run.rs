@@ -59,8 +59,8 @@ use uv_environment_operations::{EnvironmentError, EnvironmentSpecification};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
 use uv_python_discovery::PythonDownloadReporter;
 use uv_resolve_operations as operations;
+use uv_resolve_operations::ResolveSummary;
 use uv_resolve_operations::latest::LatestClient;
-use uv_resolve_operations::loggers::{DefaultResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::{resolution_markers, resolution_tags};
 use uv_settings::ResolverInstallerSettings;
 use uv_settings::ResolverSettings;
@@ -1195,9 +1195,9 @@ async fn get_or_create_environment(
         client_builder,
         &state,
         if show_resolution {
-            Box::new(DefaultResolveLogger)
+            ResolveSummary::Display
         } else {
-            Box::new(SummaryResolveLogger)
+            ResolveSummary::Suppress
         },
         if show_resolution {
             Box::new(DefaultInstallLogger)
@@ -1257,9 +1257,9 @@ async fn get_or_create_environment(
                     client_builder,
                     &state,
                     if show_resolution {
-                        Box::new(DefaultResolveLogger)
+                        ResolveSummary::Display
                     } else {
-                        Box::new(SummaryResolveLogger)
+                        ResolveSummary::Suppress
                     },
                     if show_resolution {
                         Box::new(DefaultInstallLogger)

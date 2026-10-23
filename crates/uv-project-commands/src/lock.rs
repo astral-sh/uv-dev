@@ -27,7 +27,7 @@ use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::init_script_python_requirement;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
-use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::ResolveSummary;
 use uv_scripts::Pep723Script;
 use uv_settings::{FrozenSource, LockCheck, PythonInstallMirrors, ResolverSettings};
 use uv_warnings::warn_user;
@@ -166,7 +166,7 @@ pub async fn lock(
             &settings,
             &client_builder,
             &state,
-            Box::new(DefaultResolveLogger),
+            ResolveSummary::Display,
             &concurrency,
             cache,
             workspace_cache,

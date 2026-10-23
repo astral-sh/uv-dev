@@ -30,7 +30,7 @@ use uv_project_edit::{DependencyTarget, Error, PyProjectTomlMut};
 use uv_python_discovery::ConfigDiscovery;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
-use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::ResolveSummary;
 use uv_settings::{
     FrozenSource, LockCheck, MalwareCheckSettings, PythonInstallMirrors, ResolverInstallerSettings,
 };
@@ -601,7 +601,7 @@ async fn lock_and_sync(
             &settings.resolver,
             &client_builder,
             &state,
-            Box::new(DefaultResolveLogger),
+            ResolveSummary::Display,
             concurrency,
             cache,
             &workspace_cache,

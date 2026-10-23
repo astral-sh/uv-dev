@@ -35,18 +35,18 @@ use uv_resolver::{
 };
 use uv_types::{BuildContext, HashStrategy};
 
-use crate::loggers::ResolveLogger;
 use crate::reporters::ResolverReporter;
 
 mod error;
 pub mod latest;
 pub mod locked_requirements;
-pub mod loggers;
 mod markers;
 pub mod reporters;
+mod summary;
 
 pub use error::Error;
 pub use markers::{resolution_markers, resolution_tags};
+pub use summary::ResolveSummary;
 
 /// Consolidate the requirements for an installation.
 pub async fn read_requirements(
@@ -120,7 +120,7 @@ pub async fn resolve(
     concurrency: &Concurrency,
     options: Options,
     recorder: Option<ResolutionRecorder>,
-    logger: Box<dyn ResolveLogger>,
+    summary: ResolveSummary,
     printer: Printer,
 ) -> Result<(ResolverOutput, HashStrategy), Error> {
     let start = std::time::Instant::now();
@@ -401,7 +401,7 @@ pub async fn resolve(
         resolver.resolve().await?
     };
 
-    logger.on_complete(resolution.len(), start, printer)?;
+    summary.on_complete(resolution.len(), start, printer)?;
 
     Ok((resolution, hasher))
 }

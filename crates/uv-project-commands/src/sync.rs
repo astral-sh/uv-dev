@@ -40,7 +40,7 @@ use uv_python_discovery::ConfigDiscovery;
 use uv_python_interpreter::PythonEnvironment;
 use uv_python_types::{PythonArchitecture, PythonDownloads, PythonPreference, PythonRequest};
 use uv_requirements::{script_extra_build_requires, script_specification};
-use uv_resolve_operations::loggers::DefaultResolveLogger;
+use uv_resolve_operations::ResolveSummary;
 use uv_scripts::Pep723Script;
 use uv_settings::{
     FrozenSource, LockCheck, LockedSource, MalwareCheckSettings, PythonInstallMirrors,
@@ -371,7 +371,7 @@ pub async fn sync(
                 &settings,
                 &client_builder,
                 &PlatformState::default(),
-                Box::new(DefaultResolveLogger),
+                ResolveSummary::Display,
                 Box::new(DefaultInstallLogger),
                 installer_metadata,
                 &concurrency,
@@ -460,7 +460,7 @@ pub async fn sync(
                         &settings.resolver,
                         &client_builder,
                         &state,
-                        Box::new(DefaultResolveLogger),
+                        ResolveSummary::Display,
                         &concurrency,
                         cache,
                         workspace_cache,
