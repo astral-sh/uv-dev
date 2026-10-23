@@ -259,6 +259,52 @@ fn workspace_metadata_ignores_unusable_environment() -> Result<()> {
     Ok(())
 }
 
+/// Inspecting an environment must not enable mutually exclusive extras from its lockfile.
+#[test]
+#[cfg(all(feature = "test-python", feature = "test-pypi"))]
+fn workspace_metadata_conflicting_extras() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_exclude_newer("2026-02-15T00:00:00Z");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "mre"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+
+        [project.optional-dependencies]
+        a = ["idna==3.9"]
+        b = ["idna==3.10"]
+
+        [tool.uv]
+        conflicts = [[{ extra = "a" }, { extra = "b" }]]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.sync().arg("--extra").arg("a"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + idna==3.9
+    ");
+
+    // Metadata incorrectly enables both extras despite only `a` being installed:
+    // astral-sh/uv#22796.
+    uv_snapshot!(context.filters(), context.workspace_metadata().args([
+        "--preview-features", "workspace-metadata"
+    ]), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    Resolved 3 packages in [TIME]
+    error: Failed to inspect environment
+      cause: Found conflicting extras `mre[a]` and `mre[b]` enabled simultaneously
+    ");
+
+    Ok(())
+}
+
 /// Lockfile metadata requires revision 5 or later.
 #[test]
 fn workspace_metadata_lockfile_requires_revision() -> Result<()> {
