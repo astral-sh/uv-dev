@@ -68,6 +68,9 @@ tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
+uv-cache = { workspace = true }
+
 indoc = { workspace = true }
 insta = { workspace = true }
+tokio = { workspace = true }
 toml = { workspace = true }
