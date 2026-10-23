@@ -118,6 +118,7 @@ plugins:
           - guides/integration/marimo.md
           - guides/integration/github.md
           - guides/integration/gitlab.md
+          - guides/integration/circleci.md
           - guides/integration/pre-commit.md
           - guides/integration/pytorch.md
           - guides/integration/fastapi.md
@@ -205,6 +206,7 @@ nav:
           - marimo: guides/integration/marimo.md
           - GitHub Actions: guides/integration/github.md
           - GitLab CI/CD: guides/integration/gitlab.md
+          - CircleCI: guides/integration/circleci.md
           - Pre-commit: guides/integration/pre-commit.md
           - PyTorch: guides/integration/pytorch.md
           - FastAPI: guides/integration/fastapi.md
