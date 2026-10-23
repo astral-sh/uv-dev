@@ -17,5 +17,10 @@ test = false
 workspace = true
 
 [target.'cfg(unix)'.dependencies]
+uv-static = { workspace = true }
+
 nix = { workspace = true }
 thiserror = { workspace = true }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+rustix = { workspace = true, features = ["process"] }

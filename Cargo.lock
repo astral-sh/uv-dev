@@ -6182,6 +6182,7 @@ dependencies = [
  "uv-settings",
  "uv-static",
  "uv-torch",
+ "uv-unix",
  "uv-version",
  "uv-warnings",
  "uv-workspace",
@@ -7903,6 +7904,7 @@ dependencies = [
  "uv-redacted",
  "uv-static",
  "uv-torch",
+ "uv-unix",
  "uv-version",
  "uv-warnings",
  "uv-workspace",
@@ -8179,7 +8181,9 @@ name = "uv-unix"
 version = "0.0.97"
 dependencies = [
  "nix 0.31.3",
+ "rustix",
  "thiserror",
+ "uv-static",
 ]
 
 [[package]]

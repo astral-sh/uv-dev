@@ -1,3 +1,5 @@
+#![cfg(feature = "test-python")]
+
 use uv_static::EnvVars;
 use uv_test::{get_bin, uv_snapshot};
 
@@ -52,6 +54,84 @@ fn run_open_file_limit_override() {
 }
 
 #[test]
+fn run_resource_limit_overrides() {
+    let context = uv_test::test_context!("3.12");
+    let python = &context.python_versions[0].1;
+
+    let mut command = context.run();
+    command
+        .arg("--no-project")
+        .arg("--")
+        .arg(python)
+        .arg("-c")
+        .arg(concat!(
+            "import resource; ",
+            "print(resource.getrlimit(resource.RLIMIT_AS)[0]); ",
+            "print(resource.getrlimit(resource.RLIMIT_CORE)[0]); ",
+            "print(resource.getrlimit(resource.RLIMIT_CPU)[0]); ",
+            "print(resource.getrlimit(resource.RLIMIT_FSIZE)[0]); ",
+            "print(resource.getrlimit(resource.RLIMIT_NOFILE)[0])",
+        ))
+        .env(EnvVars::UV_RUN_RLIMIT_AS, "1125899906842624")
+        .env(EnvVars::UV_RUN_RLIMIT_CORE, "0")
+        .env(EnvVars::UV_RUN_RLIMIT_CPU, "60")
+        .env(EnvVars::UV_RUN_RLIMIT_FSIZE, "4294967296")
+        .env(EnvVars::UV_RUN_RLIMIT_NOFILE, "128");
+
+    uv_snapshot!(context.filters(), command, @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    1125899906842624
+    0
+    60
+    4294967296
+    128
+    ");
+}
+
+/// The command can use a memory limit smaller than uv's own address space.
+#[cfg(target_os = "linux")]
+#[test]
+fn run_memory_limit_applies_only_to_child() {
+    let context = uv_test::test_context!("3.12");
+    let python = &context.python_versions[0].1;
+
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--no-project")
+        .arg("--")
+        .arg(python)
+        .arg("-c")
+        .arg("import resource; print(resource.getrlimit(resource.RLIMIT_AS)[0])")
+        .env(EnvVars::UV_RUN_RLIMIT_AS, "67108864"), @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    67108864
+    ");
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn run_apple_process_limit_override() {
+    let context = uv_test::test_context!("3.12");
+    let python = &context.python_versions[0].1;
+
+    let mut command = context.run();
+    command
+        .arg("--no-project")
+        .arg("--")
+        .arg(python)
+        .arg("-c")
+        .arg("import resource; print(resource.getrlimit(resource.RLIMIT_NPROC)[0])")
+        .env(EnvVars::UV_RUN_RLIMIT_NPROC, "128");
+
+    uv_snapshot!(context.filters(), command, @r"
+    exit_code: 0 (success)
+    ----- stdout -----
+    128
+    ");
+}
+
+#[test]
 fn run_open_file_limit_override_invalid() {
     let context = uv_test::test_context!("3.12");
     let python = &context.python_versions[0].1;
@@ -96,6 +176,22 @@ fn run_open_file_limit_override_exceeds_hard_limit() {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to apply `UV_RUN_RLIMIT_NOFILE` value `256`
-      cause: requested open file limit (256) exceeds the hard limit (128)
+      cause: requested RLIMIT_NOFILE limit (256) exceeds the hard limit (128)
     ");
+}
+
+/// Spawn errors retain the configured limits after child-process validation.
+#[test]
+fn run_resource_limits_in_spawn_error() {
+    let context = uv_test::test_context!("3.12");
+    uv_snapshot!(context.filters(), context.run()
+        .arg("--no-project")
+        .arg("--")
+        .arg("uv-missing-resource-limit-command")
+        .env(EnvVars::UV_RUN_RLIMIT_CPU, "60"), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to spawn: uv-missing-resource-limit-command (configured resource limits: `UV_RUN_RLIMIT_CPU=60`)
+      cause: No such file or directory (os error 2)
+    "#);
 }
