@@ -462,6 +462,9 @@ pub enum PreviewFeature {
     BuildDependencyHashes,
     /// Enables experimental support for [wheel variants](https://peps.python.org/pep-0825/).
     WheelVariants,
+    /// Shares content-addressed dependency environments between PEP 723 scripts while retaining
+    /// a distinct, mutable virtual environment for each script.
+    SharedScriptEnvironments,
 }
 
 impl Display for PreviewFeature {
