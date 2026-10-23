@@ -221,7 +221,7 @@ impl ValidatedLock {
 
         // If the pre-release mode has changed, we have to re-resolve, but can retain the existing
         // versions and forks.
-        if lock.prerelease() != &options.prerelease {
+        if !lock.matches_prerelease(&options.prerelease) {
             if lock.prerelease_mode() != options.prerelease.global {
                 let _ = writeln!(
                     printer.stderr(),
