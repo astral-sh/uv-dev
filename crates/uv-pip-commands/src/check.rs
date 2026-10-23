@@ -6,7 +6,7 @@ use owo_colors::OwoColorize;
 
 use uv_cache::Cache;
 use uv_configuration::TargetTriple;
-use uv_distribution_types::{DependencyMetadata, Diagnostic, InstalledDist};
+use uv_distribution_types::{DependencyMetadata, InstalledDist};
 use uv_installer::{SitePackages, SitePackagesDiagnostic};
 use uv_python_discovery::find_environment;
 use uv_python_types::{

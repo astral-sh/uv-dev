@@ -16,9 +16,9 @@ use uv_configuration::{BuildOptions, Concurrency, DryRun, Modifications, Reinsta
 use uv_dispatch::BuildDispatch;
 use uv_distribution::DistributionDatabase;
 use uv_distribution_types::{
-    CachedDist, ConfigSettings, DependencyMetadata, Diagnostic, Dist, DistributionMetadata,
-    ExtraBuildRequires, ExtraBuildVariables, IndexLocations, InstalledDist, InstalledMetadata,
-    InstalledVersion, LocalDist, Name, PackageConfigSettings, Resolution, VersionOrUrlRef,
+    CachedDist, ConfigSettings, DependencyMetadata, Dist, DistributionMetadata, ExtraBuildRequires,
+    ExtraBuildVariables, IndexLocations, InstalledDist, InstalledMetadata, InstalledVersion,
+    LocalDist, Name, PackageConfigSettings, Resolution, VersionOrUrlRef,
 };
 use uv_fs::{CWD, Simplified, normalize_path_under};
 use uv_install_wheel::{LinkMode, installed_dist_info_path, read_record_into_iter};

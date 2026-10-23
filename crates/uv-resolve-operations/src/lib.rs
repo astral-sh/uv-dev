@@ -16,7 +16,7 @@ use uv_configuration::{
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
 use uv_distribution_types::{
-    Diagnostic, NameRequirementSpecification, Requirement, RequirementScope, RequirementSource,
+    NameRequirementSpecification, Requirement, RequirementScope, RequirementSource,
     ResolutionDiagnostic, ResolutionRecorder, UnresolvedRequirement,
     UnresolvedRequirementSpecification,
 };
