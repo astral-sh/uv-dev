@@ -17,7 +17,7 @@ use uv_environment_operations::{
 };
 use uv_lock::{Lock, Metadata, Package};
 use uv_lock_operations::{
-    DiscoveredProject, FrozenWorkspace, LockError, LockMode, LockOperation, LockTarget,
+    DiscoveredProject, FrozenWorkspace, LockError, LockMode, LockOperation, LockResult, LockTarget,
 };
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -102,11 +102,14 @@ pub async fn metadata(
         MetadataSource::Lockfile(workspace) => workspace.lock(),
         MetadataSource::Manifest(target) => {
             let target = *target;
-            let interpreter;
-            let mode = if let Some(frozen_source) = frozen {
-                LockMode::Frozen(frozen_source.into())
+
+            let lock_result = if let Some(frozen_source) = frozen {
+                target
+                    .read_frozen(frozen_source.into())
+                    .await
+                    .map(LockResult::Unchanged)
             } else {
-                interpreter = match target {
+                let interpreter = match target {
                     LockTarget::Script(script) => ScriptInterpreter::discover(
                         script.into(),
                         python.as_deref().map(PythonRequest::parse),
@@ -154,7 +157,7 @@ pub async fn metadata(
                     }
                 };
 
-                if let LockCheck::Enabled(lock_check) = lock_check {
+                let mode = if let LockCheck::Enabled(lock_check) = lock_check {
                     LockMode::Locked(&interpreter, lock_check)
                 } else if sync.is_none()
                     || (matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file())
@@ -162,27 +165,26 @@ pub async fn metadata(
                     LockMode::DryRun(&interpreter)
                 } else {
                     LockMode::Write(&interpreter)
-                }
-            };
-
-            resolved_lock = match Box::pin(
-                LockOperation::new(
-                    mode,
-                    &settings,
-                    &client_builder,
-                    &state,
-                    Box::new(DefaultResolveLogger),
-                    &concurrency,
-                    cache,
-                    workspace_cache,
-                    printer,
-                    preview,
+                };
+                Box::pin(
+                    LockOperation::new(
+                        mode,
+                        &settings,
+                        &client_builder,
+                        &state,
+                        Box::new(DefaultResolveLogger),
+                        &concurrency,
+                        cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .with_refresh(&refresh)
+                    .execute(target),
                 )
-                .with_refresh(&refresh)
-                .execute(target),
-            )
-            .await
-            {
+                .await
+            };
+            resolved_lock = match lock_result {
                 Ok(lock) => lock.into_lock(),
                 Err(err @ LockError::LockMismatch(..)) => return Err(UvError::user(err).into()),
                 Err(err) => return Err(UvError::from(err).into()),

@@ -19,7 +19,9 @@ use uv_environment_operations::{
     EnvironmentError, ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
 };
 use uv_lock::{PackageMap, TreeDisplay, TreeJsonTarget};
-use uv_lock_operations::{DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockTarget};
+use uv_lock_operations::{
+    DiscoveredProject, FrozenWorkspace, LockMode, LockOperation, LockResult, LockTarget,
+};
 use uv_normalize::{DefaultGroups, PackageName};
 use uv_preview::{Preview, PreviewFeature};
 use uv_python_discovery::ConfigDiscovery;
@@ -220,34 +222,39 @@ pub async fn tree(
     let lock = match source {
         TreeSource::Lockfile(workspace) => workspace.lock(),
         TreeSource::Manifest(target) => {
-            let mode = if let Some(frozen_source) = frozen {
-                LockMode::Frozen(frozen_source.into())
-            } else if let LockCheck::Enabled(lock_check) = lock_check {
-                LockMode::Locked(interpreter.as_ref().unwrap(), lock_check)
-            } else if matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file() {
-                // If we're locking a script, avoid creating a lockfile if it doesn't already exist.
-                LockMode::DryRun(interpreter.as_ref().unwrap())
-            } else {
-                LockMode::Write(interpreter.as_ref().unwrap())
-            };
             let state = UniversalState::default();
-            resolved_lock = match Box::pin(
-                LockOperation::new(
-                    mode,
-                    &settings,
-                    client_builder,
-                    &state,
-                    Box::new(DefaultResolveLogger),
-                    &concurrency,
-                    cache,
-                    workspace_cache,
-                    printer,
-                    preview,
+            let lock_result = if let Some(frozen_source) = frozen {
+                target
+                    .read_frozen(frozen_source.into())
+                    .await
+                    .map(LockResult::Unchanged)
+            } else {
+                let mode = if let LockCheck::Enabled(lock_check) = lock_check {
+                    LockMode::Locked(interpreter.as_ref().unwrap(), lock_check)
+                } else if matches!(target, LockTarget::Script(_)) && !target.lock_path().is_file() {
+                    // If we're locking a script, avoid creating a lockfile if it doesn't already exist.
+                    LockMode::DryRun(interpreter.as_ref().unwrap())
+                } else {
+                    LockMode::Write(interpreter.as_ref().unwrap())
+                };
+                Box::pin(
+                    LockOperation::new(
+                        mode,
+                        &settings,
+                        client_builder,
+                        &state,
+                        Box::new(DefaultResolveLogger),
+                        &concurrency,
+                        cache,
+                        workspace_cache,
+                        printer,
+                        preview,
+                    )
+                    .execute(target),
                 )
-                .execute(target),
-            )
-            .await
-            {
+                .await
+            };
+            resolved_lock = match lock_result {
                 Ok(result) => result.into_lock(),
                 Err(err) => return Err(UvError::from(err).into()),
             };
