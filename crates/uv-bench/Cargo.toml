@@ -64,6 +64,11 @@ path = "benches/uv_pep508.rs"
 harness = false
 
 [[bench]]
+name = "project_dependency_edits"
+path = "benches/project_dependency_edits.rs"
+harness = false
+
+[[bench]]
 name = "uv_settings"
 path = "benches/uv_settings.rs"
 harness = false
@@ -89,6 +94,7 @@ uv-pep508 = { workspace = true }
 uv-performance-memory-allocator = { workspace = true }
 uv-platform-tags = { workspace = true }
 uv-preview = { workspace = true }
+uv-project-edit = { workspace = true }
 uv-pypi-types = { workspace = true }
 uv-python-managed = { workspace = true }
 uv-python-interpreter = { workspace = true }

@@ -4323,6 +4323,269 @@ fn add_frozen() -> Result<()> {
     Ok(())
 }
 
+/// Add and update multiple requirements without repeatedly reformatting the dependency array.
+#[test]
+fn add_frozen_batch_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "alpha>=1",
+            "delta>=1",
+            "zulu>=1",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().args(["echo", "bravo", "charlie"]).arg("--frozen").arg("--raw"), @"
+    exit_code: 0 (success)
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "alpha>=1",
+        "bravo",
+        "charlie",
+        "delta>=1",
+        "echo",
+        "zulu>=1",
+    ]
+    "#);
+
+    uv_snapshot!(context.filters(), context.add().args(["zulu>=2", "alpha[two]>=2", "delta>=3", "alpha[three]"]).arg("--frozen").arg("--raw"), @"
+    exit_code: 0 (success)
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "alpha[three,two]>=2",
+        "bravo",
+        "charlie",
+        "delta>=3",
+        "echo",
+        "zulu>=2",
+    ]
+    "#);
+
+    pyproject_toml.write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = [
+            "a",
+            "a-c",
+        ]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().args(["a-b", "a[z]"]).arg("--frozen").arg("--raw"), @"
+    exit_code: 0 (success)
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = [
+        "a[z]",
+        "a-b",
+        "a-c",
+    ]
+    "#);
+
+    Ok(())
+}
+
+/// Interleaving legacy and standardized development dependencies keeps lower-bound indices valid.
+#[test]
+fn add_batch_dev_dependency_bounds() -> Result<()> {
+    let context = uv_test::test_context!("3.12").with_filtered_counts();
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+
+        [dependency-groups]
+        dev = []
+
+        [tool.uv]
+        dev-dependencies = ["idna>=3.6"]
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.add().args(["iniconfig", "idna", "anyio"]).arg("--dev"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    Resolved [N] packages in [TIME]
+    Prepared [N] packages in [TIME]
+    Installed [N] packages in [TIME]
+     + anyio==4.3.0
+     + idna==3.6
+     + iniconfig==2.0.0
+     + sniffio==1.3.1
+    ");
+
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = []
+
+    [dependency-groups]
+    dev = [
+        "anyio>=4.3.0",
+        "iniconfig>=2.0.0",
+    ]
+
+    [tool.uv]
+    dev-dependencies = [
+        "idna>=3.6",
+    ]
+    "#);
+    Ok(())
+}
+
+/// Development batches route to their authored arrays while retaining unrelated TOML and comments.
+#[test]
+fn add_frozen_batch_dev_dependencies() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["production>=1"] # unchanged
+
+        [project.optional-dependencies]
+        feature = ["optional>=1"]
+
+        [dependency-groups]
+        DEV = ["shared_name>=1; python_version >= '3.12'"]
+        lint = ["group-dependency>=1"]
+
+        [tool.uv]
+        dev-dependencies = ["legacy_only>=1", "shared-name<2; sys_platform == 'linux'"]
+    "#})?;
+    uv_snapshot!(context.filters(), context.add()
+        .args(["new-alpha", "new-zulu", "--dev", "--frozen", "--raw", "--offline"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = ["production>=1"] # unchanged
+
+    [project.optional-dependencies]
+    feature = ["optional>=1"]
+
+    [dependency-groups]
+    DEV = ["shared_name>=1; python_version >= '3.12'"]
+    lint = ["group-dependency>=1"]
+
+    [tool.uv]
+    dev-dependencies = [
+        "legacy_only>=1",
+        "new-alpha",
+        "new-zulu",
+        "shared-name<2; sys_platform == 'linux'",
+    ]
+    "#);
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["group-alpha", "group-zulu", "--group", "dev", "--frozen", "--raw", "--offline"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = ["production>=1"] # unchanged
+
+    [project.optional-dependencies]
+    feature = ["optional>=1"]
+
+    [dependency-groups]
+    DEV = [
+        "group-alpha",
+        "group-zulu",
+        "shared_name>=1; python_version >= '3.12'",
+    ]
+    lint = ["group-dependency>=1"]
+
+    [tool.uv]
+    dev-dependencies = [
+        "legacy_only>=1",
+        "new-alpha",
+        "new-zulu",
+        "shared-name<2; sys_platform == 'linux'",
+    ]
+    "#);
+
+    uv_snapshot!(context.filters(), context.add()
+        .args(["shared-name>=2; python_version >= '3.12'", "legacy-only>=2", "shared_name[two]; python_version >= '3.12'", "legacy_only[three]", "--dev", "--frozen", "--raw", "--offline"]), @r#"
+    exit_code: 0 (success)
+    ----- stderr -----
+    warning: The `tool.uv.dev-dependencies` field (used in `pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+    "#);
+    assert_snapshot!(context.read("pyproject.toml"), @r#"
+    [project]
+    name = "project"
+    version = "0.1.0"
+    requires-python = ">=3.12"
+    dependencies = ["production>=1"] # unchanged
+
+    [project.optional-dependencies]
+    feature = ["optional>=1"]
+
+    [dependency-groups]
+    DEV = [
+        "group-alpha",
+        "group-zulu",
+        "shared-name[two]>=2 ; python_full_version >= '3.12'",
+    ]
+    lint = ["group-dependency>=1"]
+
+    [tool.uv]
+    dev-dependencies = [
+        "legacy-only[three]>=2",
+        "new-alpha",
+        "new-zulu",
+        "shared-name<2; sys_platform == 'linux'",
+    ]
+    "#);
+    Ok(())
+}
+
 /// Add a requirement without updating the environment.
 #[test]
 fn add_no_sync() -> Result<()> {
