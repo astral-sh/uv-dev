@@ -116,7 +116,6 @@ are not recommended, as they may cause the RPC mechanism to fail.
 use std::collections::HashMap;
 
 pub use credential::Credential;
-use credential::CredentialBuilder;
 pub use error::{Error, Result};
 
 #[cfg(any(
@@ -157,17 +156,17 @@ mod windows;
 mod credential;
 mod error;
 
-fn default_credential_builder() -> Box<CredentialBuilder> {
+fn build_default_credential(target: Option<&str>, service: &str, user: &str) -> Result<Entry> {
     #[cfg(any(
         all(target_os = "linux", feature = "secret-service"),
         all(target_os = "freebsd", feature = "secret-service"),
         all(target_os = "openbsd", feature = "secret-service")
     ))]
-    return secret_service::default_credential_builder();
+    return secret_service::build_credential(target, service, user).map(|inner| Entry { inner });
     #[cfg(all(target_os = "macos", feature = "apple-native"))]
-    return macos::default_credential_builder();
+    return macos::build_credential(target, service, user).map(|inner| Entry { inner });
     #[cfg(all(target_os = "windows", feature = "windows-native"))]
-    return windows::default_credential_builder();
+    return windows::build_credential(target, service, user).map(|inner| Entry { inner });
     #[cfg(not(any(
         all(target_os = "linux", feature = "secret-service"),
         all(target_os = "freebsd", feature = "secret-service"),
@@ -175,14 +174,10 @@ fn default_credential_builder() -> Box<CredentialBuilder> {
         all(target_os = "macos", feature = "apple-native"),
         all(target_os = "windows", feature = "windows-native"),
     )))]
-    credential::nop_credential_builder()
-}
-
-fn build_default_credential(target: Option<&str>, service: &str, user: &str) -> Result<Entry> {
-    static DEFAULT: std::sync::LazyLock<Box<CredentialBuilder>> =
-        std::sync::LazyLock::new(default_credential_builder);
-    let credential = DEFAULT.build(target, service, user)?;
-    Ok(Entry { inner: credential })
+    {
+        let _ = (target, service, user);
+        Err(Error::NoDefaultCredentialBuilder)
+    }
 }
 
 #[derive(Debug)]
