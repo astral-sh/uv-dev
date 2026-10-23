@@ -329,20 +329,8 @@ pub async fn pip_sync(
         })
         .transpose()?;
 
-    // Initialize the registry client.
-    let client = RegistryClientBuilder::new(client_builder.clone(), cache.clone())
-        .index_locations(index_locations.clone())
-        .index_strategy(index_strategy)
-        .torch_backend(torch_backend.clone())
-        .markers(interpreter.markers())
-        .platform(interpreter.platform())
-        .build()?;
-
     // Combine the `--no-binary` and `--no-build` flags from the requirements files.
     let build_options = build_options.combine(no_binary, no_build);
-
-    // Resolve the flat indexes from `--find-links`.
-    let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;
 
     // Determine whether to enable build isolation.
     let types_build_isolation = match build_isolation {
@@ -358,45 +346,35 @@ pub async fn pip_sync(
     } else {
         HashStrategy::default()
     };
-    // Initialize any shared state.
-    let state = SharedState::default();
 
     // Lower the extra build dependencies, if any.
     let extra_build_requires =
         LoweredExtraBuildDependencies::from_non_lowered(extra_build_dependencies.clone())
             .into_inner();
 
-    // Create a build dispatch.
-    let build_dispatch = BuildDispatch::new(
-        &client,
-        &cache,
-        &build_constraints,
-        interpreter,
-        &index_locations,
-        &flat_index,
-        &dependency_metadata,
-        state.clone(),
-        index_strategy,
-        config_settings,
-        config_settings_package,
-        types_build_isolation,
-        &extra_build_requires,
-        extra_build_variables,
-        link_mode,
-        &build_options,
-        &build_hasher,
-        exclude_newer.clone(),
-        sources.clone(),
-        SourceTreeEditablePolicy::Project,
-        workspace_cache.clone(),
-        concurrency.clone(),
-        preview,
-    );
-
     // Determine the set of installed packages.
     let site_packages = SitePackages::from_environment(&environment)?;
 
-    let (resolution, hasher) = if let Some(pylock) = pylock {
+    // Remote lockfiles can use credentials from the configured indexes before a registry client
+    // is needed for resolution or installation.
+    let mut registry_client_builder =
+        RegistryClientBuilder::new(client_builder.clone(), cache.clone())
+            .index_locations(index_locations.clone())
+            .index_strategy(index_strategy)
+            .torch_backend(torch_backend.clone())
+            .markers(interpreter.markers())
+            .platform(interpreter.platform());
+    registry_client_builder.cache_index_credentials()?;
+
+    // Initialize services only when resolving requirements or executing an installation plan.
+    let init_services = || async {
+        let client = registry_client_builder.clone().build()?;
+
+        let flat_index = FlatIndex::load(&client, &cache, &index_locations).await?;
+        Ok::<_, anyhow::Error>((client, flat_index, SharedState::default()))
+    };
+
+    let (resolution, hasher, services) = if let Some(pylock) = pylock {
         let (install_path, lock) = read_pylock_toml(&pylock, &client_builder).await?;
 
         // Convert the extras and groups specifications into a concrete form.
@@ -420,7 +398,7 @@ pub async fn pip_sync(
             .cloned()
             .collect::<Vec<_>>();
 
-        resolve_pylock_toml(
+        let (resolution, hasher) = resolve_pylock_toml(
             lock,
             &install_path,
             interpreter,
@@ -430,8 +408,38 @@ pub async fn pip_sync(
             &groups,
             &build_options,
             hash_checking,
-        )?
+        )?;
+        (resolution, hasher, None)
     } else {
+        let (client, flat_index, state) = init_services().await?;
+
+        // Create a build dispatch.
+        let build_dispatch = BuildDispatch::new(
+            &client,
+            &cache,
+            &build_constraints,
+            interpreter,
+            &index_locations,
+            &flat_index,
+            &dependency_metadata,
+            state.clone(),
+            index_strategy,
+            config_settings,
+            config_settings_package,
+            types_build_isolation,
+            &extra_build_requires,
+            extra_build_variables,
+            link_mode,
+            &build_options,
+            &build_hasher,
+            exclude_newer.clone(),
+            sources.clone(),
+            SourceTreeEditablePolicy::Project,
+            workspace_cache.clone(),
+            concurrency.clone(),
+            preview,
+        );
+
         // When resolving, don't take any external preferences into account.
         let preferences = Vec::default();
 
@@ -441,7 +449,7 @@ pub async fn pip_sync(
             .dependency_mode(dependency_mode)
             .exclude_newer(exclude_newer.clone())
             .index_strategy(index_strategy)
-            .torch_backend(torch_backend)
+            .torch_backend(torch_backend.clone())
             .build_options(build_options.clone())
             .build();
 
@@ -484,65 +492,97 @@ pub async fn pip_sync(
             }
         };
 
-        (resolution, hasher)
+        (resolution, hasher, Some((client, flat_index, state)))
     };
 
     // Constrain any build requirements marked as `match-runtime = true`.
     let extra_build_requires = extra_build_requires.match_runtime(&resolution)?;
 
-    // Create a build dispatch.
-    let build_dispatch = BuildDispatch::new(
-        &client,
-        &cache,
-        &build_constraints,
-        interpreter,
-        &index_locations,
-        &flat_index,
-        &dependency_metadata,
-        state.clone(),
-        index_strategy,
-        config_settings,
-        config_settings_package,
-        types_build_isolation,
-        &extra_build_requires,
-        extra_build_variables,
-        link_mode,
-        &build_options,
-        &build_hasher,
-        exclude_newer.clone(),
-        sources,
-        SourceTreeEditablePolicy::Project,
-        workspace_cache,
-        concurrency.clone(),
-        preview,
-    );
-
-    // Sync the environment.
-    let changelog = match uv_install_operations::install(
+    let compile = compile.then_some(uv_install_operations::BytecodeCompilation::All);
+    let plan = uv_install_operations::InstallationPlan::build(
         &resolution,
         site_packages,
         InstallationStrategy::Permissive,
-        Modifications::Exact,
         &reinstall,
         &build_options,
-        link_mode,
-        compile.then_some(uv_install_operations::BytecodeCompilation::All),
         &hasher,
-        &tags,
-        &client,
-        state.in_flight(),
-        &concurrency,
-        &build_dispatch,
+        &index_locations,
+        config_settings,
+        config_settings_package,
+        &extra_build_requires,
+        extra_build_variables,
         &cache,
         &environment,
-        Box::new(DefaultInstallLogger),
-        installer_metadata,
-        dry_run,
-        printer,
-        preview,
+        &tags,
     )
-    .await
-    {
+    .map_err(UvError::from)?;
+
+    let result = if plan.is_noop(Modifications::Exact, compile, dry_run) {
+        plan.finish_noop(
+            &resolution,
+            Modifications::Exact,
+            compile,
+            &DefaultInstallLogger,
+            dry_run,
+            printer,
+        )
+    } else {
+        let (client, flat_index, state) = match services {
+            Some(services) => services,
+            None => init_services().await?,
+        };
+
+        // Create a build dispatch.
+        let build_dispatch = BuildDispatch::new(
+            &client,
+            &cache,
+            &build_constraints,
+            interpreter,
+            &index_locations,
+            &flat_index,
+            &dependency_metadata,
+            state.clone(),
+            index_strategy,
+            config_settings,
+            config_settings_package,
+            types_build_isolation,
+            &extra_build_requires,
+            extra_build_variables,
+            link_mode,
+            &build_options,
+            &build_hasher,
+            exclude_newer.clone(),
+            sources,
+            SourceTreeEditablePolicy::Project,
+            workspace_cache,
+            concurrency.clone(),
+            preview,
+        );
+
+        // Sync the environment.
+        plan.execute(
+            &resolution,
+            Modifications::Exact,
+            &build_options,
+            link_mode,
+            compile,
+            &hasher,
+            &tags,
+            &client,
+            state.in_flight(),
+            &concurrency,
+            &build_dispatch,
+            &cache,
+            &environment,
+            Box::new(DefaultInstallLogger),
+            installer_metadata,
+            dry_run,
+            printer,
+            preview,
+        )
+        .await
+    };
+    let changelog = match result {
         Ok(changelog) => changelog,
         Err(uv_install_operations::Error::OutdatedEnvironment(changelog)) => {
             write_install_report(&changelog, dry_run, output_format, printer)?;
