@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
@@ -6,8 +7,10 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 #[cfg(unix)]
 use fs_err::{metadata, set_permissions};
-use indoc::indoc;
+use indoc::{formatdoc, indoc};
 use uv_static::EnvVars;
+use uv_test::package_server::PackageServer;
+use uv_test::packse::{PackseServer, generate_wheel, scenario::Scenario};
 use uv_test::{copy_dir_ignore, uv_snapshot, venv_bin_path};
 
 #[test]
@@ -353,6 +356,116 @@ fn tool_run_warn_executable_not_in_from() {
      + websockets==12.0
     warning: An executable named `fastapi` is not provided by package `fastapi` but is available via the dependency `fastapi-cli`. Consider using `uv tool run --from fastapi-cli fastapi` instead.
     ");
+}
+
+/// A legacy default index receipt allows reuse with the matching CLI index.
+#[test]
+fn tool_run_from_install_with_legacy_default_index_receipt() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "tool-legacy-index"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        entry_points = ["example"]
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("--index-url").arg(index.index_url())
+        .arg("example==1.0.0")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    Installed 1 executable: example
+    ");
+
+    let receipt_path = context.temp_dir.child("tools/example/uv-receipt.toml");
+    let mut receipt: toml::Value = toml::from_str(&context.read("tools/example/uv-receipt.toml"))?;
+    let options = receipt["tool"]["options"]
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("Expected tool options"))?;
+    options.remove("index");
+    options.insert(
+        "index-url".to_string(),
+        toml::Value::String(index.index_url()),
+    );
+    receipt_path.write_str(&toml::to_string(&receipt)?)?;
+
+    // An empty cache and offline resolution make rebuilding the environment impossible.
+    fs_err::remove_dir_all(&context.cache_dir)?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--offline")
+        .arg("--index-url").arg(index.index_url())
+        .arg("example"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from example!
+    ");
+    Ok(())
+}
+
+/// A legacy extra index receipt allows reuse with the matching CLI index.
+#[test]
+fn tool_run_from_install_with_legacy_extra_index_receipt() -> Result<()> {
+    let scenario = toml::from_str::<Scenario>(indoc! {r#"
+        name = "tool-legacy-index"
+        [root]
+        [expected]
+        satisfiable = true
+        [packages.example.versions."1.0.0"]
+        sdist = false
+        entry_points = ["example"]
+    "#})?;
+    let index = PackseServer::from_scenario(&scenario);
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("--extra-index-url").arg(index.index_url())
+        .arg("example==1.0.0")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    Installed 1 executable: example
+    ");
+
+    let receipt_path = context.temp_dir.child("tools/example/uv-receipt.toml");
+    let mut receipt: toml::Value = toml::from_str(&context.read("tools/example/uv-receipt.toml"))?;
+    let options = receipt["tool"]["options"]
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("Expected tool options"))?;
+    options.remove("index");
+    options.insert(
+        "extra-index-url".to_string(),
+        toml::Value::Array(vec![toml::Value::String(index.index_url())]),
+    );
+    receipt_path.write_str(&toml::to_string(&receipt)?)?;
+
+    // An empty cache and offline resolution make rebuilding the environment impossible.
+    fs_err::remove_dir_all(&context.cache_dir)?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--offline")
+        .arg("--extra-index-url").arg(index.index_url())
+        .arg("example"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from example!
+    ");
+    Ok(())
 }
 
 #[test]
@@ -3621,4 +3734,288 @@ async fn tool_run_latest_keyring_auth() {
      + executable-application==0.3.0
     Installed 1 executable: app
     ");
+}
+
+/// Changing the default index during an upgrade still permits offline reuse of the installed tool.
+#[tokio::test]
+async fn tool_run_from_install_after_default_index_change() -> Result<()> {
+    let name = "example".parse()?;
+    let original = PackageServer::new(&name).await;
+    let replacement = PackageServer::new(&name).await;
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let original_url = original.index_url();
+    let replacement_url = replacement.index_url();
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["example".to_string()],
+    );
+    original.serve(&filename, &bytes, None).await;
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["example".to_string()],
+    );
+    replacement.serve(&filename, &bytes, None).await;
+
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("--index-url").arg(&original_url)
+        .arg("example")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    Installed 1 executable: example
+    ");
+
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("--index-url").arg(&replacement_url)
+        .arg("example")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Updated example v1.0.0 -> v2.0.0
+     - example==1.0.0
+     + example==2.0.0
+    Installed 1 executable: example
+    ");
+
+    let receipt: toml::Value = toml::from_str(&context.read("tools/example/uv-receipt.toml"))?;
+    let indexes = &receipt["tool"]["options"]["index"];
+    assert_eq!(indexes.as_array().map(Vec::len), Some(1));
+    assert_eq!(indexes[0]["url"].as_str(), Some(replacement_url.as_str()));
+
+    // With an empty cache, offline execution can only succeed by reusing the installed tool.
+    fs_err::remove_dir_all(&context.cache_dir)?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--offline")
+        .arg("--index-url").arg(&replacement_url)
+        .arg("example"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from example!
+    ");
+    Ok(())
+}
+
+/// Repeated upgrades retain the default index receipt used to reuse an installed tool.
+#[tokio::test]
+async fn tool_run_from_install_after_default_index_upgrades() -> Result<()> {
+    let name = "example".parse()?;
+    let server = PackageServer::new(&name).await;
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let config = context.temp_dir.child("config.toml");
+    let url = server.index_url();
+    config.write_str(&formatdoc! {r"
+        index-url = {url:?}
+    "})?;
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["example".to_string()],
+    );
+    server.serve(&filename, &bytes, None).await;
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("--config-file").arg(config.path())
+        .arg("example")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    Installed 1 executable: example
+    ");
+
+    let receipt: toml::Value = toml::from_str(&context.read("tools/example/uv-receipt.toml"))?;
+    let initial_indexes = receipt["tool"]["options"]["index"].clone();
+    assert_eq!(initial_indexes.as_array().map(Vec::len), Some(1));
+
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["example".to_string()],
+    );
+    server.serve(&filename, &bytes, None).await;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("--config-file").arg(config.path())
+        .arg("example")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Updated example v1.0.0 -> v2.0.0
+     - example==1.0.0
+     + example==2.0.0
+    Installed 1 executable: example
+    ");
+
+    let receipt: toml::Value = toml::from_str(&context.read("tools/example/uv-receipt.toml"))?;
+    assert_eq!(receipt["tool"]["options"]["index"], initial_indexes);
+
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"3.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["example".to_string()],
+    );
+    server.serve(&filename, &bytes, None).await;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("--config-file").arg(config.path())
+        .arg("example")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Updated example v2.0.0 -> v3.0.0
+     - example==2.0.0
+     + example==3.0.0
+    Installed 1 executable: example
+    ");
+
+    let receipt: toml::Value = toml::from_str(&context.read("tools/example/uv-receipt.toml"))?;
+    assert_eq!(receipt["tool"]["options"]["index"], initial_indexes);
+
+    fs_err::remove_dir_all(&context.cache_dir)?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--config-file").arg(config.path())
+        .args(["--offline", "example"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from example!
+    ");
+    Ok(())
+}
+
+/// Repeated upgrades retain the named index receipt used to reuse an installed tool.
+#[tokio::test]
+async fn tool_run_from_install_after_named_index_upgrades() -> Result<()> {
+    let name = "example".parse()?;
+    let server = PackageServer::new(&name).await;
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_exe_suffix()
+        .with_tool_dirs();
+    let bin_dir = context.temp_dir.child("bin");
+    let config = context.temp_dir.child("config.toml");
+    let url = server.index_url();
+    config.write_str(&formatdoc! {r#"
+        index-url = {url:?}
+        [[index]]
+        name = "named"
+        url = {url:?}
+        explicit = true
+    "#})?;
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"1.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["example".to_string()],
+    );
+    server.serve(&filename, &bytes, None).await;
+    uv_snapshot!(context.filters(), context.tool_install()
+        .arg("--config-file").arg(config.path())
+        .arg("example")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + example==1.0.0
+    Installed 1 executable: example
+    ");
+
+    let receipt: toml::Value = toml::from_str(&context.read("tools/example/uv-receipt.toml"))?;
+    let initial_indexes = receipt["tool"]["options"]["index"].clone();
+    assert_eq!(initial_indexes.as_array().map(Vec::len), Some(2));
+
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"2.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["example".to_string()],
+    );
+    server.serve(&filename, &bytes, None).await;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("--config-file").arg(config.path())
+        .arg("example")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Updated example v1.0.0 -> v2.0.0
+     - example==1.0.0
+     + example==2.0.0
+    Installed 1 executable: example
+    ");
+
+    let receipt: toml::Value = toml::from_str(&context.read("tools/example/uv-receipt.toml"))?;
+    assert_eq!(receipt["tool"]["options"]["index"], initial_indexes);
+
+    let (filename, bytes) = generate_wheel(
+        &name,
+        &"3.0.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &["example".to_string()],
+    );
+    server.serve(&filename, &bytes, None).await;
+    uv_snapshot!(context.filters(), context.tool_upgrade()
+        .arg("--config-file").arg(config.path())
+        .arg("example")
+        .env(EnvVars::PATH, bin_dir.as_os_str()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Updated example v2.0.0 -> v3.0.0
+     - example==2.0.0
+     + example==3.0.0
+    Installed 1 executable: example
+    ");
+
+    let receipt: toml::Value = toml::from_str(&context.read("tools/example/uv-receipt.toml"))?;
+    assert_eq!(receipt["tool"]["options"]["index"], initial_indexes);
+
+    fs_err::remove_dir_all(&context.cache_dir)?;
+    uv_snapshot!(context.filters(), context.tool_run()
+        .arg("--config-file").arg(config.path())
+        .args(["--offline", "example"]), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    Hello from example!
+    ");
+    Ok(())
 }
