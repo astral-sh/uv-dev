@@ -1,0 +1,43 @@
+{
+  "related": {
+    "items": [
+      {
+        "kind": "issue",
+        "number": 89,
+        "title": "Any plans on code signing the binary releases?",
+        "url": "https://github.com/astral-sh/python-build-standalone/issues/89",
+        "state": "open",
+        "reason": "Canonical upstream request for signed Python distributions, including Windows signing. uv documents that its managed CPython builds come from python-build-standalone, and a maintainer explicitly linked this discussion from astral-sh/uv#10336. It covers the underlying signing request affecting both the interpreter and its supplied venv launchers."
+      },
+      {
+        "kind": "issue",
+        "number": 6584,
+        "title": "Group Policy Blocks UV Tool from Accessing Python Interpreter",
+        "url": "https://github.com/astral-sh/uv/issues/6584",
+        "state": "open",
+        "reason": "Reports Windows policy blocking a venv's Scripts\\python.exe during uv add/run; an April 2026 comment also reports Smart App Control blocking Python executables. The original report concerns restricted locations, whereas this reporter rebuilt a working signed environment in the same location. Related symptom, but the upstream signing request is a closer canonical match."
+      },
+      {
+        "kind": "issue",
+        "number": 10336,
+        "title": "Sign published executables for Windows",
+        "url": "https://github.com/astral-sh/uv/issues/10336",
+        "state": "closed",
+        "reason": "Closed when uv 0.12.12 introduced signing for uv release executables and binaries in uv/uv_build wheels. Its maintainer comments distinguish the upstream Python-signing discussion. That release did not establish a fix for managed CPython or existing venv executables, so this report is not evidence of a regression of that fix."
+      },
+      {
+        "kind": "issue",
+        "number": 10288,
+        "title": "Windows AV software causes 0.5 second delay for unsigned binaries",
+        "url": "https://github.com/astral-sh/uv/issues/10288",
+        "state": "open",
+        "reason": "Discusses unsigned Windows venv Python executables, signing python-build-standalone binaries, and better behavior with official Python installers. The observed failure is antivirus startup latency rather than an execution block; it provides related signing context rather than an exact duplicate."
+      }
+    ],
+    "search_scope": "Searched astral-sh/uv open and closed issues and open, closed, and merged PRs with authenticated gh. Separate literal searches covered Smart App Control, the exact Application Control error, NotSigned, Authenticode, unsigned executables, python.exe/venvlauncher, signed system Python, documentation, and warnings. Conceptual searches covered group-policy blocks, AppLocker, WDAC, SmartScreen, signing, and interpreter selection, without the incidental IDE, Python version, or Windows build. Reviewed candidate comments and followed the maintainer link to astral-sh/python-build-standalone#89. Fix-oriented review covered the uv 0.12.12 release, closed astral-sh/uv#10336, unmerged astral-sh/uv#18280, and merged astral-sh/uv#15068. Ruled out astral-sh/uv#15022 and astral-sh/uv#15068 as the same problem: they fix entrypoint breakage after signing, not missing interpreter signatures. Also ruled out installer detection in astral-sh/uv#10079 and path-policy reports astral-sh/uv#14401 and astral-sh/uv#18000 as canonical matches. No separate matching documentation or unsigned-interpreter warning issue was found."
+  },
+  "type": "duplicate",
+  "type_reason": "The core request for signed managed CPython binaries is already tracked by open astral-sh/python-build-standalone#89, which uv maintainers reference for Python-distribution signing. The Smart App Control reproduction and venv impact strengthen that existing request; documentation and warning suggestions are secondary follow-ups. No previously fixed managed-Python signing bug was identified: astral-sh/uv#10336 and uv 0.12.12 concern uv's own distributed executables.",
+  "summary": "astral-sh/python-build-standalone#89 is the canonical signing request. astral-sh/uv#6584 reports related policy blocks, astral-sh/uv#10288 discusses antivirus effects on unsigned venv executables, and closed astral-sh/uv#10336 covers signing uv itself.",
+  "draft_response": "Signing the Python distributions uv downloads is tracked in astral-sh/python-build-standalone#89. uv uses those CPython builds and normally copies their Windows venv launchers into new environments. Please add your Smart App Control reproduction there so the interpreter-signing discussion stays together.\n\nastral-sh/uv#10336 was resolved for uv's own release executables in 0.12.12; that does not sign managed Python installations or replace executables in existing environments. Your workaround of selecting signed Python.org builds with `UV_PYTHON_PREFERENCE=only-system` and rebuilding the environments is consistent with uv's supported interpreter selection. `--no-managed-python` is the equivalent command-line option. Compatibility documentation and an unsigned-interpreter warning would require additional uv-side work."
+}
