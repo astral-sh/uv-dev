@@ -79,6 +79,32 @@ pub(crate) struct GitRemote {
     url: SafeUrl,
 }
 
+/// Whether Git LFS preparation was requested and completed for a revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LfsState {
+    NotRequested,
+    Unavailable,
+    Ready,
+}
+
+impl LfsState {
+    /// Record the result of preparing or validating requested LFS objects.
+    fn requested(ready: bool) -> Self {
+        if ready {
+            Self::Ready
+        } else {
+            Self::Unavailable
+        }
+    }
+
+    pub(crate) fn is_ready(self) -> bool {
+        match self {
+            Self::NotRequested | Self::Unavailable => false,
+            Self::Ready => true,
+        }
+    }
+}
+
 /// A local clone of a remote repository's database. Multiple [`GitCheckout`]s
 /// can be cloned from a single [`GitDatabase`].
 pub(crate) struct GitDatabase {
@@ -87,7 +113,7 @@ pub(crate) struct GitDatabase {
     /// Underlying Git repository instance for this database.
     repo: GitRepository,
     /// Git LFS artifacts have been initialized (if requested).
-    lfs_ready: Option<bool>,
+    lfs_state: LfsState,
 }
 
 /// A local checkout of a particular revision from a [`GitRepository`].
@@ -97,7 +123,7 @@ pub(crate) struct GitCheckout {
     /// Underlying Git repository instance for this checkout.
     repo: GitRepository,
     /// Git LFS artifacts have been initialized (if requested).
-    lfs_ready: Option<bool>,
+    lfs_state: LfsState,
 }
 
 /// A local Git repository.
@@ -256,9 +282,9 @@ impl GitRemote {
 
             if let Ok(rev) = db.repo.resolve(reference) {
                 if with_lfs {
-                    let lfs_ready = fetch_lfs(&mut db.repo, &self.url, &rev, disable_ssl)
+                    let lfs_state = fetch_lfs(&mut db.repo, &self.url, &rev, disable_ssl)
                         .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
-                    db = db.with_lfs_ready(Some(lfs_ready));
+                    db = db.with_lfs_state(LfsState::requested(lfs_state));
                 }
                 return Ok((db, rev));
             }
@@ -278,18 +304,20 @@ impl GitRemote {
         fetch(&mut repo, &self.url, reference, disable_ssl, offline)
             .with_context(|| format!("failed to clone into: {}", into.user_display()))?;
         let rev = repo.resolve(reference)?;
-        let lfs_ready = with_lfs
-            .then(|| {
+        let lfs_state = if with_lfs {
+            LfsState::requested(
                 fetch_lfs(&mut repo, &self.url, &rev, disable_ssl)
-                    .with_context(|| format!("failed to fetch LFS objects at {rev}"))
-            })
-            .transpose()?;
+                    .with_context(|| format!("failed to fetch LFS objects at {rev}"))?,
+            )
+        } else {
+            LfsState::NotRequested
+        };
 
         Ok((
             GitDatabase {
                 remote: self,
                 repo,
-                lfs_ready,
+                lfs_state,
             },
             rev,
         ))
@@ -301,7 +329,7 @@ impl GitRemote {
         Ok(GitDatabase {
             remote: self.clone(),
             repo,
-            lfs_ready: None,
+            lfs_state: LfsState::NotRequested,
         })
     }
 }
@@ -318,7 +346,7 @@ impl GitDatabase {
             .map(|repo| GitCheckout::new(rev, repo))
             .filter(GitCheckout::is_fresh)
         {
-            Some(co) => co.with_lfs_ready(self.lfs_ready),
+            Some(co) => co.with_lfs_state(self.lfs_state),
             None => GitCheckout::clone_into(destination, self, rev, self.remote.url())?,
         };
         Ok(checkout)
@@ -352,10 +380,10 @@ impl GitDatabase {
         self.repo.lfs_fsck_objects(&format!("{oid}^0"))
     }
 
-    /// Set the Git LFS validation state (if any).
+    /// Set the Git LFS preparation state.
     #[must_use]
-    pub(crate) fn with_lfs_ready(mut self, lfs: Option<bool>) -> Self {
-        self.lfs_ready = lfs;
+    pub(crate) fn with_lfs_state(mut self, lfs: LfsState) -> Self {
+        self.lfs_state = lfs;
         self
     }
 }
@@ -369,7 +397,7 @@ impl GitCheckout {
         Self {
             revision,
             repo,
-            lfs_ready: None,
+            lfs_state: LfsState::NotRequested,
         }
     }
 
@@ -425,8 +453,8 @@ impl GitCheckout {
 
         let repo = GitRepository::open(into)?;
         let checkout = Self::new(revision, repo);
-        let lfs_ready = checkout.reset(database.lfs_ready, original_remote_url)?;
-        Ok(checkout.with_lfs_ready(lfs_ready))
+        let lfs_state = checkout.reset(database.lfs_state, original_remote_url)?;
+        Ok(checkout.with_lfs_state(lfs_state))
     }
 
     /// Checks if the `HEAD` of this checkout points to the expected revision.
@@ -444,14 +472,14 @@ impl GitCheckout {
     }
 
     /// Indicates Git LFS artifacts have been initialized (when requested).
-    pub(crate) fn lfs_ready(&self) -> Option<bool> {
-        self.lfs_ready
+    pub(crate) fn lfs_state(&self) -> LfsState {
+        self.lfs_state
     }
 
-    /// Set the Git LFS validation state (if any).
+    /// Set the Git LFS preparation state.
     #[must_use]
-    fn with_lfs_ready(mut self, lfs: Option<bool>) -> Self {
-        self.lfs_ready = lfs;
+    fn with_lfs_state(mut self, lfs: LfsState) -> Self {
+        self.lfs_state = lfs;
         self
     }
 
@@ -471,11 +499,11 @@ impl GitCheckout {
     /// [`.ok` extension]: CHECKOUT_READY_EXTENSION
     /// `git reset --hard [<commit>]` can break relative submodule URLs, so we update submodules
     /// using the original remote URL.
-    fn reset(&self, with_lfs: Option<bool>, original_remote_url: &SafeUrl) -> Result<Option<bool>> {
+    fn reset(&self, lfs_state: LfsState, original_remote_url: &SafeUrl) -> Result<LfsState> {
         // We want to skip smudge if lfs was disabled for the repository
         // as smudge filters can trigger on a reset even if lfs artifacts
         // were not originally "fetched".
-        let lfs_skip_smudge = if with_lfs == Some(true) { "0" } else { "1" };
+        let lfs_skip_smudge = if lfs_state.is_ready() { "0" } else { "1" };
 
         debug!("Reset `{}` to {}", self.repo.path.display(), self.revision);
 
@@ -533,17 +561,22 @@ impl GitCheckout {
 
         // Validate Git LFS objects (if needed) after the reset.
         // See `fetch_lfs` why we do this.
-        let lfs_validation = match with_lfs {
-            None => None,
-            Some(false) => Some(false),
-            Some(true) => Some(self.repo.lfs_fsck_objects(self.revision.as_str())),
+        let lfs_validation = match lfs_state {
+            LfsState::NotRequested => LfsState::NotRequested,
+            LfsState::Unavailable => LfsState::Unavailable,
+            LfsState::Ready => {
+                LfsState::requested(self.repo.lfs_fsck_objects(self.revision.as_str()))
+            }
         };
 
         // The .ok file should be written when the reset is successful.
         // When Git LFS is enabled, the objects must also be fetched and
         // validated successfully as part of the corresponding db.
-        if with_lfs.is_none() || lfs_validation == Some(true) {
-            paths::create(self.repo.path.with_extension(CHECKOUT_READY_EXTENSION))?;
+        match lfs_validation {
+            LfsState::NotRequested | LfsState::Ready => {
+                paths::create(self.repo.path.with_extension(CHECKOUT_READY_EXTENSION))?;
+            }
+            LfsState::Unavailable => {}
         }
 
         Ok(lfs_validation)
