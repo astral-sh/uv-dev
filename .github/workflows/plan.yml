@@ -30,6 +30,9 @@ on:
       build-release-binaries:
         description: "Whether release binaries should be built"
         value: ${{ jobs.plan.outputs.build-release-binaries }}
+      build-binary-size:
+        description: "Whether binary sizes should be measured"
+        value: ${{ jobs.plan.outputs.build-binary-size }}
       run-checks:
         description: "Whether checks should run"
         value: ${{ jobs.plan.outputs.run-checks }}
@@ -72,6 +75,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   UV_LOCKED: 1
@@ -86,6 +90,7 @@ jobs:
       check-crates-policies: ${{ steps.plan.outputs.check_crates_policies }}
       require-check-release: ${{ steps.plan.outputs.require_check_release }}
       build-release-binaries: ${{ steps.plan.outputs.build_release_binaries }}
+      build-binary-size: ${{ steps.plan.outputs.build_binary_size }}
       run-checks: ${{ steps.plan.outputs.run_checks }}
       test-publish: ${{ steps.plan.outputs.test_publish }}
       test-windows-trampoline: ${{ steps.plan.outputs.test_windows_trampoline }}
@@ -113,6 +118,17 @@ jobs:
           version: "0.13.5"
           checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
 
+      - name: "Read binary-size label"
+        id: binary-size
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          enabled="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER" \
+            --jq 'any(.labels[]; .name == "build:binary-size")')"
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+
       - name: "Plan"
         id: plan
         shell: bash
@@ -133,6 +149,7 @@ jobs:
           HAS_BUILD_SKIP_DOCKER_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'build:skip-docker') }}
           HAS_BUILD_SKIP_RELEASE_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'build:skip-release') }}
           HAS_BUILD_RELEASE_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'build:release') }}
+          HAS_BUILD_BINARY_SIZE_LABEL: ${{ steps.binary-size.outputs.enabled }}
           HAS_BUILD_PUSH_DOCKER_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'build:push-docker') }}
           HAS_BUILD_WINDOWS_TRAMPOLINE_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'build:windows-trampoline') }}
           BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha }}
@@ -156,6 +173,7 @@ jobs:
           [[ "$HAS_BUILD_SKIP_DOCKER_LABEL" == "true" ]] && has_build_skip_docker_label=1
           [[ "$HAS_BUILD_SKIP_RELEASE_LABEL" == "true" ]] && has_build_skip_release_label=1
           [[ "$HAS_BUILD_RELEASE_LABEL" == "true" ]] && has_build_release_label=1
+          [[ "$HAS_BUILD_BINARY_SIZE_LABEL" == "true" ]] && has_build_binary_size_label=1
           [[ "$HAS_BUILD_PUSH_DOCKER_LABEL" == "true" ]] && has_build_push_docker_label=1
           [[ "$HAS_BUILD_WINDOWS_TRAMPOLINE_LABEL" == "true" ]] && has_build_windows_trampoline_label=1
 
@@ -235,11 +253,12 @@ jobs:
           [[ $is_release_pr ]] && check_crates_policies=1
           [[ $is_release_pr ]] && require_check_release=1
           [[ ! $has_skip_label && ! $has_build_skip_label && ! $has_build_skip_release_label && ($release_build_changed || $has_build_release_label) ]] && build_release_binaries=1
+          [[ ! $has_skip_label && ! $has_build_skip_label && ($on_main_branch || $has_build_binary_size_label) ]] && build_binary_size=1
           [[ ! $has_skip_label ]] && run_checks=1
           [[ $publish_changed || $has_publish_label || $has_extended_label || $on_main_branch ]] && test_publish=1
           [[ ! $has_skip_label && ($trampoline_code_changed || $trampoline_scripts_changed || $trampoline_workflow_changed || $rust_deps_changed || $has_build_windows_trampoline_label || $on_main_branch) ]] && test_windows_trampoline=1
           [[ ! $has_skip_label && ($trampoline_repro_changed || $trampoline_build_scripts_changed || $has_build_windows_trampoline_label) ]] && test_windows_trampoline_check_binary=1
-          [[ $on_main_branch || $cache_relevant_changed ]] && save_rust_cache=1
+          [[ $on_main_branch || $cache_relevant_changed || $build_binary_size ]] && save_rust_cache=1
           if [[ ! $has_skip_label && (
             ($is_uv_dev && $has_benchmarks_label) ||
             (! $is_uv_dev && (($any_rust_changed && $non_test_code_changed) || $bench_workflow_changed || $on_main_branch))
@@ -263,6 +282,7 @@ jobs:
             out check_crates_policies   "$check_crates_policies"
             out require_check_release   "$require_check_release"
             out build_release_binaries  "$build_release_binaries"
+            out build_binary_size       "$build_binary_size"
             out run_checks              "$run_checks"
             out test_publish            "$test_publish"
             out test_windows_trampoline "$test_windows_trampoline"
