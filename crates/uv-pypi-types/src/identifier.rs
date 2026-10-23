@@ -85,7 +85,7 @@ impl<'de> serde::de::Deserialize<'de> for Identifier {
         D: serde::de::Deserializer<'de>,
     {
         let s = <Cow<'_, str>>::deserialize(deserializer)?;
-        Self::from_str(&s).map_err(serde::de::Error::custom)
+        Self::new(s.into_owned()).map_err(serde::de::Error::custom)
     }
 }
 
