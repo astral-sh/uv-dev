@@ -394,6 +394,11 @@ impl<P: SerializationPolicy> SafeUrl<P> {
         self.0.port_or_known_default()
     }
 
+    /// Return the URL's origin.
+    pub fn origin(&self) -> url::Origin {
+        self.0.origin()
+    }
+
     /// Return the percent-encoded path.
     pub fn path(&self) -> &str {
         self.0.path()
