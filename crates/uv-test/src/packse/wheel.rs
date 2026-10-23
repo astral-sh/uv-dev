@@ -6,9 +6,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression as ZipCompression, ZipEntryBuilder};
-use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD as base64};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use futures::executor::block_on;
@@ -21,6 +19,8 @@ use tokio_util::compat::FuturesAsyncWriteCompatExt;
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::Requirement;
+
+use crate::archive::{RecordHashes, generate_wheel_from_entries};
 
 pub(super) const DEFAULT_WHEEL_TAG: &str = "py3-none-any";
 
@@ -129,37 +129,20 @@ impl<'a> WheelBuilder<'a> {
                 .map(|&(path, contents)| (path.to_owned(), contents.to_owned())),
         );
 
-        let mut zip = ZipFileWriter::new(Vec::new());
-        for (path, contents) in &entries {
-            let entry = ZipEntryBuilder::new(path.clone().into(), ZipCompression::Stored);
-            block_on(zip.write_entry_whole(entry, contents.as_bytes()))
-                .expect("failed to write wheel file");
-        }
-
-        let record = build_record(&dist_info, &entries);
+        let entries = entries.iter().map(|(path, contents)| {
+            (
+                ZipEntryBuilder::new(path.clone().into(), ZipCompression::Stored).build(),
+                contents.as_bytes(),
+            )
+        });
         let record_entry =
-            ZipEntryBuilder::new(format!("{dist_info}/RECORD").into(), ZipCompression::Stored);
-        block_on(zip.write_entry_whole(record_entry, record.as_bytes()))
-            .expect("failed to write `RECORD` file");
-
-        let bytes = block_on(zip.close()).expect("failed to finish in-memory wheel");
+            ZipEntryBuilder::new(format!("{dist_info}/RECORD").into(), ZipCompression::Stored)
+                .build();
+        let bytes = generate_wheel_from_entries(entries, record_entry, RecordHashes::Include)
+            .expect("failed to generate in-memory wheel");
         let filename = format!("{normalized}-{version}-{tag}.whl");
         (filename, bytes)
     }
-}
-
-/// Build the `RECORD` metadata for a generated wheel.
-fn build_record(dist_info: &str, entries: &[(String, String)]) -> String {
-    let mut record = String::new();
-    for (path, contents) in entries {
-        let contents = contents.as_bytes();
-        let hash = base64.encode(Sha256::digest(contents));
-        writeln!(&mut record, "{path},sha256={hash},{}", contents.len())
-            .expect("writing RECORD metadata into a string should succeed");
-    }
-    writeln!(&mut record, "{dist_info}/RECORD,,")
-        .expect("writing RECORD metadata into a string should succeed");
-    record
 }
 
 /// Generate a source distribution (`.tar.gz`) as an in-memory tarball.

@@ -4,9 +4,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 use assert_fs::prelude::*;
-use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use futures::executor::block_on;
 use indoc::indoc;
 use insta::assert_snapshot;
 use predicates::prelude::predicate;
@@ -16,7 +14,7 @@ use uv_cache::CacheBucket;
 use uv_fs::PortablePath;
 #[cfg(unix)]
 use uv_fs::create_symlink;
-use uv_test::archive::generate_source_archive;
+use uv_test::archive::{RecordHashes, generate_source_archive, generate_wheel_from_entries};
 use uv_test::package_server::PackageServer;
 use uv_test::{TestContext, get_bin, uv_snapshot};
 
@@ -889,30 +887,12 @@ fn binary_payload_wheel(context: &TestContext) -> Result<PathBuf> {
         Root-Is-Purelib: true
         Tag: py3-none-any
     "};
-    const RECORD: &[u8] = indoc! {b"
-        binary_payload/__init__.py,,
-        binary_payload/module.py,,
-        binary_payload/native.so,,
-        binary_payload/plain.so,,
-        binary_payload/versioned.so.1,,
-        binary_payload/versioned.so.1.2,,
-        binary_payload/native.dylib,,
-        binary_payload/native.DLL,,
-        binary_payload/native.pyd,,
-        binary_payload/tool,,
-        binary_payload/large.dat,,
-        binary_payload-0.1.0.dist-info/ignored.so,,
-        binary_payload-0.1.0.dist-info/METADATA,,
-        binary_payload-0.1.0.dist-info/WHEEL,,
-        binary_payload-0.1.0.dist-info/RECORD,,
-    "};
 
     let wheel = context
         .temp_dir
         .join("binary_payload-0.1.0-py3-none-any.whl");
-    let mut writer = ZipFileWriter::new(Vec::new());
     let large_file = vec![0; 2 * 1024 * 1024];
-    for (name, contents) in [
+    let entries = [
         ("binary_payload/__init__.py", &[][..]),
         (
             "binary_payload/module.py",
@@ -933,8 +913,8 @@ fn binary_payload_wheel(context: &TestContext) -> Result<PathBuf> {
         ),
         ("binary_payload-0.1.0.dist-info/METADATA", METADATA),
         ("binary_payload-0.1.0.dist-info/WHEEL", WHEEL),
-        ("binary_payload-0.1.0.dist-info/RECORD", RECORD),
-    ] {
+    ]
+    .map(|(name, contents)| {
         let entry = ZipEntryBuilder::new(name.into(), Compression::Stored).unix_permissions(
             if matches!(name, "binary_payload/native.so" | "binary_payload/tool") {
                 0o755
@@ -942,9 +922,18 @@ fn binary_payload_wheel(context: &TestContext) -> Result<PathBuf> {
                 0o644
             },
         );
-        block_on(writer.write_entry_whole(entry, contents))?;
-    }
-    fs_err::write(&wheel, block_on(writer.close())?)?;
+        (entry.build(), contents)
+    });
+    let record_entry = ZipEntryBuilder::new(
+        "binary_payload-0.1.0.dist-info/RECORD".into(),
+        Compression::Stored,
+    )
+    .unix_permissions(0o644)
+    .build();
+    fs_err::write(
+        &wheel,
+        generate_wheel_from_entries(entries, record_entry, RecordHashes::Omit)?,
+    )?;
 
     Ok(wheel)
 }
