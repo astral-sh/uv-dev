@@ -41,6 +41,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Validate Python download metadata
+        run: uv run --project scripts/uv-dev-python --locked validate-python-downloads crates/uv-python-managed/download-metadata.json
+
       - name: Sync Sysconfig Targets
         run: ./sync_sysconfig_targets.sh
         working-directory: ./crates/uv-dev
