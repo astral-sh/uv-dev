@@ -14,8 +14,8 @@ use uv_install_operations::editable::apply_editable_mode;
 use uv_install_operations::loggers::InstallLogger;
 use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
 use uv_installer::{InstallationStrategy, SitePackages};
-use uv_lock::Installable;
-use uv_pep508::{MarkerTree, VersionOrUrl};
+use uv_lock::{Installable, Lock};
+use uv_pep508::{MarkerEnvironment, MarkerTree, VersionOrUrl};
 use uv_preview::Preview;
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
 use uv_python_interpreter::PythonEnvironment;
@@ -172,28 +172,7 @@ pub async fn sync_from_lock(
     let marker_env = resolution_markers(None, python_platform, venv.interpreter());
 
     // Validate that the platform is supported by the lockfile.
-    let environments = target.lock().supported_environments();
-    if !environments.is_empty() {
-        if !environments
-            .iter()
-            .any(|env| env.evaluate(&marker_env, &[]))
-        {
-            return Err(EnvironmentError::LockedPlatformIncompatibility(
-                // For error reporting, we use the "simplified"
-                // supported environments, because these correspond to
-                // what the end user actually wrote. The non-simplified
-                // environments, by contrast, are explicitly
-                // constrained by `requires-python`.
-                target
-                    .lock()
-                    .simplified_supported_environments()
-                    .into_iter()
-                    .filter_map(MarkerTree::contents)
-                    .map(|env| format!("`{env}`"))
-                    .join(", "),
-            ));
-        }
-    }
+    validate_locked_platform(target.lock(), &marker_env)?;
 
     // Determine the tags to use for the resolution.
     let tags = resolution_tags(None, python_platform, venv.interpreter())
@@ -365,6 +344,33 @@ pub async fn sync_from_lock(
         .await?;
 
     Ok(changelog)
+}
+
+/// Validate that the platform is supported by the lockfile.
+pub fn validate_locked_platform(
+    lock: &Lock,
+    marker_environment: &MarkerEnvironment,
+) -> Result<(), EnvironmentError> {
+    let environments = lock.supported_environments();
+    if !environments.is_empty()
+        && !environments
+            .iter()
+            .any(|environment| environment.evaluate(marker_environment, &[]))
+    {
+        return Err(EnvironmentError::LockedPlatformIncompatibility(
+            // For error reporting, we use the "simplified"
+            // supported environments, because these correspond to
+            // what the end user actually wrote. The non-simplified
+            // environments, by contrast, are explicitly
+            // constrained by `requires-python`.
+            lock.simplified_supported_environments()
+                .into_iter()
+                .filter_map(MarkerTree::contents)
+                .map(|environment| format!("`{environment}`"))
+                .join(", "),
+        ));
+    }
+    Ok(())
 }
 
 /// Filter out any virtual workspace members.
