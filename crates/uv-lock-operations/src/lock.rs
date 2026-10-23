@@ -11,7 +11,7 @@ use uv_configuration::{
     Concurrency, ExtrasSpecification, Override, PackageOverride, Reinstall, Upgrade,
 };
 use uv_dispatch::{BuildDispatch, UniversalState};
-use uv_distribution::{DistributionDatabase, FirstPartyPackages, LoweredExtraBuildDependencies};
+use uv_distribution::{DistributionDatabase, LoweredExtraBuildDependencies, WorkspaceBuildContext};
 use uv_distribution_types::{
     HashCollection, NameRequirementSpecification, RequiresPython, ResolutionRecorder,
     UnresolvedRequirementSpecification,
@@ -348,11 +348,11 @@ async fn do_lock(
         member.default_groups()?;
     }
 
-    let first_party_packages = match target {
+    let workspace_build_context = match target {
         LockTarget::Workspace(workspace) => {
-            FirstPartyPackages::from_workspace(workspace, &first_party_exclusions)
+            WorkspaceBuildContext::from_workspace(workspace, &first_party_exclusions)
         }
-        LockTarget::Script(_) => FirstPartyPackages::default(),
+        LockTarget::Script(_) => WorkspaceBuildContext::default(),
     };
     let requirements = target.requirements();
     let overrides = target.overrides();
@@ -774,7 +774,7 @@ async fn do_lock(
             &validation_build_dispatch,
             concurrency.downloads_semaphore.clone(),
         )
-        .with_first_party_packages(&first_party_packages);
+        .with_workspace_build_context(&workspace_build_context);
         match Box::pin(ValidatedLock::validate(
             existing_lock,
             target.install_path(),
@@ -861,7 +861,7 @@ async fn do_lock(
                 concurrency.downloads_semaphore.clone(),
             )
             .with_recorder(recorder.clone())
-            .with_first_party_packages(&first_party_packages);
+            .with_workspace_build_context(&workspace_build_context);
 
             // Determine whether we can reuse the existing package versions.
             let versions_lock = existing_lock.as_ref().and_then(|lock| match &lock {

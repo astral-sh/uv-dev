@@ -13,7 +13,8 @@ use uv_configuration::{
     BuildOptions, DependencyGroupsWithDefaults, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions,
 };
-use uv_distribution_types::{Edge, FirstParty, Node, Resolution, ResolvedDist};
+use uv_distribution::BuildPurpose;
+use uv_distribution_types::{Edge, Node, Resolution, ResolvedDist};
 use uv_normalize::{DefaultExtras, ExtraName, GroupName, PackageName};
 use uv_platform_tags::Tags;
 use uv_pypi_types::{ConflictKind, ConflictSet, ResolverMarkerEnvironment};
@@ -180,11 +181,8 @@ pub trait Installable<'lock> {
             tag_policy,
             build_options,
             marker_env,
-            if self.lock().is_workspace_member(package) {
-                FirstParty::Yes
-            } else {
-                FirstParty::No
-            },
+            Some(self.lock().package_role(package, self.project_name())),
+            BuildPurpose::Installation,
         )?;
         let version = package.version().cloned();
         let dist = ResolvedDist::Installable {
@@ -210,7 +208,8 @@ pub trait Installable<'lock> {
             TagPolicy::Preferred(tags),
             &BuildOptions::default(),
             marker_env,
-            FirstParty::No,
+            Some(self.lock().package_role(package, self.project_name())),
+            BuildPurpose::Installation,
         )?;
         let version = package.version().cloned();
         let dist = ResolvedDist::Installable {
@@ -1044,7 +1043,7 @@ mod tests {
     use indoc::formatdoc;
     use petgraph::visit::EdgeRef;
     use uv_configuration::{DependencyGroups, ExtrasSpecification};
-    use uv_distribution_types::Name;
+    use uv_distribution_types::{Dist, Name, PackageRole, SourceDist};
     use uv_normalize::{DefaultExtras, DefaultGroups};
     use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
     use uv_platform_tags::{Arch, Os, Platform, TagsOptions};
@@ -1752,6 +1751,53 @@ provides-extras = ["cli"]
         )
         "#);
         });
+    }
+
+    /// Excluding an install node does not change its project or workspace identity.
+    #[test]
+    fn excluded_node_retains_workspace_project_role() {
+        let lock = Lock::from_toml(
+            r#"
+version = 1
+revision = 3
+requires-python = ">=3.11"
+
+[manifest]
+members = ["project"]
+
+[[package]]
+name = "project"
+version = "1.0.0"
+source = { directory = "." }
+"#,
+        )
+        .expect("valid lock");
+        let project = lock.root().expect("workspace project");
+        let install_path = std::env::current_dir().expect("current directory");
+        let target = LockedPackages {
+            lock: &lock,
+            install_path: &install_path,
+            project_name: Some(project.name()),
+        };
+        let node = target
+            .non_installable_node(project, &TAGS, &DARWIN_MARKERS)
+            .expect("valid excluded node");
+        let role = match &node {
+            Node::Dist {
+                dist: ResolvedDist::Installable { dist, .. },
+                install,
+                ..
+            } => match dist.as_ref() {
+                Dist::Source(SourceDist::Directory(directory)) => Some((directory.role, *install)),
+                Dist::Source(_) | Dist::Built(_) => None,
+            },
+            Node::Dist {
+                dist: ResolvedDist::Installed { .. },
+                ..
+            }
+            | Node::Root => None,
+        };
+        assert_eq!(role, Some((Some(PackageRole::WorkspaceProject), false)));
     }
 
     #[test]

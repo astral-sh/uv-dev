@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use uv_distribution::Metadata;
 use uv_distribution_types::{
-    BuiltDist, Dist, DistributionMetadata, IndexUrl, Name, ResolvedDist, SourceDist,
+    BuiltDist, Dist, DistributionMetadata, IndexUrl, Name, PackageRole, ResolvedDist, SourceDist,
     VersionOrUrlRef,
 };
 use uv_normalize::{ExtraName, GroupName, PackageName};
@@ -44,17 +44,6 @@ impl PackageNodeKind {
     }
 }
 
-/// The role of a package relative to the resolver manifest.
-#[derive(Debug, Clone, Copy)]
-pub enum PackageRole {
-    /// The project named in the resolver manifest.
-    Project,
-    /// A workspace member other than the manifest's project.
-    WorkspaceMember,
-    /// A dependency that is neither the manifest's project nor a workspace member.
-    Dependency,
-}
-
 /// A pinned package with its resolved distribution and metadata. The [`ResolvedDist`] refers to a
 /// specific distribution (e.g., a specific wheel), while the [`Metadata`] describes
 /// the package-version pair.
@@ -66,7 +55,8 @@ pub struct AnnotatedDist {
     pub kind: PackageNodeKind,
     pub hashes: HashDigests,
     pub metadata: Option<Arc<MetadataResponse>>,
-    /// The role of this package relative to the resolver manifest.
+    /// The role of this package relative to names in the resolver manifest.
+    /// This classification does not validate the distribution's source path.
     pub role: PackageRole,
     /// The "full" marker for this distribution. It precisely describes all
     /// marker environments for which this distribution _can_ be installed.

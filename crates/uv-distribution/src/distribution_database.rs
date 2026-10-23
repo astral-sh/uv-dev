@@ -25,8 +25,8 @@ use uv_client::{
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
     ArchiveHashPolicy, BuildInfo, BuildableSource, BuiltDist, Dist, DistRef, HashCollection,
-    HashValidation, Hashed, IndexUrl, InstalledDist, MetadataHashPolicy, Name, ResolutionRecorder,
-    SourceDist, SourceUrl, parse_url_hashes,
+    HashValidation, Hashed, IndexUrl, InstalledDist, MetadataHashPolicy, Name, PackageRole,
+    ResolutionRecorder, SourceDist, SourceUrl, parse_url_hashes,
 };
 use uv_extract::dirhash::{DirectoryDigest, HashedFile};
 use uv_extract::hash::Hasher;
@@ -50,7 +50,8 @@ use crate::hash::http_hash_algorithms;
 use crate::metadata::{ArchiveMetadata, Metadata};
 use crate::source::SourceDistributionBuilder;
 use crate::{
-    Error, FirstPartyPackages, LocalWheel, Reporter, RequiresDist, check_supported_wheel_variant,
+    BuildPurpose, Error, LocalWheel, Reporter, RequiresDist, WorkspaceBuildContext,
+    check_supported_wheel_variant,
 };
 
 /// A cached high-level interface to convert distributions (a requirement resolved to a location)
@@ -72,7 +73,7 @@ pub struct DistributionDatabase<'a, Context: BuildContext> {
     client: ManagedClient<'a>,
     reporter: Option<Arc<dyn Reporter>>,
     content_addressed_cache: bool,
-    first_party_packages: Option<&'a FirstPartyPackages>,
+    workspace_build_context: Option<&'a WorkspaceBuildContext>,
 }
 
 impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
@@ -93,24 +94,29 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
             client: ManagedClient::new(client, downloads_semaphore),
             reporter: None,
             content_addressed_cache,
-            first_party_packages: None,
+            workspace_build_context: None,
         }
     }
 
-    /// Allow metadata builds for the given first-party workspace source trees.
+    /// Supply workspace identities and installation exclusions for metadata builds.
     #[must_use]
-    pub fn with_first_party_packages(
+    pub fn with_workspace_build_context(
         mut self,
-        first_party_packages: &'a FirstPartyPackages,
+        workspace_build_context: &'a WorkspaceBuildContext,
     ) -> Self {
-        self.first_party_packages = Some(first_party_packages);
+        self.workspace_build_context = Some(workspace_build_context);
         self
     }
 
-    /// Return whether the name and path identify an eligible workspace member.
-    pub fn is_first_party(&self, name: &PackageName, path: &Path) -> bool {
-        self.first_party_packages
-            .is_some_and(|packages| packages.contains(name, path))
+    /// Return the source's role in the current workspace, if workspace context is available.
+    pub fn package_role(&self, name: &PackageName, path: &Path) -> Option<PackageRole> {
+        self.workspace_build_context
+            .map(|workspace| workspace.package_role(name, path))
+    }
+
+    /// Return the operation context used when selecting and building sources for metadata.
+    pub fn metadata_build_purpose(&self) -> BuildPurpose<'_> {
+        BuildPurpose::Metadata(self.workspace_build_context)
     }
 
     /// Record which static metadata entries are consulted while resolving runtime dependencies.
@@ -740,7 +746,7 @@ impl<'a, Context: BuildContext> DistributionDatabase<'a, Context> {
         };
         let ArchiveMetadata { metadata, hashes } = self
             .builder
-            .for_metadata(self.first_party_packages)
+            .with_build_purpose(self.metadata_build_purpose())
             .download_and_build_metadata(source, build_hash_policy, &self.client)
             .boxed_local()
             .await?;
