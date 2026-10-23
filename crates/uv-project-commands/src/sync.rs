@@ -528,7 +528,7 @@ pub async fn sync(
         &groups,
         editable,
         install_options,
-        modifications,
+        modifications.into(),
         python_platform.as_ref(),
         (&settings).into(),
         &client_builder,

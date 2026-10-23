@@ -89,7 +89,7 @@ pub(super) async fn collect_environment(
             &groups,
             None,
             InstallOptions::default(),
-            modifications,
+            modifications.into(),
             None,
             installer_settings,
             client_builder,
