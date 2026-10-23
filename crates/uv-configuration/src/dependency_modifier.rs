@@ -97,6 +97,31 @@ impl DependencyModifiers {
         self.excludes.contains_for(package, version, dependency)
     }
 
+    /// Return whether scoped modifiers have the same effect for two package versions.
+    pub fn has_same_scoped_effects<'a>(
+        &self,
+        package: &PackageName,
+        version: &Version,
+        candidate_version: &Version,
+        dependencies: impl IntoIterator<Item = &'a Requirement>,
+    ) -> bool {
+        if !self
+            .scoped_overrides_for(package, version)
+            .eq(self.scoped_overrides_for(package, candidate_version))
+        {
+            return false;
+        }
+
+        let mut has_same_exclusion = |dependency: &Requirement| {
+            self.is_excluded_for(package, version, &dependency.name)
+                == self.is_excluded_for(package, candidate_version, &dependency.name)
+        };
+        dependencies.into_iter().all(&mut has_same_exclusion)
+            && self
+                .scoped_overrides_for(package, version)
+                .all(has_same_exclusion)
+    }
+
     /// Apply dependency overrides and exclusions in the given scope.
     pub fn apply<'a, 'scope, I>(
         &'a self,
@@ -122,5 +147,104 @@ impl DependencyModifiers {
                     .excludes
                     .contains_for_package(excludes, &requirement.name)
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use anyhow::Result;
+    use uv_distribution_types::Requirement;
+    use uv_pep508::Requirement as Pep508Requirement;
+    use uv_pypi_types::VerbatimParsedUrl;
+
+    use crate::{DependencyModifiers, ExcludeDependency, Excludes, Override, Overrides};
+
+    fn requirements(inputs: &[&str]) -> Result<Vec<Requirement>> {
+        inputs
+            .iter()
+            .map(|input| {
+                Ok(Requirement::from(
+                    Pep508Requirement::<VerbatimParsedUrl>::from_str(input)?,
+                ))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scoped_effects_prevent_coalescing() -> Result<()> {
+        #[derive(serde::Deserialize)]
+        struct OverrideInput {
+            overrides: Vec<Override<Requirement>>,
+        }
+
+        #[derive(serde::Deserialize)]
+        struct ExcludeInput {
+            excludes: Vec<ExcludeDependency>,
+        }
+
+        let name = "parent".parse()?;
+        let version = "1".parse()?;
+        let candidate_version = "2".parse()?;
+        let dependencies = requirements(&["leaf>=1", "group-leaf>=1"])?;
+        let has_same_scoped_effects = |modifiers: &DependencyModifiers| {
+            modifiers.has_same_scoped_effects(&name, &version, &candidate_version, &dependencies)
+        };
+
+        assert!(has_same_scoped_effects(&DependencyModifiers::default()));
+
+        let scoped_override = toml::from_str::<OverrideInput>(
+            r#"
+            overrides = [{
+                package = { name = "parent", version = "1" },
+                dependencies = [{ name = "leaf", specifier = "==2" }],
+            }]
+            "#,
+        )?;
+        let overrides = Overrides::from_entries(scoped_override.overrides)?;
+        assert!(!has_same_scoped_effects(&DependencyModifiers::new(
+            overrides,
+            Excludes::default(),
+        )));
+
+        for dependency in ["leaf", "group-leaf"] {
+            let exclusion = toml::from_str::<ExcludeInput>(&format!(
+                r#"
+                excludes = [{{
+                    package = {{ name = "parent", version = "1" }},
+                    dependencies = ["{dependency}"],
+                }}]
+                "#,
+            ))?;
+            assert!(!has_same_scoped_effects(&DependencyModifiers::new(
+                Overrides::default(),
+                Excludes::from_entries(exclusion.excludes),
+            )));
+        }
+
+        let scoped_addition = toml::from_str::<OverrideInput>(
+            r#"
+            overrides = [{
+                package = { name = "parent" },
+                dependencies = [{ name = "added", specifier = ">=1" }],
+            }]
+            "#,
+        )?;
+        let overrides = Overrides::from_entries(scoped_addition.overrides)?;
+        let exclusion = toml::from_str::<ExcludeInput>(
+            r#"
+            excludes = [{
+                package = { name = "parent", version = "1" },
+                dependencies = ["added"],
+            }]
+            "#,
+        )?;
+        assert!(!has_same_scoped_effects(&DependencyModifiers::new(
+            overrides,
+            Excludes::from_entries(exclusion.excludes),
+        )));
+
+        Ok(())
     }
 }

@@ -117,6 +117,9 @@ mod urls;
 /// The number of conflicts a package may accumulate before we re-prioritize and backtrack.
 const CONFLICT_THRESHOLD: usize = 5;
 
+/// The number of adjacent, already-prefetched versions to inspect for matching dependencies.
+const DEPENDENCY_COALESCE_LIMIT: usize = 128;
+
 pub struct Resolver<Provider: ResolverProvider, InstalledPackages: InstalledPackagesProvider> {
     state: ResolverState<InstalledPackages>,
     provider: Provider,
@@ -737,6 +740,19 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             .or_default()
                             .insert(version.clone());
 
+                        let dependency_versions = if state.prefetcher.versions_tried(next_package)
+                            >= CONFLICT_THRESHOLD
+                        {
+                            let coalesced_package = next_package.clone();
+                            self.shared_dependency_versions(
+                                &coalesced_package,
+                                &version,
+                                &mut state,
+                            )
+                        } else {
+                            None
+                        };
+
                         // Enrich the state with any URLs, etc.
                         state
                             .visit_package_version_dependencies(
@@ -768,6 +784,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                         state.add_package_version_dependencies(
                             next_id,
                             &version,
+                            dependency_versions,
                             dependencies,
                             &self.index,
                             &self.installed_packages,
@@ -996,6 +1013,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 state.add_package_version_dependencies(
                     package,
                     &version,
+                    None,
                     fork.dependencies,
                     &self.index,
                     &self.installed_packages,
@@ -2181,6 +2199,195 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         unavailable_version
     }
 
+    /// Returns a contiguous set of prefetched registry versions with the same dependencies.
+    ///
+    /// PubGrub can attach one dependency incompatibility to all versions in this range. This is
+    /// especially useful for packages that publish many releases with unchanged dependencies,
+    /// since rejecting the range lets the parent backtrack past all of them at once.
+    ///
+    /// The optimization is deliberately limited to specific-environment, single-index wheel
+    /// resolutions after repeated backtracking. Every adjacent candidate must already have
+    /// metadata in memory, use the same index, and have identical raw requirements and scoped
+    /// dependency effects.
+    fn shared_dependency_versions(
+        &self,
+        package: &PubGrubPackage,
+        version: &Version,
+        state: &mut ForkState,
+    ) -> Option<Range<Version>> {
+        let PubGrubPackageInner::Package {
+            name,
+            kind: PackageNodeKind::Base,
+            marker: MarkerTree::TRUE,
+        } = &**package
+        else {
+            return None;
+        };
+        if state.env.marker_environment().is_none()
+            || state.fork_urls.get(name).is_some()
+            || !self.preferences.get(name).is_empty()
+            || !self.installed_packages.get_packages(name).is_empty()
+        {
+            return None;
+        }
+
+        let fork_index = state.fork_indexes.get(name).map(IndexMetadata::url);
+        let versions_response = if let Some(index) = fork_index {
+            self.index.explicit().get(&(name.clone(), index.clone()))?
+        } else {
+            self.index.implicit().get(name)?
+        };
+        let VersionsResponse::Found(version_maps) = &*versions_response else {
+            return None;
+        };
+        let [version_map] = version_maps.as_slice() else {
+            return None;
+        };
+
+        let current_index = state.pins.get(name, version)?.index();
+        if version_map.index() != current_index {
+            return None;
+        }
+        let (_, current_metadata_id) = state.pins.dist_and_id(name, version)?;
+        let current_response = self.index.distributions().get(current_metadata_id)?;
+        let MetadataResponse::Found(current_metadata) = &*current_response else {
+            return None;
+        };
+
+        // Earlier dependency additions have already cached the conservative, sorted version
+        // universe for this package. Reuse it instead of rescanning every archived file.
+        let versions = state.known_versions.get(name)?;
+        let position = versions.binary_search(version).ok()?;
+        let mut lower = position;
+        let mut upper = position;
+
+        // PubGrub already merges identical incompatibilities for versions that were tried in an
+        // earlier iteration. Only inspect the direction in which the resolver can select its next
+        // candidate, so those already-tried neighbors do not consume the coalescing budget.
+        if self.selector.use_highest_version(name, &state.env) {
+            for (offset, candidate_version) in versions[..position]
+                .iter()
+                .rev()
+                .take(DEPENDENCY_COALESCE_LIMIT)
+                .enumerate()
+            {
+                if !self.has_same_prefetched_dependencies(
+                    name,
+                    version,
+                    current_metadata,
+                    candidate_version,
+                    version_map,
+                    current_index,
+                    state,
+                ) {
+                    break;
+                }
+                lower = position - offset - 1;
+            }
+        } else {
+            for (offset, candidate_version) in versions[position + 1..]
+                .iter()
+                .take(DEPENDENCY_COALESCE_LIMIT)
+                .enumerate()
+            {
+                if !self.has_same_prefetched_dependencies(
+                    name,
+                    version,
+                    current_metadata,
+                    candidate_version,
+                    version_map,
+                    current_index,
+                    state,
+                ) {
+                    break;
+                }
+                upper = position + offset + 1;
+            }
+        }
+        if lower == position && upper == position {
+            return None;
+        }
+
+        // These candidates now share the selected version's dependency incompatibility, so a
+        // rejection really did try all of them. Keep batch prefetch moving past the coalesced
+        // range instead of starving the next metadata batch while the parent backtracks.
+        for candidate_version in &versions[lower..=upper] {
+            state.prefetcher.version_tried(package, candidate_version);
+        }
+
+        let lower = versions[lower].clone();
+        let upper = versions[upper].clone();
+        debug!("Coalescing dependencies for {name}=={version} across {lower}..={upper}");
+        Some(Range::from_range_bounds(lower..=upper))
+    }
+
+    /// Returns whether an adjacent registry candidate has the same raw dependencies and scoped
+    /// dependency effects.
+    fn has_same_prefetched_dependencies(
+        &self,
+        name: &PackageName,
+        version: &Version,
+        current: &ArchiveMetadata,
+        candidate_version: &Version,
+        version_map: &VersionMap,
+        current_index: Option<&IndexUrl>,
+        state: &ForkState,
+    ) -> bool {
+        if !self.hasher.allows_package(name, candidate_version) {
+            return false;
+        }
+        // Batch prefetch materializes every candidate before registering its metadata request.
+        // Do not materialize an adjacent miss just to discover that no response is ready yet.
+        let Some(prioritized) = version_map.get_initialized(candidate_version) else {
+            return false;
+        };
+        let Some(dist) = prioritized.get() else {
+            return false;
+        };
+        if dist.wheel().is_none()
+            || dist.for_resolution().index() != current_index
+            || Self::check_requires_python(&dist, &state.python_requirement).is_some()
+        {
+            return false;
+        }
+        let metadata_id = dist.for_resolution().distribution_id();
+        let Some(response) = self.index.distributions().get(&metadata_id) else {
+            return false;
+        };
+        let MetadataResponse::Found(candidate) = &*response else {
+            return false;
+        };
+        if candidate.metadata.name != *name
+            || current.metadata.requires_dist != candidate.metadata.requires_dist
+            || current.metadata.dependency_groups != candidate.metadata.dependency_groups
+            || candidate
+                .metadata
+                .requires_python
+                .as_ref()
+                .is_some_and(|requires_python| {
+                    !state
+                        .python_requirement
+                        .target()
+                        .is_contained_by(requires_python)
+                })
+        {
+            return false;
+        }
+
+        self.modifiers.has_same_scoped_effects(
+            name,
+            version,
+            candidate_version,
+            current.metadata.requires_dist.iter().chain(
+                current
+                    .metadata
+                    .dependency_groups
+                    .values()
+                    .flat_map(|requirements| requirements.iter()),
+            ),
+        )
+    }
+
     /// Fetch the metadata for a stream of packages and versions.
     async fn fetch<Provider: ResolverProvider>(
         self: Arc<Self>,
@@ -2739,6 +2946,11 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 struct KnownVersions(FxHashMap<PackageName, Arc<[Version]>>);
 
 impl KnownVersions {
+    /// Returns the cached candidate universe for a package.
+    fn get(&self, name: &PackageName) -> Option<&[Version]> {
+        self.0.get(name).map(AsRef::as_ref)
+    }
+
     /// Returns the sorted, deduplicated candidate universe used to widen version sets.
     ///
     /// Results are cached on the first call per package.
@@ -3034,6 +3246,7 @@ impl<'index> ForkState<'index> {
         &mut self,
         for_package: Id<PubGrubPackage>,
         for_version: &Version,
+        dependency_versions: Option<Range<Version>>,
         dependencies: Vec<PubGrubDependency>,
         index: &InMemoryIndex,
         installed_packages: &InstalledPackages,
@@ -3063,7 +3276,27 @@ impl<'index> ForkState<'index> {
 
         // Widen across gaps so rejected adjacent versions merge into contiguous ranges rather
         // than leaving one hole per version.
-        let versions = self.widen_version_to_gap(for_version, index, installed_packages);
+        let versions = dependency_versions.unwrap_or_else(|| Range::singleton(for_version.clone()));
+        let versions = if let Some(known_versions) = self
+            .known_versions
+            .get_or_update(
+                index,
+                installed_packages,
+                PackageSource::from_fork(
+                    &self.pubgrub.package_store[self.next],
+                    &self.fork_urls,
+                    &self.fork_indexes,
+                ),
+                &self.pubgrub.package_store[self.next],
+            )
+            .filter(|versions| !versions.is_empty())
+        {
+            versions.widen_versions(known_versions)
+        } else {
+            // A decided version is always selectable and thus in the list, but an empty list
+            // would unsoundly widen to the full range.
+            versions
+        };
         let conflict = self.pubgrub.add_package_version_dependencies(
             self.next,
             for_version.clone(),
