@@ -4,12 +4,13 @@ use anyhow::Result;
 use insta::{assert_json_snapshot, assert_snapshot, with_settings};
 
 use uv_cache::Cache;
-use uv_client::BaseClientBuilder;
 use uv_client::RegistryClientBuilder;
 use uv_pep508::{MarkerEnvironment, MarkerEnvironmentBuilder};
 use uv_platform_tags::{Arch, Os, Platform};
 use uv_redacted::SafeUrl;
 use uv_version::version;
+
+use crate::http_util::local_client_builder;
 
 /// Return the current uv version as a regex-escaped string for use in snapshot filters.
 fn escaped_version() -> String {
@@ -25,7 +26,7 @@ async fn test_user_agent_has_version() -> Result<()> {
 
     // Initialize uv-client
     let cache = Cache::temp()?.init().await?;
-    let client = RegistryClientBuilder::new(BaseClientBuilder::default(), cache).build()?;
+    let client = RegistryClientBuilder::new(local_client_builder(), cache).build()?;
 
     // Send request to our dummy server
     let url = SafeUrl::from_str(&format!("http://{addr}"))?;
@@ -81,7 +82,7 @@ async fn test_user_agent_has_subcommand() -> Result<()> {
     // Initialize uv-client
     let cache = Cache::temp()?.init().await?;
     let client = RegistryClientBuilder::new(
-        BaseClientBuilder::default().subcommand(vec!["foo".to_owned(), "bar".to_owned()]),
+        local_client_builder().subcommand(vec!["foo".to_owned(), "bar".to_owned()]),
         cache,
     )
     .build()?;
@@ -157,8 +158,7 @@ async fn test_user_agent_has_linehaul() -> Result<()> {
 
     // Initialize uv-client
     let cache = Cache::temp()?.init().await?;
-    let mut builder =
-        RegistryClientBuilder::new(BaseClientBuilder::default(), cache).markers(&markers);
+    let mut builder = RegistryClientBuilder::new(local_client_builder(), cache).markers(&markers);
 
     let linux = Platform::new(
         Os::Manylinux {
