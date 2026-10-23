@@ -1,12 +1,8 @@
-use std::str::FromStr;
-
-use itertools::Itertools;
-
 use uv_normalize::{ExtraName, PackageName};
 use uv_pep508::Requirement;
 
-use crate::metadata::pyproject_toml::PyProjectToml;
-use crate::{LenientRequirement, MetadataError, VerbatimParsedUrl};
+use crate::metadata::pyproject_toml::{PyProjectDependencies, PyProjectToml, parse_dependencies};
+use crate::{MetadataError, VerbatimParsedUrl};
 
 /// Python Package Metadata 2.3 as specified in
 /// <https://packaging.python.org/specifications/core-metadata/>.
@@ -56,38 +52,10 @@ impl RequiresDist {
 
         let name = project.name;
 
-        // Extract the requirements.
-        let requires_dist = project
-            .dependencies
-            .unwrap_or_default()
-            .into_iter()
-            .map(|requires_dist| LenientRequirement::from_str(&requires_dist))
-            .map_ok(Requirement::from)
-            .chain(
-                project
-                    .optional_dependencies
-                    .as_ref()
-                    .iter()
-                    .flat_map(|index| {
-                        index.iter().flat_map(|(extras, requirements)| {
-                            requirements
-                                .iter()
-                                .map(|requires_dist| LenientRequirement::from_str(requires_dist))
-                                .map_ok(Requirement::from)
-                                .map_ok(move |requirement| {
-                                    requirement.with_extra_marker(extras.clone())
-                                })
-                        })
-                    }),
-            )
-            .collect::<Result<Box<_>, _>>()?;
-
-        // Extract the optional dependencies.
-        let provides_extra = project
-            .optional_dependencies
-            .unwrap_or_default()
-            .into_keys()
-            .collect::<Box<_>>();
+        let PyProjectDependencies {
+            requires_dist,
+            provides_extra,
+        } = parse_dependencies(project.dependencies, project.optional_dependencies)?;
 
         Ok(Self {
             name,
