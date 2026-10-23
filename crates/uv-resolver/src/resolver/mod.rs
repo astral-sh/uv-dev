@@ -406,6 +406,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
 
         'FORK: while let Some(fork) = forked_states.pop() {
             let mut state = self.materialize_fork(fork, incompatibility_arena, requests)?;
+            trace!("Solving with resolver environment: {:?}", state.env);
             if let Some(split) = state.env.end_user_fork_display() {
                 let requires_python = state.python_requirement.target();
                 debug!("Solving {split} (requires-python: {requires_python:?})");
@@ -2560,6 +2561,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
         current_environment: MarkerEnvironment,
         visited: &FxHashSet<PackageName>,
     ) -> ResolveError {
+        trace!("No solution found for resolver environment: {env:?}");
         err = NoSolutionError::collapse_local_version_segments(NoSolutionError::collapse_proxies(
             err,
         ));
