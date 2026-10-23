@@ -203,16 +203,14 @@ pub async fn pin(
         }
     }
 
-    let request = if resolved {
-        // SAFETY: We exit early if Python is not found and resolved is `true`
-        // TODO(zanieb): Maybe avoid reparsing here?
-        PythonRequest::parse(
-            &python
-                .unwrap()
+    let request = if resolved && let Some(python) = python {
+        // Keep the resolved path absolute so its name cannot become a version request on readback.
+        PythonRequest::File(
+            python
                 .interpreter()
                 .sys_executable()
-                .user_display()
-                .to_string(),
+                .simplified()
+                .to_path_buf(),
         )
     } else {
         request
