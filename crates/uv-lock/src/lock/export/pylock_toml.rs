@@ -77,6 +77,12 @@ pub enum PylockTomlErrorKind {
         expected: u64,
         actual: u64,
     },
+    #[error("Artifact `{url}` has size {actual}, but the lockfile records {expected}")]
+    ArtifactSizeMismatch {
+        url: Box<SafeUrl>,
+        expected: u64,
+        actual: u64,
+    },
     #[error("Package `{0}` requires Python {2}, but the target Python version is {1}")]
     IncompatibleRequiresPython(PackageName, Version, RequiresPython),
     #[error(
@@ -267,6 +273,16 @@ pub struct PylockToml {
     pub packages: Vec<PylockTomlPackage>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     attestation_identities: Vec<PylockTomlAttestationIdentity>,
+    #[serde(skip)]
+    size_origin: SizeOrigin,
+}
+
+/// Whether export sizes came from an existing lockfile or a fresh resolution.
+#[derive(Debug, Default, Clone, Copy)]
+enum SizeOrigin {
+    #[default]
+    Recorded,
+    Advisory,
 }
 
 fn deserialize_lock_version<'de, D>(deserializer: D) -> Result<Version, D::Error>
@@ -702,6 +718,7 @@ impl<'lock> PylockToml {
             default_groups,
             packages,
             attestation_identities,
+            size_origin: SizeOrigin::Advisory,
         })
     }
 
@@ -1077,6 +1094,7 @@ impl<'lock> PylockToml {
             default_groups,
             packages,
             attestation_identities,
+            size_origin: SizeOrigin::Recorded,
         })
     }
 
@@ -1103,6 +1121,8 @@ impl<'lock> PylockToml {
     /// registry didn't provide them, since `packages.*.hashes` is a required key in PEP 751.
     ///
     /// Local files are read from disk, with relative paths resolved against `install_path`.
+    /// Recorded sizes must match the completed read; advisory sizes from a fresh resolution are
+    /// updated to match it. Artifacts without a size declaration keep omitting that field.
     pub async fn generate_missing_hashes(
         &mut self,
         client: &RegistryClient,
@@ -1110,6 +1130,8 @@ impl<'lock> PylockToml {
         install_path: &Path,
     ) -> Result<(), PylockTomlErrorKind> {
         // TODO(tk): Maybe make hash completion part of the export API so callers cannot accidentally skip it.
+
+        let size_origin = self.size_origin;
 
         // Collect the files that are missing hashes.
         let mut jobs = Vec::new();
@@ -1124,7 +1146,7 @@ impl<'lock> PylockToml {
                     archive.path.as_ref(),
                     install_path,
                 )?;
-                jobs.push((&mut archive.hashes, source));
+                jobs.push((&mut archive.hashes, &mut archive.size, source));
             }
             if let Some(sdist) = &mut package.sdist
                 && sdist.hashes.is_empty()
@@ -1136,7 +1158,7 @@ impl<'lock> PylockToml {
                     sdist.path.as_ref(),
                     install_path,
                 )?;
-                jobs.push((&mut sdist.hashes, source));
+                jobs.push((&mut sdist.hashes, &mut sdist.size, source));
             }
             for wheel in package.wheels.iter_mut().flatten() {
                 if wheel.hashes.is_empty() {
@@ -1147,23 +1169,41 @@ impl<'lock> PylockToml {
                         wheel.path.as_ref(),
                         install_path,
                     )?;
-                    jobs.push((&mut wheel.hashes, source));
+                    jobs.push((&mut wheel.hashes, &mut wheel.size, source));
                 }
             }
         }
 
         // Fetch and hash the files.
         let hashed = futures::stream::iter(jobs)
-            .map(|(destination, source)| async move {
-                let hashes = Hashes::from(client.hash_file(&source).await?);
-                Ok::<_, PylockTomlErrorKind>((destination, hashes))
+            .map(|(hash_destination, size_destination, source)| async move {
+                let file = client.hash_file(&source).await?;
+                let size = match (size_origin, *size_destination) {
+                    (SizeOrigin::Recorded, Some(expected)) if expected != file.size => {
+                        return Err(PylockTomlErrorKind::ArtifactSizeMismatch {
+                            url: Box::new(source),
+                            expected,
+                            actual: file.size,
+                        });
+                    }
+                    (SizeOrigin::Recorded, size) => size,
+                    (SizeOrigin::Advisory, Some(_)) => Some(file.size),
+                    (SizeOrigin::Advisory, None) => None,
+                };
+                Ok((
+                    hash_destination,
+                    size_destination,
+                    Hashes::from(file.digest),
+                    size,
+                ))
             })
             .buffer_unordered(concurrency)
             .try_collect::<Vec<_>>()
             .await?;
 
-        for (destination, hashes) in hashed {
-            *destination = hashes;
+        for (hash_destination, size_destination, hashes, size) in hashed {
+            *hash_destination = hashes;
+            *size_destination = size;
         }
 
         Ok(())
