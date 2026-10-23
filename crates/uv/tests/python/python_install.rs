@@ -2928,6 +2928,10 @@ fn python_install_emulated_windows_x86_on_x64() {
 //
 // Regression test for <https://github.com/astral-sh/uv/issues/17963>.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Intermittent timeout: https://github.com/astral-sh/uv-dev/issues/2778"
+)]
 fn install_managed_venv_allow_existing() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
@@ -3298,6 +3302,10 @@ fn install_transparent_patch_upgrade_venv_module() {
 // Automatically installing a lower patch version when running a command like
 // `uv run` should not downgrade virtual environments.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Intermittent timeout: https://github.com/astral-sh/uv-dev/issues/2715"
+)]
 fn install_lower_patch_automatically() {
     let context = uv_test::test_context_with_versions!(&[])
         .with_filtered_python_keys()
@@ -3689,6 +3697,10 @@ fn python_install_pyodide() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Intermittent timeout: https://github.com/astral-sh/uv-dev/issues/2749"
+)]
 fn python_install_build_version() {
     use uv_python_managed::platform_key_from_env;
 
@@ -3756,6 +3768,10 @@ fn python_install_build_version() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "Intermittent timeout: https://github.com/astral-sh/uv-dev/issues/2049"
+)]
 fn python_install_build_version_pypy() {
     use uv_python_managed::platform_key_from_env;
 
