@@ -131,7 +131,7 @@ trait DirectoryWriter {
 }
 
 fn write_directory_once(
-    writer: &mut impl DirectoryWriter,
+    writer: &mut dyn DirectoryWriter,
     directories: &mut FxHashSet<PathBuf>,
     directory: &Path,
 ) -> Result<(), Error> {
@@ -143,7 +143,7 @@ fn write_directory_once(
 }
 
 fn write_file_with_directories(
-    writer: &mut impl DirectoryWriter,
+    writer: &mut dyn DirectoryWriter,
     directories: &mut FxHashSet<PathBuf>,
     prefix: &Path,
     relative: &Path,
