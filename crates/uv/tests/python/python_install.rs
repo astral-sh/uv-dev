@@ -16,6 +16,7 @@ use assert_fs::{
 };
 use indoc::indoc;
 use predicates::prelude::predicate;
+use serde_json::json;
 use tracing::debug;
 #[cfg(unix)]
 use uv_test::assert_link_target;
@@ -25,6 +26,10 @@ use uv_fs::Simplified;
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 use walkdir::WalkDir;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path},
+};
 
 #[test]
 fn python_install() {
@@ -2709,6 +2714,85 @@ fn python_install_cached() {
     error: Failed to install cpython-3.12.[LATEST]-[PLATFORM]
       cause: An offline Python installation was requested, but `cpython-3.12.[LATEST]-[PLATFORM]` (from `[PYTHON_DOWNLOAD_URL]`) is missing in `python-cache`
     ");
+}
+
+/// A rejected download must not poison subsequent installs using the same archive cache.
+#[tokio::test]
+async fn python_install_cached_bad_download_is_not_reused() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .without_python_download_cache()
+        .with_filtered_python_keys()
+        .with_managed_python_dirs();
+    let python_cache = context.temp_dir.child("python-cache");
+    let server = MockServer::start().await;
+    let python_downloads_json = context.temp_dir.child("python-downloads.json");
+    python_downloads_json.write_str(&serde_json::to_string(&json!({
+        "cpython-3.10.0-darwin-aarch64-none": {
+            "name": "cpython",
+            "arch": { "family": "aarch64", "variant": null },
+            "os": "darwin",
+            "libc": "none",
+            "major": 3,
+            "minor": 10,
+            "patch": 0,
+            "prerelease": "",
+            "url": format!("{}/python.tar", server.uri()),
+            "sha256": "ab".repeat(32),
+            "variant": null
+        }
+    }))?)?;
+
+    Mock::given(method("GET"))
+        .and(path("/python.tar"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0; 1024]))
+        .with_priority(1)
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/python.tar"))
+        .respond_with(ResponseTemplate::new(404))
+        .with_priority(2)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context
+        .python_install()
+        .arg("cpython-3.10.0-darwin-aarch64-none")
+        .arg("--python-downloads-json-url")
+        .arg(python_downloads_json.path())
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, python_cache.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install cpython-3.10.0-[PLATFORM]
+      cause: Hash mismatch for `cpython-3.10.0-[PLATFORM]`
+
+             Expected:
+             abababababababababababababababababababababababababababababababab
+
+             Computed:
+             5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef
+    ");
+    python_cache
+        .child("ababababa-python.tar")
+        .assert(predicate::path::missing());
+
+    // The server's new response proves this invocation fetches the URL again.
+    uv_snapshot!(context.filters(), context
+        .python_install()
+        .arg("cpython-3.10.0-darwin-aarch64-none")
+        .arg("--python-downloads-json-url")
+        .arg(python_downloads_json.path())
+        .env(EnvVars::UV_PYTHON_CACHE_DIR, python_cache.path()), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to install cpython-3.10.0-[PLATFORM]
+      cause: Failed to download `http://[LOCALHOST]/python.tar`
+      cause: HTTP status client error (404 Not Found) for url (http://[LOCALHOST]/python.tar)
+    ");
+    Ok(())
 }
 
 /// Duplicate of [`python_install`] with the cache directory disabled.

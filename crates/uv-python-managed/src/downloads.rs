@@ -36,7 +36,7 @@ use uv_client::{
 };
 use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
-use uv_fs::{Simplified, rename_with_retry};
+use uv_fs::{LockedFile, LockedFileError, LockedFileMode, Simplified, rename_with_retry};
 use uv_macros::DebugNoInline;
 use uv_platform::{Arch, Libc, Os, Platform};
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
@@ -55,6 +55,8 @@ use uv_python_types::{
 pub enum Error {
     #[error(transparent)]
     Io(#[from] io::Error),
+    #[error(transparent)]
+    LockedFile(#[from] LockedFileError),
     #[error(transparent)]
     Request(#[from] PythonDownloadRequestError),
     #[error("Expected download URL (`{0}`) to end in a supported file extension: {1}")]
@@ -534,53 +536,54 @@ impl ManagedPythonDownload {
                 }
                 None => "none",
             };
-            let target_cache_file = python_builds_dir.join(format!("{hash_prefix}-{filename}"));
+            let cache_filename = format!("{hash_prefix}-{filename}");
+            let target_cache_file = python_builds_dir.join(&cache_filename);
+            // Aliases of the cache directory must use the same lock. Hash only the filename to
+            // keep the lock path short without depending on the spelling of the directory.
+            let cache_lock_file =
+                python_builds_dir.join(format!(".{}.lock", cache_digest(&cache_filename)));
 
             // Download the archive to the cache, or return a reader if we have it in cache.
             // TODO(konsti): We should "tee" the write so we can do the download-to-cache and unpacking
             // in one step.
-            let (reader, size): (Box<dyn AsyncRead + Unpin>, Option<u64>) =
-                match fs_err::tokio::File::open(&target_cache_file).await {
-                    Ok(file) => {
-                        debug!(
-                            "Extracting existing `{}`",
-                            target_cache_file.simplified_display()
-                        );
-                        let size = file.metadata().await?.len();
-                        let reader = Box::new(tokio::io::BufReader::new(file));
-                        (reader, Some(size))
+            let file = match fs_err::tokio::File::open(&target_cache_file).await {
+                Ok(file) => {
+                    debug!(
+                        "Extracting existing `{}`",
+                        target_cache_file.simplified_display()
+                    );
+                    file
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    // Point the user to which file is missing where and where to download it
+                    if client.connectivity().is_offline() {
+                        return Err(Error::OfflinePythonMissing {
+                            file: Box::new(self.key().clone()),
+                            url: Box::new(url.clone()),
+                            python_builds_dir,
+                        });
                     }
-                    Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                        // Point the user to which file is missing where and where to download it
-                        if client.connectivity().is_offline() {
-                            return Err(Error::OfflinePythonMissing {
-                                file: Box::new(self.key().clone()),
-                                url: Box::new(url.clone()),
-                                python_builds_dir,
-                            });
-                        }
 
-                        self.download_archive(
+                    let file = self
+                        .download_archive(
                             &url,
                             client,
                             reporter,
                             &python_builds_dir,
                             &target_cache_file,
+                            &cache_lock_file,
                         )
                         .await?;
-
-                        debug!("Extracting `{}`", target_cache_file.simplified_display());
-                        let file = fs_err::tokio::File::open(&target_cache_file).await?;
-                        let size = file.metadata().await?.len();
-                        let reader = Box::new(tokio::io::BufReader::new(file));
-                        (reader, Some(size))
-                    }
-                    Err(err) => return Err(err.into()),
-                };
+                    debug!("Extracting `{}`", target_cache_file.simplified_display());
+                    file
+                }
+                Err(err) => return Err(err.into()),
+            };
 
             // Extract the downloaded archive into a temporary directory.
+            let size = Some(file.metadata().await?.len());
             self.extract_reader(
-                reader,
+                tokio::io::BufReader::new(file),
                 temp_dir,
                 &filename,
                 ext,
@@ -692,18 +695,38 @@ impl ManagedPythonDownload {
         reporter: Option<&dyn Reporter>,
         python_builds_dir: &Path,
         target_cache_file: &Path,
-    ) -> Result<(), Error> {
+        cache_lock_file: &Path,
+    ) -> Result<fs_err::tokio::File, Error> {
+        // Serialize cache misses so a waiting installer can use the first downloader's archive,
+        // while warm-cache extraction remains concurrent.
+        let _lock = LockedFile::acquire(
+            cache_lock_file,
+            LockedFileMode::Exclusive,
+            target_cache_file.user_display(),
+        )
+        .await?;
+        match fs_err::tokio::File::open(target_cache_file).await {
+            Ok(file) => return Ok(file),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+
         debug!(
             "Downloading `{}` to `{}`",
             url,
             target_cache_file.simplified_display()
         );
 
-        let (mut reader, size) = read_url(url, client).await?;
+        let (reader, size) = read_url(url, client).await?;
         let temp_dir = tempfile::tempdir_in(python_builds_dir)?;
         let temp_file = temp_dir.path().join("download");
+        let mut hashers = self
+            .sha256
+            .as_ref()
+            .map(|_| Hasher::from(HashAlgorithm::Sha256));
+        let mut reader = uv_extract::hash::HashReader::new(reader, hashers.as_mut_slice());
 
-        // Download to a temporary file. We verify the hash when unpacking the file.
+        // When a checksum is available, verify it before publishing the archive to the shared cache.
         {
             let mut archive_writer = BufWriter::new(fs_err::tokio::File::create(&temp_file).await?);
 
@@ -711,7 +734,7 @@ impl ManagedPythonDownload {
             if let Some(reporter) = reporter {
                 let key = reporter.on_request_start(Direction::Download, &self.key, size);
                 tokio::io::copy(
-                    &mut ProgressReader::new(reader, key, reporter),
+                    &mut ProgressReader::new(&mut reader, key, reporter),
                     &mut archive_writer,
                 )
                 .await?;
@@ -722,13 +745,14 @@ impl ManagedPythonDownload {
 
             archive_writer.flush().await?;
         }
-        // Move the completed file into place, invalidating the `File` instance.
-        match rename_with_retry(&temp_file, target_cache_file).await {
-            Ok(()) => {}
-            Err(_) if target_cache_file.is_file() => {}
-            Err(err) => return Err(err.into()),
-        }
-        Ok(())
+        debug!("Finished downloading `{url}`");
+        self.check_hash(hashers)?;
+
+        // Keep an open reader across publication so extraction does not depend on reopening a
+        // pathname that another process can remove or replace.
+        let file = fs_err::tokio::File::open(&temp_file).await?;
+        rename_with_retry(&temp_file, target_cache_file).await?;
+        Ok(file)
     }
 
     /// Extract a Python interpreter archive into a (temporary) directory, either from a file or
@@ -766,8 +790,18 @@ impl ManagedPythonDownload {
         };
         hasher.finish().await.map_err(Error::HashExhaustion)?;
 
-        // Check the hash
-        if let Some((expected, hasher)) = self.sha256.as_ref().zip(hashers) {
+        self.check_hash(hashers)?;
+        debug!(
+            "Finished extracting `{filename}` to `{}`",
+            target.path().simplified_display()
+        );
+
+        Ok(target)
+    }
+
+    /// Check a completed digest against the download metadata.
+    fn check_hash(&self, hasher: Option<Hasher>) -> Result<(), Error> {
+        if let Some((expected, hasher)) = self.sha256.as_ref().zip(hasher) {
             let actual = HashDigest::from(hasher);
             if actual.digest() != expected.as_str() {
                 return Err(Error::HashMismatch {
@@ -778,7 +812,7 @@ impl ManagedPythonDownload {
             }
         }
 
-        Ok(target)
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1186,7 +1220,11 @@ mod tests {
     use uv_python_types::ArchRequest;
     use uv_python_types::VersionRequest;
 
+    use std::assert_matches;
     use std::collections::HashSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tokio::io::AsyncReadExt;
 
     use uv_platform::{Arch, Libc, Os, Platform};
     use uv_python_types::{LenientImplementationName, PythonInstallationKey};
@@ -1357,6 +1395,157 @@ mod tests {
             sha256: Some(Digest::from_bytes([0xab; 32])),
             build: Some("20240713"),
         }
+    }
+
+    /// Concurrent cache misses share a single download.
+    #[tokio::test]
+    async fn python_archive_concurrent_cache_misses() -> anyhow::Result<()> {
+        struct DownloadCounter(AtomicUsize);
+
+        impl Reporter for DownloadCounter {
+            fn on_request_start(
+                &self,
+                direction: Direction,
+                _name: &PythonInstallationKey,
+                _size: Option<u64>,
+            ) -> usize {
+                if direction == Direction::Download {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                }
+                0
+            }
+
+            fn on_request_progress(&self, _id: usize, _inc: u64) {}
+
+            fn on_request_complete(&self, _direction: Direction, _id: usize) {}
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let cache_dir = temp_dir.path().join("cache");
+        fs_err::create_dir_all(&cache_dir)?;
+        let source = temp_dir.path().join("python.tar");
+        fs_err::write(&source, [0; 1024])?;
+        let url = Url::from_file_path(&source)
+            .map_err(|()| anyhow::anyhow!("failed to create the archive URL"))?;
+        let url = DisplaySafeUrl::parse(url.as_str())?;
+        let mut download = cpython_download_for_url("file:///python.tar");
+        download.sha256 = Some(Digest::from_hex(
+            "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        )?);
+        let client = BaseClientBuilder::default().build()?;
+        let cache_file = cache_dir.join("5f70bf18a-python.tar");
+        let lock_file = cache_dir.join(".lock");
+        let reporter = DownloadCounter(AtomicUsize::new(0));
+
+        let (mut first, second, third, fourth) = tokio::try_join!(
+            download.download_archive(
+                &url,
+                &client,
+                Some(&reporter),
+                &cache_dir,
+                &cache_file,
+                &lock_file,
+            ),
+            download.download_archive(
+                &url,
+                &client,
+                Some(&reporter),
+                &cache_dir,
+                &cache_file,
+                &lock_file,
+            ),
+            download.download_archive(
+                &url,
+                &client,
+                Some(&reporter),
+                &cache_dir,
+                &cache_file,
+                &lock_file,
+            ),
+            download.download_archive(
+                &url,
+                &client,
+                Some(&reporter),
+                &cache_dir,
+                &cache_file,
+                &lock_file,
+            ),
+        )?;
+
+        assert_eq!(reporter.0.load(Ordering::SeqCst), 1);
+        assert_eq!(second.metadata().await?.len(), 1024);
+        assert_eq!(third.metadata().await?.len(), 1024);
+        assert_eq!(fourth.metadata().await?.len(), 1024);
+        let mut contents = Vec::new();
+        first.read_to_end(&mut contents).await?;
+        assert_eq!(contents, [0; 1024]);
+        Ok(())
+    }
+
+    /// A complete response with the wrong digest must never become a reusable cache entry.
+    #[tokio::test]
+    async fn python_archive_download_hash_mismatch_is_not_cached() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cache_dir = temp_dir.path().join("cache");
+        fs_err::create_dir_all(&cache_dir)?;
+        let source = temp_dir.path().join("python.tar");
+        fs_err::write(&source, [0; 1024])?;
+        let url = Url::from_file_path(&source)
+            .map_err(|()| anyhow::anyhow!("failed to create the archive URL"))?;
+        let url = DisplaySafeUrl::parse(url.as_str())?;
+        let download = cpython_download_for_url("file:///python.tar");
+        let client = BaseClientBuilder::default().build()?;
+        let cache_file = cache_dir.join("ababababa-python.tar");
+
+        let result = download
+            .download_archive(
+                &url,
+                &client,
+                None,
+                &cache_dir,
+                &cache_file,
+                &cache_dir.join(".lock"),
+            )
+            .await;
+
+        assert_matches!(result, Err(Error::HashMismatch { .. }));
+        assert!(!cache_file.exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn python_archive_reader_survives_cache_removal() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cache_dir = temp_dir.path().join("cache");
+        fs_err::create_dir_all(&cache_dir)?;
+        let source = temp_dir.path().join("python.tar");
+        fs_err::write(&source, [0; 1024])?;
+        let url = Url::from_file_path(&source)
+            .map_err(|()| anyhow::anyhow!("failed to create the archive URL"))?;
+        let url = DisplaySafeUrl::parse(url.as_str())?;
+        let mut download = cpython_download_for_url("file:///python.tar");
+        download.sha256 = Some(Digest::from_hex(
+            "5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        )?);
+        let client = BaseClientBuilder::default().build()?;
+        let cache_file = cache_dir.join("5f70bf18a-python.tar");
+
+        let mut file = download
+            .download_archive(
+                &url,
+                &client,
+                None,
+                &cache_dir,
+                &cache_file,
+                &cache_dir.join(".lock"),
+            )
+            .await?;
+        fs_err::remove_file(&cache_file)?;
+
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents).await?;
+        assert_eq!(contents, [0; 1024]);
+        Ok(())
     }
 
     #[cfg(unix)]
