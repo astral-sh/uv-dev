@@ -14,8 +14,8 @@ impl<T> Default for PackageMap<T> {
 
 impl<T> PackageMap<T> {
     /// Insert a value by [`PackageId`].
-    pub fn insert(&mut self, package: Package, value: T) -> Option<T> {
-        self.0.insert(package.id, value)
+    pub fn insert(&mut self, package: &Package, value: T) -> Option<T> {
+        self.0.insert(package.id.clone(), value)
     }
 
     /// Get a value by [`PackageId`].
