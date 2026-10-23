@@ -8,7 +8,7 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
-    ActiveEnvironment, AuditOutputFormat, Concurrency, DependencyGroups, ExtrasSpecification,
+    ActiveEnvironment, AuditOutputFormat, ConcurrencyState, DependencyGroups, ExtrasSpecification,
     TargetTriple,
 };
 use uv_dispatch::UniversalState;
@@ -45,7 +45,7 @@ pub async fn audit(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: Cache,
     workspace_cache: &WorkspaceCache,

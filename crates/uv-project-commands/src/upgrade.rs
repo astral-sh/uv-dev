@@ -11,7 +11,7 @@ use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
-    ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun, Upgrade,
+    ActiveEnvironment, ConcurrencyState, DependencyGroupsWithDefaults, DryRun, Upgrade,
 };
 use uv_dispatch::UniversalState;
 use uv_distribution::{ArchiveMetadata, Metadata};
@@ -172,7 +172,7 @@ pub async fn upgrade(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,

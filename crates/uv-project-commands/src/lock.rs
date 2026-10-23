@@ -8,7 +8,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use uv_cache::{Cache, Refresh};
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_configuration::{ActiveEnvironment, Concurrency, DependencyGroupsWithDefaults, DryRun};
+use uv_configuration::{ActiveEnvironment, ConcurrencyState, DependencyGroupsWithDefaults, DryRun};
 use uv_dispatch::UniversalState;
 use uv_environment_operations::{
     ProjectEnvironmentPolicy, ProjectEnvironmentTarget, ProjectInterpreter,
@@ -50,7 +50,7 @@ pub async fn lock(
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,

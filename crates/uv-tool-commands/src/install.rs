@@ -12,8 +12,8 @@ use uv_cache::{Cache, Refresh};
 use uv_cache_info::Timestamp;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    Concurrency, Constraints, DependencyMode, DependencyModifiers, DryRun, Excludes, GitLfsSetting,
-    HashCheckingMode, Modifications, Overrides, Reinstall, TargetTriple, Upgrade,
+    ConcurrencyState, Constraints, DependencyMode, DependencyModifiers, DryRun, Excludes,
+    GitLfsSetting, HashCheckingMode, Modifications, Overrides, Reinstall, TargetTriple, Upgrade,
 };
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
@@ -82,7 +82,7 @@ pub async fn install(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     config_discovery: ConfigDiscovery,
     cache: Cache,
     refresh: Refresh,
@@ -305,7 +305,7 @@ pub async fn install(
 
         // Initialize the capabilities.
         let capabilities = IndexCapabilities::default();
-        let download_concurrency = concurrency.downloads_semaphore.clone();
+        let download_concurrency = concurrency.downloads_semaphore();
 
         // Initialize the client to fetch the latest version.
         let latest_client = LatestClient {

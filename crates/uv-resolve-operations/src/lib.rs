@@ -10,8 +10,8 @@ use owo_colors::OwoColorize;
 use uv_client::{BaseClientBuilder, RegistryClient};
 use uv_command_support::Printer;
 use uv_configuration::{
-    Concurrency, Constraints, DependencyGroups, DependencyModifiers, ExcludeDependency, Excludes,
-    ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
+    ConcurrencyState, Constraints, DependencyGroups, DependencyModifiers, ExcludeDependency,
+    Excludes, ExtrasSpecification, Override, Overrides, Reinstall, Upgrade,
 };
 use uv_dispatch::BuildDispatch;
 use uv_distribution::{DistributionDatabase, SourcedDependencyGroups};
@@ -117,7 +117,7 @@ pub async fn resolve(
     flat_index: &FlatIndex,
     index: &InMemoryIndex,
     build_dispatch: &BuildDispatch<'_>,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     options: Options,
     recorder: Option<ResolutionRecorder>,
     logger: Box<dyn ResolveLogger>,
@@ -149,7 +149,7 @@ pub async fn resolve(
                     DistributionDatabase::new(
                         client,
                         build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
+                        concurrency.downloads_semaphore(),
                     )
                     .with_recorder(recorder.clone()),
                 )
@@ -168,7 +168,7 @@ pub async fn resolve(
                 DistributionDatabase::new(
                     client,
                     build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
+                    concurrency.downloads_semaphore(),
                 )
                 .with_recorder(recorder.clone()),
             )
@@ -293,7 +293,7 @@ pub async fn resolve(
                     DistributionDatabase::new(
                         client,
                         build_dispatch,
-                        concurrency.downloads_semaphore.clone(),
+                        concurrency.downloads_semaphore(),
                     )
                     .with_recorder(recorder.clone()),
                 )
@@ -337,7 +337,7 @@ pub async fn resolve(
                 DistributionDatabase::new(
                     client,
                     build_dispatch,
-                    concurrency.downloads_semaphore.clone(),
+                    concurrency.downloads_semaphore(),
                 )
                 .with_recorder(recorder.clone()),
             )
@@ -389,12 +389,8 @@ pub async fn resolve(
             &hasher,
             build_dispatch,
             installed_packages,
-            DistributionDatabase::new(
-                client,
-                build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            )
-            .with_recorder(recorder.clone()),
+            DistributionDatabase::new(client, build_dispatch, concurrency.downloads_semaphore())
+                .with_recorder(recorder.clone()),
         )?
         .with_reporter(Arc::new(reporter));
 

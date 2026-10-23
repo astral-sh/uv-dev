@@ -11,7 +11,7 @@ use uv_errors::{Hinted, Hints};
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_configuration::{
-    BuildIsolation, BuildOptions, Concurrency, Constraints, DryRun, EditableMode,
+    BuildIsolation, BuildOptions, ConcurrencyState, Constraints, DryRun, EditableMode,
     ExcludeDependency, ExtrasSpecification, HashCheckingMode, IndexStrategy, KeyringProviderType,
     Modifications, NoSources, Override, PipInstallFormat, Reinstall, TargetTriple, Upgrade,
 };
@@ -133,7 +133,7 @@ pub async fn pip_install(
     prefix: Option<Prefix>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: Cache,
     workspace_cache: WorkspaceCache,
     dry_run: DryRun,

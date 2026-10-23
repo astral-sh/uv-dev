@@ -7,7 +7,7 @@ use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
 use uv_command_support::Printer;
 use uv_configuration::{
-    Concurrency, DependencyGroups, DependencyGroupsWithDefaults, DryRun, ExtrasSpecification,
+    ConcurrencyState, DependencyGroups, DependencyGroupsWithDefaults, DryRun, ExtrasSpecification,
     ExtrasSpecificationWithDefaults, InstallOptions, Modifications, Reinstall,
 };
 use uv_dispatch::UniversalState;
@@ -46,7 +46,7 @@ pub(super) async fn collect_environment(
     settings: &ResolverSettings,
     client_builder: &BaseClientBuilder<'_>,
     state: &UniversalState,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     preview: Preview,

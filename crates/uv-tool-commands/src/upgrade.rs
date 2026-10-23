@@ -11,7 +11,7 @@ use uv_cache::Cache;
 use uv_cache_key::CanonicalUrl;
 use uv_client::BaseClientBuilder;
 use uv_configuration::{
-    Concurrency, Constraints, DryRun, HashCheckingMode, Modifications, TargetTriple,
+    ConcurrencyState, Constraints, DryRun, HashCheckingMode, Modifications, TargetTriple,
 };
 use uv_dispatch::PlatformState;
 use uv_distribution::LoweredExtraBuildDependencies;
@@ -57,7 +57,7 @@ pub async fn upgrade(
     python_arch: Option<PythonArchitecture>,
     python_downloads: PythonDownloads,
     installer_metadata: bool,
-    concurrency: Concurrency,
+    concurrency: ConcurrencyState,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
     printer: Printer,
@@ -281,7 +281,7 @@ async fn upgrade_tool(
     workspace_cache: &WorkspaceCache,
     filesystem: &ResolverInstallerOptions,
     installer_metadata: bool,
-    concurrency: &Concurrency,
+    concurrency: &ConcurrencyState,
     preview: Preview,
 ) -> Result<UpgradeReport> {
     let tool_locks = preview.is_enabled(PreviewFeature::ToolInstallLocks);
