@@ -44,6 +44,12 @@ filter = 'test(/^python_(find|install|upgrade)::/)'
 slow-timeout = { period = "10s", terminate-after = 24 }
 
 [[profile.ci-windows.overrides]]
+filter = 'test(/^python_upgrade::python_upgrade_without_version$/)'
+test-group = 'io-bound'
+priority = 1
+slow-timeout = { period = "10s", terminate-after = 24 }
+
+[[profile.ci-windows.overrides]]
 platform = 'cfg(target_os = "windows")'
 filter = 'test(/^python_install::/) + test(/^python_update::/) + test(/^python_find::/)'
 test-group = 'io-bound'
