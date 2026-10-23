@@ -657,13 +657,9 @@ impl<'lock> InstallTarget<'lock> {
                 }
             }
             Self::Script { .. } => {
-                // We shouldn't get here if the list is empty so we can assume it isn't
-                let extra = extras
-                    .explicit_names()
-                    .next()
-                    .expect("non-empty extras")
-                    .clone();
-                return Err(EnvironmentError::MissingExtraScript(extra));
+                if let Some(extra) = extras.explicit_names().next() {
+                    return Err(EnvironmentError::MissingExtraScript(extra.clone()));
+                }
             }
         }
 
