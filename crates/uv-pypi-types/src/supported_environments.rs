@@ -49,7 +49,12 @@ impl serde::Serialize for SupportedEnvironments {
     where
         S: serde::Serializer,
     {
-        let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
+        let len = self
+            .0
+            .iter()
+            .filter(|marker| marker.contents().is_some())
+            .count();
+        let mut seq = serializer.serialize_seq(Some(len))?;
         for element in &self.0 {
             if let Some(contents) = element.contents() {
                 seq.serialize_element(&contents)?;
