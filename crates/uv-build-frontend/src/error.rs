@@ -675,3 +675,82 @@ mod test {
         ");
     }
 }
+
+#[cfg(test)]
+mod missing_header_tests {
+    use std::assert_matches;
+    use std::process::ExitStatus;
+
+    use uv_configuration::BuildOutput;
+    use uv_errors::Hint;
+
+    use super::{Error, MissingLibrary, PythonRunnerOutput};
+
+    const GCC: &str = "source.c:3:4: fatal error: include/gcc.h: No such file or directory";
+    const CLANG: &str = "source.cpp:3:4: fatal error: 'include/clang.hpp' file not found";
+    const MSVC: &str = "source.cxx(3): fatal error C1083: Cannot open include file: 'include/msvc.hxx': No such file or directory";
+
+    fn classify(stderr: impl IntoIterator<Item = impl Into<String>>) -> Error {
+        let output = PythonRunnerOutput {
+            status: ExitStatus::default(),
+            stdout: Vec::new(),
+            stderr: stderr.into_iter().map(Into::into).collect(),
+        };
+        Error::from_command_output(
+            "Build hook failed".to_string(),
+            &output,
+            BuildOutput::Quiet,
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn assert_header(error: &Error, expected: &str) {
+        let header = if let Error::MissingHeader(error) = error
+            && let MissingLibrary::Header(header) = &error.cause.missing_library
+        {
+            Some(header.as_str())
+        } else {
+            None
+        };
+        assert_eq!(header, Some(expected));
+        let hints: Vec<_> = error
+            .hints()
+            .into_iter()
+            .map(|hint| anstream::adapter::strip_str(&hint).to_string())
+            .collect();
+        assert_eq!(
+            hints,
+            [format!(
+                "This error likely indicates that you need to install a library that provides \"{expected}\""
+            )]
+        );
+    }
+
+    #[test]
+    fn compiler_header_diagnostics() {
+        for (line, header) in [
+            (GCC, "include/gcc.h"),
+            (CLANG, "include/clang.hpp"),
+            (MSVC, "include/msvc.hxx"),
+        ] {
+            assert_header(&classify([format!("  {line}  ")]), header);
+        }
+    }
+
+    #[test]
+    fn missing_header_stderr_cutoff() {
+        let stderr = std::iter::once(GCC).chain(std::iter::repeat_n("unrelated output", 9));
+        assert_header(&classify(stderr), "include/gcc.h");
+
+        let stderr = std::iter::once(GCC).chain(std::iter::repeat_n("unrelated output", 10));
+        assert_matches!(classify(stderr), Error::BuildBackend(_));
+    }
+
+    #[test]
+    fn newest_missing_header_wins() {
+        assert_header(&classify([GCC, CLANG, MSVC]), "include/msvc.hxx");
+        assert_header(&classify([MSVC, CLANG, GCC]), "include/gcc.h");
+    }
+}
