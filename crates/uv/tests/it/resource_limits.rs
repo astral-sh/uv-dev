@@ -1,3 +1,8 @@
+#[cfg(target_os = "linux")]
+use std::io::{self, Write};
+#[cfg(target_os = "linux")]
+use std::os::{fd::OwnedFd, unix::net::UnixStream};
+
 use uv_static::EnvVars;
 use uv_test::{get_bin, uv_snapshot};
 
@@ -98,4 +103,33 @@ fn run_open_file_limit_override_exceeds_hard_limit() {
     error: Failed to apply `UV_RUN_RLIMIT_NOFILE` value `256`
       cause: requested open file limit (256) exceeds the hard limit (128)
     ");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn full_nonblocking_stderr() -> io::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]);
+    let (reader, mut writer) = UnixStream::pair()?;
+    writer.set_nonblocking(true)?;
+
+    let buffer = [0; 8192];
+    loop {
+        match writer.write(&buffer) {
+            Ok(0) => return Err(io::Error::other("failed to fill the stderr socket")),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+            Err(error) => return Err(error),
+        }
+    }
+
+    let mut command = context.command();
+    command
+        .args(["cache", "clean"])
+        .stderr(OwnedFd::from(writer));
+
+    // A transient EAGAIN should not crash uv, but astral-sh/uv#22170 currently does.
+    uv_snapshot!(context.filters(), command, @"exit_code: 101 (failure)");
+
+    drop(reader);
+    Ok(())
 }
