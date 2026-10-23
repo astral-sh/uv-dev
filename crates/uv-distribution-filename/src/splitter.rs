@@ -42,9 +42,58 @@ impl<'a> Iterator for MemchrSplitter<'a> {
         // We know we'll return at least one item if there's remaining text.
         let min = usize::from(self.offset < self.haystack.len());
 
-        // Maximum possible splits is remaining length divided by 2 (minimum one char between delimiters).
-        let max = (self.haystack.len() - self.offset).div_ceil(2) + min;
+        // Each item consumes at least one byte, even when delimiters are adjacent.
+        let max = self.haystack.len() - self.offset;
 
         (min, Some(max))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MemchrSplitter;
+
+    #[test]
+    fn size_hint_bounds_remaining_items() {
+        for (haystack, delimiter) in [
+            ("", b'.'),
+            (".", b'.'),
+            ("..", b'.'),
+            ("...", b'.'),
+            ("....", b'.'),
+            ("a", b'.'),
+            ("a.", b'.'),
+            (".a", b'.'),
+            ("a..b", b'.'),
+            ("..a..b..", b'.'),
+            ("py2.py3", b'.'),
+            ("manylinux_2_17_x86_64.manylinux2014_x86_64", b'.'),
+            ("é.🦀..終.", b'.'),
+            ("é🦀終", b'.'),
+            ("---", b'-'),
+            ("a--b-", b'-'),
+            ("\0a\0\0", b'\0'),
+        ] {
+            let expected: Vec<_> = haystack.split_terminator(char::from(delimiter)).collect();
+            let mut splitter = MemchrSplitter::split(haystack, delimiter);
+
+            for consumed in 0..=expected.len() {
+                let remaining = expected.len() - consumed;
+                let (lower, upper) = splitter.size_hint();
+                assert!(
+                    lower <= remaining && upper.is_none_or(|upper| remaining <= upper),
+                    "{haystack:?}, delimiter {delimiter:?}, consumed {consumed}: \
+                     size hint ({lower}, {upper:?}) does not contain {remaining} remaining items"
+                );
+                assert_eq!(
+                    splitter.next(),
+                    expected.get(consumed).copied(),
+                    "{haystack:?}, delimiter {delimiter:?}, consumed {consumed}"
+                );
+            }
+
+            assert_eq!(splitter.size_hint(), (0, Some(0)));
+            assert_eq!(splitter.next(), None);
+        }
     }
 }
