@@ -1,10 +1,220 @@
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::PathChild, prelude::FileWriteStr};
+#[cfg(feature = "test-python")]
+use indoc::formatdoc;
 use insta::allow_duplicates;
+#[cfg(feature = "test-python")]
+use serde_json::json;
 use uv_static::EnvVars;
+#[cfg(feature = "test-python")]
+use wiremock::matchers::{header, method, path};
+#[cfg(feature = "test-python")]
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use uv_test::uv_snapshot;
+
+/// An external account file without a format silently selects the VM's identity instead.
+#[tokio::test]
+#[cfg(feature = "test-python")]
+async fn gcs_external_account_missing_file_format() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+
+    let subject_token = context.temp_dir.child("subject-token");
+    subject_token.write_str("test-subject-token")?;
+    let credentials = context.temp_dir.child("external-account.json");
+    credentials.write_str(
+        &json!({
+            "type": "external_account",
+            "audience": "test-audience",
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_url": format!("{}/token", server.uri()),
+            "credential_source": { "file": subject_token.path() }
+        })
+        .to_string(),
+    )?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok @ {}/packages/ok-1.0.0-py3-none-any.whl"]
+        "#, server.uri()
+        })?;
+
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "test-external-account-token",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/computeMetadata/v1/instance/service-accounts/default/token",
+        ))
+        .and(header("Metadata-Flavor", "Google"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "test-metadata-token",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/packages/ok-1.0.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(10)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/packages/ok-1.0.0-py3-none-any.whl"))
+        .and(header("Authorization", "Bearer test-metadata-token"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // The 403 hides the rejected configuration and the unintended identity switch:
+    // astral-sh/uv#22273.
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--no-index")
+        .arg("--no-config")
+        .arg("--keyring-provider").arg("disabled")
+        .arg("--preview-features").arg("gcs-endpoint")
+        .env(EnvVars::UV_GCS_ENDPOINT_URL, format!("{}/packages", server.uri()))
+        .env("GOOGLE_APPLICATION_CREDENTIALS", credentials.path())
+        .env_remove("GOOGLE_SCOPE")
+        .env("GCE_METADATA_HOST", server.address().to_string()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to download `ok @ http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl`
+      cause: Failed to fetch: http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl)
+    ");
+
+    Ok(())
+}
+
+/// URL-sourced external accounts also require a format, with no diagnostic even under `-v`.
+#[tokio::test]
+#[cfg(feature = "test-python")]
+async fn gcs_external_account_missing_url_format() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+
+    let credentials = context.temp_dir.child("external-account.json");
+    credentials.write_str(
+        &json!({
+            "type": "external_account",
+            "audience": "test-audience",
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_url": format!("{}/token", server.uri()),
+            "credential_source": { "url": format!("{}/subject-token", server.uri()) }
+        })
+        .to_string(),
+    )?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = ["ok @ {}/packages/ok-1.0.0-py3-none-any.whl"]
+        "#, server.uri()
+        })?;
+
+    Mock::given(method("GET"))
+        .and(path("/subject-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("test-subject-token"))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "test-external-account-token",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        })))
+        .expect(0)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(
+            "/computeMetadata/v1/instance/service-accounts/default/token",
+        ))
+        .and(header("Metadata-Flavor", "Google"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "test-metadata-token",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/packages/ok-1.0.0-py3-none-any.whl"))
+        .respond_with(ResponseTemplate::new(401))
+        .with_priority(10)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/packages/ok-1.0.0-py3-none-any.whl"))
+        .and(header("Authorization", "Bearer test-metadata-token"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Even verbose output hides the credential-loading warning, making the unexpected
+    // metadata identity difficult to diagnose: astral-sh/uv#22273.
+    uv_snapshot!(context.filters(), context.sync()
+        .arg("--no-index")
+        .arg("--no-config")
+        .arg("--keyring-provider").arg("disabled")
+        .arg("--preview-features").arg("gcs-endpoint")
+        .arg("-v")
+        .env(EnvVars::UV_GCS_ENDPOINT_URL, format!("{}/packages", server.uri()))
+        .env("GOOGLE_APPLICATION_CREDENTIALS", credentials.path())
+        .env_remove("GOOGLE_SCOPE")
+        .env("GCE_METADATA_HOST", server.address().to_string()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    DEBUG uv [VERSION] ([COMMIT] DATE)
+    DEBUG The following preview features are enabled: gcs-endpoint
+    DEBUG Found project root: [TEMP_DIR]/
+    DEBUG No workspace root found, using project root
+    DEBUG No Python version file found in workspace: [TEMP_DIR]/
+    DEBUG Using Python request `>=3.12` from `requires-python` metadata
+    DEBUG Checking for Python environment at: .venv
+    DEBUG The project environment's Python version satisfies the request: `Python >=3.12`
+    DEBUG Using request connect timeout of [TIME] and read timeout of [TIME]
+    DEBUG Found static `pyproject.toml` for: project @ file://[TEMP_DIR]/
+    DEBUG No cache entry for: http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl
+    DEBUG Sending fresh GET request for: http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl
+    DEBUG Found GCS credentials for `http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl`
+    error: Failed to download `ok @ http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl`
+      cause: Failed to fetch: http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl
+      cause: HTTP status client error (403 Forbidden) for url (http://[LOCALHOST]/packages/ok-1.0.0-py3-none-any.whl)
+    ");
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn invalid_cloud_endpoint_urls() {
