@@ -2,7 +2,7 @@ use crate::metadata::DEFAULT_EXCLUDES;
 use crate::wheel::build_exclude_matcher;
 use crate::{
     BuildBackendSettings, DirectoryWriter, Error, FileList, ListWriter, PyProjectToml,
-    compare_build_entries, error_on_venv, find_roots, write_directory_once,
+    compare_build_entries, error_on_venv, find_roots, relative_entry_path, write_directory_once,
     write_file_with_directories,
 };
 use flate2::Compression;
@@ -297,11 +297,7 @@ fn write_source_dist(
         .sort_by(compare_build_entries)
         .into_iter()
         .filter_entry(|entry| {
-            // TODO(konsti): This should be prettier.
-            let relative = entry
-                .path()
-                .strip_prefix(source_tree)
-                .expect("walkdir starts with root");
+            let relative = relative_entry_path(entry, source_tree);
 
             // Fast path: Don't descend into a directory that can't be included. This is the most
             // important performance optimization, it avoids descending into directories such as
@@ -324,11 +320,7 @@ fn write_source_dist(
                 Consider using more constrained includes or more excludes."
             );
         }
-        // TODO(konsti): This should be prettier.
-        let relative = entry
-            .path()
-            .strip_prefix(source_tree)
-            .expect("walkdir starts with root");
+        let relative = relative_entry_path(&entry, source_tree);
 
         if !include_matcher.match_path(relative, &entry) || exclude_matcher.is_match(relative) {
             trace!("Excluding from sdist: {}", relative.user_display());

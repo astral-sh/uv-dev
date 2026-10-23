@@ -469,6 +469,13 @@ fn is_venv_marker(file_name: &OsStr) -> bool {
     file_name == "pyvenv.cfg" || file_name == "lib64"
 }
 
+fn relative_entry_path<'a>(entry: &'a DirEntry, root: &Path) -> &'a Path {
+    entry
+        .path()
+        .strip_prefix(root)
+        .expect("walkdir starts with root")
+}
+
 /// Error if we're adding a venv to a distribution.
 pub(crate) fn error_on_venv(file_name: &OsStr, path: &Path) -> Result<(), Error> {
     // On 64-bit Unix, `lib64` is a (compatibility) symlink to lib. If we traverse `lib64` before
