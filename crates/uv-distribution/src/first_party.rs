@@ -50,7 +50,7 @@ impl FirstPartyPackages {
         let BuildableSource::Dist(SourceDist::Directory(directory)) = source else {
             return false;
         };
-        !directory.r#virtual.unwrap_or(false)
+        !directory.mode.virtual_project().unwrap_or(false)
             && self.contains(&directory.name, &directory.install_path)
     }
 }

@@ -278,7 +278,7 @@ impl<'a> From<&'a DirectorySourceDist> for DirectorySourceUrl<'a> {
         Self {
             url: &dist.url,
             install_path: &dist.install_path,
-            editable: dist.editable,
+            editable: dist.mode.editable(),
         }
     }
 }
