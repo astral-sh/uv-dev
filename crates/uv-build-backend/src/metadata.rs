@@ -1,11 +1,13 @@
 use indexmap::IndexMap;
 use itertools::Itertools;
-use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
+use serde::de::value::{MapAccessDeserializer, SeqAccessDeserializer};
+use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, Bound};
 use std::ffi::OsStr;
 use std::fmt::Display;
+use std::fmt::Formatter;
 use std::fmt::Write;
 use std::iter;
 use std::path::{Path, PathBuf};
@@ -1027,10 +1029,109 @@ struct Project {
     dynamic: Option<Vec<String>>,
 }
 
+// Malformed or duplicate fields can be ignored when another representation matches.
+enum MetadataString {
+    Missing,
+    String(String),
+    Null,
+    Invalid,
+}
+
+impl MetadataString {
+    fn read<'de, A>(&mut self, map: &mut A) -> Result<(), A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let value = map.next_value()?;
+        *self = match self {
+            Self::Missing => value,
+            Self::String(_) | Self::Null | Self::Invalid => Self::Invalid,
+        };
+        Ok(())
+    }
+
+    fn required(self) -> Result<String, ()> {
+        match self {
+            Self::String(value) => Ok(value),
+            Self::Missing | Self::Null | Self::Invalid => Err(()),
+        }
+    }
+
+    fn optional(self) -> Result<Option<String>, ()> {
+        match self {
+            Self::Missing | Self::Null => Ok(None),
+            Self::String(value) => Ok(Some(value)),
+            Self::Invalid => Err(()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MetadataString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StringVisitor;
+
+        impl<'de> Visitor<'de> for StringVisitor {
+            type Value = MetadataString;
+
+            fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a string")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(MetadataString::String(value.to_owned()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(MetadataString::String(value))
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(MetadataString::Null)
+            }
+
+            fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+                Ok(MetadataString::Invalid)
+            }
+
+            fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+                Ok(MetadataString::Invalid)
+            }
+
+            fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+                Ok(MetadataString::Invalid)
+            }
+
+            fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+                Ok(MetadataString::Invalid)
+            }
+
+            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                IgnoredAny::deserialize(MapAccessDeserializer::new(map))
+                    .map(|_| MetadataString::Invalid)
+            }
+
+            fn visit_seq<A>(self, sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                IgnoredAny::deserialize(SeqAccessDeserializer::new(sequence))
+                    .map(|_| MetadataString::Invalid)
+            }
+        }
+
+        deserializer.deserialize_any(StringVisitor)
+    }
+}
+
 /// The optional `project.readme` key in a pyproject.toml as specified in
 /// <https://packaging.python.org/en/latest/specifications/pyproject-toml/#readme>.
-#[derive(Deserialize, Debug, Clone)]
-#[serde(untagged, rename_all_fields = "kebab-case")]
+#[derive(Debug, Clone)]
 pub(crate) enum Readme {
     /// Relative path to the README.
     String(PathBuf),
@@ -1048,6 +1149,85 @@ pub(crate) enum Readme {
     },
 }
 
+impl<'de> Deserialize<'de> for Readme {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "kebab-case")]
+        enum Field {
+            File,
+            Text,
+            ContentType,
+            Charset,
+            #[serde(other)]
+            Other,
+        }
+
+        struct ReadmeVisitor;
+
+        impl<'de> Visitor<'de> for ReadmeVisitor {
+            type Value = Readme;
+
+            fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a README path or table")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(Readme::String(value.into()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(Readme::String(value.into()))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut file = MetadataString::Missing;
+                let mut text = MetadataString::Missing;
+                let mut content_type = MetadataString::Missing;
+                let mut charset = MetadataString::Missing;
+                while let Some(field) = map.next_key()? {
+                    match field {
+                        Field::File => file.read(&mut map)?,
+                        Field::Text => text.read(&mut map)?,
+                        Field::ContentType => content_type.read(&mut map)?,
+                        Field::Charset => charset.read(&mut map)?,
+                        Field::Other => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                let content_type = content_type
+                    .required()
+                    .map_err(|()| serde::de::Error::custom("invalid README content type"))?;
+                let charset = charset
+                    .optional()
+                    .map_err(|()| serde::de::Error::custom("invalid README charset"))?;
+                if let Ok(file) = file.required().map(PathBuf::from) {
+                    return Ok(Readme::File {
+                        file,
+                        content_type,
+                        charset,
+                    });
+                }
+                text.required()
+                    .map(|text| Readme::Text {
+                        text,
+                        content_type,
+                        charset,
+                    })
+                    .map_err(|()| serde::de::Error::custom("missing README file or text"))
+            }
+        }
+
+        deserializer.deserialize_any(ReadmeVisitor)
+    }
+}
+
 impl Readme {
     /// If the readme is a file, return the path to the file.
     pub(crate) fn path(&self) -> Option<&Path> {
@@ -1061,8 +1241,7 @@ impl Readme {
 
 /// The optional `project.license` key in a pyproject.toml as specified in
 /// <https://packaging.python.org/en/latest/specifications/pyproject-toml/#license>.
-#[derive(Deserialize, Debug, Clone)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub(crate) enum License {
     /// An SPDX Expression.
     ///
@@ -1076,6 +1255,65 @@ pub(crate) enum License {
         /// The file containing the license text.
         file: String,
     },
+}
+
+impl<'de> Deserialize<'de> for License {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field {
+            Text,
+            File,
+            #[serde(other)]
+            Other,
+        }
+
+        struct LicenseVisitor;
+
+        impl<'de> Visitor<'de> for LicenseVisitor {
+            type Value = License;
+
+            fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an SPDX expression or a license table")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(License::Spdx(value.to_owned()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(License::Spdx(value))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut text = MetadataString::Missing;
+                let mut file = MetadataString::Missing;
+                while let Some(field) = map.next_key()? {
+                    match field {
+                        Field::Text => text.read(&mut map)?,
+                        Field::File => file.read(&mut map)?,
+                        Field::Other => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                if let Ok(text) = text.required() {
+                    return Ok(License::Text { text });
+                }
+                file.required()
+                    .map(|file| License::File { file })
+                    .map_err(|()| serde::de::Error::custom("missing license text or file"))
+            }
+        }
+
+        deserializer.deserialize_any(LicenseVisitor)
+    }
 }
 
 impl License {
@@ -1313,10 +1551,84 @@ mod tests {
     use super::*;
     use indoc::{formatdoc, indoc};
     use insta::assert_snapshot;
+    use std::io::{self, Read};
     use std::iter;
     use tempfile::TempDir;
     use uv_pep508::MarkerEnvironmentBuilder;
 
+    #[test]
+    fn readme_and_license_retain_read_errors() {
+        struct FailedRead;
+
+        impl Read for FailedRead {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("metadata read failed"))
+            }
+        }
+
+        let reader = br#"{"file":"#.as_slice().chain(FailedRead);
+        assert!(
+            serde_json::from_reader::<_, Readme>(reader)
+                .unwrap_err()
+                .is_io()
+        );
+        let reader = br#"{"text":"#.as_slice().chain(FailedRead);
+        assert!(
+            serde_json::from_reader::<_, License>(reader)
+                .unwrap_err()
+                .is_io()
+        );
+    }
+
+    #[test]
+    fn readme_variant_precedence() {
+        let readme: Readme = serde_json::from_str(
+            r#"{"text":"description","file":"README.md","content-type":"text/markdown","ignored":[1,2]}"#,
+        )
+        .unwrap();
+        insta::assert_debug_snapshot!(readme, @r#"
+        File {
+            file: "README.md",
+            content_type: "text/markdown",
+            charset: None,
+        }
+        "#);
+    }
+
+    #[test]
+    fn readme_falls_back_after_duplicate_file() {
+        let readme: Readme = serde_json::from_str(
+            r#"{"file":"first.md","file":"second.md","text":"description","content-type":"text/plain"}"#,
+        )
+        .unwrap();
+        insta::assert_debug_snapshot!(readme, @r#"
+        Text {
+            text: "description",
+            content_type: "text/plain",
+            charset: None,
+        }
+        "#);
+    }
+
+    #[test]
+    fn license_falls_back_after_invalid_text() {
+        let license: License =
+            serde_json::from_str(r#"{"text":{"unexpected":true},"file":"LICENSE"}"#).unwrap();
+        insta::assert_debug_snapshot!(license, @r#"
+        File {
+            file: "LICENSE",
+        }
+        "#);
+    }
+
+    #[test]
+    fn readme_invalid_charset() {
+        let readme = serde_json::from_str::<Readme>(
+            r#"{"file":"README.md","text":"description","content-type":"text/plain","charset":42}"#,
+        )
+        .unwrap_err();
+        insta::assert_snapshot!(readme.to_string(), @"invalid README charset at line 1 column 82");
+    }
     fn extend_project(payload: &str) -> String {
         formatdoc! {r#"
             [project]
@@ -1993,7 +2305,7 @@ mod tests {
           |
         4 | readme = { path = "Readme.md" }
           |          ^^^^^^^^^^^^^^^^^^^^^^
-        data did not match any variant of untagged enum Readme
+        invalid README content type
         "#);
     }
 
