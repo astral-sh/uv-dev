@@ -1,12 +1,7 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 use itertools::Itertools;
-use owo_colors::OwoColorize;
-use thiserror::Error;
 use tracing::{Level, debug, enabled, warn};
-
-use uv_errors::{Hinted, Hints};
 
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
@@ -47,6 +42,8 @@ use uv_warnings::warn_user;
 use uv_workspace::WorkspaceCache;
 use uv_workspace::pyproject::ExtraBuildDependencies;
 
+pub use crate::environment::ExternallyManagedError;
+use crate::environment::{PipMutation, check_externally_managed};
 use crate::install_report::write_install_report;
 use crate::pylock::{read_pylock_toml, resolve_pylock_toml};
 use crate::reporters::report_target_environment;
@@ -59,25 +56,6 @@ use uv_python_discovery::PythonDownloadReporter;
 use uv_python_discovery::report_interpreter;
 use uv_resolve_operations::loggers::DefaultResolveLogger;
 use uv_resolve_operations::{resolution_markers, resolution_tags};
-
-/// The interpreter is externally managed and cannot be modified.
-#[derive(Debug, Error)]
-#[error("{message}")]
-pub struct ExternallyManagedError {
-    message: String,
-    root: PathBuf,
-    system: bool,
-}
-
-impl Hinted for ExternallyManagedError {
-    fn hints(&self) -> Hints<'_> {
-        if self.system {
-            Hints::from("Virtual environments were not considered due to the `--system` flag")
-        } else {
-            Hints::from("Consider creating a virtual environment, e.g., with `uv venv`")
-        }
-    }
-}
 
 /// Install packages into the current environment.
 #[expect(clippy::fn_params_excessive_bools)]
@@ -270,31 +248,11 @@ pub async fn pip_install(
         environment
     };
 
-    // If the environment is externally managed, abort.
-    if let Some(externally_managed) = environment.interpreter().is_externally_managed() {
-        if break_system_packages {
-            debug!("Ignoring externally managed environment due to `--break-system-packages`");
-        } else {
-            let managed_message = match externally_managed.into_error() {
-                Some(error) => format!(
-                    "The interpreter at `{}` is externally managed, and indicates the following:\n\n{}\n",
-                    environment.root().user_display().cyan(),
-                    textwrap::indent(&error, "  ").green(),
-                ),
-                None => format!(
-                    "The interpreter at `{}` is externally managed and cannot be modified.",
-                    environment.root().user_display().cyan()
-                ),
-            };
-
-            return Err(ExternallyManagedError {
-                message: managed_message,
-                root: environment.root().to_path_buf(),
-                system,
-            }
-            .into());
-        }
-    }
+    check_externally_managed(
+        &environment,
+        break_system_packages,
+        PipMutation::Install { system },
+    )?;
 
     let _lock = environment
         .lock()
