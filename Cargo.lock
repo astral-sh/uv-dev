@@ -7473,6 +7473,7 @@ dependencies = [
  "uv-client",
  "uv-command-support",
  "uv-configuration",
+ "uv-distribution-types",
  "uv-errors",
  "uv-fs",
  "uv-installer",
