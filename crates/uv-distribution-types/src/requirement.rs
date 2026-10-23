@@ -3,6 +3,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use serde::de::value::{MapAccessDeserializer, SeqAccessDeserializer, StringDeserializer};
+use serde::de::{DeserializeOwned, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 use thiserror::Error;
 use uv_cache_key::{CacheKey, CacheKeyHasher};
 use uv_distribution_filename::DistExtension;
@@ -915,7 +918,7 @@ impl Display for RequirementSource {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize)]
 #[serde(untagged)]
 enum RequirementSourceWire {
     /// Ex) `source = { git = "<https://github.com/astral-test/uv-public-pypackage?rev=0.0.1#0dacfd662c64cb4ceb16e6cf65a157a8b715b979>" }`
@@ -940,6 +943,241 @@ enum RequirementSourceWire {
         index: Option<SafeUrl<Stripped>>,
         conflict: Option<ConflictItem>,
     },
+}
+
+impl<'de> Deserialize<'de> for RequirementSourceWire {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field {
+            Git,
+            Url,
+            Subdirectory,
+            Path,
+            Directory,
+            Editable,
+            Virtual,
+            Specifier,
+            Index,
+            Conflict,
+            #[serde(other)]
+            Other,
+        }
+
+        enum Value {
+            Missing,
+            String(String),
+            Null,
+            Invalid,
+        }
+
+        impl Value {
+            fn read<'de, A>(&mut self, map: &mut A) -> Result<(), A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let value = map.next_value()?;
+                *self = match self {
+                    Self::Missing => value,
+                    Self::String(_) | Self::Null | Self::Invalid => Self::Invalid,
+                };
+                Ok(())
+            }
+
+            fn required<T: DeserializeOwned>(self) -> Result<T, ()> {
+                match self {
+                    Self::String(value) => {
+                        T::deserialize(StringDeserializer::<serde::de::value::Error>::new(value))
+                            .map_err(|_| ())
+                    }
+                    Self::Missing | Self::Null | Self::Invalid => Err(()),
+                }
+            }
+
+            fn optional<T: DeserializeOwned>(self) -> Result<Option<T>, ()> {
+                match self {
+                    Self::Missing | Self::Null => Ok(None),
+                    Self::String(value) => Self::String(value).required().map(Some),
+                    Self::Invalid => Err(()),
+                }
+            }
+        }
+
+        impl<'de> Deserialize<'de> for Value {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                struct StringVisitor;
+
+                impl<'de> Visitor<'de> for StringVisitor {
+                    type Value = Value;
+
+                    fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+                        formatter.write_str("a string")
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                        Ok(Value::String(value.to_owned()))
+                    }
+
+                    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                        Ok(Value::String(value))
+                    }
+
+                    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                        Ok(Value::Null)
+                    }
+
+                    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+                        Ok(Value::Invalid)
+                    }
+
+                    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+                        Ok(Value::Invalid)
+                    }
+
+                    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+                        Ok(Value::Invalid)
+                    }
+
+                    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+                        Ok(Value::Invalid)
+                    }
+
+                    fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+                    where
+                        A: MapAccess<'de>,
+                    {
+                        IgnoredAny::deserialize(MapAccessDeserializer::new(map))
+                            .map(|_| Value::Invalid)
+                    }
+
+                    fn visit_seq<A>(self, sequence: A) -> Result<Self::Value, A::Error>
+                    where
+                        A: SeqAccess<'de>,
+                    {
+                        IgnoredAny::deserialize(SeqAccessDeserializer::new(sequence))
+                            .map(|_| Value::Invalid)
+                    }
+                }
+
+                deserializer.deserialize_any(StringVisitor)
+            }
+        }
+
+        // Buffer the structured conflict so a failed parse can fall through to another source.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Conflict {
+            Valid(Option<ConflictItem>),
+            Invalid(IgnoredAny),
+        }
+
+        struct SourceVisitor;
+
+        impl<'de> Visitor<'de> for SourceVisitor {
+            type Value = RequirementSourceWire;
+
+            fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a requirement source")
+            }
+
+            // Scalar URLs can contain credentials or signed query parameters.
+            fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::custom("invalid requirement source"))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut git = Value::Missing;
+                let mut url = Value::Missing;
+                let mut subdirectory = Value::Missing;
+                let mut path = Value::Missing;
+                let mut directory = Value::Missing;
+                let mut editable = Value::Missing;
+                let mut virtual_directory = Value::Missing;
+                let mut specifier = Value::Missing;
+                let mut index = Value::Missing;
+                let mut conflict = None;
+                while let Some(field) = map.next_key()? {
+                    match field {
+                        Field::Git => git.read(&mut map)?,
+                        Field::Url => url.read(&mut map)?,
+                        Field::Subdirectory => subdirectory.read(&mut map)?,
+                        Field::Path => path.read(&mut map)?,
+                        Field::Directory => directory.read(&mut map)?,
+                        Field::Editable => editable.read(&mut map)?,
+                        Field::Virtual => virtual_directory.read(&mut map)?,
+                        Field::Specifier => specifier.read(&mut map)?,
+                        Field::Index => index.read(&mut map)?,
+                        Field::Conflict => {
+                            let value = map.next_value()?;
+                            conflict = Some(if conflict.is_none() {
+                                value
+                            } else {
+                                Conflict::Invalid(IgnoredAny)
+                            });
+                        }
+                        Field::Other => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+
+                // The first valid representation wins, including when fields for another
+                // representation are malformed or duplicated.
+                if let Ok(git) = git.required() {
+                    return Ok(RequirementSourceWire::Git { git });
+                }
+                if let (Ok(url), Ok(subdirectory)) = (url.required(), subdirectory.optional()) {
+                    return Ok(RequirementSourceWire::Direct { url, subdirectory });
+                }
+                if let Ok(path) = path.required() {
+                    return Ok(RequirementSourceWire::Path { path });
+                }
+                if let Ok(directory) = directory.required() {
+                    return Ok(RequirementSourceWire::Directory { directory });
+                }
+                if let Ok(editable) = editable.required() {
+                    return Ok(RequirementSourceWire::Editable { editable });
+                }
+                if let Ok(r#virtual) = virtual_directory.required() {
+                    return Ok(RequirementSourceWire::Virtual { r#virtual });
+                }
+                let specifier = match specifier {
+                    Value::Missing => Ok(VersionSpecifiers::empty()),
+                    Value::String(value) => Value::String(value).required(),
+                    Value::Null | Value::Invalid => Err(()),
+                };
+                let conflict = match conflict {
+                    None => Ok(None),
+                    Some(Conflict::Valid(value)) => Ok(value),
+                    Some(Conflict::Invalid(_)) => Err(()),
+                };
+                if let (Ok(specifier), Ok(index), Ok(conflict)) =
+                    (specifier, index.optional(), conflict)
+                {
+                    return Ok(RequirementSourceWire::Registry {
+                        specifier,
+                        index,
+                        conflict,
+                    });
+                }
+                Err(serde::de::Error::custom("invalid requirement source"))
+            }
+        }
+
+        deserializer.deserialize_any(SourceVisitor)
+    }
 }
 
 impl From<RequirementSource> for RequirementSourceWire {
@@ -1264,11 +1502,88 @@ impl TryFrom<RequirementSourceWire> for RequirementSource {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::io::{self, Read};
     use std::path::PathBuf;
 
     use uv_pep508::{MarkerTree, VerbatimUrl};
 
+    use super::RequirementSourceWire;
     use crate::{Requirement, RequirementScope, RequirementSource};
+
+    #[test]
+    fn source_retains_read_error() {
+        struct FailedRead;
+
+        impl Read for FailedRead {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("metadata read failed"))
+            }
+        }
+
+        let reader = br#"{"git":"#.as_slice().chain(FailedRead);
+        assert!(
+            serde_json::from_reader::<_, RequirementSource>(reader)
+                .unwrap_err()
+                .is_io()
+        );
+    }
+
+    #[test]
+    fn source_scalar_metadata_error() {
+        let error = serde_json::from_str::<RequirementSource>(
+            r#""https://user:secret@example.com/project?token=secret""#,
+        )
+        .unwrap_err();
+        insta::assert_snapshot!(error, @"invalid requirement source at line 1 column 54");
+    }
+
+    #[test]
+    fn source_variant_precedence() -> Result<(), Box<dyn Error>> {
+        let source: RequirementSourceWire = serde_json::from_str(
+            r#"{"path":"package.whl","git":"https://example.com/repo","url":42,"conflict":{"package":false}}"#,
+        )?;
+        insta::assert_json_snapshot!(source, @r#"
+        {
+          "git": "https://example.com/repo"
+        }
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn source_falls_back_after_invalid_and_duplicate_fields() -> Result<(), Box<dyn Error>> {
+        let source: RequirementSourceWire = serde_json::from_str(
+            r#"{"git":3,"url":"not a URL","path":"first.whl","path":"second.whl","directory":"package","specifier":null}"#,
+        )?;
+        insta::assert_json_snapshot!(source, @r#"
+        {
+          "directory": "package"
+        }
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn source_registry_default() -> Result<(), Box<dyn Error>> {
+        let source: RequirementSourceWire = serde_json::from_str(r#"{"git":false}"#)?;
+        insta::assert_json_snapshot!(source, @r#"
+        {
+          "index": null,
+          "conflict": null
+        }
+        "#);
+        Ok(())
+    }
+
+    #[test]
+    fn source_rejects_sequence_representation() {
+        assert!(
+            serde_json::from_str::<RequirementSourceWire>(
+                r#"["https://example.com/package.tar.gz", "src"]"#
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn roundtrip() {
