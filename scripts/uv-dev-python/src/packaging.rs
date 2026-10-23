@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use pyo3::exceptions::PyValueError;
@@ -6,6 +7,8 @@ use pyo3::types::PyTuple;
 use uv_normalize::PackageName;
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pep508::{Requirement, VerbatimUrl, VersionOrUrl};
+
+use crate::markers::evaluate_marker;
 
 /// A PEP 440 version parsed and compared by uv.
 #[pyclass(
@@ -130,6 +133,16 @@ impl PyRequirement {
     #[getter]
     fn marker(&self) -> Option<String> {
         self.requirement.marker.try_to_string()
+    }
+
+    /// Evaluate the requirement's marker against an explicit PEP 508 environment.
+    #[pyo3(signature = (environment, *, extras = Vec::new()))]
+    fn evaluate(
+        &self,
+        environment: BTreeMap<String, String>,
+        extras: Vec<String>,
+    ) -> PyResult<bool> {
+        evaluate_marker(self.requirement.marker, environment, extras)
     }
 }
 

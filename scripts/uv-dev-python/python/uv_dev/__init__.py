@@ -1,6 +1,7 @@
 """Internal bindings built from the same checkout as uv."""
 
 from ._native import (
+    Marker,
     Requirement,
     Version,
     VersionSpecifiers,
@@ -9,6 +10,7 @@ from ._native import (
 )
 
 __all__ = [
+    "Marker",
     "Requirement",
     "Version",
     "VersionSpecifiers",
