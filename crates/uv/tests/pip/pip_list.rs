@@ -181,7 +181,32 @@ fn list_invalid_direct_url_metadata() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: Failed to read metadata from: [SITE_PACKAGES]/project-1.0.0.dist-info
-      cause: data did not match any variant of untagged enum DirectUrl
+      cause: invalid direct URL metadata at line 1 column 37
+    ");
+    Ok(())
+}
+
+/// Scalar metadata errors must not expose URL credentials or query parameters.
+#[test]
+#[cfg(feature = "test-python")]
+fn list_scalar_direct_url_metadata() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let dist_info = ChildPath::new(context.site_packages()).child("project-1.0.0.dist-info");
+    dist_info.create_dir_all()?;
+    dist_info.child("METADATA").write_str(indoc! {"
+        Metadata-Version: 2.1
+        Name: project
+        Version: 1.0.0
+    "})?;
+    dist_info
+        .child("direct_url.json")
+        .write_str(r#""https://user:secret@example.com/project?token=secret""#)?;
+
+    uv_snapshot!(context.filters(), context.pip_list().arg("--format=freeze"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Failed to read metadata from: [SITE_PACKAGES]/project-1.0.0.dist-info
+      cause: invalid direct URL metadata at line 1 column 54
     ");
     Ok(())
 }
