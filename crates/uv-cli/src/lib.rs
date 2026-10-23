@@ -17,10 +17,10 @@ use uv_configuration::RequirementsInput;
 use uv_configuration::{
     AddBoundsKind, AnnotationStyle, AuditOutputFormat, AuthorFrom, ColorChoice,
     ExcludeNewerPackageEntry, ExportFormat, ForkStrategy, IndexStrategy, KeyringProviderType,
-    ListFormat, PackageNameSpecifier, PipCompileFormat, PipInstallFormat, PrereleaseMode,
-    PrereleasePackageEntry, ProjectBuildBackend, PythonListFormat, ResolutionMode, SyncFormat,
-    TargetTriple, TreeFormat, TrustedHost, TrustedPublishing, VersionBump, VersionBumpSpec,
-    VersionControlSystem, VersionFormat,
+    ListFormat, MetadataOutputFormat, PackageNameSpecifier, PipCompileFormat, PipInstallFormat,
+    PrereleaseMode, PrereleasePackageEntry, ProjectBuildBackend, PythonListFormat, ResolutionMode,
+    SyncFormat, TargetTriple, TreeFormat, TrustedHost, TrustedPublishing, VersionBump,
+    VersionBumpSpec, VersionControlSystem, VersionFormat,
 };
 use uv_distribution_types::{
     ConfigSettingEntry, ConfigSettingPackageEntry, ExcludeNewerOverride, Index, IndexName,
@@ -87,6 +87,63 @@ pub struct Cli {
 
     #[command(flatten)]
     pub top_level: TopLevelArgs,
+}
+
+impl Cli {
+    /// Whether the selected command should stream newline-delimited JSON.
+    pub fn is_jsonl_output(&self) -> bool {
+        match &*self.command {
+            Commands::Project(command) => match &**command {
+                ProjectCommand::Sync(args) => matches!(args.output_format, SyncFormat::Jsonl),
+                ProjectCommand::Version(args) => {
+                    matches!(args.output_format, VersionFormat::Jsonl)
+                }
+                ProjectCommand::Audit(args) => {
+                    matches!(args.audit.output_format, AuditOutputFormat::Jsonl)
+                }
+                ProjectCommand::Add(_)
+                | ProjectCommand::Remove(_)
+                | ProjectCommand::Lock(_)
+                | ProjectCommand::Upgrade(_)
+                | ProjectCommand::Export(_)
+                | ProjectCommand::Tree(_)
+                | ProjectCommand::Run(_)
+                | ProjectCommand::Init(_)
+                | ProjectCommand::Format(_)
+                | ProjectCommand::Check(_) => false,
+            },
+            Commands::Workspace(WorkspaceNamespace {
+                command: WorkspaceCommand::Metadata(args),
+            }) => matches!(args.output_format, MetadataOutputFormat::Jsonl),
+            Commands::Tool(ToolNamespace {
+                command: ToolCommand::Audit(args),
+            }) => matches!(args.audit.output_format, AuditOutputFormat::Jsonl),
+            Commands::Python(PythonNamespace {
+                command: PythonCommand::List(args),
+            }) => matches!(args.output_format, PythonListFormat::Jsonl),
+            Commands::Self_(SelfNamespace {
+                command:
+                    SelfCommand::Version {
+                        output_format: VersionFormat::Jsonl,
+                        ..
+                    },
+            }) => true,
+            Commands::Auth(_)
+            | Commands::Build(_)
+            | Commands::BuildBackend { .. }
+            | Commands::Cache(_)
+            | Commands::Clean(_)
+            | Commands::GenerateShellCompletion(_)
+            | Commands::Help(_)
+            | Commands::Pip(_)
+            | Commands::Publish(_)
+            | Commands::Python(_)
+            | Commands::Self_(_)
+            | Commands::Tool(_)
+            | Commands::Venv(_)
+            | Commands::Workspace(_) => false,
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -7588,6 +7645,10 @@ pub enum WorkspaceCommand {
 }
 #[derive(Args)]
 pub struct MetadataArgs {
+    /// Select the output format.
+    #[arg(long, value_enum, default_value_t = MetadataOutputFormat::default())]
+    pub output_format: MetadataOutputFormat,
+
     /// View metadata for the specified PEP 723 Python script, rather than the current workspace.
     ///
     /// If provided, uv will resolve the dependencies based on the script's inline metadata table,

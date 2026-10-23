@@ -8,7 +8,7 @@ use tracing::debug;
 
 use uv_cache::Cache;
 use uv_client::BaseClientBuilder;
-use uv_command_support::{ExitStatus, Printer, UvError};
+use uv_command_support::{ExitStatus, Printer, UvError, jsonl_result};
 use uv_configuration::{
     ActiveEnvironment, Concurrency, DependencyGroups, DryRun, ExtrasSpecification, InstallOptions,
     Modifications, VersionBump, VersionBumpSpec, VersionFormat,
@@ -692,9 +692,13 @@ fn print_version(
                 writeln!(printer.stdout(), "{}", old_version.cyan())?;
             }
         }
-        VersionFormat::Json => {
+        VersionFormat::Json | VersionFormat::Jsonl => {
             let final_version = new_version.unwrap_or(old_version);
-            let string = serde_json::to_string_pretty(&final_version)?;
+            let string = if matches!(output_format, VersionFormat::Jsonl) {
+                jsonl_result(&final_version)?
+            } else {
+                serde_json::to_string_pretty(&final_version)?
+            };
             writeln!(printer.stdout_important(), "{string}")?;
         }
     }

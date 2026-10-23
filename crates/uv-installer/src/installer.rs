@@ -217,6 +217,10 @@ fn install(
         warn!("Checking for conflicts between packages failed: {err}");
     }
 
+    if let Some(reporter) = reporter {
+        reporter.on_install_complete();
+    }
+
     Ok(wheels)
 }
 
