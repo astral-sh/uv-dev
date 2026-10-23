@@ -9,7 +9,7 @@ use uv_normalize::PackageName;
 use uv_types::RequestedRequirements;
 
 use crate::preferences::Preferences;
-use crate::{DependencyMode, Exclusions, ResolverEnvironment};
+use crate::{BuildDependencies, DependencyMode, Exclusions, ResolverEnvironment};
 
 /// A manifest of requirements, constraints, and preferences.
 #[derive(Clone, Debug)]
@@ -22,6 +22,9 @@ pub struct Manifest {
 
     /// The constraints for the project.
     pub(super) constraints: Constraints,
+
+    /// Build dependency roots with constraints that follow only their dependency edges.
+    pub(super) build_dependencies: BuildDependencies,
 
     /// The dependency modifiers for the project.
     pub(super) modifiers: DependencyModifiers,
@@ -75,6 +78,7 @@ impl Manifest {
             recorder: None,
             requirements,
             constraints,
+            build_dependencies: BuildDependencies::default(),
             modifiers,
             preferences,
             project,
@@ -90,6 +94,7 @@ impl Manifest {
             recorder: None,
             requirements,
             constraints: Constraints::default(),
+            build_dependencies: BuildDependencies::default(),
             modifiers: DependencyModifiers::default(),
             preferences: Preferences::default(),
             project: None,
@@ -97,6 +102,18 @@ impl Manifest {
             workspace_members: BTreeMap::new(),
             lookaheads: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_build_dependencies(mut self, build_dependencies: BuildDependencies) -> Self {
+        self.build_dependencies = build_dependencies;
+        self
+    }
+
+    #[must_use]
+    pub fn with_preferences(mut self, preferences: Preferences) -> Self {
+        self.preferences = preferences;
+        self
     }
 
     #[must_use]
@@ -185,7 +202,7 @@ impl Manifest {
                     })
                     .chain(
                         self.modifiers
-                            .apply(DependencyModifierScope::Global, &self.requirements)
+                            .apply(DependencyModifierScope::Global, self.direct_requirements())
                             .filter(move |requirement| {
                                 requirement.evaluate_markers(env.marker_environment(), &[])
                             }),
@@ -193,6 +210,7 @@ impl Manifest {
                     .chain(
                         self.constraints
                             .requirements()
+                            .chain(self.build_dependencies.constraints.requirements())
                             .filter(|requirement| !self.modifiers.is_excluded(&requirement.name))
                             .filter(move |requirement| {
                                 requirement.evaluate_markers(env.marker_environment(), &[])
@@ -203,8 +221,13 @@ impl Manifest {
             // Include direct requirements, with constraints and overrides applied.
             DependencyMode::Direct => Either::Right(
                 self.modifiers
-                    .apply(DependencyModifierScope::Global, &self.requirements)
-                    .chain(self.constraints.requirements().map(Cow::Borrowed))
+                    .apply(DependencyModifierScope::Global, self.direct_requirements())
+                    .chain(
+                        self.constraints
+                            .requirements()
+                            .chain(self.build_dependencies.constraints.requirements())
+                            .map(Cow::Borrowed),
+                    )
                     .filter(|requirement| !self.modifiers.is_excluded(&requirement.name))
                     .filter(move |requirement| {
                         requirement.evaluate_markers(env.marker_environment(), &[])
@@ -262,7 +285,7 @@ impl Manifest {
                     })
                     .chain(
                         self.modifiers
-                            .apply(DependencyModifierScope::Global, &self.requirements)
+                            .apply(DependencyModifierScope::Global, self.direct_requirements())
                             .filter(move |requirement| {
                                 requirement.evaluate_markers(env.marker_environment(), &[])
                             }),
@@ -272,7 +295,7 @@ impl Manifest {
             // Restrict to the direct requirements.
             DependencyMode::Direct => Either::Right(
                 self.modifiers
-                    .apply(DependencyModifierScope::Global, self.requirements.iter())
+                    .apply(DependencyModifierScope::Global, self.direct_requirements())
                     .filter(move |requirement| {
                         requirement.evaluate_markers(env.marker_environment(), &[])
                     }),
@@ -280,8 +303,15 @@ impl Manifest {
         }
     }
 
+    /// Runtime and build roots both contribute candidate and source policy.
+    fn direct_requirements(&self) -> impl Iterator<Item = &Requirement> {
+        self.requirements
+            .iter()
+            .chain(&self.build_dependencies.requirements)
+    }
+
     /// Returns the number of input requirements.
     pub fn num_requirements(&self) -> usize {
-        self.requirements.len()
+        self.requirements.len() + self.build_dependencies.requirements.len()
     }
 }

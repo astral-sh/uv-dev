@@ -27,7 +27,9 @@ use crate::resolver::{
     Resolution, ResolutionDependencyEdge, ResolutionNode, ResolutionPackage, SelectedDistribution,
 };
 use crate::universal_marker::{ConflictMarker, UniversalMarker};
-use crate::{InMemoryIndex, MetadataResponse, Options, ResolveError, VersionsResponse};
+use crate::{
+    BuildDependencies, InMemoryIndex, MetadataResponse, Options, ResolveError, VersionsResponse,
+};
 
 /// Merge completed forks without retaining their duplicate graphs or unused artifact pins.
 pub(crate) struct ResolutionGraphBuilder<'a> {
@@ -43,7 +45,6 @@ pub(crate) struct ResolutionGraphBuilder<'a> {
     index: &'a InMemoryIndex,
     git: &'a GitResolver,
 }
-
 impl<'a> ResolutionGraphBuilder<'a> {
     /// Start an output graph containing only the root.
     pub(crate) fn new(
@@ -151,6 +152,7 @@ impl<'a> ResolutionGraphBuilder<'a> {
         self,
         requirements: Vec<Requirement>,
         constraints: Constraints,
+        build_dependencies: BuildDependencies,
         modifiers: DependencyModifiers,
         requires_python: RequiresPython,
         conflicts: &Conflicts,
@@ -203,6 +205,7 @@ impl<'a> ResolutionGraphBuilder<'a> {
             diagnostics,
             requirements,
             constraints,
+            build_dependencies,
             modifiers,
             options,
         };
