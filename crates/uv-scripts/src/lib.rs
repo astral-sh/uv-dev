@@ -372,6 +372,8 @@ impl Pep723Script {
 pub struct Pep723Metadata {
     #[serde(default)]
     pub dependencies: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
+    #[serde(skip)]
+    dependencies_present: bool,
     pub requires_python: Option<VersionSpecifiers>,
     pub tool: Option<Tool>,
     /// The raw unserialized document.
@@ -380,6 +382,11 @@ pub struct Pep723Metadata {
 }
 
 impl Pep723Metadata {
+    /// Return `true` if the metadata declares the `dependencies` field.
+    pub fn has_dependencies_field(&self) -> bool {
+        self.dependencies_present
+    }
+
     /// Parse the PEP 723 metadata from `stdin`.
     pub fn parse(contents: &[u8]) -> Result<Option<Self>, Pep723Error> {
         // Extract the `script` tag.
@@ -419,8 +426,10 @@ impl FromStr for Pep723Metadata {
     /// Parse `Pep723Metadata` from a raw TOML string.
     #[instrument(name = "toml::from_str PEP 723 metadata", skip_all)]
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let dependencies_present = toml::from_str::<toml::Table>(raw)?.contains_key("dependencies");
         let metadata = toml::from_str(raw)?;
         Ok(Self {
+            dependencies_present,
             raw: raw.to_string(),
             ..metadata
         })

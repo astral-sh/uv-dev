@@ -17,7 +17,7 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-use uv_test::packse::generate_wheel_with_files;
+use uv_test::packse::WheelBuilder;
 use uv_test::{
     TestContext, copy_dir_ignore, packse::PackseServer, site_packages_path, uv_snapshot,
     venv_bin_path,
@@ -8488,25 +8488,11 @@ fn run_pep723_shared_upgrade_package_constraints() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (first_name, first) = generate_wheel_with_files(
-        &"shared-upgrade".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (first_name, first) =
+        WheelBuilder::new(&"shared-upgrade".parse()?, &"1.0.0".parse()?).build();
     wheels.child(first_name).write_binary(&first)?;
-    let (second_name, second) = generate_wheel_with_files(
-        &"shared-upgrade".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (second_name, second) =
+        WheelBuilder::new(&"shared-upgrade".parse()?, &"2.0.0".parse()?).build();
     wheels.child(second_name).write_binary(&second)?;
     context.temp_dir.child("script.py").write_str(indoc! {r#"
         # /// script
@@ -8576,15 +8562,8 @@ fn run_pep723_shared_upgrade_package_conflict() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"shared-upgrade".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) =
+        WheelBuilder::new(&"shared-upgrade".parse()?, &"2.0.0".parse()?).build();
     wheels.child(filename).write_binary(&wheel)?;
     context.temp_dir.child("script.py").write_str(indoc! {r#"
         # /// script
@@ -8614,25 +8593,11 @@ fn run_pep723_shared_editable_overlay_precedence() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"shared-editable".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("shared_editable/value.py", "VALUE = 'shared'\n")],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"shared-editable".parse()?, &"1.0.0".parse()?)
+        .files(&[("shared_editable/value.py", "VALUE = 'shared'\n")])
+        .build();
     wheels.child(filename).write_binary(&wheel)?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"shared-extra".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"shared-extra".parse()?, &"1.0.0".parse()?).build();
     wheels.child(filename).write_binary(&wheel)?;
     context
         .temp_dir
@@ -8753,24 +8718,12 @@ fn run_pep723_shared_startup_hooks() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"shared-hook-target".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("shared_hook_target/value.py", "VALUE = 'shared'\n")],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"shared-hook-target".parse()?, &"1.0.0".parse()?)
+        .files(&[("shared_hook_target/value.py", "VALUE = 'shared'\n")])
+        .build();
     wheels.child(filename).write_binary(&wheel)?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"shared-startup".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[(
+    let (filename, wheel) = WheelBuilder::new(&"shared-startup".parse()?, &"1.0.0".parse()?)
+        .files(&[(
             "shared_startup/hook.py",
             indoc! {r"
             def initialize():
@@ -8778,18 +8731,10 @@ fn run_pep723_shared_startup_hooks() -> Result<()> {
                 from shared_hook_target.value import VALUE
                 builtins._uv_startup_value = VALUE
         "},
-        )],
-    );
+        )])
+        .build();
     wheels.child(filename).write_binary(&wheel)?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"shared-extra".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"shared-extra".parse()?, &"1.0.0".parse()?).build();
     wheels.child(filename).write_binary(&wheel)?;
     context
         .temp_dir
@@ -8907,15 +8852,9 @@ fn run_pep723_shared_reinstall_replaces_base() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"shared-repair".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("shared_repair/payload.txt", "pristine\n")],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"shared-repair".parse()?, &"1.0.0".parse()?)
+        .files(&[("shared_repair/payload.txt", "pristine\n")])
+        .build();
     wheels.child(filename).write_binary(&wheel)?;
     let script = indoc! {r#"
         # /// script
@@ -9025,25 +8964,12 @@ fn run_pep723_shared_reinstall_package_removes_overlay_collision() -> Result<()>
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (shared_name, shared) = generate_wheel_with_files(
-        &"shared-repair".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("shared_repair/payload.txt", "pristine\n")],
-    );
+    let (shared_name, shared) = WheelBuilder::new(&"shared-repair".parse()?, &"1.0.0".parse()?)
+        .files(&[("shared_repair/payload.txt", "pristine\n")])
+        .build();
     wheels.child(shared_name).write_binary(&shared)?;
-    let (overlay_name, overlay) = generate_wheel_with_files(
-        &"overlay-only".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (overlay_name, overlay) =
+        WheelBuilder::new(&"overlay-only".parse()?, &"1.0.0".parse()?).build();
     wheels.child(overlay_name).write_binary(&overlay)?;
     context.temp_dir.child("script.py").write_str(indoc! {r#"
         # /// script
@@ -9161,15 +9087,7 @@ fn run_pep723_shared_exact_removes_overlay_packages() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"overlay-only".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"overlay-only".parse()?, &"1.0.0".parse()?).build();
     wheels.child(filename).write_binary(&wheel)?;
     context.temp_dir.child("script.py").write_str(indoc! {r#"
         # /// script
@@ -9240,25 +9158,12 @@ fn run_pep723_shared_exact_retains_declared_dependencies() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (shared_name, shared) = generate_wheel_with_files(
-        &"shared-dep".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("shared_dep/value.py", "VALUE = 'shared'\n")],
-    );
+    let (shared_name, shared) = WheelBuilder::new(&"shared-dep".parse()?, &"1.0.0".parse()?)
+        .files(&[("shared_dep/value.py", "VALUE = 'shared'\n")])
+        .build();
     wheels.child(shared_name).write_binary(&shared)?;
-    let (overlay_name, overlay) = generate_wheel_with_files(
-        &"overlay-only".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (overlay_name, overlay) =
+        WheelBuilder::new(&"overlay-only".parse()?, &"1.0.0".parse()?).build();
     wheels.child(overlay_name).write_binary(&overlay)?;
     context.temp_dir.child("script.py").write_str(indoc! {r#"
         # /// script
@@ -9333,13 +9238,8 @@ fn run_pep723_shared_entrypoints_follow_dependency_changes() -> Result<()> {
             print(version("shared-cli"), overlay_value.VALUE)
             print(sys.prefix)
     "#};
-    let (first_name, first) = generate_wheel_with_files(
-        &"shared-cli".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
+    let (first_name, first) = WheelBuilder::new(&"shared-cli".parse()?, &"1.0.0".parse()?)
+        .files(
         &[
             ("shared_cli/cli.py", cli),
             (
@@ -9347,22 +9247,17 @@ fn run_pep723_shared_entrypoints_follow_dependency_changes() -> Result<()> {
                 "[console_scripts]\nuv-shared-command = shared_cli.cli:main\nuv-shared-old = shared_cli.cli:main\n",
             ),
         ],
-    );
-    let (second_name, second) = generate_wheel_with_files(
-        &"shared-cli".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+        )
+        .build();
+    let (second_name, second) = WheelBuilder::new(&"shared-cli".parse()?, &"2.0.0".parse()?)
+        .files(&[
             ("shared_cli/cli.py", cli),
             (
                 "shared_cli-2.0.0.dist-info/entry_points.txt",
                 "[console_scripts]\nuv-shared-command = shared_cli.cli:main\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(first_name).write_binary(&first)?;
     wheels.child(second_name).write_binary(&second)?;
     let script = context.temp_dir.child("script.py");
@@ -9422,18 +9317,12 @@ fn run_pep723_shared_native_entrypoints() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"shared-native".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[(
+    let (filename, wheel) = WheelBuilder::new(&"shared-native".parse()?, &"1.0.0".parse()?)
+        .files(&[(
             "shared_native-1.0.0.data/scripts/uv-shared-native",
             "#!/bin/sh\nprintf 'shared\\n'\n",
-        )],
-    );
+        )])
+        .build();
     wheels.child(filename).write_binary(&wheel)?;
     context.temp_dir.child("script.py").write_str(indoc! {r#"
         # /// script
@@ -9603,13 +9492,8 @@ fn run_pep723_shared_entrypoints_preserve_overlay_installations() -> Result<()> 
             print(version("shared-cli"), overlay_value.VALUE)
             print(sys.prefix)
     "#};
-    let (first_name, first) = generate_wheel_with_files(
-        &"shared-cli".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
+    let (first_name, first) = WheelBuilder::new(&"shared-cli".parse()?, &"1.0.0".parse()?)
+        .files(
         &[
             ("shared_cli/cli.py", cli),
             (
@@ -9617,15 +9501,10 @@ fn run_pep723_shared_entrypoints_preserve_overlay_installations() -> Result<()> 
                 "[console_scripts]\nuv-shared-command = shared_cli.cli:main\nuv-shared-old = shared_cli.cli:main\n",
             ),
         ],
-    );
-    let (second_name, second) = generate_wheel_with_files(
-        &"shared-cli".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+        )
+        .build();
+    let (second_name, second) = WheelBuilder::new(&"shared-cli".parse()?, &"2.0.0".parse()?)
+        .files(&[
             (
                 "shared_cli/cli.py",
                 "def replacement():\n    print('shared replacement')\n",
@@ -9634,8 +9513,8 @@ fn run_pep723_shared_entrypoints_preserve_overlay_installations() -> Result<()> 
                 "shared_cli-2.0.0.dist-info/entry_points.txt",
                 "[console_scripts]\nuv-shared-command = shared_cli.cli:replacement\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(first_name).write_binary(&first)?;
     wheels.child(second_name).write_binary(&second)?;
     let script = context.temp_dir.child("script.py");
@@ -9706,14 +9585,8 @@ fn run_pep723_shared_data_follows_dependency_changes() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (first_name, first) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (first_name, first) = WheelBuilder::new(&"shared-data".parse()?, &"1.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-1.0.0.data/data/etc/jupyter/config.txt",
@@ -9723,17 +9596,11 @@ fn run_pep723_shared_data_follows_dependency_changes() -> Result<()> {
                 "shared_data-1.0.0.data/data/share/jupyter/value.txt",
                 "one\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(first_name).write_binary(&first)?;
-    let (second_name, second) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (second_name, second) = WheelBuilder::new(&"shared-data".parse()?, &"2.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-2.0.0.data/data/etc/jupyter/config.txt",
@@ -9743,24 +9610,18 @@ fn run_pep723_shared_data_follows_dependency_changes() -> Result<()> {
                 "shared_data-2.0.0.data/data/share/jupyter/value.txt",
                 "two\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(second_name).write_binary(&second)?;
-    let (third_name, third) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"3.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (third_name, third) = WheelBuilder::new(&"shared-data".parse()?, &"3.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-3.0.0.data/data/etc/jupyter/config.txt",
                 "three\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(third_name).write_binary(&third)?;
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -9840,14 +9701,8 @@ fn run_pep723_shared_data_recovers_after_copy_failure() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (first_name, first) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (first_name, first) = WheelBuilder::new(&"shared-data".parse()?, &"1.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-1.0.0.data/data/share/jupyter/value.txt",
@@ -9857,17 +9712,11 @@ fn run_pep723_shared_data_recovers_after_copy_failure() -> Result<()> {
                 "shared_data-1.0.0.data/data/share/jupyter/edited.txt",
                 "original one\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(first_name).write_binary(&first)?;
-    let (second_name, second) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (second_name, second) = WheelBuilder::new(&"shared-data".parse()?, &"2.0.0".parse()?)
+        .files(&[
             (
                 "shared_data/__init__.py",
                 "def main():\n    print('shared command')\n",
@@ -9892,17 +9741,11 @@ fn run_pep723_shared_data_recovers_after_copy_failure() -> Result<()> {
                 "shared_data-2.0.0.data/data/etc/jupyter/later.txt",
                 "later two\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(second_name).write_binary(&second)?;
-    let (third_name, third) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"3.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (third_name, third) = WheelBuilder::new(&"shared-data".parse()?, &"3.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-3.0.0.data/data/share/jupyter/value.txt",
@@ -9916,8 +9759,8 @@ fn run_pep723_shared_data_recovers_after_copy_failure() -> Result<()> {
                 "shared_data-3.0.0.data/data/etc/jupyter/later.txt",
                 "later three\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(third_name).write_binary(&third)?;
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -10045,14 +9888,8 @@ fn run_pep723_shared_data_recovers_after_manifest_failure() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (first_name, first) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (first_name, first) = WheelBuilder::new(&"shared-data".parse()?, &"1.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-1.0.0.data/data/share/jupyter/value.txt",
@@ -10062,17 +9899,11 @@ fn run_pep723_shared_data_recovers_after_manifest_failure() -> Result<()> {
                 "shared_data-1.0.0.data/data/share/jupyter/edited.txt",
                 "original one\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(first_name).write_binary(&first)?;
-    let (second_name, second) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (second_name, second) = WheelBuilder::new(&"shared-data".parse()?, &"2.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-2.0.0.data/data/share/jupyter/value.txt",
@@ -10090,17 +9921,11 @@ fn run_pep723_shared_data_recovers_after_manifest_failure() -> Result<()> {
                 "shared_data-2.0.0.data/data/etc/jupyter/later.txt",
                 "later two\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(second_name).write_binary(&second)?;
-    let (third_name, third) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"3.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (third_name, third) = WheelBuilder::new(&"shared-data".parse()?, &"3.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-3.0.0.data/data/share/jupyter/value.txt",
@@ -10114,8 +9939,8 @@ fn run_pep723_shared_data_recovers_after_manifest_failure() -> Result<()> {
                 "shared_data-3.0.0.data/data/etc/jupyter/later.txt",
                 "later three\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(third_name).write_binary(&third)?;
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -10332,53 +10157,35 @@ fn run_pep723_shared_data_preserves_overlay_installations() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (first_name, first) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (first_name, first) = WheelBuilder::new(&"shared-data".parse()?, &"1.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-1.0.0.data/data/share/jupyter/value.txt",
                 "one\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(first_name).write_binary(&first)?;
-    let (second_name, second) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (second_name, second) = WheelBuilder::new(&"shared-data".parse()?, &"2.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-2.0.0.data/data/share/jupyter/value.txt",
                 "two\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(second_name).write_binary(&second)?;
-    let (overlay_name, overlay) = generate_wheel_with_files(
-        &"overlay-data".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (overlay_name, overlay) = WheelBuilder::new(&"overlay-data".parse()?, &"1.0.0".parse()?)
+        .files(&[
             ("overlay_data/__init__.py", ""),
             (
                 "overlay_data-1.0.0.data/data/share/jupyter/value.txt",
                 "overlay\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(overlay_name).write_binary(&overlay)?;
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -10492,14 +10299,8 @@ fn run_pep723_shared_data_restores_removed_overlay_files() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (shared_name, shared) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (shared_name, shared) = WheelBuilder::new(&"shared-data".parse()?, &"1.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-1.0.0.data/data/etc/jupyter/config.txt",
@@ -10509,24 +10310,18 @@ fn run_pep723_shared_data_restores_removed_overlay_files() -> Result<()> {
                 "shared_data-1.0.0.data/data/share/jupyter/value.txt",
                 "shared data\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(shared_name).write_binary(&shared)?;
-    let (overlay_name, overlay) = generate_wheel_with_files(
-        &"overlay-data".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (overlay_name, overlay) = WheelBuilder::new(&"overlay-data".parse()?, &"1.0.0".parse()?)
+        .files(&[
             ("overlay_data/__init__.py", ""),
             (
                 "overlay_data-1.0.0.data/data/share/jupyter/value.txt",
                 "overlay data\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(overlay_name).write_binary(&overlay)?;
     context.temp_dir.child("script.py").write_str(indoc! {r#"
         # /// script
@@ -10621,14 +10416,8 @@ fn run_pep723_shared_data_preserves_local_edits() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (first_name, first) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (first_name, first) = WheelBuilder::new(&"shared-data".parse()?, &"1.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-1.0.0.data/data/etc/jupyter/config.txt",
@@ -10638,17 +10427,11 @@ fn run_pep723_shared_data_preserves_local_edits() -> Result<()> {
                 "shared_data-1.0.0.data/data/share/jupyter/value.txt",
                 "one\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(first_name).write_binary(&first)?;
-    let (second_name, second) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (second_name, second) = WheelBuilder::new(&"shared-data".parse()?, &"2.0.0".parse()?)
+        .files(&[
             ("shared_data/__init__.py", ""),
             (
                 "shared_data-2.0.0.data/data/etc/jupyter/config.txt",
@@ -10658,8 +10441,8 @@ fn run_pep723_shared_data_preserves_local_edits() -> Result<()> {
                 "shared_data-2.0.0.data/data/share/jupyter/value.txt",
                 "two\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(second_name).write_binary(&second)?;
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -10732,14 +10515,8 @@ fn run_pep723_shared_entrypoints_with_spaces() -> Result<()> {
     let context = context.with_cache_dir(cache.path());
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"shared-cli".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (filename, wheel) = WheelBuilder::new(&"shared-cli".parse()?, &"1.0.0".parse()?)
+        .files(&[
             (
                 "shared_cli/cli.py",
                 indoc! {r"
@@ -10752,8 +10529,8 @@ fn run_pep723_shared_entrypoints_with_spaces() -> Result<()> {
                 "shared_cli-1.0.0.dist-info/entry_points.txt",
                 "[console_scripts]\nuv-shared-command = shared_cli.cli:main\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(filename).write_binary(&wheel)?;
     context.temp_dir.child("script.py").write_str(indoc! {r#"
         # /// script
@@ -10806,14 +10583,8 @@ fn run_pep723_shared_entrypoints_with_long_paths() -> Result<()> {
     let context = context.with_cache_dir(cache.path());
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"shared-cli".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[
+    let (filename, wheel) = WheelBuilder::new(&"shared-cli".parse()?, &"1.0.0".parse()?)
+        .files(&[
             (
                 "shared_cli/cli.py",
                 indoc! {r"
@@ -10826,8 +10597,8 @@ fn run_pep723_shared_entrypoints_with_long_paths() -> Result<()> {
                 "shared_cli-1.0.0.dist-info/entry_points.txt",
                 "[console_scripts]\nuv-shared-command = shared_cli.cli:main\n",
             ),
-        ],
-    );
+        ])
+        .build();
     wheels.child(filename).write_binary(&wheel)?;
     context.temp_dir.child("script.py").write_str(indoc! {r#"
         # /// script
@@ -10863,14 +10634,8 @@ fn run_pep723_shared_no_build_isolation() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (backend_name, backend) = generate_wheel_with_files(
-        &"fixture-backend".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[(
+    let (backend_name, backend) = WheelBuilder::new(&"fixture-backend".parse()?, &"1.0.0".parse()?)
+        .files(&[(
             "fixture_backend/backend.py",
             indoc! {r#"
             from pathlib import Path
@@ -10880,8 +10645,8 @@ fn run_pep723_shared_no_build_isolation() -> Result<()> {
                 shutil.copyfile(name, Path(wheel_directory) / name)
                 return name
         "#},
-        )],
-    );
+        )])
+        .build();
     wheels.child(backend_name).write_binary(&backend)?;
     let source = context.temp_dir.child("example");
     source.create_dir_all()?;
@@ -10893,15 +10658,9 @@ fn run_pep723_shared_no_build_isolation() -> Result<()> {
         requires = []
         build-backend = "fixture_backend.backend"
     "#})?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"example".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("example/value.py", "VALUE = 'built'\n")],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?)
+        .files(&[("example/value.py", "VALUE = 'built'\n")])
+        .build();
     source.child(filename).write_binary(&wheel)?;
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -10967,14 +10726,8 @@ fn run_pep723_shared_no_build_isolation_package() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (backend_name, backend) = generate_wheel_with_files(
-        &"fixture-backend".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[(
+    let (backend_name, backend) = WheelBuilder::new(&"fixture-backend".parse()?, &"1.0.0".parse()?)
+        .files(&[(
             "fixture_backend/backend.py",
             indoc! {r#"
             from pathlib import Path
@@ -10984,8 +10737,8 @@ fn run_pep723_shared_no_build_isolation_package() -> Result<()> {
                 shutil.copyfile(name, Path(wheel_directory) / name)
                 return name
         "#},
-        )],
-    );
+        )])
+        .build();
     wheels.child(backend_name).write_binary(&backend)?;
     let source = context.temp_dir.child("example");
     source.create_dir_all()?;
@@ -10997,15 +10750,9 @@ fn run_pep723_shared_no_build_isolation_package() -> Result<()> {
         requires = []
         build-backend = "fixture_backend.backend"
     "#})?;
-    let (filename, wheel) = generate_wheel_with_files(
-        &"example".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("example/value.py", "VALUE = 'built'\n")],
-    );
+    let (filename, wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?)
+        .files(&[("example/value.py", "VALUE = 'built'\n")])
+        .build();
     source.child(filename).write_binary(&wheel)?;
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -11109,25 +10856,12 @@ fn run_pep723_shared_manifest_validates_before_cleanup() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let wheels = context.temp_dir.child("wheels");
     wheels.create_dir_all()?;
-    let (first_name, first) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("shared_data-1.0.0.data/data/etc/jupyter/value.txt", "one\n")],
-    );
+    let (first_name, first) = WheelBuilder::new(&"shared-data".parse()?, &"1.0.0".parse()?)
+        .files(&[("shared_data-1.0.0.data/data/etc/jupyter/value.txt", "one\n")])
+        .build();
     wheels.child(first_name).write_binary(&first)?;
-    let (second_name, second) = generate_wheel_with_files(
-        &"shared-data".parse()?,
-        &"2.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[],
-    );
+    let (second_name, second) =
+        WheelBuilder::new(&"shared-data".parse()?, &"2.0.0".parse()?).build();
     wheels.child(second_name).write_binary(&second)?;
     let script = context.temp_dir.child("script.py");
     script.write_str(indoc! {r#"
@@ -11209,27 +10943,15 @@ fn run_pep723_shared_build_config_settings() -> Result<()> {
     "#})?;
     let first = source.child("first");
     first.create_dir_all()?;
-    let (first_name, first_wheel) = generate_wheel_with_files(
-        &"example".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("example/value.py", "VALUE = 'first'\n")],
-    );
+    let (first_name, first_wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?)
+        .files(&[("example/value.py", "VALUE = 'first'\n")])
+        .build();
     first.child(first_name).write_binary(&first_wheel)?;
     let second = source.child("second");
     second.create_dir_all()?;
-    let (second_name, second_wheel) = generate_wheel_with_files(
-        &"example".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("example/value.py", "VALUE = 'second'\n")],
-    );
+    let (second_name, second_wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?)
+        .files(&[("example/value.py", "VALUE = 'second'\n")])
+        .build();
     second.child(second_name).write_binary(&second_wheel)?;
     context.temp_dir.child("first.py").write_str(indoc! {r#"
         # /// script
@@ -11312,27 +11034,15 @@ fn run_pep723_shared_build_package_config_settings() -> Result<()> {
     "#})?;
     let first = source.child("first");
     first.create_dir_all()?;
-    let (first_name, first_wheel) = generate_wheel_with_files(
-        &"example".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("example/value.py", "VALUE = 'first'\n")],
-    );
+    let (first_name, first_wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?)
+        .files(&[("example/value.py", "VALUE = 'first'\n")])
+        .build();
     first.child(first_name).write_binary(&first_wheel)?;
     let second = source.child("second");
     second.create_dir_all()?;
-    let (second_name, second_wheel) = generate_wheel_with_files(
-        &"example".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("example/value.py", "VALUE = 'second'\n")],
-    );
+    let (second_name, second_wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?)
+        .files(&[("example/value.py", "VALUE = 'second'\n")])
+        .build();
     second.child(second_name).write_binary(&second_wheel)?;
     context.temp_dir.child("first.py").write_str(indoc! {r#"
         # /// script
@@ -11419,27 +11129,15 @@ fn run_pep723_shared_build_variables() -> Result<()> {
     "#})?;
     let first = source.child("first");
     first.create_dir_all()?;
-    let (first_name, first_wheel) = generate_wheel_with_files(
-        &"example".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("example/value.py", "VALUE = 'first'\n")],
-    );
+    let (first_name, first_wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?)
+        .files(&[("example/value.py", "VALUE = 'first'\n")])
+        .build();
     first.child(first_name).write_binary(&first_wheel)?;
     let second = source.child("second");
     second.create_dir_all()?;
-    let (second_name, second_wheel) = generate_wheel_with_files(
-        &"example".parse()?,
-        &"1.0.0".parse()?,
-        &[],
-        &BTreeMap::new(),
-        None,
-        "py3-none-any",
-        &[("example/value.py", "VALUE = 'second'\n")],
-    );
+    let (second_name, second_wheel) = WheelBuilder::new(&"example".parse()?, &"1.0.0".parse()?)
+        .files(&[("example/value.py", "VALUE = 'second'\n")])
+        .build();
     second.child(second_name).write_binary(&second_wheel)?;
     context.temp_dir.child("first.py").write_str(indoc! {r#"
         # /// script

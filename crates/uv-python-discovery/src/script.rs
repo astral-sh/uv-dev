@@ -151,7 +151,7 @@ impl ScriptEnvironmentMode {
         };
         if preview.is_enabled(PreviewFeature::SharedScriptEnvironments)
             && active != ActiveEnvironment::Prefer
-            && script.metadata().dependencies.is_some()
+            && script.metadata().has_dependencies_field()
             && !has_extra_build_dependencies
             && builds_are_isolated
             && !has_lockfile

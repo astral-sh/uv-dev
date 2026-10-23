@@ -1202,7 +1202,12 @@ impl ScriptEnvironment {
                 let is_cache_entry = match active {
                     ActiveEnvironment::Ignore | ActiveEnvironment::Warn => true,
                     ActiveEnvironment::Prefer => {
-                        root == ScriptInterpreter::root(script, ActiveEnvironment::Ignore, cache)
+                        root == ScriptInterpreter::root(
+                            mode,
+                            script,
+                            ActiveEnvironment::Ignore,
+                            cache,
+                        )
                     }
                 };
                 let replace_environment = is_cache_entry || uv_fs::is_virtualenv_base(&root);
