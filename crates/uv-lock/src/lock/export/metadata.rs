@@ -1,16 +1,21 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Display;
+use std::iter::once;
 use std::path::Path;
 
+use uv_cache_key::{CanonicalUrl, RepositoryUrl};
 use uv_distribution_filename::WheelFilename;
 use uv_distribution_types::{
-    InstalledDist, Name, Requirement, RequiresPython, ResolvedDist, UrlString,
+    InstalledDist, InstalledDistKind, Name, Requirement, RequiresPython, ResolvedDist, UrlString,
 };
-use uv_fs::PortablePathBuf;
+use uv_fs::{PortablePathBuf, is_same_file_allow_missing, normalize_path};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
 use uv_pep508::{MarkerTree, StringVersion};
-use uv_pypi_types::{ConflictItem, ConflictKind, ConflictSet, Conflicts, HashDigest, ModuleName};
+use uv_pypi_types::{
+    ConflictItem, ConflictKind, ConflictSet, Conflicts, DirectUrl, HashDigest, ModuleName,
+    ResolverMarkerEnvironment, VcsKind,
+};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_python_types::LenientImplementationName;
 
@@ -93,6 +98,8 @@ pub struct Metadata {
     /// The dependency graph.
     #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
     resolution: BTreeMap<MetadataNodeIdFlat, MetadataNode>,
+    #[serde(skip)]
+    reachability: BTreeMap<MetadataNodeIdFlat, MarkerTree>,
 }
 
 /// The schema version for the metadata report.
@@ -1012,6 +1019,123 @@ impl MetadataSource {
     }
 }
 
+/// Compare the source information available in installed metadata with a locked package.
+fn package_source_matches_installed(root: &Path, package: &Package, dist: &InstalledDist) -> bool {
+    match &package.id.source {
+        Source::Registry(_) => match &dist.kind {
+            InstalledDistKind::Registry(_)
+            | InstalledDistKind::EggInfoFile(_)
+            | InstalledDistKind::EggInfoDirectory(_) => true,
+            InstalledDistKind::Url(_) | InstalledDistKind::LegacyEditable(_) => false,
+        },
+        Source::Direct(url, source) => {
+            let InstalledDistKind::Url(dist) = &dist.kind else {
+                return false;
+            };
+            let DirectUrl::ArchiveUrl {
+                url: installed_url,
+                subdirectory,
+                ..
+            } = dist.direct_url.as_ref()
+            else {
+                return false;
+            };
+            source.subdirectory == *subdirectory
+                && url.to_url().is_ok_and(|url| {
+                    CanonicalUrl::new(url.into_url())
+                        == CanonicalUrl::new(installed_url.as_url().clone())
+                })
+        }
+        Source::Path(path) => {
+            let InstalledDistKind::Url(dist) = &dist.kind else {
+                return false;
+            };
+            let DirectUrl::ArchiveUrl {
+                url,
+                subdirectory: None,
+                ..
+            } = dist.direct_url.as_ref()
+            else {
+                return false;
+            };
+            url.to_file_path().is_ok_and(|installed_path| {
+                is_same_file_allow_missing(
+                    &normalize_path(root.join(path)),
+                    &normalize_path(installed_path),
+                )
+                .unwrap_or(false)
+            })
+        }
+        Source::Directory(path) | Source::Editable(path) => {
+            let editable = matches!(package.id.source, Source::Editable(_));
+            match &dist.kind {
+                InstalledDistKind::Url(dist) => {
+                    let DirectUrl::LocalDirectory {
+                        url,
+                        subdirectory: None,
+                        ..
+                    } = dist.direct_url.as_ref()
+                    else {
+                        return false;
+                    };
+                    dist.editable == editable
+                        && url.to_file_path().is_ok_and(|installed_path| {
+                            is_same_file_allow_missing(
+                                &normalize_path(root.join(path)),
+                                &normalize_path(installed_path),
+                            )
+                            .unwrap_or(false)
+                        })
+                }
+                InstalledDistKind::LegacyEditable(dist) => {
+                    editable
+                        && is_same_file_allow_missing(
+                            &normalize_path(root.join(path)),
+                            &normalize_path(dist.target.as_ref()),
+                        )
+                        .unwrap_or(false)
+                }
+                InstalledDistKind::Registry(_)
+                | InstalledDistKind::EggInfoFile(_)
+                | InstalledDistKind::EggInfoDirectory(_) => false,
+            }
+        }
+        Source::Git(url, source) => {
+            let InstalledDistKind::Url(dist) = &dist.kind else {
+                return false;
+            };
+            let DirectUrl::VcsUrl {
+                url: installed_url,
+                subdirectory,
+                path,
+            } = dist.direct_url.as_ref()
+            else {
+                return false;
+            };
+            let vcs_info = installed_url.vcs_info();
+            if vcs_info.vcs != VcsKind::Git
+                || source.subdirectory != *subdirectory
+                || source.path != *path
+                || !vcs_info
+                    .commit_id
+                    .as_deref()
+                    .is_some_and(|commit| commit.eq_ignore_ascii_case(source.precise.as_str()))
+                || vcs_info.git_lfs.unwrap_or(false) != source.lfs.enabled()
+            {
+                return false;
+            }
+            let Some(installed_url) = installed_url.url().as_str().strip_prefix("git+") else {
+                return false;
+            };
+            url.to_url().is_ok_and(|url| {
+                RepositoryUrl::parse(installed_url)
+                    .is_ok_and(|installed_url| RepositoryUrl::new(url) == installed_url)
+            })
+        }
+        Source::Virtual(_) => false,
+    }
+}
+
 fn normalize_workspace_relative_path(
     workspace_root: &PortablePathBuf,
     maybe_rel: &Path,
@@ -1473,6 +1597,7 @@ impl Metadata {
             requires_python: lock.requires_python.clone(),
             members,
             resolution: resolve,
+            reachability,
         }
     }
 
@@ -1488,6 +1613,61 @@ impl Metadata {
             kind: MetadataNodeKind::Package,
         })
         .to_flat())
+    }
+
+    /// Match an installed distribution to a locked package without selecting conflicting extras.
+    pub fn installed_package_node_id(
+        &self,
+        lock: &Lock,
+        dist: &InstalledDist,
+        marker_env: &ResolverMarkerEnvironment,
+    ) -> Option<String> {
+        let mut candidates = lock
+            .packages_for_name(dist.name())
+            .iter()
+            .filter(|package| {
+                if let Source::Virtual(_) = package.id.source {
+                    return false;
+                }
+                let id = MetadataNodeId::from_package_id(
+                    &self.workspace_root,
+                    &package.id,
+                    MetadataNodeKind::Package,
+                )
+                .to_flat();
+                self.reachability.get(&id).is_some_and(|marker| {
+                    self.requires_python
+                        .complexify_markers(marker.without_extras())
+                        .evaluate(marker_env, &[])
+                })
+            })
+            .peekable();
+        let first = candidates.next()?;
+        let package = if candidates.peek().is_none() {
+            // A single candidate owns modules by name even when the installed version or source differs.
+            first
+        } else {
+            let mut matches = once(first).chain(candidates).filter(|package| {
+                package
+                    .version()
+                    .is_none_or(|version| version == dist.version())
+                    && package_source_matches_installed(self.workspace_root.as_ref(), package, dist)
+            });
+            let package = matches.next()?;
+            // Installed metadata does not always identify a source, such as the original index.
+            if matches.next().is_some() {
+                return None;
+            }
+            package
+        };
+        Some(
+            MetadataNodeId::from_package_id(
+                &self.workspace_root,
+                &package.id,
+                MetadataNodeKind::Package,
+            )
+            .to_flat(),
+        )
     }
 
     /// Return the package node ID for an unmanaged distribution.

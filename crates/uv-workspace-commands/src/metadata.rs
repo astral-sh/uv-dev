@@ -297,6 +297,7 @@ pub async fn metadata(
             .ok();
         let collected = collect_environment(
             install_target,
+            &export,
             &environment,
             &settings,
             &client_builder,
