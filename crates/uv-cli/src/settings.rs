@@ -3,7 +3,6 @@
 use std::env::VarError;
 use std::ffi::OsString;
 use std::fmt;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::str::FromStr;
@@ -120,24 +119,20 @@ impl GlobalSettings {
                     .concurrency
                     .downloads
                     .combine(workspace.and_then(|workspace| workspace.globals.concurrent_downloads))
-                    .map(NonZeroUsize::get)
                     .unwrap_or(Concurrency::DEFAULT_DOWNLOADS),
                 environment
                     .concurrency
                     .builds
                     .combine(workspace.and_then(|workspace| workspace.globals.concurrent_builds))
-                    .map(NonZeroUsize::get)
                     .unwrap_or_else(Concurrency::threads),
                 environment
                     .concurrency
                     .installs
                     .combine(workspace.and_then(|workspace| workspace.globals.concurrent_installs))
-                    .map(NonZeroUsize::get)
                     .unwrap_or_else(Concurrency::threads),
                 environment
                     .concurrency
                     .cache_reads
-                    .map(NonZeroUsize::get)
                     .unwrap_or(Concurrency::DEFAULT_CACHE_READS),
             ),
             show_settings: args.show_settings,
