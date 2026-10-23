@@ -39,15 +39,19 @@ pub fn dist_hints(
             suggestion.cyan(),
             suggestion.cyan(),
         ));
-    } else if !chain.is_empty() {
-        hints.push(format_chain(name, version, chain));
+    } else {
+        hints.extend(format_derivation_chain(name, version, chain));
     }
     hints.extend(cause_hints);
     hints.into_owned()
 }
 
-/// Format a [`DerivationChain`] as a human-readable error message.
-fn format_chain(name: &PackageName, version: Option<&Version>, chain: &DerivationChain) -> String {
+/// Format a non-empty [`DerivationChain`] as a human-readable hint.
+pub fn format_derivation_chain(
+    name: &PackageName,
+    version: Option<&Version>,
+    chain: &DerivationChain,
+) -> Hints<'static> {
     /// Format a step in the [`DerivationChain`] as a human-readable error message.
     fn format_step(step: &DerivationStep, range: Option<Ranges<Version>>) -> String {
         if let Some(range) =
@@ -139,6 +143,10 @@ fn format_chain(name: &PackageName, version: Option<&Version>, chain: &Derivatio
         }
     }
 
+    if chain.is_empty() {
+        return Hints::none();
+    }
+
     let mut message = if let Some(version) = version {
         format!(
             "`{}` ({}) was included because",
@@ -164,5 +172,25 @@ fn format_chain(name: &PackageName, version: Option<&Version>, chain: &Derivatio
     } else {
         message = format!("{message} `{}`", name.cyan());
     }
-    message
+    Hints::from(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+
+    use super::*;
+
+    #[test]
+    fn empty_derivation_chain() -> Result<()> {
+        let name = "example".parse()?;
+        let chain = DerivationChain::default();
+        assert!(
+            format_derivation_chain(&name, None, &chain)
+                .iter()
+                .next()
+                .is_none()
+        );
+        Ok(())
+    }
 }
