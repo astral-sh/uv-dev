@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use uv_distribution_types::{
     BuiltDist, Dist, DistributionId, DistributionMetadata, Identifier, IndexUrl, InstalledDist,
-    Name, RegistryBuiltWheel, RegistrySourceDist, ResolvedDist, ResourceId, SourceDist,
-    VersionOrUrlRef,
+    Name, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist, RequestedDist, ResolvedDist,
+    ResourceId, SourceDist, VersionOrUrlRef,
 };
 use uv_normalize::PackageName;
 
@@ -66,6 +66,39 @@ impl ResolvedDistRef<'_> {
             Self::Installed { dist } => ResolvedDist::Installed {
                 dist: Arc::new((*dist).clone()),
             },
+        }
+    }
+
+    /// Create an owned distribution for metadata retrieval.
+    ///
+    /// Wheel metadata comes from the selected artifact. [`Self::to_owned`] retains the
+    /// non-excluded artifacts for installation and lockfile output.
+    pub(crate) fn to_owned_for_metadata(&self) -> RequestedDist {
+        match self {
+            Self::InstallableRegistrySourceDist { sdist, prioritized } => {
+                let source = prioritized.source_dist().expect("a source distribution");
+                assert_eq!(
+                    (&sdist.name, &sdist.version),
+                    (&source.name, &source.version),
+                    "expected chosen sdist to match prioritized sdist"
+                );
+                RequestedDist::Installable(Dist::Source(SourceDist::Registry(source)))
+            }
+            Self::InstallableRegistryBuiltDist {
+                wheel, prioritized, ..
+            } => {
+                assert_eq!(
+                    Some(&wheel.filename),
+                    prioritized.best_wheel().map(|(wheel, _)| &wheel.filename),
+                    "expected chosen wheel to match best wheel"
+                );
+                RequestedDist::Installable(Dist::Built(BuiltDist::Registry(RegistryBuiltDist {
+                    wheels: vec![(*wheel).clone()],
+                    best_wheel_index: 0,
+                    sdist: None,
+                })))
+            }
+            Self::Installed { dist } => RequestedDist::Installed((*dist).clone()),
         }
     }
 

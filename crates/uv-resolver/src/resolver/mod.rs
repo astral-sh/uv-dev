@@ -25,8 +25,8 @@ use uv_configuration::{Constraints, DependencyModifiers, IndexStrategy};
 use uv_distribution::{ArchiveMetadata, DistributionDatabase};
 use uv_distribution_types::{
     BuiltDist, DerivationChain, Dist, DistErrorKind, Identifier, IndexCapabilities, IndexLocations,
-    IndexMetadata, IndexUrl, InstalledDist, Name, RemoteSource, Requirement, RequiresPython,
-    ResolutionRecorder, ResolvedDist, SourceDist, VariantsJsonContent, VersionOrUrlRef,
+    IndexMetadata, IndexUrl, InstalledDist, Name, RemoteSource, RequestedDist, Requirement,
+    RequiresPython, ResolutionRecorder, ResolvedDist, VariantsJsonContent, VersionOrUrlRef,
 };
 use uv_git::GitResolver;
 use uv_normalize::PackageName;
@@ -2451,7 +2451,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             let metadata =
                                 MetadataResponse::Found(ArchiveMetadata::from_metadata23(metadata));
 
-                            let dist = dist.to_owned();
+                            let dist = dist.to_owned_for_metadata();
                             if &package_name != dist.name() {
                                 return Err(ResolveError::MismatchedPackageName {
                                     request: "distribution",
@@ -2461,14 +2461,12 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                             }
 
                             let response = match dist {
-                                ResolvedDist::Installable { dist, .. } => Response::Dist {
-                                    dist: (*dist).clone(),
-                                    metadata,
-                                },
-                                ResolvedDist::Installed { dist } => Response::Installed {
-                                    dist: (*dist).clone(),
-                                    metadata,
-                                },
+                                RequestedDist::Installable(dist) => {
+                                    Response::Dist { dist, metadata }
+                                }
+                                RequestedDist::Installed(dist) => {
+                                    Response::Installed { dist, metadata }
+                                }
                             };
 
                             return Ok(Some(response));
@@ -2510,7 +2508,7 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                 // Emit a request to fetch the metadata for this version.
                 let dist = dist.for_resolution();
                 if self.index.distributions().register(dist.distribution_id()) {
-                    let dist = dist.to_owned();
+                    let dist = dist.to_owned_for_metadata();
                     if &package_name != dist.name() {
                         return Err(ResolveError::MismatchedPackageName {
                             request: "distribution",
@@ -2520,25 +2518,19 @@ impl<InstalledPackages: InstalledPackagesProvider> ResolverState<InstalledPackag
                     }
 
                     let response = match dist {
-                        ResolvedDist::Installable { dist, .. } => {
+                        RequestedDist::Installable(dist) => {
                             let metadata = provider
                                 .get_or_build_wheel_metadata(&dist)
                                 .boxed_local()
                                 .await?;
 
-                            Response::Dist {
-                                dist: (*dist).clone(),
-                                metadata,
-                            }
+                            Response::Dist { dist, metadata }
                         }
-                        ResolvedDist::Installed { dist } => {
+                        RequestedDist::Installed(dist) => {
                             let metadata =
                                 provider.get_installed_metadata(&dist).boxed_local().await?;
 
-                            Response::Installed {
-                                dist: (*dist).clone(),
-                                metadata,
-                            }
+                            Response::Installed { dist, metadata }
                         }
                     };
 
@@ -3531,37 +3523,9 @@ pub(crate) enum Request {
 
 impl<'a> From<ResolvedDistRef<'a>> for Request {
     fn from(dist: ResolvedDistRef<'a>) -> Self {
-        // N.B. This is almost identical to `ResolvedDistRef::to_owned`, but
-        // creates a `Request` instead of a `ResolvedDist`. There's probably
-        // some room for DRYing this up a bit. The obvious way would be to
-        // add a method to create a `Dist`, but a `Dist` cannot be represented
-        // as an installed dist.
-        match dist {
-            ResolvedDistRef::InstallableRegistrySourceDist { sdist, prioritized } => {
-                // This is okay because we're only here if the prioritized dist
-                // has an sdist, so this always succeeds.
-                let source = prioritized.source_dist().expect("a source distribution");
-                assert_eq!(
-                    (&sdist.name, &sdist.version),
-                    (&source.name, &source.version),
-                    "expected chosen sdist to match prioritized sdist"
-                );
-                Self::Dist(Dist::Source(SourceDist::Registry(source)))
-            }
-            ResolvedDistRef::InstallableRegistryBuiltDist {
-                wheel, prioritized, ..
-            } => {
-                assert_eq!(
-                    Some(&wheel.filename),
-                    prioritized.best_wheel().map(|(wheel, _)| &wheel.filename),
-                    "expected chosen wheel to match best wheel"
-                );
-                // This is okay because we're only here if the prioritized dist
-                // has at least one wheel, so this always succeeds.
-                let built = prioritized.built_dist().expect("at least one wheel");
-                Self::Dist(Dist::Built(BuiltDist::Registry(built)))
-            }
-            ResolvedDistRef::Installed { dist } => Self::Installed(dist.clone()),
+        match dist.to_owned_for_metadata() {
+            RequestedDist::Installable(dist) => Self::Dist(dist),
+            RequestedDist::Installed(dist) => Self::Installed(dist),
         }
     }
 }
