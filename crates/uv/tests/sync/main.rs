@@ -8,3 +8,6 @@ mod show_settings;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod sync;
+
+#[cfg(feature = "test-python")]
+mod requires_python_warnings;
