@@ -1,11 +1,12 @@
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use tracing::{debug, info_span, warn};
 
+use uv_cache_key::cache_digest;
 use uv_fs::{Simplified, created_time};
 use uv_macros::DeserializeUntagged;
 
@@ -43,6 +44,10 @@ pub struct CacheInfo {
     /// The timestamp or inode of any directories that should be considered in the cache key.
     #[serde(default)]
     directories: BTreeMap<Cow<'static, str>, Option<DirectoryTimestamp>>,
+    /// A digest of the files present among the declared inputs, relative to the source directory.
+    /// Removing an input can leave the maximum timestamp unchanged.
+    #[serde(default)]
+    files: Option<String>,
 }
 
 impl CacheInfo {
@@ -71,6 +76,7 @@ impl CacheInfo {
         let mut last_changed: Option<(PathBuf, Timestamp)> = None;
         let mut directories = BTreeMap::new();
         let mut env = BTreeMap::new();
+        let mut files = BTreeSet::new();
 
         // Read the cache keys.
         let pyproject_path = directory.join("pyproject.toml");
@@ -133,6 +139,7 @@ impl CacheInfo {
                         );
                         continue;
                     }
+                    files.insert(PathBuf::from(file.as_ref()));
                     let timestamp = Timestamp::from_metadata(&metadata);
                     if last_changed.as_ref().is_none_or(|(_, prev_timestamp)| {
                         *prev_timestamp < Timestamp::from_metadata(&metadata)
@@ -228,12 +235,10 @@ impl CacheInfo {
         // If we have any globs, first cluster them using LCP and then do a single pass on each group.
         if !globs.is_empty() {
             for (glob_base, glob_patterns) in cluster_globs(&globs) {
-                let walker = globwalk::GlobWalkerBuilder::from_patterns(
-                    directory.join(glob_base),
-                    &glob_patterns,
-                )
-                .file_type(globwalk::FileType::FILE | globwalk::FileType::SYMLINK)
-                .build()?;
+                let glob_root = directory.join(&glob_base);
+                let walker = globwalk::GlobWalkerBuilder::from_patterns(&glob_root, &glob_patterns)
+                    .file_type(globwalk::FileType::FILE | globwalk::FileType::SYMLINK)
+                    .build()?;
                 for entry in walker {
                     let entry = match entry {
                         Ok(entry) => entry,
@@ -270,6 +275,14 @@ impl CacheInfo {
                         }
                         continue;
                     }
+                    files.insert(
+                        glob_base.join(
+                            entry
+                                .path()
+                                .strip_prefix(&glob_root)
+                                .expect("glob entries are beneath their root"),
+                        ),
+                    );
                     let timestamp = Timestamp::from_metadata(&metadata);
                     if last_changed.as_ref().is_none_or(|(_, prev_timestamp)| {
                         *prev_timestamp < Timestamp::from_metadata(&metadata)
@@ -296,6 +309,7 @@ impl CacheInfo {
             tags,
             env,
             directories,
+            files: (!files.is_empty()).then(|| cache_digest(&files)),
         })
     }
 
@@ -317,6 +331,7 @@ impl CacheInfo {
             && self.tags.is_none()
             && self.env.is_empty()
             && self.directories.is_empty()
+            && self.files.is_none()
     }
 }
 
@@ -457,7 +472,9 @@ enum DirectoryTimestamp {
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheKey, ToolUv};
+    use anyhow::Result;
+
+    use super::{CacheInfo, CacheKey, ToolUv};
 
     #[test]
     fn cache_key_forms() -> Result<(), toml::de::Error> {
@@ -532,13 +549,108 @@ mod tests {
         extra cache key field
         "#);
     }
+
+    /// Removing a glob match must invalidate the cache even if the newest input is unchanged.
+    #[test]
+    fn removed_glob_match_changes_cache_info() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        fs_err::write(
+            directory.path().join("pyproject.toml"),
+            "[tool.uv]\ncache-keys = ['*.txt']\n",
+        )?;
+        let older = directory.path().join("older.txt");
+        fs_err::write(&older, "older input")?;
+        fs_err::write(directory.path().join("newer.txt"), "newer input")?;
+
+        let before = CacheInfo::from_directory(directory.path())?;
+        fs_err::remove_file(older)?;
+        let after = CacheInfo::from_directory(directory.path())?;
+
+        assert_eq!(before.timestamp, after.timestamp);
+        assert_ne!(before, after);
+        Ok(())
+    }
+
+    /// A literal cache key has the same membership requirement as a glob match.
+    #[test]
+    fn removed_literal_file_changes_cache_info() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        fs_err::write(
+            directory.path().join("pyproject.toml"),
+            "[tool.uv]\ncache-keys = ['older.txt', 'newer.txt']\n",
+        )?;
+        let older = directory.path().join("older.txt");
+        fs_err::write(&older, "older input")?;
+        fs_err::write(directory.path().join("newer.txt"), "newer input")?;
+
+        let before = CacheInfo::from_directory(directory.path())?;
+        fs_err::remove_file(older)?;
+        let after = CacheInfo::from_directory(directory.path())?;
+
+        assert_eq!(before.timestamp, after.timestamp);
+        assert_ne!(before, after);
+        assert_eq!(after, CacheInfo::from_directory(directory.path())?);
+        Ok(())
+    }
+
+    /// Older records deserialize without membership and are invalidated when files are present.
+    #[test]
+    fn legacy_cache_info_without_membership() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        fs_err::write(directory.path().join("pyproject.toml"), "")?;
+        let current = CacheInfo::from_directory(directory.path())?;
+        let legacy = rmp_serde::to_vec(&(
+            &current.timestamp,
+            &current.commit,
+            &current.tags,
+            &current.env,
+            &current.directories,
+        ))?;
+        let previous: CacheInfo = rmp_serde::from_slice(&legacy)?;
+
+        assert_eq!(previous.timestamp, current.timestamp);
+        assert_eq!(previous.files, None);
+        assert_ne!(previous, current);
+        assert_eq!(
+            rmp_serde::from_slice::<CacheInfo>(&rmp_serde::to_vec(&current)?)?,
+            current,
+        );
+        Ok(())
+    }
 }
 
 #[cfg(all(test, unix))]
 mod tests_unix {
+    #[cfg(target_os = "linux")]
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
     use anyhow::Result;
 
     use super::{CacheInfo, Timestamp};
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn non_utf8_glob_membership_is_serializable() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        fs_err::write(
+            directory.path().join("pyproject.toml"),
+            "[tool.uv]\ncache-keys = ['*.txt']\n",
+        )?;
+        fs_err::write(
+            directory
+                .path()
+                .join(OsString::from_vec(b"\xff.txt".to_vec())),
+            "input",
+        )?;
+        let info = CacheInfo::from_directory(directory.path())?;
+
+        assert!(info.files.is_some());
+        assert_eq!(
+            rmp_serde::from_slice::<CacheInfo>(&rmp_serde::to_vec(&info)?)?,
+            info,
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_cache_info_symlink_resolve() -> Result<()> {

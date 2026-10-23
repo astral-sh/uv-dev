@@ -3541,7 +3541,8 @@ impl LocalRevisionPointer {
         fs::create_dir_all(&entry.dir())
             .await
             .map_err(Error::CacheWrite)?;
-        write_atomic(entry.path(), rmp_serde::to_vec(&self)?)
+        // Shared cache buckets require older readers to ignore newly added fields.
+        write_atomic(entry.path(), rmp_serde::to_vec_named(&self)?)
             .await
             .map_err(Error::CacheWrite)
     }
@@ -3689,4 +3690,119 @@ fn read_wheel_metadata(
     let dist_info = read_archive_metadata(filename, reader)
         .map_err(|err| Error::WheelMetadata(wheel.to_path_buf(), Box::new(err)))?;
     Ok(ResolutionMetadata::parse_metadata(&dist_info)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use anyhow::Result;
+    use uv_cache::CacheEntry;
+    use uv_cache_info::{CacheInfo, Timestamp};
+    use uv_pypi_types::{HashDigest, HashDigests};
+
+    use super::{LOCAL_REVISION, LocalRevisionPointer, Revision};
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    struct LegacyCacheInfo {
+        timestamp: Option<Timestamp>,
+        commit: Option<String>,
+        tags: Option<BTreeMap<String, String>>,
+        #[serde(default)]
+        env: BTreeMap<String, Option<String>>,
+        #[serde(default)]
+        directories: BTreeMap<String, Option<LegacyDirectoryTimestamp>>,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[serde(untagged, rename_all = "kebab-case", deny_unknown_fields)]
+    enum LegacyDirectoryTimestamp {
+        Timestamp(Timestamp),
+        Inode(u64),
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct LegacyLocalRevisionPointer {
+        cache_info: LegacyCacheInfo,
+        revision: Revision,
+    }
+
+    /// Older readers must accept records produced in the shared source cache bucket.
+    #[tokio::test]
+    async fn local_revision_pointer_is_readable_without_membership() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let cache_info = serde_json::from_value(serde_json::json!({
+            "timestamp": Timestamp::now(),
+            "commit": "0000000000000000000000000000000000000000",
+            "tags": {"v1": "0000000000000000000000000000000000000000"},
+            "env": {"present": "value", "absent": null},
+            "directories": {"timestamp": Timestamp::now(), "inode": 42, "absent": null},
+            "files": "membership-digest",
+        }))?;
+        let revision = Revision::new().with_size(42).with_hashes(HashDigests::from(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .parse::<HashDigest>()?,
+        ));
+        let pointer = LocalRevisionPointer {
+            cache_info,
+            revision,
+        };
+        let entry = CacheEntry::new(directory.path().join("cache"), LOCAL_REVISION);
+        pointer.write_to(&entry).await?;
+
+        let previous: LegacyLocalRevisionPointer =
+            rmp_serde::from_slice(&fs_err::read(entry.path())?)?;
+        let mut expected = serde_json::to_value(&pointer.cache_info)?;
+        assert!(
+            expected
+                .as_object_mut()
+                .expect("cache info object")
+                .remove("files")
+                .is_some()
+        );
+        assert_eq!(serde_json::to_value(previous.cache_info)?, expected);
+        assert_eq!(
+            previous.revision.id().as_str(),
+            pointer.revision.id().as_str()
+        );
+        assert_eq!(previous.revision.hashes(), pointer.revision.hashes());
+        assert_eq!(previous.revision.size(), pointer.revision.size());
+
+        let current =
+            LocalRevisionPointer::read_from(entry.path())?.expect("written revision pointer");
+        assert_eq!(current.cache_info, pointer.cache_info);
+        assert_eq!(
+            current.revision.id().as_str(),
+            pointer.revision.id().as_str()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_revision_pointer_reads_legacy_cache_info() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        fs_err::write(directory.path().join("pyproject.toml"), "")?;
+        let cache_info = CacheInfo::from_directory(directory.path())?;
+        let legacy_cache_info: LegacyCacheInfo =
+            serde_json::from_value(serde_json::to_value(&cache_info)?)?;
+        let expected: CacheInfo =
+            serde_json::from_value(serde_json::to_value(&legacy_cache_info)?)?;
+        assert_ne!(expected, cache_info);
+        let previous = LegacyLocalRevisionPointer {
+            cache_info: legacy_cache_info,
+            revision: Revision::new(),
+        };
+        let entry = CacheEntry::new(directory.path(), LOCAL_REVISION);
+        fs_err::write(entry.path(), rmp_serde::to_vec(&previous)?)?;
+
+        let current =
+            LocalRevisionPointer::read_from(entry.path())?.expect("legacy revision pointer");
+        assert_eq!(current.cache_info, expected);
+        assert_eq!(
+            current.revision.id().as_str(),
+            previous.revision.id().as_str()
+        );
+        Ok(())
+    }
 }
