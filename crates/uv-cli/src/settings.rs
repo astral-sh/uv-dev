@@ -15,7 +15,7 @@ use rustc_hash::FxHashSet;
 use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
 use uv_auth::Service;
 use uv_cache::{CacheArgs, Refresh};
-use uv_client::{Certificates, Connectivity, MetadataRangeRequest};
+use uv_client::{Certificates, Connectivity, GitHubFastPathUrl, MetadataRangeRequest};
 use uv_configuration::{
     ActiveEnvironment, AddBoundsKind, AnnotationStyle, BuildIsolation, BuildOptions, Concurrency,
     DependencyGroups, DependencyMode, DevMode, DryRun, EditableMode, EnvFile, ExcludeDependency,
@@ -289,6 +289,7 @@ pub struct NetworkSettings {
     pub connect_timeout: Duration,
     pub retries: u32,
     pub metadata_range_request: MetadataRangeRequest,
+    pub github_fast_path_url: Option<GitHubFastPathUrl>,
 }
 
 impl NetworkSettings {
@@ -419,6 +420,7 @@ impl NetworkSettings {
                 .require_metadata_range_requests
                 .unwrap_or_default()
                 .into(),
+            github_fast_path_url: environment.github_fast_path_url.clone(),
         })
     }
 
