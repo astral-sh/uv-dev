@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, Bound},
     ffi::OsString,
     fmt::Write,
-    io,
+    io, mem,
     path::{Path, PathBuf},
 };
 
@@ -764,8 +764,39 @@ pub(super) fn finalize_tool_install(
         executable_directory.user_display()
     );
 
-    let mut installed_entrypoints: Vec<ToolEntrypoint> = Vec::new();
     let site_packages = SitePackages::from_environment(environment)?;
+    let installed = site_packages.get_packages(name);
+    let root = installed.first();
+    let mut root_entrypoints = if let Some(root) = root {
+        entrypoint_paths(&site_packages, root.name(), root.version())?
+    } else {
+        Vec::new()
+    };
+
+    // Validate the root before exporting dependencies that may replace another tool's commands.
+    if root_entrypoints.is_empty() {
+        let matching_dependency_packages = if root.is_some() {
+            matching_packages(name.as_ref(), &site_packages)
+                .into_iter()
+                .map(|dist| dist.name().clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        writeln!(
+            printer.stdout(),
+            "No executables are provided by package `{}`; removing tool",
+            name.cyan()
+        )?;
+        installed_tools.remove_environment(name)?;
+        return Err(NoExecutablesError::Root {
+            package: name.clone(),
+            matching_dependency_packages,
+        }
+        .into());
+    }
+
+    let mut installed_entrypoints: Vec<ToolEntrypoint> = Vec::new();
     let ordered_packages = entrypoints
         // Install dependencies first
         .iter()
@@ -782,31 +813,15 @@ pub(super) fn finalize_tool_install(
             debug!("Installing entrypoints for `{package}` as part of tool `{name}`");
         }
 
-        let installed = site_packages.get_packages(package);
-        let Some(dist) = installed.first() else {
-            if package != name {
+        let dist_entrypoints = if package == name {
+            mem::take(&mut root_entrypoints)
+        } else {
+            let installed = site_packages.get_packages(package);
+            let Some(dist) = installed.first() else {
                 bail!("Expected package `{package}` to be installed");
-            }
-
-            writeln!(
-                printer.stdout(),
-                "No executables are provided by package `{}`; removing tool",
-                package.cyan()
-            )?;
-            remove_entrypoint_paths(
-                installed_entrypoints
-                    .iter()
-                    .map(|entrypoint| entrypoint.install_path.as_path()),
-            );
-            installed_tools.remove_environment(name)?;
-
-            return Err(NoExecutablesError::Root {
-                package: package.clone(),
-                matching_dependency_packages: Vec::new(),
-            }
-            .into());
+            };
+            entrypoint_paths(&site_packages, dist.name(), dist.version())?
         };
-        let dist_entrypoints = entrypoint_paths(&site_packages, dist.name(), dist.version())?;
 
         // Determine the entry points targets. Use a sorted collection for deterministic output.
         let target_entrypoints = dist_entrypoints
@@ -823,49 +838,15 @@ pub(super) fn finalize_tool_install(
             .collect::<BTreeSet<_>>();
 
         if target_entrypoints.is_empty() {
-            let err = if package != name {
-                NoExecutablesError::Dependency {
-                    package: package.clone(),
-                }
-            } else {
-                NoExecutablesError::Root {
-                    package: package.clone(),
-                    matching_dependency_packages: matching_packages(
-                        package.as_ref(),
-                        &site_packages,
-                    )
-                    .into_iter()
-                    .map(|dist| dist.name().clone())
-                    .collect(),
-                }
+            let err = NoExecutablesError::Dependency {
+                package: package.clone(),
             };
-
-            if package != name {
-                // Non-root package: display the error with hints and continue.
-                writeln!(
-                    printer.stdout(),
-                    "{}",
-                    ErrorWithHints::new(&err, err.hints())
-                )?;
-                continue;
-            }
-
-            // For the root package, this is a fatal error.
             writeln!(
                 printer.stdout(),
-                "No executables are provided by package `{}`; removing tool",
-                package.cyan()
+                "{}",
+                ErrorWithHints::new(&err, err.hints())
             )?;
-
-            // Clean up the environment we just created.
-            remove_entrypoint_paths(
-                installed_entrypoints
-                    .iter()
-                    .map(|entrypoint| entrypoint.install_path.as_path()),
-            );
-            installed_tools.remove_environment(name)?;
-
-            return Err(err.into());
+            continue;
         }
 
         // Error if we're overwriting an existing entrypoint, unless the user passed `--force`.
