@@ -1,7 +1,7 @@
 use uv_configuration::{
-    BuildIsolation, BuildOptions, ExcludeNewer, ForkStrategy, HashCheckingMode, IndexStrategy,
-    KeyringProviderType, NoBinary, NoBuild, NoSources, Prerelease, PrereleaseMode,
-    PrereleasePackage, Reinstall, ResolutionMode, Upgrade,
+    BuildIsolation, BuildOptions, BuildPolicy, BuildPolicyPackage, ExcludeNewer, ForkStrategy,
+    HashCheckingMode, IndexStrategy, KeyringProviderType, NoBinary, NoBuild, NoSources, Prerelease,
+    PrereleaseMode, PrereleasePackage, Reinstall, ResolutionMode, Upgrade,
 };
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, IndexLocations, PackageConfigSettings,
@@ -194,6 +194,27 @@ pub fn resolve_prerelease(global: PrereleaseMode, mut package: PrereleasePackage
     }
 }
 
+/// Warn when build policies are configured without enabling their preview feature.
+pub fn warn_build_policy_preview(options: &BuildOptions) {
+    if options.has_build_policy() && !uv_preview::is_enabled(PreviewFeature::BuildPolicy) {
+        warn_user_once!(
+            "The `--build-policy` and `--build-policy-package` options are experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::BuildPolicy
+        );
+    }
+}
+
+fn resolve_build_options(
+    no_binary: NoBinary,
+    no_build: NoBuild,
+    global: Option<BuildPolicy>,
+    package: BuildPolicyPackage,
+) -> BuildOptions {
+    let options = BuildOptions::new(no_binary, no_build).with_build_policy(global, package);
+    warn_build_policy_preview(&options);
+    options
+}
+
 impl From<ResolverOptions> for ResolverSettings {
     fn from(value: ResolverOptions) -> Self {
         Self {
@@ -233,9 +254,11 @@ impl From<ResolverOptions> for ResolverSettings {
                 value.no_sources_package.unwrap_or_default(),
             ),
             upgrade: value.upgrade.unwrap_or_default(),
-            build_options: BuildOptions::new(
+            build_options: resolve_build_options(
                 NoBinary::from_args(value.no_binary, value.no_binary_package.unwrap_or_default()),
                 NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
+                value.build_policy,
+                value.build_policy_package.unwrap_or_default(),
             ),
         }
     }
@@ -258,12 +281,14 @@ impl From<ResolverInstallerOptions> for ResolverInstallerSettings {
         let index_locations = value.indexes.into();
         Self {
             resolver: ResolverSettings {
-                build_options: BuildOptions::new(
+                build_options: resolve_build_options(
                     NoBinary::from_args(
                         value.no_binary,
                         value.no_binary_package.unwrap_or_default(),
                     ),
                     NoBuild::from_args(value.no_build, value.no_build_package.unwrap_or_default()),
+                    value.build_policy,
+                    value.build_policy_package.unwrap_or_default(),
                 ),
                 config_setting: value.config_settings.unwrap_or_default(),
                 config_settings_package: value.config_settings_package.unwrap_or_default(),

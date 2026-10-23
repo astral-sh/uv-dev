@@ -462,6 +462,8 @@ pub enum PreviewFeature {
     BuildDependencyHashes,
     /// Enables experimental support for [wheel variants](https://peps.python.org/pep-0825/).
     WheelVariants,
+    /// Controls source builds and the artifacts retained in lockfiles and compiled requirements.
+    BuildPolicy,
 }
 
 impl Display for PreviewFeature {
