@@ -63,7 +63,7 @@ pub enum Error {
     Ambiguous(Vec<Box<Credential>>),
     /// This indicates that there was no default credential builder to use;
     /// the client must set one before creating entries.
-    #[error("No default credential builder is available; set one before creating entries")]
+    #[error("No built-in credential store is enabled for this platform")]
     NoDefaultCredentialBuilder,
 }
 
