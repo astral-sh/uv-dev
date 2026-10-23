@@ -40,6 +40,40 @@ The version-constant maintenance script uses the same `Version` implementation a
 uv run --project scripts/uv-dev-python --locked python scripts/sync-python-version-constants.py
 ```
 
+To inspect a requirement without running a resolver:
+
+```sh
+uv run --project scripts/uv-dev-python --locked uv-debug-requirement \
+  "Some_Package[Fast_Mode]>=1; python_version < '3.14'"
+```
+
+Pass `--environment environment.json` to evaluate its marker against a complete PEP 508 environment,
+and repeat `--extra` for active extras. No environment values are inferred from the machine running
+the command.
+
+For interactive investigation, start `uv run --project scripts/uv-dev-python --locked python`:
+
+```python
+from packaging.markers import default_environment
+from uv_dev import Marker, Requirement
+
+environment = dict(default_environment())
+marker = Marker("python_version >= '3.12' and extra == 'fast-mode'")
+print(marker.normalized)
+print(marker.evaluate(environment, extras=["Fast_Mode"]))
+print(Requirement("demo; python_version >= '3.12'").evaluate(environment))
+```
+
+`Marker.normalized` is `None` when the expression simplifies to true. `is_true` and `is_false`
+report constants recognized by uv's marker simplifier. A `False` result from either property means
+the simplifier did not recognize the corresponding constant; it does not establish whether the
+expression is satisfiable.
+
+The Hypothesis suite compares selected version and requirement fields, specifier membership, and
+marker evaluation with `packaging` using generated inputs. It supplies explicit environments and
+enables prereleases for `packaging`'s specifier comparisons. These comparisons exercise the
+bindings; resolver and command behavior still belong in uv's Rust and CLI tests.
+
 To run the binding tests:
 
 ```sh

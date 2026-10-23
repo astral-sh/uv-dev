@@ -11,9 +11,10 @@ classifiers = ["Private :: Do Not Upload"]
 
 [project.scripts]
 validate-python-downloads = "uv_dev.downloads:main"
+uv-debug-requirement = "uv_dev.inspect:main"
 
 [dependency-groups]
-dev = ["pytest>=8.3", "ruff>=0.16.2", "ty>=0.0.69"]
+dev = ["hypothesis>=6.151", "packaging>=26", "pytest>=8.3", "ruff>=0.16.2", "ty>=0.0.69"]
 
 [tool.maturin]
 module-name = "uv_dev._native"

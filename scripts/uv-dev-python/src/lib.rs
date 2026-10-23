@@ -4,8 +4,10 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use uv_python_types::PythonDownloadKey;
 
+mod markers;
 mod packaging;
 
+use markers::PyMarker;
 use packaging::{PyRequirement, PyVersion, PyVersionSpecifiers, normalize_package_name};
 
 /// Convert catalog entries to canonical installation keys, rejecting invalid platform,
@@ -34,5 +36,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyVersion>()?;
     module.add_class::<PyVersionSpecifiers>()?;
     module.add_class::<PyRequirement>()?;
+    module.add_class::<PyMarker>()?;
     Ok(())
 }

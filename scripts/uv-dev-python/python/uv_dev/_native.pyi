@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Self
 
 def python_download_keys(metadata: str) -> dict[str, str]:
@@ -35,3 +36,22 @@ class Requirement:
     def url(self) -> str | None: ...
     @property
     def marker(self) -> str | None: ...
+    def evaluate(
+        self, environment: dict[str, str], *, extras: Sequence[str] = ()
+    ) -> bool: ...
+
+class Marker:
+    def __new__(cls, value: str) -> Self: ...
+    def __eq__(self, other: object, /) -> bool: ...
+    def __hash__(self) -> int: ...
+    @property
+    def normalized(self) -> str | None:
+        """The simplified expression, or `None` when it simplifies to true."""
+    @property
+    def is_true(self) -> bool: ...
+    @property
+    def is_false(self) -> bool: ...
+    def evaluate(
+        self, environment: dict[str, str], *, extras: Sequence[str] = ()
+    ) -> bool:
+        """Evaluate a complete PEP 508 environment without host defaults."""
