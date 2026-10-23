@@ -19,7 +19,7 @@ use uv_dispatch::{BuildDispatch, SharedState};
 use uv_distribution::LoweredExtraBuildDependencies;
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExtraBuildVariables, Index, IndexLocations, Name,
-    NameRequirementSpecification, Origin, PackageConfigSettings, Requirement, Resolution,
+    NameRequirementSpecification, Origin, PackageConfigSettings, Requirement, Resolution, Sourced,
 };
 use uv_fs::Simplified;
 use uv_install_wheel::LinkMode;
@@ -109,7 +109,7 @@ pub async fn pip_install(
     reinstall: Reinstall,
     link_mode: LinkMode,
     compile: bool,
-    hash_checking: Option<HashCheckingMode>,
+    hash_checking: Option<Sourced<HashCheckingMode>>,
     build_hash_checking: HashCheckingMode,
     installer_metadata: bool,
     config_settings: &ConfigSettings,
@@ -179,7 +179,8 @@ pub async fn pip_install(
     override_dependencies.extend(overrides_from_workspace);
 
     let hash_checking = HashCheckingMode::from_requirements_txt(hash_checking, require_hashes);
-    let build_hash_checking = resolve_build_hash_checking(hash_checking, build_hash_checking);
+    let build_hash_checking =
+        resolve_build_hash_checking(hash_checking.clone(), build_hash_checking);
 
     if pylock.is_some() {
         if !preview.is_enabled(PreviewFeature::Pylock) {
@@ -403,7 +404,7 @@ pub async fn pip_install(
     };
 
     // Collect the set of required hashes.
-    let hasher = if let Some(hash_checking) = hash_checking {
+    let hasher = if let Some(hash_checking) = hash_checking.clone() {
         HashStrategy::from_requirements(
             requirements
                 .iter()

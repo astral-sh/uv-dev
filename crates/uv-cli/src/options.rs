@@ -3,23 +3,29 @@ use std::error::Error;
 use std::fmt;
 
 use anyhow::bail;
+use clap::parser::ValueSource;
+use clap::{ArgMatches, Args, Command, FromArgMatches};
 
 use uv_cache::Refresh;
 use uv_configuration::{
     BuildIsolation, ExcludeNewerPackage, PrereleaseMode, PrereleasePackage, Reinstall, Upgrade,
 };
-use uv_distribution_types::{ConfigSettings, Index, PackageConfigSettings, Requirement};
+use uv_distribution_types::{
+    ConfigSettings, Index, PackageConfigSettings, Requirement, SettingSource, Sourced,
+};
 use uv_normalize::PackageName;
 use uv_settings::{
     Combine, EnvFlag, IndexOptions, PipOptions, ResolverInstallerOptions, ResolverOptions,
 };
+use uv_static::EnvVars;
 use uv_warnings::owo_colors::OwoColorize;
 
 use crate::{
     BuildIsolationArgs, BuildOptionsArgs, CompileBytecodeArgs, ExcludeNewerArgs, FetchArgs,
-    IndexArgs, InstallerArgs, Maybe, PackageBuildIsolationArgs, PackageExcludeNewerArgs,
-    RefreshArgs, RegistryClientArgs, ReinstallArgs, ResolverArgs, ResolverInstallerArgs,
-    SourcesArgs, UpgradeArgs, VersionSelectionArgs,
+    HashCheckingArgs, HashCheckingOptions, IndexArgs, InstallerArgs, Maybe,
+    PackageBuildIsolationArgs, PackageExcludeNewerArgs, RefreshArgs, RegistryClientArgs,
+    ReinstallArgs, ResolverArgs, ResolverInstallerArgs, SourcesArgs, UpgradeArgs,
+    VersionSelectionArgs,
 };
 
 /// An error caused by an invalid combination of command-line arguments.
@@ -54,6 +60,80 @@ pub(crate) fn flag(yes: bool, no: bool, name: &str) -> anyhow::Result<Option<boo
                 format!("--no-{name}").green(),
             )));
         }
+    }
+}
+
+impl Args for HashCheckingArgs {
+    fn augment_args(command: Command) -> Command {
+        HashCheckingOptions::augment_args(command)
+    }
+
+    fn augment_args_for_update(command: Command) -> Command {
+        HashCheckingOptions::augment_args_for_update(command)
+    }
+}
+
+impl FromArgMatches for HashCheckingArgs {
+    fn from_arg_matches(matches: &ArgMatches) -> Result<Self, clap::Error> {
+        let args = HashCheckingOptions::from_arg_matches(matches)?;
+        let setting = |yes, no, name, yes_id, no_id, yes_flag, no_flag| {
+            flag(yes, no, name)
+                .map(|value| {
+                    value.map(|value| {
+                        let (id, flag) = if value {
+                            (yes_id, yes_flag)
+                        } else {
+                            (no_id, no_flag)
+                        };
+                        let source = match matches.value_source(id) {
+                            Some(ValueSource::CommandLine) => {
+                                Some(SettingSource::CommandLine(flag))
+                            }
+                            Some(ValueSource::EnvVariable) => match id {
+                                "require_hashes" => {
+                                    Some(SettingSource::Environment(EnvVars::UV_REQUIRE_HASHES))
+                                }
+                                "no_verify_hashes" => {
+                                    Some(SettingSource::Environment(EnvVars::UV_NO_VERIFY_HASHES))
+                                }
+                                _ => None,
+                            },
+                            Some(ValueSource::DefaultValue) | None => None,
+                            // `ValueSource` is non-exhaustive.
+                            Some(_) => None,
+                        };
+                        source.map_or_else(|| value.into(), |source| Sourced::new(value, source))
+                    })
+                })
+                .map_err(|err| clap::Error::raw(clap::error::ErrorKind::ArgumentConflict, err))
+        };
+        Ok(Self {
+            require_hashes: setting(
+                args.require_hashes,
+                args.no_require_hashes,
+                "require-hashes",
+                "require_hashes",
+                "no_require_hashes",
+                "--require-hashes",
+                "--no-require-hashes",
+            )?,
+            verify_hashes: setting(
+                args.verify_hashes,
+                args.no_verify_hashes,
+                "verify-hashes",
+                "verify_hashes",
+                "no_verify_hashes",
+                "--verify-hashes",
+                "--no-verify-hashes",
+            )?,
+        })
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {
+        let updated = Self::from_arg_matches(matches)?;
+        self.require_hashes = updated.require_hashes.or(self.require_hashes.take());
+        self.verify_hashes = updated.verify_hashes.or(self.verify_hashes.take());
+        Ok(())
     }
 }
 
@@ -561,7 +641,8 @@ impl IndexArgs {
             index_url: index_url.and_then(Maybe::into_option),
             extra_index_url: extra_index_url
                 .map(|indexes| indexes.into_iter().filter_map(Maybe::into_option).collect()),
-            no_index: no_index.then_some(true),
+            no_index: no_index
+                .then(|| Sourced::new(true, SettingSource::CommandLine("--no-index"))),
             find_links: find_links
                 .map(|links| links.into_iter().filter_map(Maybe::into_option).collect()),
         })

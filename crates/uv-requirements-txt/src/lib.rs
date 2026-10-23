@@ -51,7 +51,8 @@ use uv_configuration::{
     NoBinary, NoBuild, PackageNameSpecifier, RequirementsInput, RequirementsInputError,
 };
 use uv_distribution_types::{
-    Requirement, UnresolvedRequirement, UnresolvedRequirementSpecification,
+    Requirement, RequirementsLocation, SettingSource, Sourced, UnresolvedRequirement,
+    UnresolvedRequirementSpecification,
 };
 use uv_fs::normalize_path;
 use uv_pep508::{Pep508Error, RequirementOrigin, VerbatimUrl, expand_env_vars};
@@ -93,9 +94,9 @@ enum RequirementsTxtStatement {
     /// `--find-links`
     FindLinks(VerbatimUrl),
     /// `--no-index`
-    NoIndex,
+    NoIndex { start: usize },
     /// `--require-hashes`
-    RequireHashes,
+    RequireHashes { start: usize },
     /// `--no-binary`
     NoBinary(NoBinary),
     /// `--only-binary`
@@ -158,9 +159,9 @@ pub struct RequirementsTxt {
     /// The find links locations, specified with `--find-links`.
     pub find_links: Vec<VerbatimUrl>,
     /// Whether to ignore the index, specified with `--no-index`.
-    pub no_index: bool,
-    /// Whether all requirements must be hashed, specified with `--require-hashes`.
-    pub require_hashes: bool,
+    pub no_index: Sourced<bool>,
+    /// Whether hashes are required, with every enabling declaration.
+    pub require_hashes: Sourced<bool>,
     /// Whether to disallow wheels, specified with `--no-binary`.
     pub no_binary: NoBinary,
     /// Whether to allow only wheels, specified with `--only-binary`.
@@ -381,7 +382,7 @@ impl RequirementsTxt {
                             }
                         }
                     }
-                    let sub_requirements = Box::pin(Self::parse_impl(
+                    let mut sub_requirements = Box::pin(Self::parse_impl(
                         &sub_file,
                         working_dir,
                         client_builder,
@@ -409,6 +410,13 @@ impl RequirementsTxt {
                             column,
                         });
                     }
+
+                    let location = RequirementsLocation {
+                        input: requirements_txt.clone(),
+                        line: calculate_row_column(content, start).0,
+                    };
+                    sub_requirements.no_index.included_by(&location);
+                    sub_requirements.require_hashes.included_by(&location);
 
                     // Add each to the correct category.
                     data.update_from(sub_requirements);
@@ -443,7 +451,7 @@ impl RequirementsTxt {
                         }
                     };
 
-                    let sub_constraints = Box::pin(Self::parse_impl(
+                    let mut sub_constraints = Box::pin(Self::parse_impl(
                         &sub_file,
                         working_dir,
                         client_builder,
@@ -482,7 +490,13 @@ impl RequirementsTxt {
                     for constraint in sub_constraints.constraints {
                         data.constraints.push(constraint);
                     }
-                    data.require_hashes |= sub_constraints.require_hashes;
+                    sub_constraints
+                        .require_hashes
+                        .included_by(&RequirementsLocation {
+                            input: requirements_txt.clone(),
+                            line: calculate_row_column(content, start).0,
+                        });
+                    data.require_hashes = data.require_hashes.or(sub_constraints.require_hashes);
                 }
                 RequirementsTxtStatement::RequirementEntry(requirement_entry) => {
                     data.requirements.push(requirement_entry);
@@ -507,11 +521,29 @@ impl RequirementsTxt {
                 RequirementsTxtStatement::FindLinks(url) => {
                     data.find_links.push(url);
                 }
-                RequirementsTxtStatement::NoIndex => {
-                    data.no_index = true;
+                RequirementsTxtStatement::NoIndex { start } => {
+                    data.no_index = data.no_index.or(Sourced::new(
+                        true,
+                        SettingSource::Requirements {
+                            location: RequirementsLocation {
+                                input: requirements_txt.clone(),
+                                line: calculate_row_column(content, start).0,
+                            },
+                            included_by: Vec::new(),
+                        },
+                    ));
                 }
-                RequirementsTxtStatement::RequireHashes => {
-                    data.require_hashes = true;
+                RequirementsTxtStatement::RequireHashes { start } => {
+                    data.require_hashes = data.require_hashes.or(Sourced::new(
+                        true,
+                        SettingSource::Requirements {
+                            location: RequirementsLocation {
+                                input: requirements_txt.clone(),
+                                line: calculate_row_column(content, start).0,
+                            },
+                            included_by: Vec::new(),
+                        },
+                    ));
                 }
                 RequirementsTxtStatement::NoBinary(no_binary) => {
                     data.no_binary.extend(no_binary);
@@ -576,8 +608,8 @@ impl RequirementsTxt {
         }
         self.extra_index_urls.extend(extra_index_urls);
         self.find_links.extend(find_links);
-        self.no_index = self.no_index || no_index;
-        self.require_hashes = self.require_hashes || require_hashes;
+        self.no_index = std::mem::take(&mut self.no_index).or(no_index);
+        self.require_hashes = std::mem::take(&mut self.require_hashes).or(require_hashes);
         self.no_binary.extend(no_binary);
         self.only_binary.extend(only_binary);
     }
@@ -796,9 +828,9 @@ fn parse_entry(
         };
         RequirementsTxtStatement::ExtraIndexUrl(url.with_given(given))
     } else if eat_option(s, "--no-index") {
-        RequirementsTxtStatement::NoIndex
+        RequirementsTxtStatement::NoIndex { start }
     } else if s.eat_if("--require-hashes") {
-        RequirementsTxtStatement::RequireHashes
+        RequirementsTxtStatement::RequireHashes { start }
     } else if s.eat_if("--find-links") || s.eat_if("-f") {
         let given = parse_value("--find-links", content, s, |c: char| !is_terminal(c))?;
         let given = unquote(given)

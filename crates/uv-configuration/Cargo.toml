@@ -20,7 +20,6 @@ uv-auth = { workspace = true }
 uv-cache = { workspace = true }
 uv-cache-info = { workspace = true }
 uv-distribution-types = { workspace = true }
-uv-fs = { workspace = true }
 uv-git = { workspace = true }
 uv-macros = { workspace = true }
 uv-normalize = { workspace = true }

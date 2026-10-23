@@ -9,7 +9,7 @@ use uv_configuration::{
 };
 use uv_distribution_types::{
     ConfigSettings, ExcludeNewerOverride, ExcludeNewerValue, ExtraBuildVariables, Index, IndexUrl,
-    MinimumLibcVersion, PackageConfigSettings, PipExtraIndex, PipFindLinks, PipIndex,
+    MinimumLibcVersion, PackageConfigSettings, PipExtraIndex, PipFindLinks, PipIndex, Sourced,
 };
 use uv_install_wheel::LinkMode;
 use uv_pypi_types::{SchemaConflicts, SupportedEnvironments};
@@ -120,6 +120,12 @@ impl_combine_or!(TargetTriple);
 impl_combine_or!(TorchMode);
 impl_combine_or!(TrustedPublishing);
 impl_combine_or!(bool);
+
+impl<T> Combine for Option<Sourced<T>> {
+    fn combine(self, other: Self) -> Self {
+        self.or(other)
+    }
+}
 
 impl<T> Combine for Option<Vec<T>> {
     /// Combine two vectors by extending the vector in `self` with the vector in `other`, if they're

@@ -40,7 +40,7 @@ use uv_cli::{
 };
 use uv_client::BaseClientBuilder;
 use uv_command_support::{ExitStatus, Printer, UvError};
-use uv_configuration::{PythonUpgrade, PythonUpgradeSource, ToolRunCommand};
+use uv_configuration::{PythonUpgrade, PythonUpgradeSource, RequirementsInput, ToolRunCommand};
 use uv_flags::EnvironmentFlags;
 use uv_fs::{CWD, Simplified, normalize_path};
 #[cfg(feature = "self-update")]
@@ -483,10 +483,18 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
     // If the target is a PEP 723 script, merge the metadata into the filesystem metadata.
     let script_filesystem = script
         .as_ref()
-        .map(Pep723Item::metadata)
-        .and_then(|metadata| metadata.tool.as_ref())
-        .and_then(|tool| tool.uv.as_ref())
-        .map(|uv| Options::simple(uv.globals.clone(), uv.top_level.clone()))
+        .and_then(|script| {
+            let uv = script.metadata().tool.as_ref()?.uv.as_ref()?;
+            let input = match script {
+                Pep723Item::Script(script) => RequirementsInput::Local(script.path.clone()),
+                Pep723Item::Stdin(_) => RequirementsInput::Stdin,
+                Pep723Item::Remote(_, url) => RequirementsInput::Remote(url.clone()),
+            };
+            Some(
+                Options::simple(uv.globals.clone(), uv.top_level.clone())
+                    .with_config_source(&input, "tool.uv."),
+            )
+        })
         .map(FilesystemOptions::from);
     let script_filesystem = if let Some(Pep723Item::Script(script)) = script.as_ref() {
         let script_dir = script.path.parent().expect("script path has no parent");

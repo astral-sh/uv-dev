@@ -12,6 +12,7 @@ use tracing::trace;
 
 use uv_distribution_types::{
     DerivationChain, DistErrorKind, IndexCapabilities, IndexLocations, IndexUrl, RequestedDist,
+    SettingSources,
 };
 use uv_macros::DebugNoInline;
 use uv_normalize::PackageName;
@@ -119,7 +120,7 @@ pub enum ResolveError {
     InvalidVersion(#[from] uv_pep440::VersionSpecifierBuildError),
 
     #[error("Hash-checking is required, but no trusted hash was provided for: `{0}`")]
-    UnhashedPackage(PackageName),
+    UnhashedPackage(PackageName, SettingSources),
 
     #[error("found conflicting distribution in resolution: {0}")]
     ConflictingDistribution(ConflictingDistributionError),
@@ -151,7 +152,7 @@ impl ResolveError {
             | Self::DisallowedUrl { .. }
             | Self::DistributionType(_)
             | Self::NoSolution(_)
-            | Self::UnhashedPackage(_)
+            | Self::UnhashedPackage(..)
             | Self::PackageUnavailable(_)
             | Self::ConflictMarker(_)
             | Self::MismatchedPackageName { .. } => true,
@@ -168,6 +169,9 @@ impl ResolveError {
 impl uv_errors::Hinted for ResolveError {
     fn hints(&self) -> uv_errors::Hints<'_> {
         match self {
+            Self::UnhashedPackage(_, sources) => {
+                sources.enabled_hints("--require-hashes").collect()
+            }
             Self::NoSolution(no_solution) => uv_errors::Hinted::hints(no_solution.as_ref()),
             Self::Client(error) => uv_errors::Hinted::hints(error),
             Self::Distribution(error) => uv_errors::Hinted::hints(error),

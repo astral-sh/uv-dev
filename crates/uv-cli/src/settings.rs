@@ -29,7 +29,7 @@ use uv_configuration::{
 use uv_distribution_types::{
     ConfigSettings, DependencyMetadata, ExcludeNewerOverride, ExtraBuildVariables, Index,
     IndexLocations, IndexUrl, MinimumLibcVersion, NameRequirementSpecification,
-    PackageConfigSettings, Requirement,
+    PackageConfigSettings, Requirement, Sourced,
 };
 use uv_install_wheel::LinkMode;
 use uv_normalize::{ExtraName, PackageName, PipGroupName};
@@ -3601,9 +3601,7 @@ impl PipSyncSettings {
             hash_checking:
                 HashCheckingArgs {
                     require_hashes,
-                    no_require_hashes,
                     verify_hashes,
-                    no_verify_hashes,
                 },
             python,
             system,
@@ -3663,8 +3661,8 @@ impl PipSyncSettings {
                     )?,
                     target,
                     prefix,
-                    require_hashes: flag(require_hashes, no_require_hashes, "require-hashes")?,
-                    verify_hashes: flag(verify_hashes, no_verify_hashes, "verify-hashes")?,
+                    require_hashes,
+                    verify_hashes,
                     no_build: flag(no_build, build, "build")?,
                     no_binary,
                     only_binary,
@@ -3745,9 +3743,7 @@ impl PipInstallSettings {
             hash_checking:
                 HashCheckingArgs {
                     require_hashes,
-                    no_require_hashes,
                     verify_hashes,
-                    no_verify_hashes,
                 },
             python,
             system,
@@ -3883,8 +3879,8 @@ impl PipInstallSettings {
                     no_deps: flag(no_deps, deps, "deps")?,
                     python_version,
                     python_platform,
-                    require_hashes: flag(require_hashes, no_require_hashes, "require-hashes")?,
-                    verify_hashes: flag(verify_hashes, no_verify_hashes, "verify-hashes")?,
+                    require_hashes,
+                    verify_hashes,
                     torch_backend,
                     ..installer.into_pip_options(configured_indexes(filesystem.as_ref()))?
                 },
@@ -4212,7 +4208,7 @@ pub struct BuildSettings {
     pub clear: bool,
     pub build_constraints: Vec<RequirementsInput>,
     pub build_constraints_from_workspace: Vec<NameRequirementSpecification>,
-    pub hash_checking: Option<HashCheckingMode>,
+    pub hash_checking: Option<Sourced<HashCheckingMode>>,
     pub python: Option<String>,
     pub install_mirrors: PythonInstallMirrors,
     pub refresh: Refresh,
@@ -4241,9 +4237,7 @@ impl BuildSettings {
             hash_checking:
                 HashCheckingArgs {
                     require_hashes,
-                    no_require_hashes,
                     verify_hashes,
-                    no_verify_hashes,
                 },
             build_logs,
             no_build_logs,
@@ -4297,10 +4291,7 @@ impl BuildSettings {
                 environment.build_constraints.clone(),
             ),
             build_constraints_from_workspace,
-            hash_checking: HashCheckingMode::from_args(
-                flag(require_hashes, no_require_hashes, "require-hashes")?,
-                flag(verify_hashes, no_verify_hashes, "verify-hashes")?,
-            ),
+            hash_checking: HashCheckingMode::from_settings(require_hashes, verify_hashes),
             python: python.and_then(Maybe::into_option),
             refresh: Refresh::try_from(refresh)?,
             settings: resolve_resolver_settings(resolver, build, filesystem, &environment)?,
@@ -4607,7 +4598,7 @@ pub struct PipSettings {
     pub link_mode: LinkMode,
     pub compile_bytecode: bool,
     pub sources: NoSources,
-    pub hash_checking: Option<HashCheckingMode>,
+    pub hash_checking: Option<Sourced<HashCheckingMode>>,
     pub upgrade: Upgrade,
     pub reinstall: Reinstall,
 }
@@ -4923,7 +4914,7 @@ impl PipSettings {
                 .combine(emit_index_annotation)
                 .unwrap_or_default(),
             link_mode: args.link_mode.combine(link_mode).unwrap_or_default(),
-            hash_checking: HashCheckingMode::from_args(
+            hash_checking: HashCheckingMode::from_settings(
                 args.require_hashes.combine(require_hashes),
                 args.verify_hashes.combine(verify_hashes),
             ),
