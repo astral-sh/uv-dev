@@ -32,7 +32,8 @@ use uv_tool::{InstalledTools, Tool};
 use uv_types::{HashStrategy, SourceTreeEditablePolicy};
 use uv_workspace::WorkspaceCache;
 
-use crate::common::{ToolLock, remove_entrypoints, tool_environment_spec};
+use crate::common::remove_entrypoints;
+use crate::lock::{ToolLock, tool_environment_spec};
 use uv_command_support::{ExitStatus, Printer, conjunction};
 use uv_environment_operations::{
     EnvironmentResolution, EnvironmentUpdate, resolve_environment, sync_environment,
