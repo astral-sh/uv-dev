@@ -131,7 +131,7 @@ impl uv_errors::Hinted for ExternallyInstalledError {
 
 #[instrument(skip_all)]
 #[doc(hidden)]
-pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
+pub async fn run(mut cli: Cli, global_initialization: GlobalInitialization) -> Result<ExitStatus> {
     let config_discovery = ConfigDiscovery::from_args(cli.top_level.no_config);
 
     // Configure color before resolving settings so argument errors retain their styling.
@@ -147,6 +147,11 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
         cli.top_level.global_args.directory.clone().or_else(|| {
             std::env::var_os(EnvVars::UV_WORKING_DIRECTORY).map(std::path::PathBuf::from)
         });
+
+    // Publish check URLs use the invocation directory for both CLI and environment values.
+    if let Commands::Publish(args) = &mut *cli.command {
+        args.resolve_environment()?;
+    }
 
     // Switch directories as early as possible.
     if let Some(directory) = directory.as_ref() {
