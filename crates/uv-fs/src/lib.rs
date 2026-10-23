@@ -1235,3 +1235,6 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "tokio"))]
+mod progress_reader_tests;
