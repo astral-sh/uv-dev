@@ -94,7 +94,7 @@ impl IndexUrl {
 
     /// Return the raw URL for the index.
     pub fn url(&self) -> &SafeUrl {
-        self.inner().raw().as_url()
+        self.inner().inner().as_url()
     }
 
     /// Convert the index URL into a [`SafeUrl`].
@@ -234,7 +234,7 @@ impl<P: SerializationPolicy> From<VerbatimUrl<P>> for IndexUrl {
         let url = url.with_policy(Stripped);
         if url.scheme() == "file" {
             Self::Path(Arc::new(url))
-        } else if *url.raw().as_url() == *PYPI_URL {
+        } else if *url.inner().as_url() == *PYPI_URL {
             Self::Pypi(Arc::new(url))
         } else {
             Self::Url(Arc::new(url))

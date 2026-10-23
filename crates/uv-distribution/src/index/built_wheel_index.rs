@@ -61,7 +61,7 @@ impl<'a> BuiltWheelIndex<'a> {
         // For direct URLs, cache directly under the hash of the URL itself.
         let cache_shard = self.cache.shard(
             CacheBucket::SourceDistributions,
-            WheelCache::Url(source_dist.url.raw()).root(),
+            WheelCache::Url(source_dist.url.inner()).root(),
         );
 
         // Read the revision from the cache.
