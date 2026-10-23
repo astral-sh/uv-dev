@@ -321,7 +321,36 @@ impl<'a, C, W> ErrorOptions<'a, C, W> {
 /// Format an error chain and explicitly supplied hints to standard error using the default level
 /// and color.
 pub fn write_error_chain(err: &dyn Error, hints: &Hints<'_>) -> fmt::Result {
-    write_error_chain_with_options(err, hints, ErrorOptions::default())
+    write_error_chain_buffered(err, hints, ErrorOptions::default())
+}
+
+/// Render a complete diagnostic before publishing it with one stream write.
+///
+/// A stream that locks each write can keep the report contiguous with respect to other writers in
+/// the process. This buffers the full report; it does not guarantee interprocess pipe atomicity.
+pub fn write_error_chain_buffered<C: DynColor + Copy, W: fmt::Write>(
+    err: &dyn Error,
+    hints: &Hints<'_>,
+    options: ErrorOptions<'_, C, W>,
+) -> fmt::Result {
+    let ErrorOptions {
+        level,
+        color,
+        width_override,
+        mut stream,
+    } = options;
+    let mut report = String::new();
+    write_error_chain_with_options(
+        err,
+        hints,
+        ErrorOptions {
+            level,
+            color,
+            width_override,
+            stream: &mut report,
+        },
+    )?;
+    stream.write_str(&report)
 }
 
 /// Format the [`Debug`] representation of every error in an error chain.
@@ -404,6 +433,11 @@ pub fn write_error_chain_with_options<C: DynColor + Copy, W: fmt::Write>(
 
 #[cfg(test)]
 mod tests {
+    use std::fmt;
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::thread;
+    use std::time::Duration;
+
     use anyhow::anyhow;
     use indoc::indoc;
     use insta::{assert_debug_snapshot, assert_snapshot};
@@ -411,8 +445,137 @@ mod tests {
 
     use super::{
         ErrorOptions, ErrorWithHints, Hint, HintOrdering, Hints, debug_error_chain,
-        write_error_chain_with_options,
+        write_error_chain_buffered, write_error_chain_with_options,
     };
+
+    struct ConcurrentWriter {
+        output: Arc<Mutex<String>>,
+        start: mpsc::Sender<()>,
+        done: mpsc::Receiver<()>,
+        calls: usize,
+    }
+
+    impl fmt::Write for ConcurrentWriter {
+        fn write_str(&mut self, text: &str) -> fmt::Result {
+            // Model stderr's per-write lock, with another writer scheduled after the first write.
+            self.output.lock().map_err(|_| fmt::Error)?.push_str(text);
+            self.calls += 1;
+            if self.calls == 1 {
+                self.start.send(()).map_err(|_| fmt::Error)?;
+                self.done
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(|_| fmt::Error)?;
+            }
+            Ok(())
+        }
+    }
+
+    fn with_concurrent_output(
+        write: impl FnOnce(&mut ConcurrentWriter) -> fmt::Result,
+    ) -> (String, usize) {
+        let output = Arc::new(Mutex::new(String::new()));
+        let (start, ready) = mpsc::channel();
+        let (done, finished) = mpsc::channel();
+        let other_output = output.clone();
+        let other = thread::spawn(move || {
+            ready
+                .recv_timeout(Duration::from_secs(5))
+                .expect("diagnostic write started");
+            other_output
+                .lock()
+                .expect("output lock")
+                .push_str("background output\n");
+            done.send(()).expect("diagnostic writer waiting");
+        });
+        let mut writer = ConcurrentWriter {
+            output: output.clone(),
+            start,
+            done: finished,
+            calls: 0,
+        };
+        write(&mut writer).expect("diagnostic rendered");
+        other.join().expect("concurrent writer finished");
+        let output = output.lock().expect("output lock").clone();
+        (output, writer.calls)
+    }
+
+    #[test]
+    fn complete_reports_do_not_interleave() -> fmt::Result {
+        let error = anyhow!("underlying failure").context("operation failed");
+        let hints = Hints::from("Try again after fixing the cause.");
+        let mut expected = String::new();
+        write_error_chain_with_options(
+            error.as_ref(),
+            &hints,
+            ErrorOptions::default()
+                .with_width_override(100)
+                .with_stream(&mut expected),
+        )?;
+
+        let (streamed, writes) = with_concurrent_output(|writer| {
+            write_error_chain_with_options(
+                error.as_ref(),
+                &hints,
+                ErrorOptions::default()
+                    .with_width_override(100)
+                    .with_stream(writer),
+            )
+        });
+        assert!(writes > 1);
+        assert_ne!(streamed, format!("{expected}background output\n"));
+
+        let (buffered, writes) = with_concurrent_output(|writer| {
+            write_error_chain_buffered(
+                error.as_ref(),
+                &hints,
+                ErrorOptions::default()
+                    .with_width_override(100)
+                    .with_stream(writer),
+            )
+        });
+        assert_eq!(writes, 1);
+        assert_eq!(buffered, format!("{expected}background output\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn buffered_reports_preserve_colored_bytes() -> fmt::Result {
+        for (level, color) in [("error", AnsiColors::Red), ("warning", AnsiColors::Yellow)] {
+            for message in [
+                "short backend output".to_string(),
+                "backend output\n".repeat(8192),
+            ] {
+                let error = anyhow!(message).context("operation failed");
+                let hints = Hints::from("first hint");
+                let mut expected = String::new();
+                write_error_chain_with_options(
+                    error.as_ref(),
+                    &hints,
+                    ErrorOptions::default()
+                        .with_level(level)
+                        .with_color(color)
+                        .with_width_override(100)
+                        .with_stream(&mut expected),
+                )?;
+                let mut actual = String::new();
+                write_error_chain_buffered(
+                    error.as_ref(),
+                    &hints,
+                    ErrorOptions::default()
+                        .with_level(level)
+                        .with_color(color)
+                        .with_width_override(100)
+                        .with_stream(&mut actual),
+                )?;
+                assert_eq!(actual, expected);
+                assert_eq!(
+                    anstream::adapter::strip_str(&actual),
+                    anstream::adapter::strip_str(&expected)
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn extend_deduplicates_matching_hints() {
