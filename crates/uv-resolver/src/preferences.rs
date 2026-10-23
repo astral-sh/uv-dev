@@ -20,7 +20,7 @@ pub enum PreferenceError {
 }
 
 /// A pinned requirement, as extracted from a `requirements.txt` file.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Preference {
     name: PackageName,
     version: Version,
@@ -95,6 +95,34 @@ impl Preference {
         }
     }
 
+    /// Create a registry-version preference inherited from another workspace's lockfile.
+    ///
+    /// Conflict selectors belong to the workspace that declared them. Only the PEP 508
+    /// environment portions of the source lockfile's markers apply to this preference.
+    pub fn from_inherited_locked(
+        name: PackageName,
+        version: Version,
+        index: IndexUrl,
+        fork_markers: Vec<UniversalMarker>,
+    ) -> Self {
+        let mut fork_markers = fork_markers
+            .into_iter()
+            .map(|marker| UniversalMarker::from_combined(marker.pep508()))
+            .collect::<Vec<_>>();
+        fork_markers.sort_unstable();
+        fork_markers.dedup();
+
+        Self {
+            name,
+            version,
+            marker: MarkerTree::TRUE,
+            index: PreferenceIndex::Explicit(index),
+            fork_markers,
+            hashes: HashDigests::empty(),
+            source: PreferenceSource::InheritedLock,
+        }
+    }
+
     /// Create a [`Preference`] from an installed distribution.
     pub fn from_installed(dist: &InstalledDist) -> Option<Self> {
         let InstalledDistKind::Registry(dist) = &dist.kind else {
@@ -117,7 +145,7 @@ impl Preference {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PreferenceIndex {
     /// The preference should match to any index.
     Any,
@@ -155,12 +183,51 @@ impl From<Option<IndexUrl>> for PreferenceIndex {
 pub(crate) enum PreferenceSource {
     /// The preference is from an installed package in the environment.
     Environment,
-    /// The preference is from a `uv.ock` file.
+    /// The preference is from the current workspace's `uv.lock` file.
     Lock,
+    /// The preference is from another workspace's `uv.lock` file.
+    InheritedLock,
     /// The preference is from a `requirements.txt` file.
     RequirementsTxt,
     /// The preference is from the current solve.
     Resolver,
+}
+
+/// The order in which equally applicable preferences should be considered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum PreferencePriority {
+    Resolver,
+    InheritedLock,
+    Existing,
+}
+
+impl PreferenceSource {
+    /// Return the priority of this preference among entries for the same environment.
+    pub(crate) fn priority(self) -> PreferencePriority {
+        match self {
+            Self::Resolver => PreferencePriority::Resolver,
+            Self::InheritedLock => PreferencePriority::InheritedLock,
+            Self::Environment | Self::Lock | Self::RequirementsTxt => PreferencePriority::Existing,
+        }
+    }
+
+    /// Return whether this preference was inherited from another workspace.
+    pub(crate) fn is_inherited(self) -> bool {
+        match self {
+            Self::InheritedLock => true,
+            Self::Environment | Self::Lock | Self::RequirementsTxt | Self::Resolver => false,
+        }
+    }
+
+    /// Return whether this preference permits selecting a yanked version.
+    pub(crate) fn allows_yanked(self) -> bool {
+        match self {
+            // Yank allowances are indexed by package name and version, not by registry. An
+            // inherited pin must not authorize that version on an unrelated registry.
+            Self::InheritedLock => false,
+            Self::Environment | Self::Lock | Self::RequirementsTxt | Self::Resolver => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -197,8 +264,9 @@ impl Entry {
 ///
 /// The marker is the marker of the fork that resolved to the pin, if any.
 ///
-/// Preferences should be prioritized first by whether their marker matches and then by the order
-/// they are stored, so that a lockfile has higher precedence than sibling forks.
+/// Preferences are prioritized first by whether their marker matches and then by the configured
+/// version-selection strategy. When an inherited baseline is present, source priority also
+/// distinguishes the current lockfile, the inherited lockfile, and sibling forks.
 #[derive(Debug, Clone, Default)]
 pub struct Preferences(FxHashMap<PackageName, Vec<Entry>>);
 
@@ -283,20 +351,10 @@ impl Preferences {
     /// Returns an iterator over the preferences.
     pub(crate) fn iter(
         &self,
-    ) -> impl Iterator<
-        Item = (
-            &PackageName,
-            impl Iterator<Item = (&UniversalMarker, &PreferenceIndex, &Version)>,
-        ),
-    > {
-        self.0.iter().map(|(name, preferences)| {
-            (
-                name,
-                preferences
-                    .iter()
-                    .map(|entry| (&entry.marker, &entry.index, entry.pin.version())),
-            )
-        })
+    ) -> impl Iterator<Item = (&PackageName, impl Iterator<Item = &Entry>)> {
+        self.0
+            .iter()
+            .map(|(name, preferences)| (name, preferences.iter()))
     }
 
     /// Return the pinned version for a package, if any.
@@ -380,5 +438,30 @@ mod tests {
             preference.matches(&index_with_username),
             "PreferenceIndex should match URLs that differ only in username"
         );
+    }
+
+    #[test]
+    fn inherited_preference_priority() {
+        assert!(PreferenceSource::Lock.priority() > PreferenceSource::InheritedLock.priority());
+        assert!(PreferenceSource::InheritedLock.priority() > PreferenceSource::Resolver.priority());
+    }
+
+    #[test]
+    fn inherited_preference_drops_conflict_selectors() {
+        let marker =
+            MarkerTree::from_str("python_version >= '3.12' and extra == 'extra-6-parent-feature'")
+                .expect("valid test marker");
+        let preference = Preference::from_inherited_locked(
+            PackageName::from_str("example").expect("valid test package name"),
+            Version::from_str("1.0").expect("valid test version"),
+            IndexUrl::from_str("https://pypi.org/simple").expect("valid test index"),
+            vec![UniversalMarker::from_combined(marker)],
+        );
+
+        assert_eq!(
+            preference.fork_markers,
+            [UniversalMarker::from_combined(marker.without_extras())]
+        );
+        assert!(preference.fork_markers[0].conflict().is_true());
     }
 }

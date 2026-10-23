@@ -19,6 +19,12 @@ mod format;
 mod init;
 
 #[cfg(feature = "test-python")]
+mod init_nested_workspaces;
+
+#[cfg(feature = "test-python")]
+mod init_no_overwrite;
+
+#[cfg(feature = "test-python")]
 mod lock;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]

@@ -300,6 +300,9 @@ pub enum PreviewFeature {
     /// line. Use `--paths` to display their paths instead, for example, when passing workspace
     /// directories to another tool.
     WorkspaceList,
+    /// Independently locked child workspaces can prefer versions from their parent workspace's
+    /// lockfile while retaining their own resolution, settings, and Python requirement.
+    NestedWorkspaces,
     /// The `uv export --format cyclonedx1.5` command exports a software bill of materials in
     /// CycloneDX 1.5 JSON format. This describes the locked dependencies in a format that can be
     /// consumed by software inventory and security tools.
