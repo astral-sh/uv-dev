@@ -3607,6 +3607,20 @@ pub struct SyncArgs {
     #[arg(long, overrides_with = "active", hide = true)]
     pub no_active: bool,
 
+    /// Select the system environment instead of the project environment.
+    ///
+    /// This flag is unsupported; use `UV_PROJECT_ENVIRONMENT` instead.
+    #[arg(
+        long,
+        required(false),
+        action(clap::ArgAction::SetTrue),
+        value_parser = clap::builder::UnknownArgumentValueParser::suggest(
+            "set `UV_PROJECT_ENVIRONMENT` to the target environment path instead"
+        ),
+        hide(true)
+    )]
+    pub system: Option<String>,
+
     /// Do not install the current project [env: UV_NO_INSTALL_PROJECT=]
     ///
     /// By default, the current project is installed into the environment with all of its
