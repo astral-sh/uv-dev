@@ -64,6 +64,27 @@ explicitly created or updated using `uv lock`:
 $ uv lock
 ```
 
+## Resolving lockfile conflicts
+
+If a merge or rebase produces conflicts in `uv.lock`, first resolve and stage any conflicts in the
+project metadata, such as `pyproject.toml`. Then take the lockfile from the branch whose changes you
+are incorporating and regenerate it from the resolved project metadata. For example, when updating
+your branch from `main`:
+
+```console
+$ git checkout main -- uv.lock
+$ uv lock
+$ git add uv.lock
+```
+
+Review the regenerated lockfile and resolve any remaining conflicts, then finish the merge with
+`git commit` or continue the rebase with `git rebase --continue`. There is no need to edit the
+lockfile's package records by hand.
+
+Use an explicit branch name instead of `--ours` or `--theirs`: during a merge, those refer to the
+current branch and the branch being merged, respectively. During a rebase, `--ours` is the state
+already rebased onto the new base, while `--theirs` is the commit being replayed.
+
 ## Syncing the environment
 
 While the environment is synced [automatically](#automatic-lock-and-sync), it may also be explicitly
