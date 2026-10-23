@@ -1050,7 +1050,7 @@ fn implied_platform_markers<'a>(
                 }));
                 marker = marker.or(tag_marker);
             }
-            PlatformTag::WinArm64 => {
+            PlatformTag::WinArm64 | PlatformTag::WinArm64Ec => {
                 let mut tag_marker = MarkerTree::expression(MarkerExpression::String {
                     key: MarkerValueString::SysPlatform,
                     operator: MarkerOperator::Equal,
@@ -1350,6 +1350,10 @@ mod tests {
         );
         assert_platform_markers(
             "numpy-2.2.1-cp313-cp313t-win_arm64.whl",
+            "sys_platform == 'win32' and platform_machine == 'ARM64'",
+        );
+        assert_platform_markers(
+            "numpy-2.2.1-cp313-cp313t-win_arm64ec.whl",
             "sys_platform == 'win32' and platform_machine == 'ARM64'",
         );
         assert_platform_markers(

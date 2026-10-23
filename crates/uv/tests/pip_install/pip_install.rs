@@ -43,6 +43,61 @@ use uv_test::{
     uv_snapshot, venv_bin_path,
 };
 
+/// An ARM64EC interpreter prefers a native stable-ABI wheel over an emulated exact-ABI wheel,
+/// and can install an AMD64-only dependency in the same environment.
+#[test]
+#[cfg(unix)]
+fn arm64ec_wheel_fallback() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+
+    let (filename, wheel) = WheelBuilder::new(&"native".parse()?, &"1.0.0".parse()?)
+        .tag("cp310-abi3-win_arm64ec")
+        .requires(&["fallback==1.0.0".parse()?])
+        .files(&[("native/selected.py", "architecture = 'arm64ec'\n")])
+        .build();
+    links.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"native".parse()?, &"1.0.0".parse()?)
+        .tag("cp312-cp312-win_amd64")
+        .requires(&["fallback==1.0.0".parse()?])
+        .files(&[("native/selected.py", "architecture = 'amd64'\n")])
+        .build();
+    links.child(filename).write_binary(&wheel)?;
+    let (filename, wheel) = WheelBuilder::new(&"fallback".parse()?, &"1.0.0".parse()?)
+        .tag("cp312-cp312-win_amd64")
+        .build();
+    links.child(filename).write_binary(&wheel)?;
+
+    // On Unix, `sysconfig` accepts a platform override, allowing the real interpreter probe to
+    // report ARM64EC without requiring an ARM64EC Python build.
+    uv_snapshot!(context.filters(), context.pip_install()
+        .env("_PYTHON_HOST_PLATFORM", "win-arm64ec")
+        .arg("--no-cache")
+        .arg("--no-index")
+        .arg("--find-links")
+        .arg(links.path())
+        .arg("native==1.0.0"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 2 packages in [TIME]
+    Prepared 2 packages in [TIME]
+    Installed 2 packages in [TIME]
+     + fallback==1.0.0
+     + native==1.0.0
+    ");
+
+    uv_snapshot!(context.python_command().arg("-c").arg(
+        "from native.selected import architecture; import fallback; print(architecture); print(fallback.__version__)"
+    ), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    arm64ec
+    1.0.0
+    ");
+    Ok(())
+}
+
 fn write_many_files_wheel(path: &Path, source_files: usize) -> Result<()> {
     let mut writer = ZipFileWriter::new(Vec::new());
     let mut record = String::new();

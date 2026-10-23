@@ -2,7 +2,7 @@ use crate::{Error, Os};
 use std::str::FromStr;
 use target_lexicon::Architecture;
 
-/// Architecture variants, e.g., with support for different instruction sets
+/// Architecture variants, including instruction sets and ABIs.
 #[derive(Debug, Eq, PartialEq, Clone, Copy, Hash, Ord, PartialOrd)]
 pub enum ArchVariant {
     /// Targets 64-bit Intel/AMD CPUs newer than Nehalem (2008).
@@ -14,6 +14,8 @@ pub enum ArchVariant {
     /// Targets 64-bit Intel/AMD CPUs with AVX-512 instructions (post-2017 Intel CPUs).
     /// Many post-2017 Intel CPUs do not support AVX-512.
     V4,
+    /// The Windows ARM64 ABI that interoperates with x64 code.
+    Arm64Ec,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy, Hash)]
@@ -70,7 +72,7 @@ impl PartialOrd for Arch {
     }
 }
 impl Arch {
-    pub fn new(family: target_lexicon::Architecture, variant: Option<ArchVariant>) -> Self {
+    fn new(family: target_lexicon::Architecture, variant: Option<ArchVariant>) -> Self {
         Self { family, variant }
     }
 
@@ -99,6 +101,9 @@ impl Arch {
 
 impl std::fmt::Display for Arch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.variant == Some(ArchVariant::Arm64Ec) {
+            return write!(f, "arm64ec");
+        }
         match self.family {
             target_lexicon::Architecture::X86_32(target_lexicon::X86_32Architecture::I686) => {
                 write!(f, "x86")?;
@@ -132,17 +137,27 @@ impl FromStr for Arch {
             Ok(inner)
         }
 
+        if s == "arm64ec" {
+            return Ok(Self::from(&uv_platform_tags::Arch::Arm64Ec));
+        }
+
         // First check for a variant
         if let Some((Ok(family), Ok(variant))) = s
             .rsplit_once('_')
             .map(|(family, variant)| (parse_family(family), ArchVariant::from_str(variant)))
         {
-            // We only support variants for `x86_64` right now
-            if !matches!(family, target_lexicon::Architecture::X86_64) {
-                return Err(Error::UnsupportedVariant(
-                    variant.to_string(),
-                    family.to_string(),
-                ));
+            match (family, variant) {
+                (Architecture::X86_64, ArchVariant::V2 | ArchVariant::V3 | ArchVariant::V4)
+                | (
+                    Architecture::Aarch64(target_lexicon::Aarch64Architecture::Aarch64),
+                    ArchVariant::Arm64Ec,
+                ) => {}
+                _ => {
+                    return Err(Error::UnsupportedVariant(
+                        variant.to_string(),
+                        family.to_string(),
+                    ));
+                }
             }
             return Ok(Self {
                 family,
@@ -167,6 +182,7 @@ impl FromStr for ArchVariant {
             "v2" => Ok(Self::V2),
             "v3" => Ok(Self::V3),
             "v4" => Ok(Self::V4),
+            "arm64ec" => Ok(Self::Arm64Ec),
             _ => Err(()),
         }
     }
@@ -178,7 +194,14 @@ impl std::fmt::Display for ArchVariant {
             Self::V2 => write!(f, "v2"),
             Self::V3 => write!(f, "v3"),
             Self::V4 => write!(f, "v4"),
+            Self::Arm64Ec => write!(f, "arm64ec"),
         }
+    }
+}
+
+impl From<Architecture> for Arch {
+    fn from(family: Architecture) -> Self {
+        Self::new(family, None)
     }
 }
 
@@ -188,6 +211,10 @@ impl From<&uv_platform_tags::Arch> for Arch {
             uv_platform_tags::Arch::Aarch64 => Self::new(
                 target_lexicon::Architecture::Aarch64(target_lexicon::Aarch64Architecture::Aarch64),
                 None,
+            ),
+            uv_platform_tags::Arch::Arm64Ec => Self::new(
+                target_lexicon::Architecture::Aarch64(target_lexicon::Aarch64Architecture::Aarch64),
+                Some(ArchVariant::Arm64Ec),
             ),
             uv_platform_tags::Arch::Armv5TEL => Self::new(
                 target_lexicon::Architecture::Arm(target_lexicon::ArmArchitecture::Armv5te),
@@ -234,6 +261,17 @@ mod tests {
 
     use super::test_support::{aarch64, run_with_arch, x86_64};
     use super::{Arch, Os};
+
+    #[test]
+    fn test_arm64ec_architecture() {
+        let arch = Arch::from(&uv_platform_tags::Arch::Arm64Ec);
+        assert_eq!(arch.to_string(), "arm64ec");
+        assert_eq!(Arch::from_str("arm64ec").expect("valid architecture"), arch);
+        assert_eq!(arch.family(), aarch64().family());
+        assert_ne!(arch, aarch64());
+        assert_ne!(arch, x86_64());
+        assert!(Arch::from_str("x86_64_arm64ec").is_err());
+    }
 
     #[test]
     fn test_arch_sorting_prefers_native() {

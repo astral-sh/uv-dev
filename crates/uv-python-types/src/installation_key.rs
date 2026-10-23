@@ -342,7 +342,7 @@ impl From<PythonInstallationKey> for PythonInstallationMinorVersionKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uv_platform::ArchVariant;
+
     #[test]
     fn test_python_installation_key_from_str() {
         // Test basic parsing
@@ -360,7 +360,7 @@ mod tests {
         );
         assert_eq!(
             key.platform.arch,
-            Arch::new(target_lexicon::Architecture::X86_64, None)
+            Arch::from(target_lexicon::Architecture::X86_64)
         );
         assert_eq!(
             key.platform.libc,
@@ -380,10 +380,7 @@ mod tests {
             key.platform.os,
             Os::new(target_lexicon::OperatingSystem::Linux)
         );
-        assert_eq!(
-            key.platform.arch,
-            Arch::new(target_lexicon::Architecture::X86_64, Some(ArchVariant::V3))
-        );
+        assert_eq!(key.platform.arch.to_string(), "x86_64_v3");
         assert_eq!(
             key.platform.libc,
             Libc::Some(target_lexicon::Environment::Musl)
@@ -406,10 +403,9 @@ mod tests {
         );
         assert_eq!(
             key.platform.arch,
-            Arch::new(
-                target_lexicon::Architecture::Aarch64(target_lexicon::Aarch64Architecture::Aarch64),
-                None
-            )
+            Arch::from(target_lexicon::Architecture::Aarch64(
+                target_lexicon::Aarch64Architecture::Aarch64
+            ))
         );
         assert_eq!(key.platform.libc, Libc::None);
 
