@@ -61,9 +61,9 @@ impl Error {
     fn is_user_failure(&self) -> bool {
         match self {
             Self::Prepare(error) => error.is_user_failure(),
+            Self::Install(error) => error.is_user_failure(),
             Self::Hash(_) | Self::OutdatedEnvironment(_) => true,
             Self::Plan(_)
-            | Self::Install(_)
             | Self::Uninstall(_)
             | Self::CompileTree { .. }
             | Self::CompileFiles(_)

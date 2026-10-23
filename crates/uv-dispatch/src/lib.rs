@@ -118,13 +118,13 @@ impl IsBuildBackendError for BuildDispatchError {
                 error.is_user_failure()
             }
             Self::Prepare(error) => error.is_user_failure(),
+            Self::InstallBuildDependencies(error) => error.is_user_failure(),
             Self::Lookahead(error) => error.is_user_failure(),
             Self::BuildBackend(_)
             | Self::Tags(_)
             | Self::Join(_)
             | Self::Anyhow(_)
             | Self::UninstallBuildDependencies(_)
-            | Self::InstallBuildDependencies(_)
             | Self::Plan(_) => false,
         }
     }
