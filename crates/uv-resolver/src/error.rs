@@ -10,6 +10,7 @@ use pubgrub::{DerivationTree, Derived, External, Map, Ranges, Term};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::trace;
 
+use uv_configuration::RequirementsInput;
 use uv_distribution_types::{
     DerivationChain, DistErrorKind, IndexCapabilities, IndexLocations, IndexUrl, RequestedDist,
 };
@@ -119,7 +120,7 @@ pub enum ResolveError {
     InvalidVersion(#[from] uv_pep440::VersionSpecifierBuildError),
 
     #[error("Hash-checking is required, but no trusted hash was provided for: `{0}`")]
-    UnhashedPackage(PackageName),
+    UnhashedPackage(PackageName, Option<Box<RequirementsInput>>),
 
     #[error("found conflicting distribution in resolution: {0}")]
     ConflictingDistribution(ConflictingDistributionError),
@@ -140,6 +141,30 @@ pub enum ResolveError {
 }
 
 impl ResolveError {
+    /// Attach the input that enabled `--require-hashes` to errors caused by that mode.
+    pub fn attach_require_hashes_source(&mut self, source: Option<RequirementsInput>) {
+        match self {
+            Self::Dependencies(error, ..) => error.attach_require_hashes_source(source),
+            Self::UnhashedPackage(_, origin) => *origin = source.map(Box::new),
+            Self::Client(_)
+            | Self::Distribution(_)
+            | Self::ChannelClosed
+            | Self::UnregisteredTask(_)
+            | Self::ConflictingUrls { .. }
+            | Self::ConflictingIndexesForEnvironment { .. }
+            | Self::ConflictingIndexes(..)
+            | Self::DisallowedUrl { .. }
+            | Self::DistributionType(_)
+            | Self::Dist(..)
+            | Self::NoSolution(_)
+            | Self::InvalidVersion(_)
+            | Self::ConflictingDistribution(_)
+            | Self::PackageUnavailable(_)
+            | Self::ConflictMarker(_)
+            | Self::MismatchedPackageName { .. } => {}
+        }
+    }
+
     /// Return whether this is an expected user-facing failure.
     pub fn is_user_failure(&self) -> bool {
         match self {
@@ -151,7 +176,7 @@ impl ResolveError {
             | Self::DisallowedUrl { .. }
             | Self::DistributionType(_)
             | Self::NoSolution(_)
-            | Self::UnhashedPackage(_)
+            | Self::UnhashedPackage(..)
             | Self::PackageUnavailable(_)
             | Self::ConflictMarker(_)
             | Self::MismatchedPackageName { .. } => true,
@@ -172,6 +197,17 @@ impl uv_errors::Hinted for ResolveError {
             Self::Client(error) => uv_errors::Hinted::hints(error),
             Self::Distribution(error) => uv_errors::Hinted::hints(error),
             Self::Dependencies(error, ..) => uv_errors::Hinted::hints(error.as_ref()),
+            Self::UnhashedPackage(_, Some(origin)) => match origin.as_ref() {
+                RequirementsInput::Stdin => uv_errors::Hints::from(
+                    "`--require-hashes` was enabled in requirements read from stdin",
+                ),
+                origin @ (RequirementsInput::Local(_) | RequirementsInput::Remote(_)) => {
+                    uv_errors::Hints::from(format!(
+                        "`--require-hashes` was enabled in `{}`",
+                        origin.user_display()
+                    ))
+                }
+            },
             _ => uv_errors::Hints::none(),
         }
     }

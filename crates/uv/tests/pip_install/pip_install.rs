@@ -1586,6 +1586,8 @@ fn install_require_hashes_in_requirements_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have their versions pinned with `==`, but found: iniconfig
+
+    hint: `--require-hashes` was enabled in `requirements.txt`
     "
     );
 
@@ -1602,8 +1604,174 @@ fn install_require_hashes_in_requirements_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled in `requirements.txt`
     "
     );
+
+    Ok(())
+}
+
+/// Identify the first directive through mixed, transitive requirements and constraints includes.
+#[test]
+fn install_require_hashes_in_nested_requirements_txt() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        -r nested/requirements.txt
+        iniconfig==2.0.0
+    "})?;
+    context
+        .temp_dir
+        .child("nested/requirements.txt")
+        .write_str(indoc! {r"
+        -c constraints.txt
+        --require-hashes
+    "})?;
+    context
+        .temp_dir
+        .child("nested/constraints.txt")
+        .write_str(indoc! {r"
+        -r hashes.txt
+    "})?;
+    context
+        .temp_dir
+        .child("nested/hashes.txt")
+        .write_str("--require-hashes")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--no-verify-hashes"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled in `nested/hashes.txt`
+    ");
+
+    Ok(())
+}
+
+/// Identify hash checking enabled by a separate constraints input.
+#[test]
+fn install_require_hashes_in_constraints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig==2.0.0")?;
+    context
+        .temp_dir
+        .child("hashes.txt")
+        .write_str("--require-hashes")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--constraint")
+        .arg("hashes.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled in `hashes.txt`
+    ");
+
+    Ok(())
+}
+
+/// Identify hash checking enabled by a separate overrides input.
+#[test]
+fn install_require_hashes_in_overrides() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str("iniconfig==2.0.0")?;
+    context
+        .temp_dir
+        .child("hashes.txt")
+        .write_str("--require-hashes")?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--override")
+        .arg("hashes.txt"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled in `hashes.txt`
+    ");
+
+    Ok(())
+}
+
+/// Identify hash checking enabled by requirements on stdin.
+#[test]
+fn install_require_hashes_in_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let requirements_txt = context.temp_dir.child("requirements.txt");
+    requirements_txt.write_str(indoc! {r"
+        --require-hashes
+        iniconfig==2.0.0
+    "})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("-")
+        .stdin(File::open(requirements_txt.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled in requirements read from stdin
+    ");
+
+    Ok(())
+}
+
+/// Identify remote hash directives without exposing credentials.
+#[tokio::test]
+async fn install_require_hashes_in_remote_requirements_txt() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/requirements.txt"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("-c nested/hashes.txt\niniconfig==2.0.0"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/nested/hashes.txt"))
+        .and(basic_auth("user", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("--require-hashes"))
+        .mount(&server)
+        .await;
+
+    let mut requirements_url = Url::parse(&format!("{}/requirements.txt", server.uri()))?;
+    let _ = requirements_url.set_username("user");
+    let _ = requirements_url.set_password(Some("password"));
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r")
+        .arg(requirements_url.as_str()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled in `http://user:****@[LOCALHOST]/nested/hashes.txt`
+    ");
 
     Ok(())
 }
@@ -1631,6 +1799,8 @@ fn install_require_hashes_in_nested_constraints_txt() -> Result<()> {
     exit_code: 2 (failure)
     ----- stderr -----
     error: In `--require-hashes` mode, all requirements must have a hash, but none were provided for: iniconfig==2.0.0
+
+    hint: `--require-hashes` was enabled in `constraints.txt`
     "
     );
 
@@ -9593,6 +9763,235 @@ fn require_hashes_missing_dependency() -> Result<()> {
     error: Hash-checking is required, but no trusted hash was provided for: `markupsafe`
     "
     );
+
+    // A directive in the input remains visible when resolution finds an unpinned dependency.
+    requirements_txt.write_str(indoc! {r"
+        --require-hashes
+        werkzeug==3.0.0 --hash=sha256:cbb2600f7eabe51dbc0502f58be0b3e1b96b893b05695ea2b35b43d4de2d9962
+    "})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt"), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Hash-checking is required, but no trusted hash was provided for: `markupsafe`
+
+    hint: `--require-hashes` was enabled in `requirements.txt`
+    ");
+
+    Ok(())
+}
+
+/// Hash failures wrapped by dependency resolution retain the input that enabled hash checking.
+#[test]
+fn require_hashes_url_constraint_dependency_origin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        -c constraints.txt
+        werkzeug==3.0.0 --hash=sha256:cbb2600f7eabe51dbc0502f58be0b3e1b96b893b05695ea2b35b43d4de2d9962
+    "})?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str(indoc! {r"
+        --require-hashes
+        markupsafe @ https://example.com/markupsafe-2.1.3-py3-none-any.whl
+    "})?;
+
+    uv_snapshot!(context.pip_install()
+        .args(["-r", "requirements.txt"]), @"
+    exit_code: 1 (failure)
+    ----- stderr -----
+    error: Failed to resolve dependencies for package `werkzeug==3.0.0`
+      cause: Hash-checking is required, but no trusted hash was provided for: `markupsafe`
+
+    hint: `--require-hashes` was enabled in `constraints.txt`
+    ");
+
+    Ok(())
+}
+
+/// Nested constraint includes retain the hashes that satisfy their required-hash policy.
+#[test]
+fn require_hashes_nested_constraint() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        -c constraints.txt
+        anyio==4.0.0
+    "})?;
+    context
+        .temp_dir
+        .child("constraints.txt")
+        .write_str("-c nested/hashes.txt")?;
+    context
+        .temp_dir
+        .child("nested/hashes.txt")
+        .write_str(indoc! {r"
+        --require-hashes
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    "})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r")
+        .arg("requirements.txt")
+        .arg("--no-deps"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + anyio==4.0.0
+    ");
+
+    Ok(())
+}
+
+/// A direct constraint after a nested include supplies the final hash list.
+#[test]
+fn require_hashes_nested_constraint_declaration_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        --require-hashes
+        -c constraints.txt
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    "})?;
+    let constraints = context.temp_dir.child("constraints.txt");
+    constraints.write_str(indoc! {r"
+        -c old.txt
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    "})?;
+    context.temp_dir.child("old.txt").write_str(indoc! {r"
+        anyio==4.0.0 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("requirements.txt").arg("--no-deps"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + anyio==4.0.0
+    ");
+
+    constraints.write_str(indoc! {r"
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+        -c old.txt
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("requirements.txt").arg("--reinstall").arg("--no-deps"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but there were no overlapping hashes between the requirements and constraints for: anyio==4.0.0
+
+    hint: `--require-hashes` was enabled in `requirements.txt`
+    ");
+
+    Ok(())
+}
+
+/// Command-line constraints retain the order of direct pins and nested includes.
+#[test]
+fn require_hashes_cli_constraint_declaration_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        --require-hashes
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    "})?;
+    let constraints = context.temp_dir.child("constraints.txt");
+    constraints.write_str(indoc! {r"
+        -c old.txt
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    "})?;
+    context.temp_dir.child("old.txt").write_str(indoc! {r"
+        anyio==4.0.0 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("requirements.txt").arg("-c").arg("constraints.txt").arg("--no-deps"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + anyio==4.0.0
+    ");
+
+    constraints.write_str(indoc! {r"
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+        -c old.txt
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("requirements.txt").arg("-c").arg("constraints.txt").arg("--reinstall").arg("--no-deps"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but there were no overlapping hashes between the requirements and constraints for: anyio==4.0.0
+
+    hint: `--require-hashes` was enabled in `requirements.txt`
+    ");
+
+    Ok(())
+}
+
+/// Constraints read from stdin retain the order of direct pins and nested includes.
+#[test]
+fn require_hashes_stdin_constraint_declaration_order() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    context
+        .temp_dir
+        .child("requirements.txt")
+        .write_str(indoc! {r"
+        --require-hashes
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    "})?;
+    let constraints = context.temp_dir.child("constraints.txt");
+    constraints.write_str(indoc! {r"
+        -c old.txt
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+    "})?;
+    context.temp_dir.child("old.txt").write_str(indoc! {r"
+        anyio==4.0.0 --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("requirements.txt").arg("-c").arg("-").arg("--no-deps").stdin(File::open(constraints.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + anyio==4.0.0
+    ");
+
+    constraints.write_str(indoc! {r"
+        anyio==4.0.0 --hash=sha256:cfdb2b588b9fc25ede96d8db56ed50848b0b649dca3dd1df0b11f683bb9e0b5f
+        -c old.txt
+    "})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("-r").arg("requirements.txt").arg("-c").arg("-").arg("--reinstall").arg("--no-deps").stdin(File::open(constraints.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: In `--require-hashes` mode, all requirements must have a hash, but there were no overlapping hashes between the requirements and constraints for: anyio==4.0.0
+
+    hint: `--require-hashes` was enabled in `requirements.txt`
+    ");
 
     Ok(())
 }

@@ -107,9 +107,9 @@ enum RequirementsTxtStatement {
 /// A [Requirement] with additional metadata from the `requirements.txt`, currently only hashes but in
 /// the future also editable and similar information.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct RequirementEntry {
+pub struct RequirementEntry<T = RequirementsTxtRequirement> {
     /// The actual PEP 508 requirement.
-    pub requirement: RequirementsTxtRequirement,
+    pub requirement: T,
     /// Hashes of the downloadable packages.
     pub hashes: Vec<String>,
 }
@@ -148,7 +148,7 @@ pub struct RequirementsTxt {
     /// The actual requirements with the hashes.
     pub requirements: Vec<RequirementEntry>,
     /// Constraints included with `-c`.
-    pub constraints: Vec<uv_pep508::Requirement<VerbatimParsedUrl>>,
+    pub constraints: Vec<RequirementEntry<uv_pep508::Requirement<VerbatimParsedUrl>>>,
     /// Editables with `-e`.
     pub editables: Vec<RequirementEntry>,
     /// The index URL, specified with `--index-url`.
@@ -159,8 +159,8 @@ pub struct RequirementsTxt {
     pub find_links: Vec<VerbatimUrl>,
     /// Whether to ignore the index, specified with `--no-index`.
     pub no_index: bool,
-    /// Whether all requirements must be hashed, specified with `--require-hashes`.
-    pub require_hashes: bool,
+    /// The first input that enabled `--require-hashes`, including nested inputs.
+    pub require_hashes: Option<RequirementsInput>,
     /// Whether to disallow wheels, specified with `--no-binary`.
     pub no_binary: NoBinary,
     /// Whether to allow only wheels, specified with `--only-binary`.
@@ -206,36 +206,26 @@ impl RequirementsTxt {
         .await
     }
 
-    /// Parse requirements from a string, using the given input for error messages and resolving
-    /// relative inputs.
-    pub async fn parse_str(
-        content: &str,
+    /// Parse a constraints file, retaining declaration order across recursive inclusions.
+    #[instrument(skip_all)]
+    pub async fn parse_constraints_with_cache(
         requirements_txt: impl Into<RequirementsInput>,
         working_dir: impl AsRef<Path>,
         client_builder: &BaseClientBuilder<'_>,
-        source_contents: &mut SourceCache,
+        cache: &mut SourceCache,
     ) -> Result<Self, RequirementsTxtFileError> {
         let requirements_txt = requirements_txt.into();
-        let working_dir = working_dir.as_ref();
-
-        let mut visited = VisitedFiles::Requirements {
-            requirements: &mut FxHashSet::default(),
+        let mut visited = VisitedFiles::Constraints {
             constraints: &mut FxHashSet::default(),
         };
-
-        Self::parse_inner(
-            content,
+        Self::parse_impl(
+            &requirements_txt,
             working_dir,
             client_builder,
-            &requirements_txt,
             &mut visited,
-            source_contents,
+            cache,
         )
         .await
-        .map_err(|err| RequirementsTxtFileError {
-            file: Box::new(requirements_txt),
-            error: err,
-        })
     }
 
     /// See module level documentation
@@ -463,29 +453,36 @@ impl RequirementsTxt {
                         });
                     }
 
-                    // Treat any nested requirements or constraints as constraints. This differs
-                    // from `pip`, which seems to treat `-r` requirements in constraints files as
-                    // _requirements_, but we don't want to support that.
-                    for entry in sub_constraints.requirements {
-                        match entry.requirement {
-                            RequirementsTxtRequirement::Named(requirement) => {
-                                data.constraints.push(requirement);
-                            }
-                            RequirementsTxtRequirement::Unnamed(_) => {
-                                return Err(RequirementsTxtParserError::UnnamedConstraint {
-                                    start,
-                                    end,
-                                });
-                            }
-                        }
+                    // Named entries are already appended in declaration order while parsing in
+                    // constraints mode, including nested requirements files. Only unnamed entries remain.
+                    if !sub_constraints.requirements.is_empty() {
+                        return Err(RequirementsTxtParserError::UnnamedConstraint { start, end });
                     }
-                    for constraint in sub_constraints.constraints {
-                        data.constraints.push(constraint);
-                    }
-                    data.require_hashes |= sub_constraints.require_hashes;
+                    data.constraints.extend(sub_constraints.constraints);
+                    data.require_hashes = data.require_hashes.or(sub_constraints.require_hashes);
                 }
                 RequirementsTxtStatement::RequirementEntry(requirement_entry) => {
-                    data.requirements.push(requirement_entry);
+                    match (&*visited, requirement_entry) {
+                        (
+                            VisitedFiles::Constraints { .. },
+                            RequirementEntry {
+                                requirement: RequirementsTxtRequirement::Named(requirement),
+                                hashes,
+                            },
+                        ) => data.constraints.push(RequirementEntry {
+                            requirement,
+                            hashes,
+                        }),
+                        // Keep unnamed entries for the including constraint statement to reject.
+                        (VisitedFiles::Requirements { .. }, requirement_entry)
+                        | (
+                            VisitedFiles::Constraints { .. },
+                            requirement_entry @ RequirementEntry {
+                                requirement: RequirementsTxtRequirement::Unnamed(_),
+                                ..
+                            },
+                        ) => data.requirements.push(requirement_entry),
+                    }
                 }
                 RequirementsTxtStatement::EditableRequirementEntry(editable) => {
                     data.editables.push(editable);
@@ -511,7 +508,8 @@ impl RequirementsTxt {
                     data.no_index = true;
                 }
                 RequirementsTxtStatement::RequireHashes => {
-                    data.require_hashes = true;
+                    data.require_hashes
+                        .get_or_insert_with(|| requirements_txt.clone());
                 }
                 RequirementsTxtStatement::NoBinary(no_binary) => {
                     data.no_binary.extend(no_binary);
@@ -577,7 +575,7 @@ impl RequirementsTxt {
         self.extra_index_urls.extend(extra_index_urls);
         self.find_links.extend(find_links);
         self.no_index = self.no_index || no_index;
-        self.require_hashes = self.require_hashes || require_hashes;
+        self.require_hashes = self.require_hashes.take().or(require_hashes);
         self.no_binary.extend(no_binary);
         self.only_binary.extend(only_binary);
     }
@@ -2061,7 +2059,7 @@ mod test {
                 extra_index_urls: [],
                 find_links: [],
                 no_index: false,
-                require_hashes: false,
+                require_hashes: None,
                 no_binary: None,
                 only_binary: None,
             }
@@ -2122,7 +2120,7 @@ mod test {
                 extra_index_urls: [],
                 find_links: [],
                 no_index: false,
-                require_hashes: false,
+                require_hashes: None,
                 no_binary: Packages(
                     [
                         PackageName(
@@ -2230,7 +2228,7 @@ mod test {
                 extra_index_urls: [],
                 find_links: [],
                 no_index: true,
-                require_hashes: false,
+                require_hashes: None,
                 no_binary: None,
                 only_binary: None,
             }
@@ -2482,7 +2480,7 @@ mod test {
                 extra_index_urls: [],
                 find_links: [],
                 no_index: false,
-                require_hashes: false,
+                require_hashes: None,
                 no_binary: All,
                 only_binary: None,
             }
@@ -2849,7 +2847,7 @@ mod test {
                 extra_index_urls: [],
                 find_links: [],
                 no_index: false,
-                require_hashes: false,
+                require_hashes: None,
                 no_binary: None,
                 only_binary: None,
             }
@@ -3029,8 +3027,11 @@ mod test {
             .iter()
             .map(|entry| entry.requirement.to_string())
             .collect();
-        let constraints: BTreeSet<String> =
-            parsed.constraints.iter().map(ToString::to_string).collect();
+        let constraints: BTreeSet<String> = parsed
+            .constraints
+            .iter()
+            .map(|entry| entry.requirement.to_string())
+            .collect();
 
         assert_debug_snapshot!(requirements, @r#"
         {
