@@ -49,6 +49,24 @@ impl Conflicts {
         self.iter().any(|set| set.contains(package, kind))
     }
 
+    /// Returns extras declared to conflict with their own project's production selection.
+    pub fn project_conflicting_extras(&self) -> impl Iterator<Item = &'_ ConflictItem> + '_ {
+        self.iter().flat_map(|set| {
+            set.iter().filter(move |item| match item.kind() {
+                ConflictKind::Extra(extra) => {
+                    set.project_conflicts_with_extra(item.package(), extra)
+                }
+                ConflictKind::Group(_) | ConflictKind::Project => false,
+            })
+        })
+    }
+
+    /// Returns whether an extra and its project's production selection share a conflict set.
+    pub fn project_conflicts_with_extra(&self, package: &PackageName, extra: &ExtraName) -> bool {
+        self.iter()
+            .any(|set| set.project_conflicts_with_extra(package, extra))
+    }
+
     /// Returns true if there are no conflicts.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
@@ -252,6 +270,11 @@ impl ConflictSet {
         let kind = kind.into();
         self.iter()
             .any(|set| set.package() == package && *set.kind() == kind)
+    }
+
+    /// Returns whether this set declares an extra and its project as alternatives.
+    fn project_conflicts_with_extra(&self, package: &PackageName, extra: &ExtraName) -> bool {
+        self.contains(package, ConflictKindRef::Project) && self.contains(package, extra)
     }
 
     /// Returns true if these conflicts contain any set that contains the given
@@ -857,7 +880,7 @@ mod tests {
 
     use anyhow::Result;
     use rustc_hash::FxHashSet;
-    use uv_normalize::{GroupName, PackageName};
+    use uv_normalize::{ExtraName, GroupName, PackageName};
 
     use super::{ConflictItem, ConflictSet, Conflicts};
     use crate::DependencyGroups;
@@ -867,6 +890,46 @@ mod tests {
             ConflictItem::from((package.clone(), GroupName::from_str(left)?)),
             ConflictItem::from((package.clone(), GroupName::from_str(right)?)),
         ])?)
+    }
+
+    #[test]
+    fn project_extra_conflicts_require_same_package_and_set() -> Result<()> {
+        let package = PackageName::from_str("project")?;
+        let other_package = PackageName::from_str("other")?;
+        let extra = ExtraName::from_str("feature")?;
+        let other_extra = ExtraName::from_str("other")?;
+        let group = GroupName::from_str("dev")?;
+        let own_extra = ConflictItem::from((package.clone(), extra.clone()));
+        let foreign_extra = ConflictItem::from((other_package.clone(), extra.clone()));
+        let mut conflicts = Conflicts(vec![
+            ConflictSet::try_from(vec![
+                ConflictItem::from(package.clone()),
+                foreign_extra.clone(),
+            ])?,
+            ConflictSet::try_from(vec![
+                ConflictItem::from(other_package.clone()),
+                own_extra.clone(),
+            ])?,
+        ]);
+
+        assert!(!conflicts.project_conflicts_with_extra(&package, &extra));
+        assert!(!conflicts.project_conflicts_with_extra(&other_package, &extra));
+        assert!(conflicts.project_conflicting_extras().next().is_none());
+
+        conflicts.push(ConflictSet::try_from(vec![
+            ConflictItem::from(package.clone()),
+            own_extra.clone(),
+            ConflictItem::from((package.clone(), group)),
+            foreign_extra,
+        ])?);
+        assert!(conflicts.project_conflicts_with_extra(&package, &extra));
+        assert!(!conflicts.project_conflicts_with_extra(&other_package, &extra));
+        assert!(!conflicts.project_conflicts_with_extra(&package, &other_extra));
+        assert_eq!(
+            conflicts.project_conflicting_extras().collect::<Vec<_>>(),
+            vec![&own_extra],
+        );
+        Ok(())
     }
 
     #[test]
