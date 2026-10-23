@@ -482,7 +482,7 @@ async fn send_request_to_with_cert(
         .cached_client()
         .uncached()
         .for_host(url)
-        .get(url.clone())
+        .get(url.clone().into_unsafe_url())
         .send()
         .await
 }

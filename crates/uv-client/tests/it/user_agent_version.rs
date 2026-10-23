@@ -33,7 +33,7 @@ async fn test_user_agent_has_version() -> Result<()> {
         .cached_client()
         .uncached()
         .for_host(&url)
-        .get(url)
+        .get(url.into_unsafe_url())
         .send()
         .await?;
 
@@ -92,7 +92,7 @@ async fn test_user_agent_has_subcommand() -> Result<()> {
         .cached_client()
         .uncached()
         .for_host(&url)
-        .get(url)
+        .get(url.into_unsafe_url())
         .send()
         .await?;
 
@@ -187,7 +187,7 @@ async fn test_user_agent_has_linehaul() -> Result<()> {
         .cached_client()
         .uncached()
         .for_host(&url)
-        .get(url)
+        .get(url.into_unsafe_url())
         .send()
         .await?;
 

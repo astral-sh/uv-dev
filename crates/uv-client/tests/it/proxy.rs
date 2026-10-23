@@ -31,7 +31,11 @@ async fn http_proxy() -> Result<()> {
 
     // Make a request to the target.
     let target_url = SafeUrl::parse_relaxed(&target_server.uri())?;
-    let response = client.for_host(&target_url).get(target_url).send().await?;
+    let response = client
+        .for_host(&target_url)
+        .get(target_url.into_unsafe_url())
+        .send()
+        .await?;
 
     assert_eq!(response.status(), 200);
 
@@ -69,7 +73,11 @@ async fn no_proxy() -> Result<()> {
 
     // Make a request to the target.
     let target_url = SafeUrl::parse_relaxed(&target_server.uri())?;
-    let response = client.for_host(&target_url).get(target_url).send().await?;
+    let response = client
+        .for_host(&target_url)
+        .get(target_url.into_unsafe_url())
+        .send()
+        .await?;
 
     assert_eq!(response.status(), 200);
 

@@ -17,6 +17,7 @@ use reqwest::header::{
 };
 use reqwest::multipart::{Form, Part};
 use reqwest::{Body, Response, StatusCode};
+use reqwest_middleware::RequestBuilder;
 use reqwest_retry::RetryError;
 use reqwest_retry::policies::ExponentialBackoff;
 use rustc_hash::FxHashMap;
@@ -32,7 +33,7 @@ use uv_auth::{Credentials, CredentialsPrompt, CredentialsPromptError, Realm};
 use uv_cache::{Cache, Refresh};
 use uv_client::{
     BaseClient, ClientBuildError, DEFAULT_MAX_REDIRECTS, MetadataFormat, OwnedArchive,
-    ProblemDetails, RegistryClientBuilder, RequestBuilder, RetryParsingError, RetryState,
+    ProblemDetails, RegistryClientBuilder, RetryParsingError, RetryState,
 };
 use uv_configuration::{KeyringProviderType, TrustedPublishing};
 use uv_distribution_filename::{DistFilename, SourceDistExtension, SourceDistFilename};
@@ -733,7 +734,7 @@ impl<'a> PublishSession<'a> {
                 Ok(response) => {
                     // When the user accidentally uses https://test.pypi.org/legacy (no slash) as publish URL, we
                     // get a redirect to https://test.pypi.org/legacy/ (the canonical index URL).
-                    // In the above case we get 308, where reqwest or `RedirectClientWithMiddleware` would try
+                    // In the above case we get 308, where reqwest or the redirect middleware would try
                     // cloning the streaming body, which is not possible.
                     // For https://test.pypi.org/simple (no slash), we get 301, which means we should make a GET request:
                     // https://fetch.spec.whatwg.org/#http-redirect-fetch).
@@ -1322,7 +1323,7 @@ impl PublishSession<'_> {
         attestations: Option<&str>,
         registry: &SafeUrl,
         reporter: Arc<impl Reporter>,
-    ) -> Result<(RequestBuilder<'_>, usize), PublishPrepareError> {
+    ) -> Result<(RequestBuilder, usize), PublishPrepareError> {
         let credentials = self.credentials.as_credentials();
         let mut form = Form::new();
         for (key, value) in form_metadata.iter() {
@@ -1364,7 +1365,7 @@ impl PublishSession<'_> {
         let mut request = self
             .upload_client
             .for_host(&url)
-            .post(url)
+            .post(url.into_unsafe_url())
             .multipart(form)
             // Ask PyPI for a structured error messages instead of HTML-markup error messages.
             // For other registries, we ask them to return plain text over HTML. See
@@ -2040,7 +2041,7 @@ mod tests {
         insta::with_settings!({
             filters => [("boundary=[0-9a-f-]+", "boundary=[...]")],
         }, {
-            assert_debug_snapshot!(&request.raw_builder(), @r#"
+            assert_debug_snapshot!(&request, @r#"
             RequestBuilder {
                 inner: RequestBuilder {
                     method: POST,
@@ -2206,7 +2207,7 @@ mod tests {
         insta::with_settings!({
             filters => [("boundary=[0-9a-f-]+", "boundary=[...]")],
         }, {
-            assert_debug_snapshot!(&request.raw_builder(), @r#"
+            assert_debug_snapshot!(&request, @r#"
             RequestBuilder {
                 inner: RequestBuilder {
                     method: POST,

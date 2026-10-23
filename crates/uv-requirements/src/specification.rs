@@ -745,7 +745,11 @@ async fn read_file(
         RequirementsInput::Stdin => Ok(uv_fs::read_stdin_to_string_transcode()?),
         RequirementsInput::Remote(url) => {
             let client = client_builder.build()?;
-            let response = client.for_host(url).get(url.clone()).send().await?;
+            let response = client
+                .for_host(url)
+                .get(url.clone().into_unsafe_url())
+                .send()
+                .await?;
 
             response.error_for_status_ref()?;
 

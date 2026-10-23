@@ -41,7 +41,7 @@ pub(crate) async fn validate_zip(
 
     let response = client
         .uncached_client(&archive.url)
-        .get(archive.url.clone())
+        .get(archive.url.clone().into_unsafe_url())
         .send()
         .await?;
     let reader = response
