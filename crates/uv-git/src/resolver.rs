@@ -215,20 +215,6 @@ impl GitResolver {
 
         let reference = RepositoryReference::from(url);
 
-        // If we know the precise commit already, reuse it, to ensure that all fetches within a
-        // single process are consistent.
-        let url = {
-            if let Some(precise) = self.get(&reference) {
-                Cow::Owned(
-                    url.clone()
-                        .with_precise(precise)
-                        .map_err(|error| GitResolverError::Git(error.into()))?,
-                )
-            } else {
-                Cow::Borrowed(url)
-            }
-        };
-
         // Avoid races between different processes, too.
         let lock_dir = cache.join("locks");
         fs::create_dir_all(&lock_dir).await?;
@@ -239,6 +225,18 @@ impl GitResolver {
             &repository_url,
         )
         .await?;
+
+        // A fetch ahead of us may resolve the reference while we wait for the repository lock.
+        // Use that precise commit so concurrent requests share one fetch and one revision.
+        let url = if let Some(precise) = self.get(&reference) {
+            Cow::Owned(
+                url.clone()
+                    .with_precise(precise)
+                    .map_err(|error| GitResolverError::Git(error.into()))?,
+            )
+        } else {
+            Cow::Borrowed(url)
+        };
 
         // Fetch the Git repository.
         let source = if let Some(reporter) = reporter {
