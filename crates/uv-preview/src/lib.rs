@@ -281,9 +281,10 @@ pub enum PreviewFeature {
     /// output and a machine-readable byte count; enabling this feature silences the preview
     /// warning.
     CacheSize,
-    /// Cache cleanup reports the physical disk space reclaimed, accounting for hardlinks and
-    /// copy-on-write clones on macOS and Linux. If an entry's allocated size cannot be measured, uv
-    /// reports a lower bound; other platforms continue to use a coarser estimate. See [clearing the
+    /// Cache size and cleanup report physical disk usage, accounting for hardlinks and
+    /// copy-on-write clones on macOS and Linux. During cleanup, unmeasurable allocations produce a
+    /// lower bound. Cache sizing falls back to a coarser allocation estimate when extent mapping is
+    /// unavailable; other platforms use coarser estimates. See [clearing the
     /// cache](./cache.md#clearing-the-cache) for details.
     CachePhysicalSpace,
     /// The `uv init` command rejects the deprecated `--project` option. To choose where to create a
