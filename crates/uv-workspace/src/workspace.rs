@@ -17,7 +17,9 @@ use rustc_hash::{FxHashSet, FxHasher};
 use tracing::{debug, trace, warn};
 
 use uv_cache::Cache;
-use uv_configuration::{ActiveEnvironment, DependencyGroupsWithDefaults, ExcludeDependency};
+use uv_configuration::{
+    ActiveEnvironment, DependencyGroupsWithDefaults, ExcludeDependency, RequiredEnvironmentsMode,
+};
 use uv_distribution_types::{Index, MinimumLibcVersion, Requirement, RequirementSource};
 use uv_fs::{CWD, Simplified, normalize_path};
 use uv_macros::DebugNoInline;
@@ -133,7 +135,8 @@ impl ProjectEnvironmentSelection {
     }
 }
 
-type WorkspaceMembers = Arc<BTreeMap<PackageName, WorkspaceMember>>;
+/// Shared membership discovered for a workspace.
+pub type WorkspaceMembers = Arc<BTreeMap<PackageName, WorkspaceMember>>;
 type FxOnceMap<K, V> = OnceMap<K, V, BuildHasherDefault<FxHasher>>;
 type CachedWorkspaceResult = Result<CachedWorkspace, WorkspaceError>;
 
@@ -878,6 +881,15 @@ impl Workspace {
             .and_then(|uv| uv.minimum_libc_version)
     }
 
+    /// Returns the policy used to satisfy the workspace's required environments.
+    pub fn required_environments_mode(&self) -> Option<RequiredEnvironmentsMode> {
+        self.pyproject_toml
+            .tool
+            .as_ref()
+            .and_then(|tool| tool.uv.as_ref())
+            .and_then(|uv| uv.required_environments_mode)
+    }
+
     /// Returns the set of conflicts for the workspace.
     pub fn conflicts(&self) -> Result<Conflicts, WorkspaceError> {
         let mut conflicting = Conflicts::empty();
@@ -1070,6 +1082,11 @@ impl Workspace {
     /// The members of the workspace.
     pub fn packages(&self) -> &BTreeMap<PackageName, WorkspaceMember> {
         &self.packages
+    }
+
+    /// Share discovered membership without copying the member records or paths.
+    pub fn shared_packages(&self) -> WorkspaceMembers {
+        Arc::clone(&self.packages)
     }
 
     /// The sources table from the workspace `pyproject.toml`.
@@ -2704,6 +2721,7 @@ mod tests {
                       "environments": null,
                       "required-environments": null,
                       "minimum-libc-version": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }
@@ -2806,6 +2824,7 @@ mod tests {
                       "environments": null,
                       "required-environments": null,
                       "minimum-libc-version": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }
@@ -3239,6 +3258,7 @@ mod tests {
                       "environments": null,
                       "required-environments": null,
                       "minimum-libc-version": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }
@@ -3350,6 +3370,7 @@ mod tests {
                       "environments": null,
                       "required-environments": null,
                       "minimum-libc-version": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }
@@ -3474,6 +3495,7 @@ mod tests {
                       "environments": null,
                       "required-environments": null,
                       "minimum-libc-version": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }
@@ -3572,6 +3594,7 @@ mod tests {
                       "environments": null,
                       "required-environments": null,
                       "minimum-libc-version": null,
+                      "required-environments-mode": null,
                       "conflicts": null,
                       "build-backend": null
                     }

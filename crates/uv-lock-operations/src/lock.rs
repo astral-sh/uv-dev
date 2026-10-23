@@ -543,6 +543,15 @@ async fn do_lock(
     } else {
         None
     };
+    let required_environments_mode = target.required_environments_mode();
+    if required_environments_mode.is_some()
+        && !preview.is_enabled(PreviewFeature::RequiredEnvironmentsMode)
+    {
+        warn_user_once!(
+            "The `required-environments-mode` setting is experimental and may change without warning. Pass `--preview-features {}` to disable this warning.",
+            PreviewFeature::RequiredEnvironmentsMode
+        );
+    }
 
     let minimum_libc_version = target.minimum_libc_version();
     if minimum_libc_version.is_some() && !preview.is_enabled(PreviewFeature::MinimumLibcVersion) {
@@ -637,13 +646,6 @@ async fn do_lock(
 
     let lock_supported_environments = environments.cloned().unwrap_or_default();
     let lock_required_environments = required_environments.cloned().unwrap_or_default();
-    let artifact_environments = SupportedEnvironments::from_markers(
-        lock_supported_environments
-            .iter()
-            .copied()
-            .chain(lock_required_environments.iter().copied())
-            .collect(),
-    );
 
     let options = OptionsBuilder::new()
         .resolution_mode(*resolution)
@@ -652,8 +654,10 @@ async fn do_lock(
         .exclude_newer(exclude_newer.clone())
         .index_strategy(*index_strategy)
         .build_options(build_options.clone())
-        .artifact_environments(artifact_environments.clone())
+        .artifact_environments(lock_supported_environments.clone())
         .minimum_libc_version(minimum_libc_version)
+        .required_environments(lock_required_environments.clone())
+        .required_environments_mode(required_environments_mode)
         .build();
     // Checking an existing lockfile may build metadata and install build dependencies. Verify any
     // artifacts recorded in that lockfile, including for an ordinary unlocked command.

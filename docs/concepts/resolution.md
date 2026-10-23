@@ -202,7 +202,25 @@ For example, `environments = ["sys_platform == 'darwin'"]` would limit uv to sol
 ignoring Linux and Windows). On the other hand,
 `required-environments = ["sys_platform == 'darwin'"]` would _require_ that any package without a
 source distribution include a wheel for macOS in order to be installable (and would fail if no such
-wheel is available).
+wheel is available). By default, packages with a source distribution can satisfy a required
+environment without a matching wheel.
+
+To require compatible wheels for every package in a required environment, including packages that
+publish a source distribution, set `required-environments-mode = "require-wheels"`. This mode is in
+preview and can be enabled without a warning via the `required-environments-mode` preview feature.
+For example, to require Python 3.13 wheels while continuing to resolve a known holdout only on
+Python 3.12:
+
+```toml title="pyproject.toml"
+[project]
+requires-python = ">=3.12"
+dependencies = ["known-holdout; python_version < '3.13'"]
+
+[tool.uv]
+required-environments = ["python_version == '3.13'"]
+required-environments-mode = "require-wheels"
+preview-features = ["required-environments-mode"]
+```
 
 In practice, `required-environments` can be useful for declaring explicit support for non-latest
 platforms, since this often requires backtracking past the latest published versions of those
