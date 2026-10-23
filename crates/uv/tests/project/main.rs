@@ -24,6 +24,9 @@ mod lock;
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod run;
 
+#[cfg(feature = "test-python")]
+mod run_python_modes;
+
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod tree;
 
