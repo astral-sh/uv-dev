@@ -21,6 +21,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: $/.github/actions/setup-cargo
+
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           # renovate: datasource=github-release-attachments depName=astral-sh/uv
@@ -38,10 +40,10 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: "Generate reference documentation"
         run: |
-          cargo --locked dev generate-options-reference
-          cargo --locked dev generate-cli-reference
-          cargo --locked dev generate-env-vars-reference
-          cargo --locked dev generate-preview-features-reference
+          cargo dev generate-options-reference
+          cargo dev generate-cli-reference
+          cargo dev generate-env-vars-reference
+          cargo dev generate-preview-features-reference
 
       - name: "Build docs"
         run: uv run --only-group docs mkdocs build --strict -f mkdocs.yml

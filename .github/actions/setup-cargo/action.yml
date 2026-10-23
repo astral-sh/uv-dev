@@ -1,0 +1,44 @@
+name: "Set up Cargo shim"
+description: "Require locked Cargo commands, with optional release SBOM embedding."
+
+inputs:
+  auditable:
+    description: "Set to 1 to embed SBOMs in release builds."
+    default: "0"
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Install Cargo shim"
+      shell: bash
+      env:
+        CARGO_AUDITABLE: ${{ inputs.auditable }}
+      # Export a validated mode and runner-owned paths without environment-file delimiters.
+      run: | # zizmor: ignore[github-env]
+        case "$CARGO_AUDITABLE" in
+          0|1) ;;
+          *) echo "auditable must be 0 or 1." >&2; exit 1 ;;
+        esac
+        shim_dir="$RUNNER_TEMP/uv-cargo-shim"
+        real_cargo="${REAL_CARGO:-$(command -v cargo)}"
+        mkdir -p "$shim_dir"
+        cp "$GITHUB_WORKSPACE/scripts/cargo.sh" "$shim_dir/cargo"
+        cp "$GITHUB_WORKSPACE/scripts/cargo.cmd" "$shim_dir/cargo.cmd"
+        chmod +x "$shim_dir/cargo"
+
+        if [[ "$shim_dir$real_cargo" == *$'\n'* || "$shim_dir$real_cargo" == *$'\r'* ]]; then
+          echo "Cargo shim paths must not contain newlines." >&2
+          exit 1
+        fi
+
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          shim_dir="$(cygpath -m "$shim_dir")"
+          real_cargo="$(cygpath -m "$real_cargo")"
+          echo "CARGO=$shim_dir/cargo.cmd" >> "$GITHUB_ENV"
+        else
+          echo "CARGO=$shim_dir/cargo" >> "$GITHUB_ENV"
+        fi
+        echo "REAL_CARGO=$real_cargo" >> "$GITHUB_ENV"
+        echo "CARGO_LOCKED=1" >> "$GITHUB_ENV"
+        echo "CARGO_AUDITABLE=$CARGO_AUDITABLE" >> "$GITHUB_ENV"
+        echo "$shim_dir" >> "$GITHUB_PATH"

@@ -26,9 +26,11 @@ cp -r /source /workspace
 # `.cargo/config.toml`, which enables build-std.
 cd /workspace/crates/uv-trampoline
 
-cargo +"$TOOLCHAIN" xwin build --locked --xwin-arch x86 --release --target i686-pc-windows-msvc
-cargo +"$TOOLCHAIN" xwin build --locked --release --target x86_64-pc-windows-msvc
-cargo +"$TOOLCHAIN" xwin build --locked --release --target aarch64-pc-windows-msvc
+export CARGO_LOCKED=1 CARGO_AUDITABLE=0
+
+/workspace/scripts/cargo.sh +"$TOOLCHAIN" xwin build --locked --xwin-arch x86 --release --target i686-pc-windows-msvc
+/workspace/scripts/cargo.sh +"$TOOLCHAIN" xwin build --locked --release --target x86_64-pc-windows-msvc
+/workspace/scripts/cargo.sh +"$TOOLCHAIN" xwin build --locked --release --target aarch64-pc-windows-msvc
 
 for arch in i686 x86_64 aarch64; do
     for variant in console gui; do

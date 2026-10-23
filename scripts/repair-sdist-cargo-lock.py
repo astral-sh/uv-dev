@@ -72,6 +72,7 @@ def fix_sdist_lockfile(sdist_path: str) -> None:
         print(f"Pruning Cargo.lock in {top_level_name}...")
         subprocess.run(
             ["cargo", "update", "--workspace"],
+            env={**os.environ, "CARGO_LOCKED": "0"},
             cwd=extracted_dir,
             check=True,
         )

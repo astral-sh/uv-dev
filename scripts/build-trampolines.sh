@@ -37,6 +37,6 @@ docker run --rm \
     bash /build-trampolines-in-docker.sh "$TOOLCHAIN"
 
 # Zero out non-deterministic PE fields (timestamps, debug GUIDs).
-cargo run --locked --quiet -p uv-trampoline-builder --bin normalize-pe-timestamps -- "$OUTPUT_DIR"/*.exe
+CARGO_LOCKED=1 CARGO_AUDITABLE=0 "$REPO_ROOT/scripts/cargo.sh" run --quiet -p uv-trampoline-builder --bin normalize-pe-timestamps -- "$OUTPUT_DIR"/*.exe
 
 echo "Done. Trampolines written to $OUTPUT_DIR"

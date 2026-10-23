@@ -83,6 +83,9 @@ jobs:
         run: |
           Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
 
+      # Dev Drive setup changes Cargo's location and `PATH`.
+      - uses: $/.github/actions/setup-cargo
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
@@ -145,6 +148,9 @@ jobs:
       - name: Copy Git Repo to Dev Drive
         run: |
           Copy-Item -Path "${{ github.workspace }}" -Destination "$Env:UV_WORKSPACE" -Recurse
+      # Dev Drive setup changes Cargo's location and `PATH`.
+      - uses: $/.github/actions/setup-cargo
+
       - name: "Install Rust toolchain"
         working-directory: ${{ env.UV_WORKSPACE }}
         run: |
@@ -164,16 +170,16 @@ jobs:
             ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
       - name: "Test committed binaries"
         working-directory: ${{ env.UV_WORKSPACE }}
-        run: cargo test --locked -p uv-trampoline-builder --target ${{ matrix.target-arch }}-pc-windows-msvc
+        run: cargo test -p uv-trampoline-builder --target ${{ matrix.target-arch }}-pc-windows-msvc
       # Build and copy the new binaries
       - name: "Build"
         working-directory: ${{ env.UV_WORKSPACE }}/crates/uv-trampoline
         run: |
-          cargo build --locked --target ${{ matrix.target-arch }}-pc-windows-msvc
+          cargo build --target ${{ matrix.target-arch }}-pc-windows-msvc
           cp target/${{ matrix.target-arch }}-pc-windows-msvc/debug/uv-trampoline-console.exe ../uv-trampoline-builder/trampolines/uv-trampoline-${{ matrix.target-arch }}-console.exe
           cp target/${{ matrix.target-arch }}-pc-windows-msvc/debug/uv-trampoline-gui.exe ../uv-trampoline-builder/trampolines/uv-trampoline-${{ matrix.target-arch }}-gui.exe
       - name: "Test new binaries"
         working-directory: ${{ env.UV_WORKSPACE }}
         run: |
           # We turn off the default "production" test feature since these are debug binaries
-          cargo test --locked -p uv-trampoline-builder --target ${{ matrix.target-arch }}-pc-windows-msvc --no-default-features
+          cargo test -p uv-trampoline-builder --target ${{ matrix.target-arch }}-pc-windows-msvc --no-default-features
