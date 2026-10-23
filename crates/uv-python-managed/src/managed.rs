@@ -7,13 +7,14 @@ use std::io::{self, Write};
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use fs_err as fs;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use thiserror::Error;
 use tokio::task::{JoinError, spawn_blocking};
-use tracing::{debug, warn};
+use tracing::{Instrument, Span, debug, warn};
 #[cfg(windows)]
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
@@ -517,8 +518,37 @@ impl ManagedPythonInstallation {
         PythonInstallationMinorVersionKey::ref_cast(&self.key)
     }
 
+    /// Complete installation files and return the lock for subsequent publication work.
+    ///
+    /// The owned task retains the lock through asynchronous filesystem operations even if its
+    /// caller is cancelled, and transfers it to the blocking worker for dylib patching.
+    pub async fn finalize(self, lock: Arc<LockedFile>) -> Result<(Self, Arc<LockedFile>), Error> {
+        let span = Span::current();
+        tokio::spawn(
+            async move {
+                debug!("Finalizing Python installation {}", self.key());
+                self.ensure_externally_managed().await?;
+                self.ensure_sysconfig_patched().await?;
+                self.ensure_canonical_executables().await?;
+                self.ensure_build_file().await?;
+
+                let span = Span::current();
+                spawn_blocking(move || {
+                    let _entered = span.enter();
+                    if let Err(error) = self.ensure_dylib_patched() {
+                        error.warn_user(&self);
+                    }
+                    Ok((self, lock))
+                })
+                .await?
+            }
+            .instrument(span),
+        )
+        .await?
+    }
+
     /// Ensure the environment contains the canonical Python executable names.
-    pub async fn ensure_canonical_executables(&self) -> Result<(), Error> {
+    async fn ensure_canonical_executables(&self) -> Result<(), Error> {
         let installation = self.clone();
         spawn_blocking(move || {
             let python = installation.executable(false);
@@ -567,7 +597,7 @@ impl ManagedPythonInstallation {
 
     /// Ensure the environment is marked as externally managed with the
     /// standard `EXTERNALLY-MANAGED` file.
-    pub async fn ensure_externally_managed(&self) -> Result<(), Error> {
+    async fn ensure_externally_managed(&self) -> Result<(), Error> {
         if self.key.os().is_emscripten() {
             // Emscripten's stdlib is a zip file so we can't put an
             // EXTERNALLY-MANAGED inside.
@@ -598,7 +628,7 @@ impl ManagedPythonInstallation {
     }
 
     /// Ensure that the `sysconfig` data is patched to match the installation path.
-    pub async fn ensure_sysconfig_patched(&self) -> Result<(), Error> {
+    async fn ensure_sysconfig_patched(&self) -> Result<(), Error> {
         if cfg!(unix) && !self.key.os().is_windows() {
             if self.key.os().is_emscripten() {
                 // Emscripten's stdlib is a zip file so we can't update the
@@ -643,7 +673,7 @@ impl ManagedPythonInstallation {
     }
 
     /// Ensure the build version is written to a BUILD file in the installation directory.
-    pub async fn ensure_build_file(&self) -> Result<(), Error> {
+    async fn ensure_build_file(&self) -> Result<(), Error> {
         if let Some(ref build) = self.build {
             let build_file = self.path.join("BUILD");
             fs::tokio::write(&build_file, build.as_ref()).await?;
