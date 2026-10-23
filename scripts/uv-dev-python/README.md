@@ -19,6 +19,27 @@ The first invocation compiles the extension with the repository's Rust toolchain
 profile. Changes to Rust sources invalidate uv's build cache. Run commands through this project to
 use the bindings from the current checkout.
 
+The package also exposes `Version`, `VersionSpecifiers`, `Requirement`, and `normalize_package_name`
+from uv's packaging crates. For example:
+
+```python
+from uv_dev import Requirement, Version, VersionSpecifiers
+
+assert Version("3.15.0rc2") < Version("3.15.0rc10")
+assert Version("1.5") in VersionSpecifiers(">=1,<2")
+assert Requirement("My_Package[Fast_Mode]>=1").name == "my-package"
+```
+
+`VersionSpecifiers` applies Rust's version comparisons without the resolver's prerelease selection
+policy. These are small internal wrappers, not a replacement for the full `packaging` API.
+`Requirement` exposes normalized names, extras, specifiers, URLs, and markers.
+
+The version-constant maintenance script uses the same `Version` implementation as uv:
+
+```sh
+uv run --project scripts/uv-dev-python --locked python scripts/sync-python-version-constants.py
+```
+
 To run the binding tests:
 
 ```sh

@@ -16,6 +16,9 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.28.2" }
 serde_json = "1.0.145"
+uv-normalize = { path = "../../crates/uv-normalize" }
+uv-pep440 = { path = "../../crates/uv-pep440" }
+uv-pep508 = { path = "../../crates/uv-pep508", features = ["non-pep508-extensions"] }
 uv-python-types = { path = "../../crates/uv-python-types" }
 
 [lints.rust]

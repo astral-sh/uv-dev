@@ -51,7 +51,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Update Python version constants"
-        run: uv run --locked --python 3.12 --no-build --script scripts/sync-python-version-constants.py
+        run: uv run --project scripts/uv-dev-python --locked python scripts/sync-python-version-constants.py
 
       - name: "Get uv token"
         id: token

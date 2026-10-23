@@ -4,6 +4,10 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use uv_python_types::PythonDownloadKey;
 
+mod packaging;
+
+use packaging::{PyRequirement, PyVersion, PyVersionSpecifiers, normalize_package_name};
+
 /// Convert catalog entries to canonical installation keys, rejecting invalid platform,
 /// variant, and version fields.
 #[pyfunction]
@@ -26,5 +30,9 @@ fn python_download_keys(metadata: &str) -> PyResult<BTreeMap<String, String>> {
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(python_download_keys, module)?)?;
+    module.add_function(wrap_pyfunction!(normalize_package_name, module)?)?;
+    module.add_class::<PyVersion>()?;
+    module.add_class::<PyVersionSpecifiers>()?;
+    module.add_class::<PyRequirement>()?;
     Ok(())
 }

@@ -108,7 +108,7 @@ jobs:
       - run: cargo fmt --manifest-path scripts/uv-dev-python/Cargo.toml --check
       - run: uv run --project scripts/uv-dev-python --locked pytest scripts/uv-dev-python/tests
       - run: uv run --project scripts/uv-dev-python --locked cargo clippy --manifest-path scripts/uv-dev-python/Cargo.toml --locked -- -D warnings
-      - run: uv run --project scripts/uv-dev-python --locked ty check scripts/uv-dev-python/python scripts/uv-dev-python/tests
+      - run: uv run --project scripts/uv-dev-python --locked ty check --project scripts/uv-dev-python scripts/uv-dev-python/python scripts/uv-dev-python/tests scripts/sync-python-version-constants.py
 
   shellcheck:
     timeout-minutes: 10
