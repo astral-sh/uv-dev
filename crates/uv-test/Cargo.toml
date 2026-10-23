@@ -35,6 +35,7 @@ uv-pep508 = { workspace = true }
 uv-preview = { workspace = true, features = ["testing"] }
 uv-python-discovery = { workspace = true }
 uv-redacted = { workspace = true }
+uv-pypi-types = { workspace = true }
 uv-static = { workspace = true }
 uv-version = { workspace = true }
 
