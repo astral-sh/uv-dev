@@ -2217,6 +2217,8 @@ impl fmt::Debug for NodeId {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use uv_pep440::{Version, VersionSpecifier};
 
     use super::{INTERNER, Interner, NodeId};
@@ -2273,8 +2275,116 @@ mod tests {
         );
         let result = guard.and(left, right);
         let entries = guard.state.cache.len();
+        assert!(entries > 0);
         assert_eq!(guard.and(right, left).0, result.0);
         assert_eq!(guard.state.cache.len(), entries);
+
+        let result = guard.or(left, right.not());
+        let entries = guard.state.cache.len();
+        assert_eq!(guard.or(right.not(), left).0, result.0);
+        assert_eq!(guard.state.cache.len(), entries);
+    }
+
+    /// Exercise cache reuse across typed nodes, compound trees, and complement edges.
+    #[test]
+    fn commutative_cache_workload() -> Result<(), Box<dyn Error>> {
+        let interner = Interner::default();
+        let mut guard = interner.lock();
+        let mut operands = Vec::new();
+        for expression in [
+            "python_full_version >= '3.12'",
+            "sys_platform == 'linux'",
+            "sys_platform == 'win32'",
+            "os_name == 'posix'",
+            "extra == 'speedups'",
+            "'linux' in sys_platform",
+        ] {
+            operands.push(guard.expression(
+                MarkerExpression::from_str(expression)?.ok_or("missing marker expression")?,
+            ));
+        }
+        operands.push(guard.and(operands[0], operands[1]));
+        operands.push(guard.or(operands[1], operands[2]));
+        operands.extend(operands.clone().into_iter().map(NodeId::not));
+
+        let mut conjunction_entries = 0;
+        let mut disjunction_entries = 0;
+        let mut trivial_conjunctions = 0;
+        let mut trivial_disjunctions = 0;
+        let mut maximum_entries = 0;
+        for &left in &operands {
+            for &right in &operands {
+                // Clear only memoized operations; interned nodes remain valid and canonical.
+                guard.state.cache.clear();
+                let conjunction = guard.and(left, right);
+                let entries = guard.state.cache.len();
+                conjunction_entries += entries;
+                trivial_conjunctions += usize::from(entries == 0);
+                maximum_entries = maximum_entries.max(entries);
+                assert_eq!(guard.and(right, left).0, conjunction.0);
+                assert_eq!(guard.state.cache.len(), entries);
+
+                guard.state.cache.clear();
+                let disjunction = guard.or(left, right);
+                let entries = guard.state.cache.len();
+                disjunction_entries += entries;
+                trivial_disjunctions += usize::from(entries == 0);
+                maximum_entries = maximum_entries.max(entries);
+                assert_eq!(guard.or(right, left).0, disjunction.0);
+                assert_eq!(guard.state.cache.len(), entries);
+
+                assert_eq!(guard.or(left.not(), right.not()).not().0, conjunction.0);
+                assert_eq!(guard.and(left.not(), right.not()).not().0, disjunction.0);
+                if left == right.not() {
+                    assert_eq!(conjunction.0, NodeId::FALSE.0);
+                    assert_eq!(disjunction.0, NodeId::TRUE.0);
+                }
+            }
+        }
+        insta::assert_debug_snapshot!(
+            [
+                ("operands", operands.len()),
+                ("operand_pairs", operands.len().pow(2)),
+                ("cold_conjunction_entries", conjunction_entries),
+                ("cold_disjunction_entries", disjunction_entries),
+                ("trivial_conjunctions", trivial_conjunctions),
+                ("trivial_disjunctions", trivial_disjunctions),
+                ("maximum_cold_entries", maximum_entries),
+            ],
+            @r#"
+        [
+            (
+                "operands",
+                16,
+            ),
+            (
+                "operand_pairs",
+                256,
+            ),
+            (
+                "cold_conjunction_entries",
+                240,
+            ),
+            (
+                "cold_disjunction_entries",
+                240,
+            ),
+            (
+                "trivial_conjunctions",
+                32,
+            ),
+            (
+                "trivial_disjunctions",
+                32,
+            ),
+            (
+                "maximum_cold_entries",
+                2,
+            ),
+        ]
+        "#
+        );
+        Ok(())
     }
 
     #[test]
