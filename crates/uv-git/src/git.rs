@@ -77,6 +77,10 @@ enum RefspecStrategy {
 pub(crate) struct GitRemote {
     /// URL to a remote repository.
     url: SafeUrl,
+    /// URL passed to Git, including an explicitly specified default port.
+    transport_url: String,
+    /// Credential-free URL passed to Git for submodule resolution.
+    safe_transport_url: String,
 }
 
 /// A local clone of a remote repository's database. Multiple [`GitCheckout`]s
@@ -217,8 +221,12 @@ impl GitRepository {
 
 impl GitRemote {
     /// Creates an instance for a remote repository URL.
-    pub(crate) fn new(url: SafeUrl) -> Self {
-        Self { url }
+    pub(crate) fn new(url: SafeUrl, transport_url: String, safe_transport_url: String) -> Self {
+        Self {
+            url,
+            transport_url,
+            safe_transport_url,
+        }
     }
 
     /// Gets the remote repository URL.
@@ -251,12 +259,12 @@ impl GitRemote {
         let locked_reference = locked_rev.map(GitReference::Commit);
         let reference = locked_reference.as_ref().unwrap_or(reference);
         if let Some(mut db) = db {
-            fetch(&mut db.repo, &self.url, reference, disable_ssl, offline)
+            fetch(&mut db.repo, &self, reference, disable_ssl, offline)
                 .with_context(|| format!("failed to fetch into: {}", into.user_display()))?;
 
             if let Ok(rev) = db.repo.resolve(reference) {
                 if with_lfs {
-                    let lfs_ready = fetch_lfs(&mut db.repo, &self.url, &rev, disable_ssl)
+                    let lfs_ready = fetch_lfs(&mut db.repo, &self, &rev, disable_ssl)
                         .with_context(|| format!("failed to fetch LFS objects at {rev}"))?;
                     db = db.with_lfs_ready(Some(lfs_ready));
                 }
@@ -275,12 +283,12 @@ impl GitRemote {
 
         fs_err::create_dir_all(into)?;
         let mut repo = GitRepository::init(into)?;
-        fetch(&mut repo, &self.url, reference, disable_ssl, offline)
+        fetch(&mut repo, &self, reference, disable_ssl, offline)
             .with_context(|| format!("failed to clone into: {}", into.user_display()))?;
         let rev = repo.resolve(reference)?;
         let lfs_ready = with_lfs
             .then(|| {
-                fetch_lfs(&mut repo, &self.url, &rev, disable_ssl)
+                fetch_lfs(&mut repo, &self, &rev, disable_ssl)
                     .with_context(|| format!("failed to fetch LFS objects at {rev}"))
             })
             .transpose()?;
@@ -319,7 +327,7 @@ impl GitDatabase {
             .filter(GitCheckout::is_fresh)
         {
             Some(co) => co.with_lfs_ready(self.lfs_ready),
-            None => GitCheckout::clone_into(destination, self, rev, self.remote.url())?,
+            None => GitCheckout::clone_into(destination, self, rev, &self.remote)?,
         };
         Ok(checkout)
     }
@@ -379,7 +387,7 @@ impl GitCheckout {
         into: &Path,
         database: &GitDatabase,
         revision: GitOid,
-        original_remote_url: &SafeUrl,
+        original_remote: &GitRemote,
     ) -> Result<Self> {
         // Invalidate readiness before replacing the checkout, including an interrupted clone.
         match fs_err::remove_file(into.with_extension(CHECKOUT_READY_EXTENSION)) {
@@ -425,7 +433,7 @@ impl GitCheckout {
 
         let repo = GitRepository::open(into)?;
         let checkout = Self::new(revision, repo);
-        let lfs_ready = checkout.reset(database.lfs_ready, original_remote_url)?;
+        let lfs_ready = checkout.reset(database.lfs_ready, original_remote)?;
         Ok(checkout.with_lfs_ready(lfs_ready))
     }
 
@@ -471,7 +479,7 @@ impl GitCheckout {
     /// [`.ok` extension]: CHECKOUT_READY_EXTENSION
     /// `git reset --hard [<commit>]` can break relative submodule URLs, so we update submodules
     /// using the original remote URL.
-    fn reset(&self, with_lfs: Option<bool>, original_remote_url: &SafeUrl) -> Result<Option<bool>> {
+    fn reset(&self, with_lfs: Option<bool>, original_remote: &GitRemote) -> Result<Option<bool>> {
         // We want to skip smudge if lfs was disabled for the repository
         // as smudge filters can trigger on a reset even if lfs artifacts
         // were not originally "fetched".
@@ -498,7 +506,7 @@ impl GitCheckout {
         // Git commands run inside submodules, which would make nested relative URLs resolve against
         // the top-level remote instead of their immediate parent submodule.
         let mut submodule_update = GIT.as_ref().cloned()?;
-        for config in submodule_update_config(original_remote_url) {
+        for config in submodule_update_config(original_remote) {
             submodule_update.arg("-c").arg(config);
         }
 
@@ -509,14 +517,14 @@ impl GitCheckout {
             .env(EnvVars::GIT_LFS_SKIP_SMUDGE, lfs_skip_smudge)
             .cwd(&self.repo.path)
             .exec_with_output()
-            .map_err(|err| redact_git_error(err, original_remote_url))
+            .map_err(|err| redact_git_error(err, original_remote))
             .map(drop)?;
 
         // Recursively update nested submodules without overriding `remote.origin.url`, so each
         // nested relative URL resolves against its immediate parent submodule. The transient
         // credential rewrite is still safe to inherit because it only affects transport.
         let mut submodule_update = GIT.as_ref().cloned()?;
-        for config in submodule_auth_config(original_remote_url) {
+        for config in submodule_auth_config(original_remote) {
             submodule_update.arg("-c").arg(config);
         }
 
@@ -528,7 +536,7 @@ impl GitCheckout {
             .env(EnvVars::GIT_LFS_SKIP_SMUDGE, lfs_skip_smudge)
             .cwd(&self.repo.path)
             .exec_with_output()
-            .map_err(|err| redact_git_error(err, original_remote_url))
+            .map_err(|err| redact_git_error(err, original_remote))
             .map(drop)?;
 
         // Validate Git LFS objects (if needed) after the reset.
@@ -557,11 +565,13 @@ impl GitCheckout {
 /// remotes. Instead, callers pass these values via `git -c`, using a credential-stripped origin URL
 /// for resolution and a transient `url.*.insteadOf` rewrite when credentials are needed for
 /// transport.
-fn submodule_update_config(original_remote_url: &SafeUrl) -> Vec<String> {
-    let remote_url = original_remote_url.without_credentials();
-    let mut config = vec![format!("remote.origin.url={}", remote_url.as_str())];
+fn submodule_update_config(original_remote: &GitRemote) -> Vec<String> {
+    let mut config = vec![format!(
+        "remote.origin.url={}",
+        original_remote.safe_transport_url
+    )];
 
-    config.extend(submodule_auth_config(original_remote_url));
+    config.extend(submodule_auth_config(original_remote));
     config
 }
 
@@ -570,20 +580,15 @@ fn submodule_update_config(original_remote_url: &SafeUrl) -> Vec<String> {
 /// Unlike `remote.origin.url`, these rewrites are safe to inherit during recursive submodule
 /// updates: they rewrite transport URLs for authentication, but do not change the base URL that Git
 /// uses to resolve nested relative submodule URLs.
-fn submodule_auth_config(original_remote_url: &SafeUrl) -> Vec<String> {
-    let remote_url = original_remote_url.without_credentials();
+fn submodule_auth_config(original_remote: &GitRemote) -> Vec<String> {
     let mut config = Vec::new();
 
-    if remote_url.as_str() != original_remote_url.as_str() {
-        let safe_root = remote_url_root(remote_url.into_owned());
-        let credentialed_root = remote_url_root(original_remote_url.clone());
+    if original_remote.safe_transport_url != original_remote.transport_url {
+        let safe_root = remote_url_root(&original_remote.safe_transport_url);
+        let credentialed_root = remote_url_root(&original_remote.transport_url);
 
-        if safe_root.as_str() != credentialed_root.as_str() {
-            config.push(format!(
-                "url.{}.insteadOf={}",
-                credentialed_root.as_str(),
-                safe_root.as_str()
-            ));
+        if safe_root != credentialed_root {
+            config.push(format!("url.{credentialed_root}.insteadOf={safe_root}"));
         }
     }
 
@@ -595,11 +600,12 @@ fn submodule_auth_config(original_remote_url: &SafeUrl) -> Vec<String> {
 /// This is used as the rewrite prefix for `url.*.insteadOf`, so a credentialed parent URL can
 /// authenticate sibling submodule URLs without making the credentials part of any persisted
 /// submodule URL.
-fn remote_url_root(mut url: SafeUrl) -> SafeUrl {
-    url.set_path("/");
-    url.set_query(None);
-    url.set_fragment(None);
-    url
+fn remote_url_root(url: &str) -> String {
+    let authority_start = url.find("://").map_or(0, |index| index + 3);
+    let root_end = url[authority_start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |index| authority_start + index);
+    format!("{}/", &url[..root_end])
 }
 
 /// Attempts to fetch the given git `reference` for a Git repository.
@@ -612,7 +618,7 @@ fn remote_url_root(mut url: SafeUrl) -> SafeUrl {
 /// The `remote_url` argument is the git remote URL where we want to fetch from.
 fn fetch(
     repo: &mut GitRepository,
-    remote_url: &SafeUrl,
+    remote: &GitRemote,
     reference: &GitReference,
     disable_ssl: bool,
     offline: bool,
@@ -675,11 +681,11 @@ fn fetch(
         }
     }
 
-    debug!("Performing a Git fetch for: {remote_url}");
+    debug!("Performing a Git fetch for: {}", remote.url);
     let result = match refspec_strategy {
         RefspecStrategy::All => fetch_with_cli(
             repo,
-            remote_url,
+            remote,
             refspecs.as_slice(),
             tags,
             disable_ssl,
@@ -692,7 +698,7 @@ fn fetch(
                 .map_while(|refspec| {
                     let fetch_result = fetch_with_cli(
                         repo,
-                        remote_url,
+                        remote,
                         std::slice::from_ref(refspec),
                         tags,
                         disable_ssl,
@@ -744,7 +750,7 @@ fn fetch(
 /// Attempts to use `git` CLI installed on the system to fetch a repository.
 fn fetch_with_cli(
     repo: &mut GitRepository,
-    url: &SafeUrl,
+    remote: &GitRemote,
     refspecs: &[String],
     tags: bool,
     disable_ssl: bool,
@@ -770,7 +776,7 @@ fn fetch_with_cli(
     }
     cmd.arg("--force") // handle force pushes
         .arg("--update-head-ok") // see discussion in #2078
-        .arg(url.as_str())
+        .arg(&remote.transport_url)
         .args(refspecs)
         .cwd(&repo.path);
 
@@ -782,7 +788,7 @@ fn fetch_with_cli(
         if msg.contains("transport '") && msg.contains("' not allowed") && offline {
             return GitError::TransportNotAllowed.into();
         }
-        redact_git_error(err, url)
+        redact_git_error(err, remote)
     })?;
 
     Ok(())
@@ -814,7 +820,7 @@ pub static GIT_LFS: LazyLock<Result<ProcessBuilder>> = LazyLock::new(|| {
 /// Attempts to use `git-lfs` CLI to fetch required LFS objects for a given revision.
 fn fetch_lfs(
     repo: &mut GitRepository,
-    url: &SafeUrl,
+    remote: &GitRemote,
     revision: &GitOid,
     disable_ssl: bool,
 ) -> Result<bool> {
@@ -833,7 +839,7 @@ fn fetch_lfs(
     }
 
     cmd.arg("fetch")
-        .arg(url.as_str())
+        .arg(&remote.transport_url)
         .arg(revision.as_str())
         // We should not support requesting LFS artifacts with skip smudge being set.
         // While this may not be necessary, it's added to avoid any potential future issues.
@@ -841,7 +847,7 @@ fn fetch_lfs(
         .cwd(&repo.path);
 
     cmd.exec_with_output()
-        .map_err(|err| redact_git_error(err, url))?;
+        .map_err(|err| redact_git_error(err, remote))?;
 
     // We now validate the Git LFS objects explicitly (if supported). This is
     // needed to avoid issues with Git LFS not being installed or configured
@@ -856,9 +862,26 @@ fn fetch_lfs(
 }
 
 /// Redact a credentialed remote URL from a Git process error.
-fn redact_git_error(mut error: anyhow::Error, url: &SafeUrl) -> anyhow::Error {
-    let credentialed_root = remote_url_root(url.clone());
-    let redact = |message: &str| credentialed_root.redact_in(&url.redact_in(message));
+fn redact_git_error(mut error: anyhow::Error, remote: &GitRemote) -> anyhow::Error {
+    let mut credentialed_root = remote.url().clone();
+    credentialed_root.set_path("/");
+    credentialed_root.set_query(None);
+    credentialed_root.set_fragment(None);
+    let transport_root = remote_url_root(&remote.transport_url);
+    let safe_transport_root = remote_url_root(&remote.safe_transport_url);
+    let redact = |message: &str| {
+        let message = if remote.transport_url == remote.url().as_str() {
+            message.to_string()
+        } else {
+            message.replace(&remote.transport_url, &remote.safe_transport_url)
+        };
+        let message = if transport_root == credentialed_root.as_str() {
+            message
+        } else {
+            message.replace(&transport_root, &safe_transport_root)
+        };
+        credentialed_root.redact_in(&remote.url.redact_in(&message))
+    };
 
     if let Some(process_error) = error.downcast_mut::<ProcessError>() {
         process_error.desc = redact(&process_error.desc);
@@ -875,31 +898,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn submodule_update_config_strips_credentials_from_origin_override() {
-        let url = SafeUrl::parse("https://user:password@example.com/org/repo.git").unwrap();
+    fn submodule_update_config_strips_credentials_from_origin_override() -> Result<()> {
+        let url = SafeUrl::parse("https://user:password@example.com/org/repo.git")?;
+        let remote = GitRemote::new(
+            url.clone(),
+            url.as_str().to_string(),
+            "https://example.com/org/repo.git".to_string(),
+        );
 
         assert_eq!(
-            submodule_update_config(&url),
+            submodule_update_config(&remote),
             vec![
                 "remote.origin.url=https://example.com/org/repo.git".to_string(),
                 "url.https://user:password@example.com/.insteadOf=https://example.com/".to_string(),
             ]
         );
+
+        Ok(())
     }
 
     #[test]
-    fn submodule_update_config_preserves_git_ssh_user() {
-        let url = SafeUrl::parse("ssh://git@example.com/org/repo.git").unwrap();
+    fn submodule_update_config_preserves_git_ssh_user() -> Result<()> {
+        let url = SafeUrl::parse("ssh://git@example.com/org/repo.git")?;
+        let remote = GitRemote::new(
+            url.clone(),
+            url.as_str().to_string(),
+            url.as_str().to_string(),
+        );
 
         assert_eq!(
-            submodule_update_config(&url),
+            submodule_update_config(&remote),
             vec!["remote.origin.url=ssh://git@example.com/org/repo.git".to_string()]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn submodule_update_config_preserves_explicit_default_port() -> Result<()> {
+        let url = SafeUrl::parse("https://user:password@example.com/org/repo.git")?;
+        let remote = GitRemote::new(
+            url,
+            "https://user:password@example.com:443/org/repo.git".to_string(),
+            "https://example.com:443/org/repo.git".to_string(),
+        );
+
+        assert_eq!(
+            submodule_update_config(&remote),
+            vec![
+                "remote.origin.url=https://example.com:443/org/repo.git".to_string(),
+                "url.https://user:password@example.com:443/.insteadOf=https://example.com:443/"
+                    .to_string(),
+            ]
+        );
+
+        Ok(())
     }
 
     #[test]
     fn git_process_error_redacts_credentials() -> Result<()> {
         let url = SafeUrl::parse("https://git:secret-token@example.com/org/repo.git")?;
+        let remote = GitRemote::new(
+            url.clone(),
+            url.as_str().to_string(),
+            url.without_credentials().as_str().to_string(),
+        );
         let stderr = format!("fatal: Authentication failed for '{}'", url.as_str());
         let error = ProcessError::new_raw(
             &format!(
@@ -913,7 +976,7 @@ mod tests {
         )
         .into();
 
-        let error = redact_git_error(error, &url);
+        let error = redact_git_error(error, &remote);
         let process_error = error
             .downcast_ref::<ProcessError>()
             .context("expected Git process error")?;
@@ -941,12 +1004,17 @@ mod tests {
     #[test]
     fn git_submodule_process_error_redacts_credentials() -> Result<()> {
         let url = SafeUrl::parse("https://git:secret-token@example.com/org/repo.git")?;
+        let remote = GitRemote::new(
+            url.clone(),
+            url.as_str().to_string(),
+            url.without_credentials().as_str().to_string(),
+        );
 
         for args in ["--init", "--recursive --init"] {
             let error = anyhow!(
                 "process didn't exit successfully: `git -c 'url.https://git:secret-token@example.com/.insteadOf=https://example.com/' submodule update {args}` (exit status: 128)"
             );
-            let redacted = redact_git_error(error, &url).to_string();
+            let redacted = redact_git_error(error, &remote).to_string();
 
             assert!(!redacted.contains("secret-token"));
             assert_eq!(
@@ -956,6 +1024,29 @@ mod tests {
                 )
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn git_process_error_redacts_credentials_with_explicit_default_port() -> Result<()> {
+        let url = SafeUrl::parse("https://git:secret-token@example.com/org/repo.git")?;
+        let remote = GitRemote::new(
+            url,
+            "https://git:secret-token@example.com:443/org/repo.git".to_string(),
+            "https://example.com:443/org/repo.git".to_string(),
+        );
+        let error = anyhow!(
+            "failed to fetch https://git:secret-token@example.com:443/org/repo.git via url.https://git:secret-token@example.com:443/.insteadOf"
+        );
+
+        let redacted = redact_git_error(error, &remote).to_string();
+
+        assert!(!redacted.contains("secret-token"));
+        assert_eq!(
+            redacted,
+            "failed to fetch https://example.com:443/org/repo.git via url.https://example.com:443/.insteadOf"
+        );
 
         Ok(())
     }

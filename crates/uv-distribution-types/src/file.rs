@@ -209,6 +209,12 @@ impl From<&SafeUrl> for UrlString {
     }
 }
 
+impl From<String> for UrlString {
+    fn from(value: String) -> Self {
+        Self(value.into())
+    }
+}
+
 impl Display for UrlString {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)

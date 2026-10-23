@@ -342,13 +342,7 @@ impl TryFrom<SafeUrl> for ParsedGitDirectoryUrl {
     fn try_from(url_in: SafeUrl) -> Result<Self, Self::Error> {
         let subdirectory = get_subdirectory(&url_in).map(PathBuf::into_boxed_path);
 
-        let url = url_in
-            .as_str()
-            .strip_prefix("git+")
-            .unwrap_or(url_in.as_str());
-        let url =
-            SafeUrl::parse(url).map_err(|err| ParsedUrlError::UrlParse(url.to_string(), err))?;
-        let url = GitUrl::try_from(url)?;
+        let url = GitUrl::try_from(url_in)?;
         Ok(Self { url, subdirectory })
     }
 }
@@ -389,13 +383,7 @@ impl TryFrom<SafeUrl> for ParsedGitPathUrl {
         let ext = DistExtension::from_path(&install_path)
             .map_err(|err| ParsedUrlError::MissingExtensionPath(install_path.clone(), err))?;
 
-        let url = url_in
-            .as_str()
-            .strip_prefix("git+")
-            .unwrap_or(url_in.as_str());
-        let url =
-            SafeUrl::parse(url).map_err(|err| ParsedUrlError::UrlParse(url.to_string(), err))?;
-        let url = GitUrl::try_from(url)?;
+        let url = GitUrl::try_from(url_in)?;
         Ok(Self {
             url,
             install_path,
@@ -865,6 +853,16 @@ mod tests {
             let actual = SafeUrl::from(&DirectUrl::from(&parsed_url));
             assert_eq!(expected, actual);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn git_url_preserves_explicit_default_port() -> Result<()> {
+        let url = SafeUrl::parse("git+https://example.com:443/pkg.git")?;
+        let parsed = ParsedGitDirectoryUrl::try_from(url)?;
+
+        assert_eq!(parsed.url.explicit_default_port(), Some(443));
 
         Ok(())
     }
