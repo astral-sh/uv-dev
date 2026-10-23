@@ -8,7 +8,7 @@ use rustc_hash::FxHashSet;
 
 use uv_cache::Cache;
 use uv_configuration::{BuildKind, BuildOptions, BuildOutput, NoSources};
-use uv_distribution_filename::DistFilename;
+use uv_distribution_filename::{BuiltFilename, DistFilename, WheelFilename};
 use uv_distribution_types::{
     CachedDist, ConfigSettings, DependencyMetadata, DistributionId, ExtraBuildRequires,
     ExtraBuildVariables, IndexCapabilities, IndexLocations, InstalledDist, IsBuildBackendError,
@@ -229,13 +229,11 @@ pub trait SourceBuildTrait {
     ///
     /// For PEP 517 builds, this calls `build_wheel`.
     ///
-    /// Returns the filename of the built wheel inside the given `wheel_dir`. The filename is a
-    /// string and not a `WheelFilename` because the on disk filename might not be normalized in the
-    /// same way as uv would.
+    /// Returns the raw on-disk filename and parsed identity of the built wheel inside `wheel_dir`.
     fn wheel<'a>(
         &'a self,
         wheel_dir: &'a Path,
-    ) -> impl Future<Output = Result<String, AnyErrorBuild>> + 'a;
+    ) -> impl Future<Output = Result<BuiltFilename<WheelFilename>, AnyErrorBuild>> + 'a;
 }
 
 /// Provides access to installed distributions during resolution.
