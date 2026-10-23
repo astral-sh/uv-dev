@@ -39,7 +39,6 @@ use walkdir::WalkDir;
 use uv_cache::{Cache, CacheBucket};
 use uv_fs::Simplified;
 use uv_python_discovery::PythonInstallation;
-use uv_python_managed::ManagedPythonInstallations;
 use uv_python_types::{EnvironmentPreference, PythonPreference, PythonRequest, PythonVersion};
 use uv_static::EnvVars;
 
@@ -141,8 +140,8 @@ pub struct TestContext {
     pub venv: ChildPath,
     pub workspace_root: PathBuf,
 
-    /// The Python version used for the virtual environment, if any.
-    python_version: Option<PythonVersion>,
+    /// The requested version and selected executable used for the virtual environment, if any.
+    venv_python: Option<(PythonVersion, PathBuf)>,
 
     /// All the Python versions available during this test context.
     pub python_versions: Vec<(PythonVersion, PathBuf)>,
@@ -1024,12 +1023,13 @@ impl TestContext {
                 )
                 .expect("Failed to find test Python versions"),
             )
+            .map(|(requested, (actual, executable))| (requested, actual, executable))
             .collect();
 
         // Construct directories for each Python executable on Unix where the executable names
         // need to be normalized
         if cfg!(unix) {
-            for (version, executable) in &python_versions {
+            for (version, _, executable) in &python_versions {
                 let parent = python_dir.child(version.to_string());
                 parent.create_dir_all().unwrap();
                 parent.child("python3").symlink_to_file(executable).unwrap();
@@ -1049,7 +1049,7 @@ impl TestContext {
             filters.push((r"exit code: ".to_string(), "exit status: ".to_string()));
         }
 
-        for (version, executable) in &python_versions {
+        for (version, actual_version, executable) in &python_versions {
             // Add filtering for the interpreter path
             filters.extend(
                 Self::path_patterns(executable)
@@ -1071,11 +1071,8 @@ impl TestContext {
 
             // Add Python patch version filtering unless explicitly requested to ensure
             // snapshots are patch version agnostic when it is not a part of the test.
-            if version.patch().is_none() {
-                filters.push((
-                    format!(r"({})\.\d+", regex::escape(version.to_string().as_str())),
-                    "$1.[X]".to_string(),
-                ));
+            if let Some(filter) = python_patch_version_filter(version, actual_version) {
+                filters.push(filter);
             }
         }
 
@@ -1212,8 +1209,13 @@ impl TestContext {
             bin_dir,
             venv,
             workspace_root,
-            python_version,
-            python_versions,
+            venv_python: python_versions
+                .first()
+                .map(|(requested, _, executable)| (requested.clone(), executable.clone())),
+            python_versions: python_versions
+                .into_iter()
+                .map(|(requested, _, executable)| (requested, executable))
+                .collect(),
             uv_bin,
             filters,
             extra_env: vec![(
@@ -2007,16 +2009,11 @@ impl TestContext {
 
     /// Returns the site-packages folder inside the venv.
     pub fn site_packages(&self) -> PathBuf {
-        site_packages_path(
-            &self.venv,
-            &format!(
-                "{}{}",
-                self.python_kind(),
-                self.python_version.as_ref().expect(
-                    "A Python version must be provided to retrieve the test site packages path"
-                )
-            ),
-        )
+        let (version, _) = self
+            .venv_python
+            .as_ref()
+            .expect("A Python version must be provided to retrieve the test site packages path");
+        site_packages_path(&self.venv, &format!("{}{version}", self.python_kind()))
     }
 
     /// Reset the virtual environment in the test context.
@@ -2026,12 +2023,11 @@ impl TestContext {
 
     /// Create a new virtual environment named `.venv` in the test context.
     fn create_venv(&self) {
-        let executable = get_python(
-            self.python_version
-                .as_ref()
-                .expect("A Python version must be provided to create a test virtual environment"),
-        );
-        create_venv_from_executable(&self.venv, &self.cache_dir, &executable, &self.uv_bin);
+        let (_, executable) = self
+            .venv_python
+            .as_ref()
+            .expect("A Python version must be provided to create a test virtual environment");
+        create_venv_from_executable(&self.venv, &self.cache_dir, executable, &self.uv_bin);
     }
 
     /// Copies the files from the ecosystem project given into this text
@@ -2231,23 +2227,6 @@ pub fn venv_bin_path(venv: impl AsRef<Path>) -> PathBuf {
     }
 }
 
-/// Get the path to the python interpreter for a specific python version.
-fn get_python(version: &PythonVersion) -> PathBuf {
-    ManagedPythonInstallations::from_settings(None)
-        .map(|installed_pythons| {
-            installed_pythons
-                .find_version(version)
-                .expect("Tests are run on a supported platform")
-                .next()
-                .as_ref()
-                .map(|python| python.executable(false))
-        })
-        // We'll search for the request Python on the PATH if not found in the python versions
-        // We hack this into a `PathBuf` to satisfy the compiler but it's just a string
-        .unwrap_or_default()
-        .unwrap_or(PathBuf::from(version.to_string()))
-}
-
 /// Create a virtual environment at the given path.
 fn create_venv_from_executable<P: AsRef<Path>>(
     path: P,
@@ -2284,18 +2263,18 @@ pub fn python_path_with_versions(
     Ok(env::join_paths(
         python_installations_for_versions(temp_dir, python_versions, download_list.as_ref())?
             .into_iter()
-            .map(|path| path.parent().unwrap().to_path_buf()),
+            .map(|(_, path)| path.parent().unwrap().to_path_buf()),
     )?)
 }
 
-/// Returns a list of Python executables for the given versions.
+/// Returns the actual Python versions and executables for the requested versions.
 ///
 /// Generally this should be used with `UV_PYTHON_SEARCH_PATH`.
 fn python_installations_for_versions(
     temp_dir: &ChildPath,
     python_versions: &[&str],
     download_list: Option<&ManagedPythonDownloadList>,
-) -> anyhow::Result<Vec<PathBuf>> {
+) -> anyhow::Result<Vec<(PythonVersion, PathBuf)>> {
     let cache = Cache::from_path(temp_dir.child("cache").to_path_buf())
         .init_no_wait()?
         .expect("No cache contention when setting up Python in tests");
@@ -2314,7 +2293,11 @@ fn python_installations_for_versions(
                 download_list,
                 &cache,
             ) {
-                python.into_interpreter().sys_executable().to_owned()
+                let interpreter = python.into_interpreter();
+                (
+                    PythonVersion::from(interpreter.python_full_version().clone()),
+                    interpreter.sys_executable().to_owned(),
+                )
             } else {
                 panic!("Could not find Python {python_version} for test\nTry `cargo run python install` first, or refer to CONTRIBUTING.md");
             }
@@ -2327,6 +2310,21 @@ fn python_installations_for_versions(
     );
 
     Ok(selected_pythons)
+}
+
+/// Mask the selected interpreter's patch version unless it was explicitly requested.
+fn python_patch_version_filter(
+    requested: &PythonVersion,
+    actual: &PythonVersion,
+) -> Option<(String, String)> {
+    if requested.patch().is_some() {
+        return None;
+    }
+    let patch = actual.patch()?;
+    Some((
+        format!(r"({}\.{})\.{patch}(\D|$)", actual.major(), actual.minor()),
+        "$1.[X]$2".to_string(),
+    ))
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -2902,6 +2900,57 @@ mod copy_dir_ignore_tests {
 
         destination.child("module.py").assert("VALUE = 1\n");
         destination.child("existing.txt").assert("existing file");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod python_patch_version_filter_tests {
+    use std::slice;
+    use std::str::FromStr;
+
+    use super::{PythonVersion, apply_filters, python_patch_version_filter};
+
+    #[test]
+    fn masks_only_the_selected_patch() -> anyhow::Result<()> {
+        let requested = PythonVersion::from_str("3.12").map_err(anyhow::Error::msg)?;
+        let actual = PythonVersion::from_str("3.12.13").map_err(anyhow::Error::msg)?;
+        let filter = python_patch_version_filter(&requested, &actual)
+            .expect("a minor-version request should filter its selected patch");
+
+        for (input, expected) in [
+            ("3.12.13", "3.12.[X]"),
+            ("3.12.13,3.12.13", "3.12.[X],3.12.[X]"),
+            ("3.12.12 3.12.130 3.12.1", "3.12.12 3.12.130 3.12.1"),
+            ("cpython-3.12.13-linux", "cpython-3.12.[X]-linux"),
+            ("python3.12.13", "python3.12.[X]"),
+        ] {
+            assert_eq!(
+                apply_filters(input.to_string(), slice::from_ref(&filter)),
+                expected
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_prerelease_suffixes() -> anyhow::Result<()> {
+        let requested = PythonVersion::from_str("3.15").map_err(anyhow::Error::msg)?;
+        let actual = PythonVersion::from_str("3.15.0rc2").map_err(anyhow::Error::msg)?;
+        let filter = python_patch_version_filter(&requested, &actual)
+            .expect("a minor-version request should filter its selected patch");
+
+        assert_eq!(
+            apply_filters("3.15.0rc2 3.15.1rc2".to_string(), [filter]),
+            "3.15.[X]rc2 3.15.1rc2"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_explicit_patch_requests() -> anyhow::Result<()> {
+        let requested = PythonVersion::from_str("3.12.13").map_err(anyhow::Error::msg)?;
+        assert!(python_patch_version_filter(&requested, &requested).is_none());
         Ok(())
     }
 }
