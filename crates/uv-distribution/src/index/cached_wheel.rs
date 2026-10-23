@@ -82,23 +82,7 @@ impl CachedWheel {
         let build_info = pointer.to_build_info();
         let archive = pointer.into_archive();
 
-        // Ignore stale pointers.
-        if !archive.exists(cache) {
-            return None;
-        }
-
-        let Archive { id, hashes, .. } = archive;
-        let entry = cache.entry(CacheBucket::Archive, "", id);
-
-        // Convert to a cached wheel.
-        Some(Self {
-            filename: archive.filename,
-            entry,
-            hashes,
-            cache_info,
-            build_info,
-            size: archive.size,
-        })
+        Self::from_archive(archive, cache_info, build_info, cache)
     }
 
     /// Read a cached wheel from a `.rev` pointer
@@ -111,6 +95,15 @@ impl CachedWheel {
         let build_info = pointer.to_build_info();
         let archive = pointer.into_archive();
 
+        Self::from_archive(archive, cache_info, build_info, cache)
+    }
+
+    fn from_archive(
+        archive: Archive,
+        cache_info: CacheInfo,
+        build_info: Option<BuildInfo>,
+        cache: &Cache,
+    ) -> Option<Self> {
         // Ignore stale pointers.
         if !archive.exists(cache) {
             return None;
