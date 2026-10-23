@@ -320,7 +320,7 @@ impl PythonInstallation {
         reporter: Option<&dyn Reporter>,
         mirrors: PythonDownloadMirrors<'_>,
     ) -> Result<Self, Error> {
-        let installations = ManagedPythonInstallations::from_settings(None)?.init()?;
+        let installations = ManagedPythonInstallations::from_settings(None).init()?;
         let installations_dir = installations.root();
         let scratch_dir = installations.scratch();
         let _lock = installations.lock().await?;
@@ -417,8 +417,7 @@ impl PythonInstallation {
             });
         }
 
-        ManagedPythonInstallations::from_settings(None)
-            .is_ok_and(|installations| installations.contains(&self.interpreter))
+        ManagedPythonInstallations::from_settings(None).contains(&self.interpreter)
     }
 
     /// Whether this is a CPython installation.
