@@ -1,7 +1,3 @@
-#[cfg(feature = "test-universal")]
-#[cfg(all(feature = "test-universal", feature = "test-git"))]
-use std::process::Command;
-
 use anyhow::Result;
 #[cfg(feature = "test-universal")]
 use anyhow::anyhow;
@@ -24123,19 +24119,22 @@ fn lock_metadata_free_shared_git_direct_source() -> Result<()> {
         basic-package = { path = "archives/basic_package-0.1.0-py3-none-any.whl" }
         "#})?;
 
-    Command::new("git")
+    context
+        .git_command()
         .arg("init")
         .arg(repository.path())
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("add")
         .arg(".")
         .assert()
         .success();
-    Command::new("git")
+    context
+        .git_command()
         .arg("-C")
         .arg(repository.path())
         .arg("-c")
