@@ -513,21 +513,9 @@ impl ValidatedLock {
         }
     }
 
-    /// Return whether the existing lock satisfies the current inputs.
-    #[must_use]
-    pub fn is_satisfied(&self) -> bool {
-        matches!(self, Self::Satisfies(_))
-    }
-
-    /// Return whether the existing lock can provide version preferences.
-    #[must_use]
-    pub fn is_usable(&self) -> bool {
-        !matches!(self, Self::Unusable(_))
-    }
-
     /// Convert the [`ValidatedLock`] into a [`Lock`].
     #[must_use]
-    pub fn into_lock(self) -> Lock {
+    pub(crate) fn into_lock(self) -> Lock {
         match self {
             Self::Unusable(lock) => lock,
             Self::Satisfies(lock) => lock,
