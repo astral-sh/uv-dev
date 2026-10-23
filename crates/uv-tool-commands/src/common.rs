@@ -46,7 +46,7 @@ use uv_python_types::{
     PythonVariant, VersionRequest,
 };
 use uv_requirements::RequirementsSpecification;
-use uv_resolver::{FlatIndex, OptionsBuilder, Preference, ResolverOutput};
+use uv_resolver::{FlatIndex, Options, Preference, ResolverOutput};
 use uv_settings::{PythonInstallMirrors, ToolOptions};
 use uv_shell::Shell;
 use uv_tool::{InstalledTools, Tool, ToolEntrypoint, entrypoint_paths};
@@ -467,14 +467,15 @@ impl ToolLock {
             }
         };
 
-        let options = OptionsBuilder::new()
-            .resolution_mode(*resolution)
-            .prerelease(prerelease.clone())
-            .fork_strategy(*fork_strategy)
-            .exclude_newer(exclude_newer.clone())
-            .index_strategy(*index_strategy)
-            .build_options(build_options.clone())
-            .build();
+        let options = Options {
+            resolution_mode: *resolution,
+            prerelease: prerelease.clone(),
+            fork_strategy: *fork_strategy,
+            exclude_newer: exclude_newer.clone(),
+            index_strategy: *index_strategy,
+            build_options: build_options.clone(),
+            ..Options::default()
+        };
         let hasher = HashStrategy::collect(HashCollection::Url);
         let build_hasher = HashStrategy::from_constraints(
             build_constraints,

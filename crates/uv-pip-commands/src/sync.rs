@@ -35,7 +35,7 @@ use uv_python_types::{
 };
 use uv_requirements::{GroupsSpecification, RequirementsSource, RequirementsSpecification};
 use uv_resolver::{
-    DependencyMode, ExcludeNewer, FlatIndex, OptionsBuilder, Prerelease, PythonRequirement,
+    DependencyMode, ExcludeNewer, FlatIndex, Options, Prerelease, PythonRequirement,
     ResolutionMode, ResolverEnvironment,
 };
 use uv_settings::PythonInstallMirrors;
@@ -435,15 +435,16 @@ pub async fn pip_sync(
         // When resolving, don't take any external preferences into account.
         let preferences = Vec::default();
 
-        let options = OptionsBuilder::new()
-            .resolution_mode(resolution_mode)
-            .prerelease(prerelease)
-            .dependency_mode(dependency_mode)
-            .exclude_newer(exclude_newer.clone())
-            .index_strategy(index_strategy)
-            .torch_backend(torch_backend)
-            .build_options(build_options.clone())
-            .build();
+        let options = Options {
+            resolution_mode,
+            prerelease,
+            dependency_mode,
+            exclude_newer: exclude_newer.clone(),
+            index_strategy,
+            torch_backend,
+            build_options: build_options.clone(),
+            ..Options::default()
+        };
 
         let (resolution, hasher) = match uv_resolve_operations::resolve(
             requirements,
