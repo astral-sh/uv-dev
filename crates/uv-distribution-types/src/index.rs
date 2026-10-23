@@ -407,7 +407,6 @@ pub enum IndexFormat {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum IndexHashAlgorithm {
-    Md5,
     Sha256,
     Sha384,
     Sha512,
@@ -417,7 +416,6 @@ pub enum IndexHashAlgorithm {
 impl From<IndexHashAlgorithm> for HashAlgorithm {
     fn from(value: IndexHashAlgorithm) -> Self {
         match value {
-            IndexHashAlgorithm::Md5 => Self::Md5,
             IndexHashAlgorithm::Sha256 => Self::Sha256,
             IndexHashAlgorithm::Sha384 => Self::Sha384,
             IndexHashAlgorithm::Sha512 => Self::Sha512,
