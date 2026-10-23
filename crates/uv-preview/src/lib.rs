@@ -263,6 +263,10 @@ pub enum PreviewFeature {
     /// environment. These conflicts can cause imports to depend on installation order, even when
     /// the packages have different distribution names.
     DetectModuleConflicts,
+    /// The `uv download` command downloads all distribution archives recorded in the project's
+    /// existing lockfile for offline installation; enabling this feature silences the preview
+    /// warning.
+    DownloadCommand,
     /// The `uv format` command formats Python code with Ruff, downloading the formatter when
     /// needed. It can also check formatting with `--check` or show proposed changes with `--diff`;
     /// enabling this feature silences the preview warning.

@@ -77,7 +77,7 @@ impl<'a, Context: BuildContext> ExtrasResolver<'a, Context> {
     ) -> Result<Requirement, Error> {
         // Determine whether the requirement represents a local distribution and convert to a
         // buildable distribution.
-        let Some(dist) = required_dist(&requirement)? else {
+        let Some(dist) = required_dist(&requirement, database.cache())? else {
             return Ok(requirement);
         };
 

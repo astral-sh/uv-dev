@@ -6238,6 +6238,7 @@ dependencies = [
  "url",
  "uv-auth",
  "uv-cache",
+ "uv-cache-info",
  "uv-cache-key",
  "uv-configuration",
  "uv-distribution-filename",

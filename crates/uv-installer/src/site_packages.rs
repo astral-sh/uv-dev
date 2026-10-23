@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use fs_err as fs;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
+use uv_cache::Cache;
 use uv_configuration::{
     DependencyMode, DependencyModifierScope, DependencyModifiers, ExcludeDependency, Excludes,
     Override, Overrides,
@@ -334,6 +335,7 @@ impl SitePackages {
     /// dependencies when requested by [`DependencyMode`].
     pub fn satisfies_spec(
         &self,
+        cache: &Cache,
         requirements: &[UnresolvedRequirementSpecification],
         constraints: &[NameRequirementSpecification],
         overrides: &[UnresolvedRequirementSpecification],
@@ -446,6 +448,7 @@ impl SitePackages {
         let modifiers = DependencyModifiers::new(overrides, excludes);
 
         match self.satisfies_requirements(
+            cache,
             requirements.iter().map(Cow::as_ref),
             constraints.iter().map(|constraint| &constraint.requirement),
             &modifiers,
@@ -477,6 +480,7 @@ impl SitePackages {
     /// If `build_settings` is `None`, accept installed distributions regardless of their build settings.
     pub fn satisfies_requirements<'a, 'b>(
         &self,
+        cache: &Cache,
         requirements: impl Iterator<Item = &'a Requirement>,
         constraints: impl Iterator<Item = &'b Requirement>,
         modifiers: &DependencyModifiers,
@@ -524,6 +528,7 @@ impl SitePackages {
                 [distribution] => {
                     // Requirements were filtered with the parent extras before entering the stack.
                     match RequirementSatisfaction::check(
+                        cache,
                         name,
                         distribution,
                         &requirement.source,
@@ -544,6 +549,7 @@ impl SitePackages {
                     for constraint in constraints.get(name).into_iter().flatten() {
                         if constraint.evaluate_markers(Some(markers), &[]) {
                             match RequirementSatisfaction::check(
+                                cache,
                                 name,
                                 distribution,
                                 &constraint.source,
