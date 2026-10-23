@@ -264,6 +264,69 @@ fn python_install_pkgconfig() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// An otherwise intact managed installation can lose its interpreter executable.
+#[cfg(unix)]
+#[test]
+fn python_install_missing_executable() -> anyhow::Result<()> {
+    let context = uv_test::test_context_with_versions!(&[])
+        .with_filtered_python_keys()
+        .with_managed_python_dirs();
+
+    context.python_install().arg("3.12.15").assert().success();
+
+    let installation = context
+        .temp_dir
+        .child("managed")
+        .child(format!("cpython-3.12.15-{}", platform_key_from_env()?));
+    let executable = installation.child("bin/python3.12");
+    fs_err::remove_file(executable.path())?;
+
+    // This should repair the installation, but matching its directory and version key is enough
+    // to report success even though the interpreter is missing (astral-sh/uv#22649).
+    uv_snapshot!(context.filters(), context.python_install().arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.12.15 in [TIME]
+     + cpython-3.12.15-[PLATFORM] (python3.12)
+    ");
+    assert_path_missing(&executable);
+
+    // With downloads enabled, `uv run` still fails instead of repairing the installation.
+    uv_snapshot!(context.filters(), context.run()
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--no-project")
+        .arg("--managed-python")
+        .arg("--python").arg("3.12")
+        .arg("python").arg("-c").arg("print('ok')"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Python interpreter not found at `[TEMP_DIR]/managed/cpython-3.12.15-[PLATFORM]/bin/python3.12`
+    ");
+    assert_path_missing(&executable);
+
+    // An explicit reinstall restores the executable and makes the same run command work.
+    uv_snapshot!(context.filters(), context.python_install().arg("--reinstall").arg("3.12"), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Installed Python 3.12.15 in [TIME]
+     ~ cpython-3.12.15-[PLATFORM] (python3.12)
+    ");
+    executable.assert(predicate::path::exists());
+
+    uv_snapshot!(context.filters(), context.run()
+        .env_remove(EnvVars::VIRTUAL_ENV)
+        .arg("--no-project")
+        .arg("--managed-python")
+        .arg("--python").arg("3.12")
+        .arg("python").arg("-c").arg("print('ok')"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    ok
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn python_reinstall() {
     let context = uv_test::test_context_with_versions!(&[])
