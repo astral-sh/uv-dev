@@ -200,10 +200,11 @@ impl<'a> FlatIndexClient<'a> {
         url: &SafeUrl,
         flat_index: &IndexUrl,
     ) -> Result<FlatIndexEntries, Error> {
+        // URL userinfo does not partition this cache; the complete path and query remain part of the key.
         let cache_entry = self.cache.entry(
             CacheBucket::FlatIndex,
             "html",
-            format!("{}.msgpack", cache_digest(url)),
+            format!("{}.msgpack", cache_digest(&url.without_credentials())),
         );
         let cache_control = match self.connectivity {
             Connectivity::Online => CacheControl::from(

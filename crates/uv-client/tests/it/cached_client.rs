@@ -10,7 +10,7 @@ use anyhow::{Result, anyhow};
 use reqwest::Response;
 use tokio::runtime::Builder;
 use tokio::sync::Notify;
-use wiremock::matchers::{any, header, method, path, query_param};
+use wiremock::matchers::{any, basic_auth, header, method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_cache::{Cache, CacheEntry};
@@ -105,6 +105,137 @@ fn dispatch_and_http_errors_share_retry_budget() -> Result<()> {
             server.verify().await;
             Ok(())
         })
+}
+
+/// Rotating embedded credentials can reuse a fresh listing online and a cached listing offline.
+#[tokio::test]
+async fn flat_indexes_with_rotated_credentials_reuse_cache() -> Result<()> {
+    let server = MockServer::start().await;
+    let cache = Cache::temp()?.init().await?;
+    let client = CachedClient::new(BaseClientBuilder::default().build()?);
+    let flat_index = FlatIndexClient::new(&client, Connectivity::Online, &cache);
+    let original = IndexUrl::parse(
+        &format!("http://user:first@{}/flat?sig=value", server.address()),
+        None,
+    )?;
+
+    Mock::given(method("GET"))
+        .and(path("/flat"))
+        .and(query_param("sig", "value"))
+        .and(basic_auth("user", "first"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_string(
+                    r#"<a href="example-1.0.0-py3-none-any.whl">example-1.0.0-py3-none-any.whl</a>"#,
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    flat_index.fetch_all(std::iter::once(&original)).await?;
+    let changed_password = IndexUrl::parse(
+        &format!("http://user:second@{}/flat?sig=value", server.address()),
+        None,
+    )?;
+    let (entries, offline) = flat_index
+        .fetch_all(std::iter::once(&changed_password))
+        .await?
+        .into_parts();
+    assert!(!offline);
+    let filenames = entries
+        .iter()
+        .map(|entry| entry.filename().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(filenames, ["example-1.0.0-py3-none-any.whl"]);
+    server.verify().await;
+
+    let client = CachedClient::new(
+        BaseClientBuilder::default()
+            .connectivity(Connectivity::Offline)
+            .build()?,
+    );
+    let flat_index = FlatIndexClient::new(&client, Connectivity::Offline, &cache);
+    let changed_username = IndexUrl::parse(
+        &format!("http://other:first@{}/flat?sig=value", server.address()),
+        None,
+    )?;
+    let (entries, offline) = flat_index
+        .fetch_all(std::iter::once(&changed_username))
+        .await?
+        .into_parts();
+    assert!(!offline);
+    let filenames = entries
+        .iter()
+        .map(|entry| entry.filename().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(filenames, ["example-1.0.0-py3-none-any.whl"]);
+    Ok(())
+}
+
+/// A trailing slash can change the listing and the base used to resolve relative links.
+#[tokio::test]
+async fn flat_indexes_with_different_paths_are_cached_separately() -> Result<()> {
+    let server = MockServer::start().await;
+    let cache = Cache::temp()?.init().await?;
+    let client = CachedClient::new(BaseClientBuilder::default().build()?);
+    let flat_index = FlatIndexClient::new(&client, Connectivity::Online, &cache);
+    let first = IndexUrl::parse(&format!("{}/flat", server.uri()), None)?;
+    let second = IndexUrl::parse(&format!("{}/flat/", server.uri()), None)?;
+
+    Mock::given(method("GET"))
+        .and(path("/flat"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_string(
+                    r#"<a href="first-1.0.0-py3-none-any.whl">first-1.0.0-py3-none-any.whl</a>"#,
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/flat/"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("cache-control", "public, max-age=3600")
+                .set_body_string(
+                    r#"<a href="second-1.0.0-py3-none-any.whl">second-1.0.0-py3-none-any.whl</a>"#,
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    flat_index.fetch_all(std::iter::once(&first)).await?;
+    flat_index.fetch_all(std::iter::once(&second)).await?;
+    server.verify().await;
+
+    let client = CachedClient::new(
+        BaseClientBuilder::default()
+            .connectivity(Connectivity::Offline)
+            .build()?,
+    );
+    let flat_index = FlatIndexClient::new(&client, Connectivity::Offline, &cache);
+    let (entries, offline) = flat_index
+        .fetch_all([&first, &second].into_iter())
+        .await?
+        .into_parts();
+    assert!(!offline);
+    let filenames = entries
+        .iter()
+        .map(|entry| entry.filename().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        filenames,
+        [
+            "first-1.0.0-py3-none-any.whl",
+            "second-1.0.0-py3-none-any.whl"
+        ]
+    );
+    Ok(())
 }
 
 /// Cacheable flat-index responses whose URLs differ only in a redacted query value can both be used
