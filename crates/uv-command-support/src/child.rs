@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 
 use anyhow::bail;
+#[cfg(unix)]
+use nix::sys::signal;
+#[cfg(unix)]
+use nix::unistd::Pid;
 use tokio::process::Child;
 use tracing::debug;
 use uv_fs::Simplified;
@@ -94,6 +98,23 @@ pub fn read_env_files(env_files: &[PathBuf]) -> anyhow::Result<Vec<(String, Stri
     Ok(environment)
 }
 
+/// Forward a signal without changing how the child is awaited if forwarding fails.
+#[cfg(unix)]
+fn forward_signal(child_pid: Pid, signal: signal::Signal) {
+    forward_signal_with(child_pid, signal, signal::kill);
+}
+
+#[cfg(unix)]
+fn forward_signal_with(
+    child_pid: Pid,
+    signal: signal::Signal,
+    send: impl FnOnce(Pid, signal::Signal) -> nix::Result<()>,
+) {
+    if let Err(err) = send(child_pid, signal) {
+        debug!("Failed to forward {signal} to child at {child_pid}: {err}");
+    }
+}
+
 /// Wait for the child process to complete, handling signals and error codes.
 ///
 /// Note that this registers handles to ignore some signals in the parent process. This is safe as
@@ -132,8 +153,7 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
         use std::ops::Deref;
 
         use anyhow::Context;
-        use nix::sys::signal;
-        use nix::unistd::{Pid, getpgid};
+        use nix::unistd::getpgid;
         use tokio::select;
         use tokio::signal::unix::{Signal, SignalKind, signal as handle_signal};
 
@@ -256,7 +276,7 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
                     // to handle that signal before hitting it with another one
                     debug!("Received SIGINT, forwarding to child at {child_pid} in 200ms");
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                    let _ = signal::kill(child_pid, signal::Signal::SIGINT);
+                    forward_signal(child_pid, signal::Signal::SIGINT);
                 },
                 _ = sigterm_handle.recv() => {
                     // If the child has already exited, we can't send it signals
@@ -268,7 +288,7 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
                     // We unconditionally forward SIGTERM to the child process; unlike SIGINT, this
                     // isn't usually handled by the terminal.
                     debug!("Received SIGTERM, forwarding to child at {child_pid}");
-                    let _ = signal::kill(child_pid, signal::Signal::SIGTERM);
+                    forward_signal(child_pid, signal::Signal::SIGTERM);
                 }
                 _ = sigusr1_handle.recv() => {
                     let Some(child_pid) = *ChildPid::from(&handle) else {
@@ -278,7 +298,7 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
 
                     // We unconditionally forward SIGUSR1 to the child process.
                     debug!("Received SIGUSR1, forwarding to child at {child_pid}");
-                    let _ = signal::kill(child_pid, signal::Signal::SIGUSR1);
+                    forward_signal(child_pid, signal::Signal::SIGUSR1);
                 }
                 _ = sigusr2_handle.recv() => {
                     let Some(child_pid) = *ChildPid::from(&handle) else {
@@ -288,7 +308,7 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
 
                     // We unconditionally forward SIGUSR2 to the child process.
                     debug!("Received SIGUSR2, forwarding to child at {child_pid}");
-                    let _ = signal::kill(child_pid, signal::Signal::SIGUSR2);
+                    forward_signal(child_pid, signal::Signal::SIGUSR2);
                 }
                 _ = sighup_handle.recv() => {
                     let Some(child_pid) = *ChildPid::from(&handle) else {
@@ -298,7 +318,7 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
 
                     // We unconditionally forward SIGHUP to the child process.
                     debug!("Received SIGHUP, forwarding to child at {child_pid}");
-                    let _ = signal::kill(child_pid, signal::Signal::SIGHUP);
+                    forward_signal(child_pid, signal::Signal::SIGHUP);
                 }
                 _ = sigalrm_handle.recv() => {
                     let Some(child_pid) = *ChildPid::from(&handle) else {
@@ -308,7 +328,7 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
 
                     // We unconditionally forward SIGALRM to the child process.
                     debug!("Received SIGALRM, forwarding to child at {child_pid}");
-                    let _ = signal::kill(child_pid, signal::Signal::SIGALRM);
+                    forward_signal(child_pid, signal::Signal::SIGALRM);
                 }
                 _ = sigquit_handle.recv() => {
                     let Some(child_pid) = *ChildPid::from(&handle) else {
@@ -318,7 +338,7 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
 
                     // We unconditionally forward SIGQUIT to the child process.
                     debug!("Received SIGQUIT, forwarding to child at {child_pid}");
-                    let _ = signal::kill(child_pid, signal::Signal::SIGQUIT);
+                    forward_signal(child_pid, signal::Signal::SIGQUIT);
                 }
                 _ = sigwinch_handle.recv() => {
                     let Some(child_pid) = *ChildPid::from(&handle) else {
@@ -328,7 +348,7 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
 
                     // We unconditionally forward SIGWINCH to the child process.
                     debug!("Received SIGWINCH, forwarding to child at {child_pid}");
-                    let _ = signal::kill(child_pid, signal::Signal::SIGWINCH);
+                    forward_signal(child_pid, signal::Signal::SIGWINCH);
                 }
                 _ = sigpipe_handle.recv() => {
                     let Some(child_pid) = *ChildPid::from(&handle) else {
@@ -338,7 +358,7 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
 
                     // We unconditionally forward SIGPIPE to the child process.
                     debug!("Received SIGPIPE, forwarding to child at {child_pid}");
-                    let _ = signal::kill(child_pid, signal::Signal::SIGPIPE);
+                    forward_signal(child_pid, signal::Signal::SIGPIPE);
                 }
                 _ = siginfo_handle.recv() => {
                     let Some(child_pid) = *ChildPid::from(&handle) else {
@@ -356,7 +376,7 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
                         target_os = "openbsd",
                         target_os = "illumos",
                     ))]
-                    let _ = signal::kill(child_pid, signal::Signal::SIGINFO);
+                    forward_signal(child_pid, signal::Signal::SIGINFO);
                 }
             };
         }
@@ -396,5 +416,52 @@ pub async fn run_to_completion(mut handle: Child) -> anyhow::Result<ExitStatus> 
             }
         }
         Ok(ExitStatus::Failure)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::{Read, Seek};
+
+    use nix::errno::Errno;
+    use nix::sys::signal::Signal;
+    use nix::unistd::Pid;
+    use tracing::Level;
+
+    use super::forward_signal_with;
+
+    #[test]
+    fn failed_signal_forwarding_is_logged() -> anyhow::Result<()> {
+        let mut output = tempfile::tempfile()?;
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(Level::DEBUG)
+            .with_ansi(false)
+            .without_time()
+            .with_target(false)
+            .with_writer(output.try_clone()?)
+            .finish();
+        let child_pid = Pid::this();
+
+        tracing::subscriber::with_default(subscriber, || {
+            forward_signal_with(child_pid, Signal::SIGTERM, |pid, signal| {
+                assert_eq!(pid, child_pid);
+                assert_eq!(signal, Signal::SIGTERM);
+                Err(Errno::ESRCH)
+            });
+            forward_signal_with(child_pid, Signal::SIGTERM, |pid, signal| {
+                assert_eq!(pid, child_pid);
+                assert_eq!(signal, Signal::SIGTERM);
+                Ok(())
+            });
+        });
+
+        output.rewind()?;
+        let mut logs = String::new();
+        output.read_to_string(&mut logs)?;
+        insta::assert_snapshot!(logs.replace(&child_pid.to_string(), "[PID]"), @"
+        DEBUG Failed to forward SIGTERM to child at [PID]: ESRCH: No such process
+        ");
+
+        Ok(())
     }
 }
