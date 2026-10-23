@@ -59,6 +59,11 @@ path = "benches/macos_dylib.rs"
 harness = false
 
 [[bench]]
+name = "index_lookup"
+path = "benches/index_lookup.rs"
+harness = false
+
+[[bench]]
 name = "uv_pep508"
 path = "benches/uv_pep508.rs"
 harness = false
