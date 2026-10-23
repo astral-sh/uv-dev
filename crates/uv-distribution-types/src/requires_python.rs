@@ -243,6 +243,15 @@ impl RequiresPython {
         self.specifiers.contains(&version)
     }
 
+    /// Returns `true` if the specifiers accept the same Python release versions.
+    ///
+    /// This comparison includes interior exclusions and wildcard precision, and ignores any
+    /// narrowing of the resolution bounds in [`Self::range`].
+    pub fn has_same_release_versions(&self, other: &Self) -> bool {
+        release_specifiers_to_ranges(self.specifiers.clone())
+            == release_specifiers_to_ranges(other.specifiers.clone())
+    }
+
     /// Returns `true` if the `Requires-Python` is contained by the given version specifiers.
     ///
     /// In this context, we treat `Requires-Python` as a lower bound. For example, if the
