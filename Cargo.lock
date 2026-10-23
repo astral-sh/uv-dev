@@ -6835,6 +6835,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror",
  "tracing",
  "uv-distribution-filename",
@@ -6849,6 +6850,7 @@ dependencies = [
  "uv-trampoline-builder",
  "uv-warnings",
  "walkdir",
+ "windows",
 ]
 
 [[package]]

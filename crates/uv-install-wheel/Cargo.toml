@@ -53,6 +53,12 @@ walkdir = { workspace = true }
 same-file = { workspace = true }
 self-replace = { workspace = true }
 
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tempfile = { workspace = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows = { workspace = true }
+
 [features]
 clap = ["uv-fs/clap"]
 schemars = ["uv-fs/schemars"]

@@ -368,16 +368,14 @@ pub(crate) fn write_script_entrypoints(
     layout: &Layout,
     relocatable: bool,
     site_packages: &Path,
-    entrypoints: &[Script],
+    entrypoints: &PreparedEntryPoints<'_>,
     record: &mut Vec<RecordEntry>,
-    is_gui: bool,
 ) -> Result<(), Error> {
-    for script in entrypoints {
-        let script = ValidatedScript::try_from_script(script, layout)?;
+    for (script, is_gui) in &entrypoints.scripts {
         let entrypoint_relative = script.relative_to_site_package(site_packages)?;
 
         // Generate the launcher script.
-        let launcher_executable = get_script_executable(&layout.sys_executable, is_gui);
+        let launcher_executable = get_script_executable(&layout.sys_executable, *is_gui);
         let launcher_executable =
             get_relocatable_executable(launcher_executable, layout, relocatable)?;
         let launcher_python_script = get_script_launcher(
@@ -390,7 +388,7 @@ pub(crate) fn write_script_entrypoints(
             write_file_recorded(
                 site_packages,
                 &entrypoint_relative,
-                &windows_script_launcher(&launcher_python_script, is_gui, &launcher_executable)?,
+                &windows_script_launcher(&launcher_python_script, *is_gui, &launcher_executable)?,
                 record,
             )?;
         } else {
@@ -416,6 +414,190 @@ pub(crate) fn write_script_entrypoints(
         }
     }
     Ok(())
+}
+
+/// Entry points with validated paths and unique final script destinations.
+pub(crate) struct PreparedEntryPoints<'script> {
+    scripts: Vec<(ValidatedScript<'script>, bool)>,
+    scripts_root: PathBuf,
+    destinations: ScriptDestinations,
+}
+
+impl<'script> PreparedEntryPoints<'script> {
+    pub(crate) fn new(
+        layout: &Layout,
+        console_scripts: &'script [Script],
+        gui_scripts: &'script [Script],
+    ) -> Result<Self, Error> {
+        let mut scripts = Vec::with_capacity(console_scripts.len() + gui_scripts.len());
+        for (script, is_gui) in console_scripts
+            .iter()
+            .map(|script| (script, false))
+            .chain(gui_scripts.iter().map(|script| (script, true)))
+        {
+            scripts.push((ValidatedScript::try_from_script(script, layout)?, is_gui));
+        }
+        let scripts_root = layout.scheme.scripts.clone();
+        let destinations = ScriptDestinations::prepare(&scripts_root, &scripts)?;
+        Ok(Self {
+            scripts,
+            scripts_root,
+            destinations,
+        })
+    }
+
+    fn contains_destination(&mut self, path: &Path) -> Result<bool, Error> {
+        self.destinations
+            .contains(&self.scripts_root, &self.scripts, path)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.scripts.is_empty()
+    }
+}
+
+/// A fast index for unambiguous names, or an owned namespace for filesystem comparisons.
+enum ScriptDestinations {
+    Indexed(FxHashMap<Vec<u8>, usize>),
+    #[cfg(any(windows, target_os = "macos"))]
+    Probed(tempfile::TempDir),
+}
+
+impl ScriptDestinations {
+    fn prepare(root: &Path, scripts: &[(ValidatedScript<'_>, bool)]) -> Result<Self, Error> {
+        let mut paths = FxHashMap::default();
+        for (index, (script, _)) in scripts.iter().enumerate() {
+            let relative = script
+                .as_path()
+                .strip_prefix(root)
+                .map_err(io::Error::other)?;
+            #[cfg(any(windows, target_os = "macos"))]
+            if !relative.as_os_str().as_encoded_bytes().is_ascii() {
+                return Self::probe(root, scripts);
+            }
+            let previous = paths.insert(script_destination_key(relative), index);
+            #[cfg(any(windows, target_os = "macos"))]
+            if previous.is_some() {
+                // A case-sensitive volume can keep ASCII case variants distinct too.
+                return Self::probe(root, scripts);
+            }
+            #[cfg(not(any(windows, target_os = "macos")))]
+            if let Some(previous) = previous {
+                return Err(entrypoint_collision(
+                    scripts[previous].0.inner().name.as_str(),
+                    script.inner().name.as_str(),
+                ));
+            }
+        }
+        Ok(Self::Indexed(paths))
+    }
+
+    fn contains(
+        &mut self,
+        root: &Path,
+        scripts: &[(ValidatedScript<'_>, bool)],
+        path: &Path,
+    ) -> Result<bool, Error> {
+        if scripts.is_empty() {
+            return Ok(false);
+        }
+        let relative = path.strip_prefix(root).map_err(io::Error::other)?;
+        match self {
+            Self::Indexed(paths) => {
+                let index = paths.get(&script_destination_key(relative)).copied();
+                #[cfg(any(windows, target_os = "macos"))]
+                if !relative.as_os_str().as_encoded_bytes().is_ascii()
+                    || index.is_some_and(|index| scripts[index].0.as_path() != path)
+                {
+                    // Unicode payload names can alias an otherwise ASCII-only set of launchers.
+                    *self = Self::probe(root, scripts)?;
+                    return self.contains(root, scripts, path);
+                }
+                Ok(index.is_some())
+            }
+            #[cfg(any(windows, target_os = "macos"))]
+            Self::Probed(directory) => {
+                match fs::symlink_metadata(directory.path().join(relative)) {
+                    Ok(metadata) => Ok(metadata.is_file()),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+                    Err(error) => Err(error.into()),
+                }
+            }
+        }
+    }
+
+    /// Let the target filesystem compare non-ASCII names, whose case and normalization rules
+    /// differ between NTFS, ReFS, APFS, and HFS+. The private directory is removed with the index.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn probe(root: &Path, scripts: &[(ValidatedScript<'_>, bool)]) -> Result<Self, Error> {
+        // The scripts directory need not exist yet. Its closest existing ancestor is on the
+        // filesystem that will hold it, without creating installation directories during validation.
+        let absolute_root = std::path::absolute(root)?;
+        let mut ancestor = absolute_root.as_path();
+        loop {
+            match fs::metadata(ancestor) {
+                Ok(metadata) if metadata.is_dir() => break,
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotADirectory,
+                        "a script directory ancestor is not a directory",
+                    )
+                    .into());
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    ancestor = ancestor.parent().ok_or(error)?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let directory = tempfile::Builder::new()
+            .prefix(".uv-entrypoints-")
+            .tempdir_in(ancestor)?;
+        for (script, _) in scripts {
+            let relative = script
+                .as_path()
+                .strip_prefix(root)
+                .map_err(io::Error::other)?;
+            let path = directory.path().join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => file.write_all(script.inner().name.as_bytes())?,
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    let previous = fs::read_to_string(&path)?;
+                    return Err(entrypoint_collision(
+                        &previous,
+                        script.inner().name.as_str(),
+                    ));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(Self::Probed(directory))
+    }
+}
+
+fn entrypoint_collision(previous: &str, current: &str) -> Error {
+    let mut entry_points = [previous, current];
+    entry_points.sort_unstable();
+    Error::InvalidWheel(format!(
+        "Wheel entry points `{}` and `{}` install to the same destination",
+        entry_points[0], entry_points[1]
+    ))
+}
+
+/// ASCII names use a cheap index; other platform-sensitive comparisons use the filesystem.
+fn script_destination_key(path: &Path) -> Vec<u8> {
+    if cfg!(any(windows, target_os = "macos")) {
+        path.as_os_str().as_encoded_bytes().to_ascii_lowercase()
+    } else {
+        path.as_os_str().as_encoded_bytes().to_vec()
+    }
 }
 
 /// A parsed `WHEEL` file.
@@ -772,8 +954,7 @@ pub(crate) fn install_data(
     site_packages: &Path,
     data_dir: &Path,
     dist_name: &PackageName,
-    console_scripts: &[Script],
-    gui_scripts: &[Script],
+    entrypoints: &mut PreparedEntryPoints<'_>,
     record: &mut [RecordEntry],
 ) -> Result<(), Error> {
     for entry in fs::read_dir(data_dir)? {
@@ -815,10 +996,12 @@ pub(crate) fn install_data(
                         .or_else(|| name.strip_suffix("-script.py"))
                         .or_else(|| name.strip_suffix(".pya"))
                         .unwrap_or(&name);
-                    if console_scripts
+                    if entrypoints
+                        .scripts
                         .iter()
-                        .chain(gui_scripts)
-                        .any(|script| script.name == match_name)
+                        .any(|(script, _)| script.inner().name == match_name)
+                        || entrypoints
+                            .contains_destination(&layout.scheme.scripts.join(file.file_name()))?
                     {
                         continue;
                     }
@@ -1273,7 +1456,13 @@ impl RenameOrCopy {
 mod test {
     use std::assert_matches;
     use std::io::{BufReader, Cursor, ErrorKind, Seek};
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
+    #[cfg(windows)]
+    use windows::Win32::Storage::FileSystem::{GetVolumeInformationW, GetVolumePathNameW};
+    #[cfg(windows)]
+    use windows::core::PCWSTR;
 
     use anyhow::Result;
     use assert_fs::prelude::*;
@@ -1284,6 +1473,262 @@ mod test {
         get_script_executable, parse_email_message_file, parse_scripts, read_record,
         write_installer_metadata,
     };
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn entrypoint_layout(scripts: &Path) -> super::Layout {
+        super::Layout {
+            sys_executable: scripts.join("python"),
+            python_version: (3, 13),
+            os_name: if cfg!(windows) { "nt" } else { "posix" }.to_string(),
+            scheme: uv_pypi_types::Scheme {
+                purelib: scripts.join("site-packages"),
+                platlib: scripts.join("site-packages"),
+                scripts: scripts.to_path_buf(),
+                data: scripts.to_path_buf(),
+                include: scripts.join("include"),
+            },
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_script_destination_aliases() -> Result<()> {
+        let directory = assert_fs::TempDir::new()?;
+        let layout = entrypoint_layout(directory.path());
+        let scripts = [Script::from_value("σ", "example:main")?];
+        let mut entrypoints = super::PreparedEntryPoints::new(&layout, &scripts, &[])?;
+        assert!(entrypoints.contains_destination(&directory.join("Σ.EXE"))?);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn assert_ntfs(path: &Path) -> Result<()> {
+        let path: Vec<_> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut volume_path = vec![0; path.len()];
+        // SAFETY: The source is null-terminated and both buffers remain live for the call.
+        #[expect(unsafe_code)]
+        unsafe {
+            GetVolumePathNameW(PCWSTR(path.as_ptr()), &mut volume_path)?;
+        }
+        let mut file_system = vec![0; 260];
+        // SAFETY: The root is null-terminated by GetVolumePathNameW and the writable output
+        // slice has room for the filesystem name. All other outputs are unused.
+        #[expect(unsafe_code)]
+        unsafe {
+            GetVolumeInformationW(
+                PCWSTR(volume_path.as_ptr()),
+                None,
+                None,
+                None,
+                None,
+                Some(&mut file_system),
+            )?;
+        }
+        let length = file_system
+            .iter()
+            .position(|&unit| unit == 0)
+            .unwrap_or(file_system.len());
+        assert_eq!(String::from_utf16(&file_system[..length])?, "NTFS");
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_script_destination_sigma_on_ntfs() -> Result<()> {
+        let Some(root) = std::env::var_os("UV_INTERNAL__TEST_LOWLINKS_FS") else {
+            return Ok(());
+        };
+        let directory = assert_fs::TempDir::new_in(root)?;
+        assert_ntfs(directory.path())?;
+        let sigma = directory.child("σ.exe");
+        let final_sigma = directory.child("ς.exe");
+        sigma.write_str("sigma")?;
+
+        let layout = entrypoint_layout(directory.path());
+        let scripts = [Script::from_value("σ", "example:main")?];
+        let mut entrypoints = super::PreparedEntryPoints::new(&layout, &scripts, &[])?;
+        assert_eq!(
+            entrypoints.contains_destination(final_sigma.path())?,
+            final_sigma.try_exists()?
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_script_destination_dotted_i_on_ntfs() -> Result<()> {
+        let Some(root) = std::env::var_os("UV_INTERNAL__TEST_LOWLINKS_FS") else {
+            return Ok(());
+        };
+        let directory = assert_fs::TempDir::new_in(root)?;
+        assert_ntfs(directory.path())?;
+        let composed = directory.child("İ.exe");
+        let expanded = directory.child("i\u{307}.exe");
+        composed.write_str("composed")?;
+        assert!(!expanded.try_exists()?);
+
+        let layout = entrypoint_layout(directory.path());
+        let scripts = [Script::from_value("İ", "example:main")?];
+        let mut entrypoints = super::PreparedEntryPoints::new(&layout, &scripts, &[])?;
+        assert!(!entrypoints.contains_destination(expanded.path())?);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_script_destination_distinctions() -> Result<()> {
+        let directory = assert_fs::TempDir::new()?;
+        let layout = entrypoint_layout(directory.path());
+        let scripts = [
+            Script::from_value("ß", "example:main")?,
+            Script::from_value("ss", "example:main")?,
+            Script::from_value("é", "example:main")?,
+            Script::from_value("e\u{301}", "example:main")?,
+            Script::from_value("İ", "example:main")?,
+            Script::from_value("i\u{307}", "example:main")?,
+        ];
+        let mut entrypoints = super::PreparedEntryPoints::new(&layout, &scripts, &[])?;
+        assert!(entrypoints.contains_destination(&directory.join("SS.EXE"))?);
+        assert!(!entrypoints.contains_destination(&directory.join("other.exe"))?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_script_destination_normalization() -> Result<()> {
+        let directory = assert_fs::TempDir::new()?;
+        let composed = directory.child("café");
+        let decomposed = directory.child("cafe\u{301}");
+        composed.write_str("composed")?;
+        let aliases = decomposed.try_exists()?;
+        let layout = entrypoint_layout(directory.path());
+        let scripts = [
+            Script::from_value("café", "example:main")?,
+            Script::from_value("cafe\u{301}", "example:main")?,
+        ];
+        let collision = match super::PreparedEntryPoints::new(&layout, &scripts, &[]) {
+            Ok(_) => false,
+            Err(Error::InvalidWheel(_)) => true,
+            Err(error) => return Err(error.into()),
+        };
+        assert_eq!(collision, aliases);
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_script_destination_compatibility_forms() -> Result<()> {
+        let directory = assert_fs::TempDir::new()?;
+        let circled = directory.child("①");
+        circled.write_str("circled")?;
+        assert!(!directory.child("1").try_exists()?);
+        let layout = entrypoint_layout(directory.path());
+        let scripts = [
+            Script::from_value("①", "example:main")?,
+            Script::from_value("1", "example:main")?,
+        ];
+        let mut entrypoints = super::PreparedEntryPoints::new(&layout, &scripts, &[])?;
+        assert!(entrypoints.contains_destination(&directory.join("1"))?);
+        assert!(!entrypoints.contains_destination(&directory.join("2"))?);
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_unicode_payload_for_ascii_entrypoint() -> Result<()> {
+        let directory = assert_fs::TempDir::new()?;
+        directory.child("K").write_str("ascii")?;
+        let kelvin = directory.child("K");
+        let layout = entrypoint_layout(directory.path());
+        let scripts = [Script::from_value("K", "example:main")?];
+        let mut entrypoints = super::PreparedEntryPoints::new(&layout, &scripts, &[])?;
+        assert_eq!(
+            entrypoints.contains_destination(kelvin.path())?,
+            kelvin.try_exists()?
+        );
+        Ok(())
+    }
+
+    /// HFS+ uses a frozen decomposition table that differs from APFS.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_script_destination_normalization_on_hfs() -> Result<()> {
+        let Some(root) = std::env::var_os("UV_INTERNAL__TEST_NOCOW_FS") else {
+            return Ok(());
+        };
+        let directory = tempfile::tempdir_in(root)?;
+        let composed = directory.path().join("café");
+        let decomposed = directory.path().join("cafe\u{301}");
+        fs_err::write(&composed, "composed")?;
+        assert!(decomposed.try_exists()?);
+        let layout = entrypoint_layout(directory.path());
+        let scripts = [
+            Script::from_value("café", "example:main")?,
+            Script::from_value("cafe\u{301}", "example:main")?,
+        ];
+        let collision = match super::PreparedEntryPoints::new(&layout, &scripts, &[]) {
+            Ok(_) => false,
+            Err(Error::InvalidWheel(_)) => true,
+            Err(error) => return Err(error.into()),
+        };
+        assert!(collision);
+        assert_eq!(
+            fs_err::read_dir(directory.path())?
+                .collect::<std::io::Result<Vec<_>>>()?
+                .len(),
+            1
+        );
+        Ok(())
+    }
+
+    /// HFS+ excludes the Kelvin sign from decomposition, unlike generic Unicode NFD.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_script_destination_hfs_excluded_decomposition() -> Result<()> {
+        let Some(root) = std::env::var_os("UV_INTERNAL__TEST_NOCOW_FS") else {
+            return Ok(());
+        };
+        let directory = tempfile::tempdir_in(root)?;
+        let ascii = directory.path().join("K");
+        let kelvin = directory.path().join("K");
+        fs_err::write(&ascii, "ascii")?;
+        assert!(!kelvin.try_exists()?);
+        let layout = entrypoint_layout(directory.path());
+        let scripts = [Script::from_value("K", "example:main")?];
+        let mut entrypoints = super::PreparedEntryPoints::new(&layout, &scripts, &[])?;
+        assert!(!entrypoints.contains_destination(&kelvin)?);
+        assert!(entrypoints.contains_destination(&ascii)?);
+        drop(entrypoints);
+        assert_eq!(
+            fs_err::read_dir(directory.path())?
+                .collect::<std::io::Result<Vec<_>>>()?
+                .len(),
+            1
+        );
+        Ok(())
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn many_unicode_script_destinations() -> Result<()> {
+        let directory = assert_fs::TempDir::new()?;
+        let scripts_root = directory.join("scripts");
+        let layout = entrypoint_layout(&scripts_root);
+        let scripts = (0..256)
+            .map(|index| Script::from_value(&format!("café-{index}"), "example:main"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut entrypoints = super::PreparedEntryPoints::new(&layout, &scripts, &[])?;
+        for index in 0..256 {
+            assert!(entrypoints.contains_destination(
+                &scripts_root.join(format!("café-{index}{}", std::env::consts::EXE_SUFFIX))
+            )?);
+        }
+        assert!(!entrypoints.contains_destination(&scripts_root.join("missing"))?);
+        assert!(!scripts_root.try_exists()?);
+        drop(entrypoints);
+        assert_eq!(fs_err::read_dir(directory.path())?.count(), 0);
+        Ok(())
+    }
 
     #[test]
     fn test_parse_email_message_file() {
