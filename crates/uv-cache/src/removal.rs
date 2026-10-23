@@ -270,7 +270,7 @@ fn set_readable(path: &Path) -> io::Result<bool> {
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs_err::metadata(path)?.permissions();
-        if perms.mode() & 0o500 == 0 {
+        if perms.mode() & 0o500 != 0o500 {
             perms.set_mode(perms.mode() | 0o500);
             fs_err::set_permissions(path, perms)?;
             return Ok(true);
@@ -337,5 +337,66 @@ fn remove_dir_all(path: &Path) -> io::Result<()> {
             fs_err::remove_dir_all(path)
         }
         Err(err) => Err(err),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod readable_permissions_tests {
+    use std::fs::Permissions;
+    use std::io;
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::{Remover, set_readable};
+
+    #[test]
+    fn repairs_each_missing_owner_bit() -> io::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        for mode in [
+            0o000, 0o100, 0o200, 0o300, 0o400, 0o500, 0o600, 0o700, 0o327, 0o627, 0o727,
+        ] {
+            let directory = temp_dir.path().join(format!("{mode:04o}"));
+            fs_err::create_dir(&directory)?;
+            fs_err::set_permissions(&directory, Permissions::from_mode(mode))?;
+
+            let changed = set_readable(&directory);
+            let mode_after_first =
+                fs_err::metadata(&directory).map(|metadata| metadata.permissions().mode() & 0o7777);
+            let changed_again = set_readable(&directory);
+            let mode_after_second =
+                fs_err::metadata(&directory).map(|metadata| metadata.permissions().mode() & 0o7777);
+
+            // Restore access before an assertion can leave a restricted temporary directory.
+            fs_err::set_permissions(&directory, Permissions::from_mode(0o700))?;
+
+            assert_eq!(changed?, mode & 0o500 != 0o500, "mode {mode:04o}");
+            assert_eq!(mode_after_first?, mode | 0o500, "mode {mode:04o}");
+            assert!(!changed_again?, "mode {mode:04o}");
+            assert_eq!(mode_after_second?, mode | 0o500, "mode {mode:04o}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn removes_directory_missing_owner_read() -> io::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let directory = temp_dir.path().join("restricted");
+        fs_err::create_dir(&directory)?;
+        fs_err::write(directory.join("file"), [0])?;
+        fs_err::set_permissions(&directory, Permissions::from_mode(0o300))?;
+
+        let result = Remover::default().rm_rf(&directory, false);
+
+        // A failing removal must not strand the restricted temporary directory.
+        match fs_err::set_permissions(&directory, Permissions::from_mode(0o700)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+
+        let removal = result?;
+        assert_eq!(removal.num_files, 1);
+        assert_eq!(removal.num_dirs, 1);
+        assert!(!directory.try_exists()?);
+        Ok(())
     }
 }
