@@ -149,13 +149,15 @@ jobs:
         uses: openai/codex-action@c05cfd74ad95c626cdf05c6685e62becc3bf7813
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TMPDIR: ${{ runner.temp }}
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           codex-version: "0.155.1"
           codex-home: "agents/codex"
           effort: high
           permission-profile: "issue-triage"
+          # The Linux sudo launch strips TMPDIR, so grant the context path explicitly.
+          codex-args: >-
+            ["--config", "permissions.issue-triage.filesystem={\"${{ runner.temp }}/issue-context\"=\"write\"}"]
           safety-strategy: drop-sudo
           allow-users: "*"
           prompt-file: "${{ runner.temp }}/triage-issue-prompt.md"
