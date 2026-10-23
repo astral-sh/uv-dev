@@ -37,7 +37,7 @@ jobs:
           persist-credentials: false
 
       - name: "Install Rust toolchain"
-        run: rustup toolchain install --profile minimal
+        run: rustup toolchain install --profile minimal --override
 
       - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
         with:
@@ -158,7 +158,7 @@ jobs:
           persist-credentials: false
 
       - name: "Install Rust toolchain"
-        run: rustup toolchain install --profile minimal
+        run: rustup toolchain install --profile minimal --override
 
       - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
         with:
@@ -276,7 +276,10 @@ jobs:
 
       - name: "Install Rust toolchain"
         working-directory: ${{ env.UV_WORKSPACE }}
-        run: rustup toolchain install --profile minimal
+        run: |
+          rustup toolchain install --profile minimal --override
+          $toolchain = (rustup show active-toolchain).Split()[0]
+          rustup override set $toolchain --path "${{ github.workspace }}"
 
       - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
         with:
