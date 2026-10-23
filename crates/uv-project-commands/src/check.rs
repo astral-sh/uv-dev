@@ -19,7 +19,7 @@ use uv_environment_operations::{
     LinkErrorReporting, ProjectEnvironment, ProjectEnvironmentPolicy, ProjectEnvironmentTarget,
     ProjectInterpreter, ScriptEnvironment, store_credentials_from_target, sync_from_lock,
 };
-use uv_fs::normalize_path;
+use uv_fs::{ClearNonVirtualenv, normalize_path};
 use uv_install_operations::loggers::SummaryInstallLogger;
 use uv_lock_operations::{LockMode, LockOperation, LockTarget};
 use uv_normalize::{DEV_DEPENDENCIES, DefaultExtras, PackageName};
@@ -348,7 +348,10 @@ pub async fn check(
             interpreter,
             uv_virtualenv::Prompt::None,
             false,
-            uv_virtualenv::OnExisting::Remove(uv_virtualenv::RemovalReason::TemporaryEnvironment),
+            uv_virtualenv::OnExisting::Replace {
+                reason: uv_virtualenv::RemovalReason::TemporaryEnvironment,
+                clear_non_virtualenv: ClearNonVirtualenv::Allow,
+            },
             false,
             uv_virtualenv::Seed::Disabled,
             UpgradePolicy::Fixed,

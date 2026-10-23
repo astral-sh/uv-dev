@@ -1,5 +1,3 @@
-#![expect(clippy::disallowed_types)]
-
 #[cfg(feature = "test-git")]
 mod conditional_imports {
     pub(crate) use uv_test::{READ_ONLY_GITHUB_TOKEN, decode_token};
@@ -5625,6 +5623,7 @@ fn add_repeat() -> Result<()> {
 /// Add from requirement file.
 #[test]
 #[cfg(feature = "test-git")]
+#[expect(clippy::disallowed_types)]
 fn add_requirements_file() -> Result<()> {
     let context = uv_test::test_context!("3.12").with_filtered_counts();
 
