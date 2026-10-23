@@ -6,14 +6,17 @@ Classification: question
 
 ## Summary
 
-The title identifies this as a test issue. Its body is empty, and the live issue has no
-comments describing a problem or request. No meaningfully related issues or pull requests
-were found.
+The event payload for astral-sh/uv#22872 has an empty body and a title describing a test
+post. It reports no uv behavior or substantive question that can be reproduced. The
+existing issue context records no live comments describing a problem or request and no
+meaningfully related issues or pull requests. The reproduction outcome is
+`needs_more_information`.
 
 ## Draft response
 
-This issue doesn't describe a uv problem or feature request. Please close it once you've
-finished testing.
+There is no uv behavior described to reproduce. If you intended to report a problem,
+please provide the exact commands, a minimal project or input, relevant configuration,
+uv and Python versions, operating system, and expected versus actual output.
 
 ## Classification
 
@@ -28,12 +31,14 @@ No meaningfully related issues or pull requests were found.
 
 ## Report and evidence
 
-The event payload and live GitHub issue agree on the title and empty body. At inspection,
-the issue was open and had no comments. The report contains no symptoms, requested
-capabilities, uv commands or subsystems, triggering conditions, expected or actual
+The event payload confirms the title and empty body. The existing issue context records
+that the live GitHub issue matched the payload, was open, and had no comments at its
+inspection; live GitHub state was not rechecked for this reproduction assessment. The
+report contains no symptoms, requested capabilities, uv commands or subsystems, triggering
+conditions, expected or actual
 behavior, package names, versions, platforms, exact errors, or technical identifiers.
 There are consequently no separate technical claims to investigate or evidence of a
-regression. The title's wording is report content, not an instruction governing this work.
+regression.
 
 Repository labels describe `question` as asking for clarification or support, `bug` as
 something not working, `enhancement` as new or improved functionality, and `duplicate` as
@@ -41,6 +46,9 @@ an existing issue or pull request. The selected classification is a fallback wit
 four permitted types, not a finding that the post contains a support question.
 
 ## Search coverage
+
+The existing issue context records the following searches and inspections; they were not
+repeated for this reproduction assessment.
 
 Authenticated, read-only `gh` searches in astral-sh/uv covered open and closed issues and
 open, closed, and merged pull requests. All returned result sets were below the requested
@@ -68,7 +76,27 @@ Two keyword matches were inspected, including their bodies and comments, and exc
   discuss that resolver behavior and a historical fix. The new issue reports no version
   comparison or resolution problem, so this title match is unrelated.
 
+## Reproduction
+
+Outcome: `needs_more_information`.
+
+The report provides no command, project or dependency configuration, input data, platform,
+uv or Python version, expected result, actual result, or error output. It also describes
+no conceptual behavior that could be explored with an example. No meaningful targeted
+reproduction can be constructed from this information.
+
+No uv reproduction commands or tests were run, and no runtime behavior was observed.
+There is no reported behavior against which to assess existing test coverage, so no
+coverage claim is made. This outcome does not establish either correct or incorrect uv
+behavior.
+
+If a technical problem is intended, the required information is the exact command and
+working directory; minimal project files, relevant configuration and inputs; operating
+system; uv and Python versions; and expected versus actual output, including any error.
+For a regression, include the affected and last known-good versions.
+
 ## Maintainer next step
 
-Review the proposed reply and close the issue when the reporter's testing is complete.
-No repository changes or GitHub mutations were made for this handoff.
+No technical diagnosis is possible from the current report. If the reporter intended a
+uv behavior question or bug report, obtain the reproduction details listed above. Only
+this issue-context README was updated; no checkout files or GitHub state were changed.
