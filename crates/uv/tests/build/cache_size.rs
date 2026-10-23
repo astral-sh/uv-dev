@@ -2,15 +2,20 @@ use assert_cmd::assert::OutputAssertExt;
 
 use uv_test::uv_snapshot;
 
-/// Test that `cache size` returns 0 when the cache directory does not exist.
+/// An empty cache can retain filesystem space in its coordination directory.
 #[test]
-fn cache_size_missing_raw() {
-    let context = uv_test::test_context_with_versions!(&[]).with_cache_dir("missing-cache");
+fn cache_size_empty_raw() {
+    let context = uv_test::test_context!("3.12").with_filtered_cache_size();
 
-    uv_snapshot!(context.cache_size().arg("--preview"), @"
+    // Remove entries while retaining the root coordination lock.
+    context.clean().assert().success();
+
+    assert!(context.cache_dir.join(".lock").is_file());
+
+    uv_snapshot!(context.filters(), context.cache_size().arg("--preview"), @"
     exit_code: 0 (success)
     ----- stdout -----
-    0
+    [SIZE]
     ");
 }
 

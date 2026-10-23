@@ -459,12 +459,8 @@ impl Cache {
         self.temp_dir.is_some()
     }
 
-    /// Populate the cache scaffold.
-    fn create_base_files(root: &PathBuf) -> io::Result<()> {
-        // Add the CACHEDIR.TAG.
-        cachedir::ensure_tag(root)?;
-
-        // Add the .gitignore.
+    /// Keep cache-owned metadata hidden from enclosing Git worktrees.
+    fn create_gitignore(root: &Path) -> io::Result<()> {
         match fs_err::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -474,6 +470,15 @@ impl Cache {
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => (),
             Err(err) => return Err(err),
         }
+        Ok(())
+    }
+
+    /// Populate the cache scaffold.
+    fn create_base_files(root: &PathBuf) -> io::Result<()> {
+        // Add the CACHEDIR.TAG.
+        cachedir::ensure_tag(root)?;
+
+        Self::create_gitignore(root)?;
 
         // Add an empty .gitignore to the build bucket, to ensure that the cache's own .gitignore
         // doesn't interfere with source distribution builds. Build backends (like hatchling) will
@@ -548,6 +553,7 @@ impl Cache {
             Err(err) => return Err(err.into()),
         };
 
+        // A cleaner may have removed the scaffold while this initializer waited.
         Self::create_base_files(root).map_err(|err| Error::Init(root.clone(), err))?;
         Ok(Self {
             root: std::path::absolute(root).map_err(Error::Absolute)?,
@@ -578,11 +584,13 @@ impl Cache {
         }))
     }
 
-    /// Clear the cache, removing all entries.
+    /// Clear entries while retaining the root coordination lock and Git ignore marker.
     pub fn clear(self, reporter: Box<dyn CleanReporter>) -> Result<Removal, io::Error> {
-        // Waiters may have already opened the lock. Retain its path and directory so they acquire
-        // the same lock as new uv processes. Resolve only the root: never follow links inside it.
+        // Waiters may have already opened `.lock`. Keep its inode and parent directory in place
+        // so later users and cleaners acquire the same lock, including after this guard drops.
+        // Resolve only the root so a directory symlink remains while links inside it aren't followed.
         let root = fs_err::canonicalize(&self.root)?;
+        Self::create_gitignore(&root)?;
         Remover::new(reporter)
             .with_removal_accounting(self.removal_accounting)
             .rm_rf(&root, true)
