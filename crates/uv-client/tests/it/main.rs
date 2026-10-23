@@ -1,3 +1,4 @@
+mod artifactory;
 mod cached_client;
 mod http_util;
 mod proxy;
