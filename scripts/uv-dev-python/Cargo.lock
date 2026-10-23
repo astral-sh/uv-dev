@@ -1194,6 +1194,9 @@ version = "0.0.0"
 dependencies = [
  "pyo3",
  "serde_json",
+ "uv-normalize",
+ "uv-pep440",
+ "uv-pep508",
  "uv-python-types",
 ]
 

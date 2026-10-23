@@ -9,15 +9,10 @@ For minor versions with only prereleases, it uses the latest prerelease.
 
 This is called by the sync-python-releases workflow to keep the test constants
 in sync with the latest available Python versions.
-"""
 
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["packaging"]
-# [tool.uv]
-# no-build = true
-# exclude-newer = "P7D"
-# ///
+Run with `uv run --project scripts/uv-dev-python --locked python
+scripts/sync-python-version-constants.py` from the repository root.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +20,7 @@ import json
 import re
 from pathlib import Path
 
-from packaging.version import Version
+from uv_dev import Version
 
 SELF_DIR = Path(__file__).parent
 ROOT = SELF_DIR.parent
