@@ -77,4 +77,17 @@ mod tests {
             r#"'Testing'"'"'s/$venv;activate'"#
         );
     }
+
+    #[test]
+    #[cfg(windows)]
+    fn posix_windows_paths() {
+        assert_eq!(
+            shlex_posix(r".venv\Scripts\activate"),
+            ".venv/Scripts/activate"
+        );
+        assert_eq!(
+            shlex_posix(r"C:\Users\Ferris\My Env's\Scripts\activate"),
+            r#"'C:/Users/Ferris/My Env'"'"'s/Scripts/activate'"#
+        );
+    }
 }
