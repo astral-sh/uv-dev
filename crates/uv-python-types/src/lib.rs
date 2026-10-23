@@ -1,6 +1,7 @@
 //! Python versions, requests, installation keys, and configuration values.
 
 mod architecture;
+mod download_key;
 mod download_request;
 mod implementation;
 mod installation_key;
@@ -11,6 +12,7 @@ mod request;
 mod target;
 
 pub use architecture::PythonArchitecture;
+pub use download_key::{PythonDownloadKey, PythonDownloadKeyError};
 pub use download_request::{
     ArchRequest, PlatformRequest, PythonDownloadRequest, PythonDownloadRequestError,
 };

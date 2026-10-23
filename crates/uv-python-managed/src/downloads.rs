@@ -6,7 +6,6 @@ use std::fmt::Display;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::str::FromStr;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTimeError};
 use std::{env, io};
@@ -38,7 +37,7 @@ use uv_distribution_filename::{ExtensionError, SourceDistExtension};
 use uv_extract::hash::Hasher;
 use uv_fs::{Simplified, rename_with_retry};
 use uv_macros::DebugNoInline;
-use uv_platform::{Arch, Libc, Os, Platform};
+use uv_platform::Os;
 use uv_pypi_types::{Digest, HashAlgorithm, HashDigest};
 use uv_redacted::{SafeUrl, SafeUrlError};
 use uv_static::{
@@ -46,9 +45,11 @@ use uv_static::{
     custom_astral_mirror_url,
 };
 
+#[cfg(test)]
+use uv_python_types::PythonVersion;
 use uv_python_types::{
-    ImplementationName, LenientImplementationName, PythonDownloadMirrors, PythonInstallationKey,
-    PythonVariant, PythonVersion,
+    ImplementationName, LenientImplementationName, PythonDownloadKey, PythonDownloadMirrors,
+    PythonInstallationKey,
 };
 
 #[derive(Error, DebugNoInline)]
@@ -214,24 +215,11 @@ pub struct ManagedPythonDownloadList {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct JsonPythonDownload {
-    name: String,
-    arch: JsonArch,
-    os: String,
-    libc: String,
-    major: u8,
-    minor: u8,
-    patch: u8,
-    prerelease: Option<String>,
+    #[serde(flatten)]
+    key: PythonDownloadKey,
     url: String,
     sha256: Option<Digest<32>>,
-    variant: Option<String>,
     build: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct JsonArch {
-    family: String,
-    variant: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -925,84 +913,10 @@ fn parse_json_downloads(
     json_downloads
         .into_iter()
         .filter_map(|(key, entry)| {
-            let implementation = match entry.name.as_str() {
-                "cpython" => LenientImplementationName::Known(ImplementationName::CPython),
-                "pypy" => LenientImplementationName::Known(ImplementationName::PyPy),
-                "graalpy" => LenientImplementationName::Known(ImplementationName::GraalPy),
-                _ => LenientImplementationName::Unknown(entry.name.clone()),
-            };
-
-            let arch_str = match entry.arch.family.as_str() {
-                "armv5tel" => Cow::Borrowed("armv5te"),
-                // The `gc` variant of riscv64 is the common base instruction set and
-                // is the target in `python-build-standalone`
-                // See https://github.com/astral-sh/python-build-standalone/issues/504
-                "riscv64" => Cow::Borrowed("riscv64gc"),
-                value => Cow::Borrowed(value),
-            };
-
-            let arch_str = if let Some(variant) = entry.arch.variant {
-                Cow::Owned(format!("{arch_str}_{variant}"))
-            } else {
-                arch_str
-            };
-
-            let arch = match Arch::from_str(&arch_str) {
-                Ok(arch) => arch,
-                Err(e) => {
-                    debug!("Skipping entry {key}: Invalid arch '{arch_str}' - {e}");
-                    return None;
-                }
-            };
-
-            let os = match Os::from_str(&entry.os) {
-                Ok(os) => os,
-                Err(e) => {
-                    debug!("Skipping entry {}: Invalid OS '{}' - {}", key, entry.os, e);
-                    return None;
-                }
-            };
-
-            let libc = match Libc::from_str(&entry.libc) {
-                Ok(libc) => libc,
-                Err(e) => {
-                    debug!(
-                        "Skipping entry {}: Invalid libc '{}' - {}",
-                        key, entry.libc, e
-                    );
-                    return None;
-                }
-            };
-
-            let variant = match entry
-                .variant
-                .as_deref()
-                .map(PythonVariant::from_str)
-                .transpose()
-            {
-                Ok(Some(variant)) => variant,
-                Ok(None) => PythonVariant::default(),
-                Err(()) => {
-                    debug!(
-                        "Skipping entry {key}: Unknown python variant - {}",
-                        entry.variant.unwrap_or_default()
-                    );
-                    return None;
-                }
-            };
-
-            let version_str = format!(
-                "{}.{}.{}{}",
-                entry.major,
-                entry.minor,
-                entry.patch,
-                entry.prerelease.as_deref().unwrap_or_default()
-            );
-
-            let version = match PythonVersion::from_str(&version_str) {
-                Ok(version) => version,
-                Err(e) => {
-                    debug!("Skipping entry {key}: Invalid version '{version_str}' - {e}");
+            let installation_key = match entry.key.installation_key() {
+                Ok(key) => key,
+                Err(error) => {
+                    debug!("Skipping entry {key}: {error}");
                     return None;
                 }
             };
@@ -1014,12 +928,7 @@ fn parse_json_downloads(
                 .map(|s| Box::leak(s.into_boxed_str()) as &'static str);
 
             Some(ManagedPythonDownload {
-                key: PythonInstallationKey::new_from_version(
-                    implementation,
-                    &version,
-                    Platform::new(os, arch, libc),
-                    variant,
-                ),
+                key: installation_key,
                 url,
                 sha256,
                 build,
@@ -1182,6 +1091,7 @@ async fn read_url(
 mod tests {
     #[cfg(unix)]
     use crate::ManagedPythonInstallation;
+    use std::str::FromStr;
     #[cfg(target_arch = "aarch64")]
     use uv_python_types::ArchRequest;
     use uv_python_types::VersionRequest;

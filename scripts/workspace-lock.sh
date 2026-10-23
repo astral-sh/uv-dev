@@ -9,6 +9,7 @@ set -e -o pipefail
 
 # Project lockfile
 uv lock "$@"
+uv lock --project scripts/uv-dev-python "$@"
 
 # All PEP 723 script lockfiles
 uv workspace list --scripts | xargs -P4 -I {} uv lock --script {} "$@"

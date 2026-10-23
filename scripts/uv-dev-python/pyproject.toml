@@ -1,0 +1,38 @@
+[build-system]
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"
+
+[project]
+name = "uv-dev-python"
+version = "0.0.0"
+description = "Internal Python access to uv's Rust implementations"
+requires-python = ">=3.12"
+classifiers = ["Private :: Do Not Upload"]
+
+[project.scripts]
+validate-python-downloads = "uv_dev.downloads:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "ruff>=0.16.2", "ty>=0.0.69"]
+
+[tool.maturin]
+module-name = "uv_dev._native"
+python-source = "python"
+profile = "dev"
+locked = true
+
+[tool.uv]
+no-build = false
+exclude-newer = "P7D"
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "src/**/*.rs" },
+    { file = "../../Cargo.toml" },
+    { file = "../../crates/**/Cargo.toml" },
+    { file = "../../crates/**/*.rs" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
