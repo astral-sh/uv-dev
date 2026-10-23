@@ -769,12 +769,8 @@ async fn do_lock(
     // If any of the resolution-determining settings changed, invalidate the lock.
     let existing_lock = if let Some(existing_lock) = existing_lock {
         let validation_build_dispatch = build_dispatch.fork(&locked_build_hasher);
-        let database = DistributionDatabase::new(
-            &client,
-            &validation_build_dispatch,
-            concurrency.downloads_semaphore.clone(),
-        )
-        .with_first_party_packages(&first_party_packages);
+        let database = DistributionDatabase::new(&client, &validation_build_dispatch, concurrency)
+            .with_first_party_packages(&first_party_packages);
         match Box::pin(ValidatedLock::validate(
             existing_lock,
             target.install_path(),
@@ -855,13 +851,9 @@ async fn do_lock(
             } else {
                 None
             };
-            let database = DistributionDatabase::new(
-                &client,
-                &build_dispatch,
-                concurrency.downloads_semaphore.clone(),
-            )
-            .with_recorder(recorder.clone())
-            .with_first_party_packages(&first_party_packages);
+            let database = DistributionDatabase::new(&client, &build_dispatch, concurrency)
+                .with_recorder(recorder.clone())
+                .with_first_party_packages(&first_party_packages);
 
             // Determine whether we can reuse the existing package versions.
             let versions_lock = existing_lock.as_ref().and_then(|lock| match &lock {
