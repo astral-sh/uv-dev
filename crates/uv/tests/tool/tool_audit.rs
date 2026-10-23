@@ -1,6 +1,14 @@
+use std::convert::Infallible;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
 use anyhow::Result;
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::prelude::*;
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::service::service_fn;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use indoc::indoc;
 use insta::assert_json_snapshot;
 use serde_json::{Value, json};
@@ -425,6 +433,121 @@ async fn tool_audit_multiple_tools() {
     Auditing `simple-launcher`
     Found no known vulnerabilities and no adverse project statuses in 1 package
     ");
+}
+
+#[test]
+fn tool_audit_reuses_osv_connections() -> Result<()> {
+    let context = uv_test::test_context!("3.13").with_tool_dirs();
+    install_tool(&context, "simple-launcher", true);
+    install_tool(&context, "basic-app", true);
+
+    let connections = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let address = listener.local_addr()?;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = std::thread::spawn({
+        let connections = Arc::clone(&connections);
+        let requests = Arc::clone(&requests);
+        move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test server runtime");
+            runtime.block_on(async move {
+                let listener =
+                    tokio::net::TcpListener::from_std(listener).expect("test server listener");
+                let serve = async {
+                    while let Ok((stream, _)) = listener.accept().await {
+                        let connection = connections.fetch_add(1, Ordering::SeqCst);
+                        let requests = Arc::clone(&requests);
+                        tokio::spawn(async move {
+                            let _ = hyper_util::server::conn::auto::Builder::new(
+                                TokioExecutor::new(),
+                            )
+                            .serve_connection(
+                                TokioIo::new(stream),
+                                service_fn(
+                                    move |request: hyper::Request<hyper::body::Incoming>| {
+                                        let requests = Arc::clone(&requests);
+                                        async move {
+                                            assert_eq!(request.method(), hyper::Method::POST);
+                                            assert_eq!(request.uri().path(), "/v1/querybatch");
+                                            let body = request
+                                                .into_body()
+                                                .collect()
+                                                .await
+                                                .expect("complete query body")
+                                                .to_bytes();
+                                            let body: Value = serde_json::from_slice(&body)
+                                                .expect("valid OSV query");
+                                            let queries = body["queries"]
+                                                .as_array()
+                                                .expect("OSV query array");
+                                            let names = queries
+                                                .iter()
+                                                .map(|query| {
+                                                    query["package"]["name"]
+                                                        .as_str()
+                                                        .expect("package name")
+                                                        .to_owned()
+                                                })
+                                                .collect::<Vec<_>>();
+                                            requests
+                                                .lock()
+                                                .expect("request record mutex")
+                                                .push((connection, names));
+                                            let body = json!({
+                                                "results": vec![json!({"vulns": []}); queries.len()]
+                                            });
+                                            Ok::<_, Infallible>(
+                                                hyper::Response::builder()
+                                                    .header("content-type", "application/json")
+                                                    .body(Full::new(Bytes::from(body.to_string())))
+                                                    .expect("valid OSV response"),
+                                            )
+                                        }
+                                    },
+                                ),
+                            )
+                            .await;
+                        });
+                    }
+                };
+                tokio::select! {
+                    () = serve => {}
+                    _ = shutdown_rx => {}
+                }
+            });
+        }
+    });
+
+    uv_snapshot!(context.filters(), context.tool_audit()
+        .arg("--all")
+        .arg("--service-url")
+        .arg(format!("http://{address}"))
+        .env(EnvVars::UV_PREVIEW_FEATURES, "audit,tool-install-locks")
+        , @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Auditing `basic-app`
+    Found no known vulnerabilities and no adverse project statuses in 1 package
+    Auditing `simple-launcher`
+    Found no known vulnerabilities and no adverse project statuses in 1 package
+    ");
+
+    drop(shutdown_tx);
+    server.join().expect("test server thread");
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *requests.lock().expect("request record mutex"),
+        [
+            (0, vec!["basic-app".to_owned()]),
+            (0, vec!["simple-launcher".to_owned()]),
+        ]
+    );
+    Ok(())
 }
 
 #[tokio::test]

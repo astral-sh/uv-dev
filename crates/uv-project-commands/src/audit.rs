@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use uv_audit::{VulnerabilityID, VulnerabilityServiceFormat};
 use uv_audit_operations::{AuditResults, artifact_uri, audit_lock, warn_unmatched_ignores};
 use uv_cache::Cache;
-use uv_client::BaseClientBuilder;
+use uv_client::{BaseClientBuilder, CachedClient};
 use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     ActiveEnvironment, AuditOutputFormat, Concurrency, DependencyGroups, ExtrasSpecification,
@@ -203,6 +203,7 @@ pub async fn audit(
         )
     });
 
+    let osv_client = CachedClient::new(client_builder.clone().build()?);
     let outcome = audit_lock(
         &lock,
         target.install_path(),
@@ -211,6 +212,7 @@ pub async fn audit(
         &settings.index_locations,
         settings.keyring_provider,
         client_builder,
+        osv_client,
         concurrency,
         &cache,
         printer,
