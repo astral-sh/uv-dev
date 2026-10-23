@@ -15,6 +15,7 @@ pub mod export;
 pub mod format;
 pub mod init;
 pub mod lock;
+mod lock_report;
 pub mod remove;
 pub mod run;
 pub mod sync;

@@ -20,7 +20,7 @@ use uv_types::HashStrategy;
 use uv_warnings::warn_user;
 use uv_workspace::{Editability, WorkspaceMember};
 
-use crate::LockValidationError;
+use crate::{LockReporter, LockValidationError, LockValidationReason, LockValidationReasonCode};
 
 /// Whether an existing lockfile can satisfy or guide a new resolution.
 #[derive(Debug)]
@@ -68,12 +68,20 @@ impl ValidatedLock {
         database: &DistributionDatabase<'_, BuildDispatch<'_>>,
         preview: Preview,
         printer: Printer,
+        mut reporter: Option<&mut dyn LockReporter>,
     ) -> Result<Self, LockValidationError> {
+        let result = async {
         // Perform checks in a deliberate order, such that the most extreme conditions are tested
         // first (i.e., every check that returns `Self::Unusable`, followed by every check that
         // returns `Self::Versions`, followed by every check that returns `Self::Preferable`, and
         // finally `Self::Satisfies`).
         if lock.resolution_mode() != options.resolution_mode {
+            if let Some(reporter) = reporter.as_deref_mut() {
+                reporter.stale(
+                    LockValidationReason::new(LockValidationReasonCode::ResolutionModeChanged)
+                        .values([options.resolution_mode], [lock.resolution_mode()]),
+                );
+            }
             let _ = writeln!(
                 printer.stderr(),
                 "Ignoring existing lockfile due to change in resolution mode: `{}` vs. `{}`",
@@ -83,6 +91,12 @@ impl ValidatedLock {
             return Ok(Self::Unusable(lock));
         }
         if lock.fork_strategy() != options.fork_strategy {
+            if let Some(reporter) = reporter.as_deref_mut() {
+                reporter.stale(
+                    LockValidationReason::new(LockValidationReasonCode::ForkStrategyChanged)
+                        .values([options.fork_strategy], [lock.fork_strategy()]),
+                );
+            }
             let _ = writeln!(
                 printer.stderr(),
                 "Ignoring existing lockfile due to change in fork strategy: `{}` vs. `{}`",
@@ -98,6 +112,9 @@ impl ValidatedLock {
             // If a relative value is used, we won't invalidate on every tick of the clock unless
             // the span duration changed or some other operation causes a new resolution
             if !change.is_relative_timestamp_change() {
+                if let Some(reporter) = reporter.as_deref_mut() {
+                    reporter.stale(LockValidationReason::exclude_newer(&change));
+                }
                 let _ = writeln!(
                     printer.stderr(),
                     "Resolving despite existing lockfile due to {change}",
@@ -121,6 +138,11 @@ impl ValidatedLock {
         // bunk, then we shouldn't return a result that indicates we should try
         // to re-use the existing fork markers.
         if let Err((fork_markers_union, environments_union)) = lock.check_marker_coverage() {
+            if let Some(reporter) = reporter.as_deref_mut() {
+                reporter.stale(LockValidationReason::new(
+                    LockValidationReasonCode::MarkerCoverageChanged,
+                ));
+            }
             warn_user!(
                 "Resolving despite existing lockfile due to fork markers not covering the supported environments: `{}` vs `{}`",
                 fork_markers_union
@@ -138,6 +160,11 @@ impl ValidatedLock {
         if let Err((fork_markers_union, requires_python_marker)) =
             lock.requires_python_coverage(requires_python)
         {
+            if let Some(reporter) = reporter.as_deref_mut() {
+                reporter.stale(LockValidationReason::new(
+                    LockValidationReasonCode::PythonCoverageChanged,
+                ));
+            }
             warn_user!(
                 "Resolving despite existing lockfile due to fork markers being disjoint with `requires-python`: `{}` vs `{}`",
                 fork_markers_union
@@ -160,6 +187,11 @@ impl ValidatedLock {
             .map(|marker| lock.simplify_environment(marker))
             .collect::<Vec<_>>();
         if expected != actual {
+            if let Some(reporter) = reporter.as_deref_mut() {
+                reporter.stale(LockValidationReason::new(
+                    LockValidationReasonCode::EnvironmentsChanged,
+                ));
+            }
             debug!(
                 "Resolving despite existing lockfile due to change in supported environments: `{:?}` vs. `{:?}`",
                 expected, actual
@@ -177,6 +209,11 @@ impl ValidatedLock {
             .map(|marker| lock.simplify_environment(marker))
             .collect::<Vec<_>>();
         if expected != actual {
+            if let Some(reporter) = reporter.as_deref_mut() {
+                reporter.stale(LockValidationReason::new(
+                    LockValidationReasonCode::RequiredEnvironmentsChanged,
+                ));
+            }
             debug!(
                 "Resolving despite existing lockfile due to change in supported environments: `{:?}` vs. `{:?}`",
                 expected, actual
@@ -186,6 +223,11 @@ impl ValidatedLock {
 
         // Different libc requirements can change which versions cover the required platforms.
         if lock.minimum_libc_version() != options.minimum_libc_version {
+            if let Some(reporter) = reporter.as_deref_mut() {
+                reporter.stale(LockValidationReason::new(
+                    LockValidationReasonCode::MinimumLibcVersionChanged,
+                ));
+            }
             debug!(
                 "Resolving despite existing lockfile due to change in minimum libc version: {:?} vs. {:?}",
                 lock.minimum_libc_version(),
@@ -196,6 +238,11 @@ impl ValidatedLock {
 
         // If the conflicting group config has changed, we have to perform a clean resolution.
         if conflicts != lock.conflicts() {
+            if let Some(reporter) = reporter.as_deref_mut() {
+                reporter.stale(LockValidationReason::new(
+                    LockValidationReasonCode::ConflictsChanged,
+                ));
+            }
             debug!(
                 "Resolving despite existing lockfile due to change in conflicting groups: `{:?}` vs. `{:?}`",
                 conflicts,
@@ -207,6 +254,12 @@ impl ValidatedLock {
         // If the Requires-Python bound has changed, we have to perform a clean resolution, since
         // the set of `resolution-markers` may no longer cover the entire supported Python range.
         if lock.requires_python().range() != requires_python.range() {
+            if let Some(reporter) = reporter.as_deref_mut() {
+                reporter.stale(
+                    LockValidationReason::new(LockValidationReasonCode::RequiresPythonChanged)
+                        .values([requires_python], [lock.requires_python()]),
+                );
+            }
             debug!(
                 "Resolving despite existing lockfile due to change in Python requirement: `{}` vs. `{}`",
                 lock.requires_python(),
@@ -222,6 +275,11 @@ impl ValidatedLock {
         // If the pre-release mode has changed, we have to re-resolve, but can retain the existing
         // versions and forks.
         if lock.prerelease() != &options.prerelease {
+            if let Some(reporter) = reporter.as_deref_mut() {
+                reporter.stale(LockValidationReason::new(
+                    LockValidationReasonCode::PrereleaseChanged,
+                ));
+            }
             if lock.prerelease_mode() != options.prerelease.global {
                 let _ = writeln!(
                     printer.stderr(),
@@ -247,6 +305,11 @@ impl ValidatedLock {
         }
 
         if !lock.satisfies_hash_algorithms(install_path, index_locations)? {
+            if let Some(reporter) = reporter.as_deref_mut() {
+                reporter.stale(LockValidationReason::new(
+                    LockValidationReasonCode::HashAlgorithmsChanged,
+                ));
+            }
             debug!("Resolving despite existing lockfile due to mismatched hash algorithm");
             return Ok(Self::Preferable(lock));
         }
@@ -271,7 +334,7 @@ impl ValidatedLock {
         };
 
         // Determine whether the lockfile satisfies the workspace requirements.
-        match lock
+        let satisfies = lock
             .satisfies(
                 install_path,
                 packages,
@@ -295,8 +358,13 @@ impl ValidatedLock {
                 database,
                 preview.is_enabled(PreviewFeature::LockWithoutMetadata),
             )
-            .await?
+            .await?;
+        if let Some(reporter) = reporter.as_deref_mut()
+            && let Some(reason) = LockValidationReason::from_satisfies(&satisfies)
         {
+            reporter.stale(reason);
+        }
+        match satisfies {
             SatisfiesResult::Satisfied => {
                 debug!("Existing `uv.lock` satisfies workspace requirements");
                 Ok(Self::Satisfies(lock))
@@ -511,6 +579,14 @@ impl ValidatedLock {
                 Ok(Self::Preferable(lock))
             }
         }
+        }
+        .await;
+        if let Some(reporter) = reporter
+            && let Err(error) = &result
+        {
+            reporter.validation_error(error);
+        }
+        result
     }
 
     /// Return whether the existing lock satisfies the current inputs.
