@@ -1922,7 +1922,7 @@ mod tests {
     use insta::{assert_debug_snapshot, assert_snapshot};
     use tokio::sync::Semaphore;
     use uv_normalize::PackageName;
-    use uv_pypi_types::{HashDigest, HashDigests, PypiSimpleDetail};
+    use uv_pypi_types::{HashDigest, HashDigests, PypiFile, PypiSimpleDetail, Yanked};
     use uv_redacted::SafeUrl;
     use uv_torch::{TorchBackend, TorchStrategy};
 
@@ -1938,6 +1938,8 @@ mod tests {
     use uv_small_str::SmallString;
     use wiremock::matchers::{basic_auth, method, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::{CachedFile, File as DistributionFile};
 
     type Error = Box<dyn std::error::Error>;
 
@@ -2350,6 +2352,45 @@ mod tests {
         Ok(())
     }
 
+    fn distribution_file() -> Result<DistributionFile, Error> {
+        let file: PypiFile = serde_json::from_str(
+            r#"{
+                "filename": "example-1.0.tar.gz",
+                "hashes": {},
+                "core-metadata": true,
+                "requires-python": ">=3.8",
+                "url": "../../files/example-1.0.tar.gz"
+            }"#,
+        )?;
+        Ok(DistributionFile::try_from_pypi(
+            file,
+            &SmallString::from("https://example.org/simple/example/"),
+        )?)
+    }
+
+    #[test]
+    fn cached_file_scalar_presence_round_trip() -> Result<(), Error> {
+        let mut file = distribution_file()?;
+        for size in [None, Some(0), Some(42), Some(u64::MAX)] {
+            for upload_time in [None, Some(0), Some(-1), Some(i64::MIN), Some(i64::MAX)] {
+                file.size = size;
+                file.upload_time_utc_ms = upload_time;
+                let cached = CachedFile::from(file.clone());
+                let archived = OwnedArchive::from_unarchived(&cached)?;
+
+                assert_eq!(archived.has_size, size.is_some());
+                assert_eq!(archived.size.to_native(), size.unwrap_or_default());
+                assert_eq!(archived.has_upload_time, upload_time.is_some());
+                assert_eq!(archived.upload_time_utc_ms(), upload_time);
+                assert_eq!(
+                    DistributionFile::from(OwnedArchive::deserialize(&archived)),
+                    file
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn variant_json_simple_api() -> Result<(), Error> {
         let response = r#"{
@@ -2396,6 +2437,35 @@ mod tests {
     }
 
     #[test]
+    fn cached_file_filename_round_trip() -> Result<(), Error> {
+        let mut file = distribution_file()?;
+        for (url, stored) in [
+            ("../../files/example-1.0.tar.gz?download=1#fragment", false),
+            (
+                "https://example.org/files/example-1.0.tar.gz?download=1#fragment",
+                false,
+            ),
+            ("../../files/renamed.tar.gz", true),
+            ("../../files/example%2D1.0.tar.gz", true),
+        ] {
+            file.url = FileLocation::new(
+                SmallString::from(url),
+                &SmallString::from("https://example.org/simple/example/"),
+            );
+            let cached = CachedFile::from(file.clone());
+            assert_eq!(cached.filename.is_some(), stored, "{url}");
+            assert_eq!(cached.filename(), file.filename.as_ref(), "{url}");
+
+            let archived = OwnedArchive::from_unarchived(&cached)?;
+            assert_eq!(
+                DistributionFile::from(OwnedArchive::deserialize(&archived)),
+                file
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn variant_json_html_index() -> Result<(), Error> {
         let html = r#"
             <a href="example-1.0-py3-none-any.whl">example-1.0-py3-none-any.whl</a>
@@ -2426,6 +2496,36 @@ mod tests {
             sidecar.url.to_url()?,
             @"https://example.com/simple/example/example-1.0-variants.json"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn cached_file_yanked_round_trip() -> Result<(), Error> {
+        let mut file = distribution_file()?;
+        for (yanked, expected) in [
+            (None, None),
+            (Some(Yanked::Bool(false)), None),
+            (Some(Yanked::Bool(true)), Some(Yanked::Bool(true))),
+            (
+                Some(Yanked::Reason(SmallString::from(""))),
+                Some(Yanked::Reason(SmallString::from(""))),
+            ),
+            (
+                Some(Yanked::Reason(SmallString::from("broken release"))),
+                Some(Yanked::Reason(SmallString::from("broken release"))),
+            ),
+        ] {
+            file.yanked = yanked.map(Box::new);
+            let cached = CachedFile::from(file.clone());
+            let archived = OwnedArchive::from_unarchived(&cached)?;
+
+            file.yanked = expected.map(Box::new);
+            assert_eq!(archived.yanked.is_none(), file.yanked.is_none());
+            assert_eq!(
+                DistributionFile::from(OwnedArchive::deserialize(&archived)),
+                file
+            );
+        }
         Ok(())
     }
 
