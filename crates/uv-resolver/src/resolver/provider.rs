@@ -301,6 +301,11 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
                         Err(error) => Err(error.into()),
                     }
                 }
+                uv_distribution::Error::Build(ref error) if error.is_metadata_inconsistent() => {
+                    Ok(MetadataResponse::Unavailable(
+                        MetadataUnavailable::InconsistentMetadata(Arc::new(err)),
+                    ))
+                }
                 uv_distribution::Error::WheelMetadataVersionMismatch { .. } => {
                     Ok(MetadataResponse::Unavailable(
                         MetadataUnavailable::InconsistentMetadata(Arc::new(err)),
