@@ -6,28 +6,29 @@ use serde::{Deserialize, Serialize};
 use uv_pep440::{Version, VersionSpecifier, VersionSpecifiers};
 
 /// The default version specifier when adding a dependency.
-// While PEP 440 allows an arbitrary number of version digits, the `major` and `minor` build on
-// most projects sticking to two or three components and a SemVer-ish versioning system, so can
-// bump the major or minor version of a major.minor or major.minor.patch input version.
+// PEP 440 allows any number of version components. The `major` and `minor` bounds assume
+// versions usually use two or three components and follow semantic versioning conventions.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum AddBoundsKind {
-    /// Only a lower bound, e.g., `>=1.2.3`.
+    /// Set only a lower bound, such as `>=1.2.3`.
     #[default]
     Lower,
-    /// Allow the same major version, similar to the semver caret, e.g., `>=1.2.3, <2.0.0`.
+    /// Allow the same major version, such as `>=1.2.3, <2.0.0`.
+    /// This is similar to a semantic-versioning caret.
     ///
-    /// Leading zeroes are skipped, e.g. `>=0.1.2, <0.2.0`.
+    /// Skip leading zeroes, as in `>=0.1.2, <0.2.0`.
     Major,
-    /// Allow the same minor version, similar to the semver tilde, e.g., `>=1.2.3, <1.3.0`.
+    /// Allow the same minor version, such as `>=1.2.3, <1.3.0`.
+    /// This is similar to a semantic-versioning tilde.
     ///
-    /// Leading zeroes are skipped, e.g. `>=0.1.2, <0.1.3`.
+    /// Skip leading zeroes, as in `>=0.1.2, <0.1.3`.
     Minor,
-    /// Pin the exact version, e.g., `==1.2.3`.
+    /// Pin the exact version, such as `==1.2.3`.
     ///
-    /// This option is not recommended, as versions are already pinned in the uv lockfile.
+    /// Avoid this option because the uv lockfile already pins versions.
     Exact,
 }
 
@@ -45,9 +46,8 @@ impl Display for AddBoundsKind {
 impl AddBoundsKind {
     /// Return the version specifiers for this bound policy and a resolved version.
     pub fn specifiers(self, version: Version) -> VersionSpecifiers {
-        // Nomenclature: "major" is the most significant component of the version, "minor" is the
-        // second most significant component, so most versions are either major.minor.patch or
-        // 0.major.minor.
+        // The major version is the most significant component. The minor version is the next
+        // component. Common formats are `major.minor.patch` and `0.major.minor`.
         match self {
             Self::Lower => {
                 VersionSpecifiers::from(VersionSpecifier::greater_than_equal_version(version))
@@ -59,7 +59,7 @@ impl AddBoundsKind {
                     .take_while(|digit| **digit == 0)
                     .count();
 
-                // Special case: The version is 0.
+                // Handle a version that contains only zeroes.
                 if leading_zeroes == version.release().len() {
                     let upper_bound = Version::new(
                         [0, 1]
@@ -72,15 +72,15 @@ impl AddBoundsKind {
                     ]);
                 }
 
-                // Compute the new major version and pad it to the same length:
+                // Increment the major version and preserve the number of components:
                 // 1.2.3 -> 2.0.0
                 // 1.2 -> 2.0
                 // 1 -> 2
-                // We ignore leading zeroes, adding Semver-style semantics to 0.x versions, too:
+                // Skip leading zeroes to apply semantic versioning to `0.x` versions:
                 // 0.1.2 -> 0.2.0
                 // 0.0.1 -> 0.0.2
                 let major = version.release().get(leading_zeroes).copied().unwrap_or(0);
-                // The length of the lower bound minus the leading zero and bumped component.
+                // Count the components after the incremented component.
                 let trailing_zeros = version.release().iter().skip(leading_zeroes + 1).len();
                 let upper_bound = Version::new(
                     iter::repeat_n(0, leading_zeroes)
@@ -100,7 +100,7 @@ impl AddBoundsKind {
                     .take_while(|digit| **digit == 0)
                     .count();
 
-                // Special case: The version is 0.
+                // Handle a version that contains only zeroes.
                 if leading_zeroes == version.release().len() {
                     let upper_bound = [0, 0, 1]
                         .into_iter()
@@ -111,14 +111,13 @@ impl AddBoundsKind {
                     ]);
                 }
 
-                // If both major and minor version are 0, the concept of bumping the minor version
-                // instead of the major version is not useful. Instead, we bump the next
-                // non-zero part of the version. This avoids extending the three components of 0.0.1
-                // to the four components of 0.0.1.1.
+                // If the major and minor versions are zero, increment the next nonzero component.
+                // This preserves the number of components, such as the three components in
+                // `0.0.1`.
                 if leading_zeroes >= 2 {
                     let most_significant =
                         version.release().get(leading_zeroes).copied().unwrap_or(0);
-                    // The length of the lower bound minus the leading zero and bumped component.
+                    // Count the components after the incremented component.
                     let trailing_zeros = version.release().iter().skip(leading_zeroes + 1).len();
                     let upper_bound = Version::new(
                         iter::repeat_n(0, leading_zeroes)
@@ -131,16 +130,15 @@ impl AddBoundsKind {
                     ]);
                 }
 
-                // Compute the new minor version and pad it to the same length where possible:
+                // Increment the minor version and preserve the number of components when possible:
                 // 1.2.3 -> 1.3.0
                 // 1.2 -> 1.3
                 // 1 -> 1.1
-                // We ignore leading zero, adding Semver-style semantics to 0.x versions, too:
+                // Skip leading zeroes to apply semantic versioning to `0.x` versions:
                 // 0.1.2 -> 0.1.3
                 // 0.0.1 -> 0.0.2
 
-                // If the version has only one digit, say `1`, or if there are only leading zeroes,
-                // pad with zeroes.
+                // Pad single-component versions and versions with only leading zeroes.
                 let major = version.release().get(leading_zeroes).copied().unwrap_or(0);
                 let minor = version
                     .release()

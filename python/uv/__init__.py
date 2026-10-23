@@ -1,3 +1,5 @@
+"""Expose helpers for the installed `uv` executable."""
+
 from __future__ import annotations
 
 from ._find_uv import find_uv_bin
@@ -6,6 +8,7 @@ __all__ = ["find_uv_bin"]
 
 
 def __getattr__(attr_name: str) -> object:
+    """Explain why legacy build backend hooks are not available."""
     if attr_name in {
         "build_sdist",
         "build_wheel",
