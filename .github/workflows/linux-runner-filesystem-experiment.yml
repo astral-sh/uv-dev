@@ -1,0 +1,138 @@
+name: Linux runner filesystem experiment
+"on":
+  push:
+    branches:
+      - zb/linux-runner-filesystem-rca-20260901
+permissions:
+  contents: read
+concurrency:
+  group: linux-filesystem-rca-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  PYTHON_VERSION: "3.12"
+  RUSTC_BOOTSTRAP: 1
+  RUSTUP_MAX_RETRIES: 10
+jobs:
+  compare:
+    name: ${{ matrix.runner }}
+    runs-on: ${{ matrix.labels }}
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: source
+        shell: bash
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - runner: namespace-16
+            labels:
+              - nscloud-ubuntu-24.04-amd64-16x64-with-features
+              - namespace-features:container.privileged=true
+          - runner: depot-16
+            labels:
+              - depot-ubuntu-24.04-16
+    steps:
+      - name: Checkout experiment
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          path: experiment
+      - name: Checkout fixed uv source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: astral-sh/uv
+          ref: e9837f6e09e481bf5d1c2c2f13b641c14a366518
+          persist-credentials: false
+          path: source
+      - name: Prepare task scratch directory
+        run: |
+          mkdir -p "$HOME/code/tmp/uv-runner-rca/native"
+      - name: Install mold
+        run: ./scripts/install-mold.sh
+      - name: Install Rust toolchain
+        run: rustup toolchain install --profile minimal
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.12.7
+      - name: Install required Python versions
+        run: uv python install
+      - name: Install secret service
+        run: |
+          # Bound package download attempts without depending on Depot's mirror configuration.
+          printf '%s\n' \
+            'Acquire::Retries "3";' \
+            'Acquire::http::Timeout "10";' \
+            'Acquire::https::Timeout "10";' \
+            | sudo tee /etc/apt/apt.conf.d/80-retries > /dev/null
+          sudo apt install -y --no-install-recommends dbus-daemon gnome-keyring time
+      - name: Start gnome-keyring
+        run: |
+          DBUS_SESSION_BUS_ADDRESS="$(dbus-daemon --session --fork --print-address=1)"
+          export DBUS_SESSION_BUS_ADDRESS
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          gnome-keyring-daemon --components=secrets --daemonize --unlock <<< 'foobar'
+      - name: Create btrfs filesystem
+        run: |
+          sudo apt install -y btrfs-progs
+          truncate -s 1G "$HOME/code/tmp/uv-runner-rca/btrfs.img"
+          mkfs.btrfs "$HOME/code/tmp/uv-runner-rca/btrfs.img"
+          sudo mkdir /btrfs
+          sudo mount -o loop "$HOME/code/tmp/uv-runner-rca/btrfs.img" /btrfs
+          sudo chown "$(id -u):$(id -g)" /btrfs
+      - name: Create tmpfs filesystem
+        run: |
+          sudo mkdir /tmpfs
+          sudo mount -t tmpfs -o size=256m tmpfs /tmpfs
+          sudo chown "$(id -u):$(id -g)" /tmpfs
+      - name: Create ext4 filesystem (low hardlink limit)
+        run: |
+          sudo apt install -y e2fsprogs
+          truncate -s 128M "$HOME/code/tmp/uv-runner-rca/ext4.img"
+          mkfs.ext4 -F "$HOME/code/tmp/uv-runner-rca/ext4.img"
+          sudo mkdir /ext4
+          sudo mount -o loop "$HOME/code/tmp/uv-runner-rca/ext4.img" /ext4
+          sudo chown "$(id -u):$(id -g)" /ext4
+      - name: Install cargo nextest
+        uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad
+        with:
+          tool: cargo-nextest
+      - name: Create isolated scratch filesystems
+        run: |
+          scratch="$HOME/code/tmp/uv-runner-rca"
+          mkdir -p "$scratch/ext4" "$scratch/tmpfs"
+          truncate -s 16G "$scratch/test-scratch.img"
+          mkfs.ext4 -F -q "$scratch/test-scratch.img"
+          sudo mount -o loop "$scratch/test-scratch.img" "$scratch/ext4"
+          sudo mount -t tmpfs -o size=16G tmpfs "$scratch/tmpfs"
+          sudo chown "$(id -u):$(id -g)" "$scratch/ext4" "$scratch/tmpfs"
+          findmnt -n -o FSTYPE,TARGET -T "$scratch/native"
+          findmnt -n -o FSTYPE,TARGET -T "$scratch/ext4"
+          findmnt -n -o FSTYPE,TARGET -T "$scratch/tmpfs"
+      - name: Measure controlled comparisons
+        env:
+          RCA_RUNNER: ${{ matrix.runner }}
+          UV_HTTP_RETRIES: "5"
+          RUST_BACKTRACE: "1"
+          CARGO_UNSTABLE_MTIME_ON_USE: "false"
+          UV_INTERNAL__TEST_COW_FS: /btrfs
+          UV_INTERNAL__TEST_NOCOW_FS: /tmpfs
+          UV_INTERNAL__TEST_ALT_FS: /tmpfs
+          UV_INTERNAL__TEST_LOWLINKS_FS: /ext4
+          INSTA_UPDATE: "no"
+          INSTA_PENDING_DIR: ${{ github.workspace }}/results/pending-snapshots
+        run: |
+          python3 ../experiment/.github/runner-experiments/benchmark.py filesystem --results "$GITHUB_WORKSPACE/results"
+      - name: Upload measurements
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: linux-filesystem-rca-${{ matrix.runner }}
+          path: results/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
