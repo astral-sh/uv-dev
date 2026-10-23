@@ -56,6 +56,38 @@ REPO_URL = "https://github.com/astral-sh/uv"
 PRETTIER_VERSION = "3.8.3"
 
 
+def generate_member_readme(
+    package: dict, workspace_root: pathlib.Path, uv_version: str
+) -> pathlib.Path | None:
+    name = package["name"]
+    if name == "uv":
+        return None
+
+    crate_dir = pathlib.Path(package["manifest_path"]).parent
+    readme_path = crate_dir / "README.md"
+    if readme_path.exists():
+        existing_content = readme_path.read_text()
+        if not existing_content.startswith(GENERATED_HEADER):
+            print(f"Skipping {name}: existing README without generated header")
+            return None
+
+    crate_version = package["version"]
+    relative_crate_path = crate_dir.relative_to(workspace_root)
+    source_url = f"{REPO_URL}/blob/{uv_version}/{relative_crate_path}"
+    uv_crates_io_url = f"https://crates.io/crates/uv/{uv_version}"
+    readme_content = MEMBER_TEMPLATE.format(
+        GENERATED_HEADER=GENERATED_HEADER,
+        name=name,
+        crate_version=crate_version,
+        uv_version=uv_version,
+        uv_crates_io_url=uv_crates_io_url,
+        source_url=source_url,
+    )
+    readme_path.write_text(readme_content)
+    print(f"Generated README for {name}")
+    return readme_path
+
+
 def main() -> None:
     result = subprocess.run(
         ["cargo", "metadata", "--format-version", "1"],
@@ -112,45 +144,9 @@ def main() -> None:
     # Generate READMEs for all workspace members
     for workspace_member in content["workspace_members"]:
         package = packages[workspace_member]
-        name = package["name"]
-
-        # Skip the main uv crate (already handled above)
-        if name == "uv":
-            continue
-
-        # Determine the README path for this crate
-        manifest_path = pathlib.Path(package["manifest_path"])
-        crate_dir = manifest_path.parent
-        member_readme_path = crate_dir / "README.md"
-
-        # Check if README already exists
-        if member_readme_path.exists():
-            existing_content = member_readme_path.read_text()
-            # Skip if it doesn't have the generated header
-            if not existing_content.startswith(GENERATED_HEADER):
-                print(f"Skipping {name}: existing README without generated header")
-                continue
-
-        # Get the crate version and compute source URL
-        crate_version = package["version"]
-        # Compute relative path from workspace root to crate directory
-        relative_crate_path = crate_dir.relative_to(workspace_root)
-        source_url = f"{REPO_URL}/blob/{uv_version}/{relative_crate_path}"
-
-        # Generate the README content
-        uv_crates_io_url = f"https://crates.io/crates/uv/{uv_version}"
-        member_readme_content = MEMBER_TEMPLATE.format(
-            GENERATED_HEADER=GENERATED_HEADER,
-            name=name,
-            crate_version=crate_version,
-            uv_version=uv_version,
-            uv_crates_io_url=uv_crates_io_url,
-            source_url=source_url,
-        )
-        member_readme_path.write_text(member_readme_content)
-        generated_paths.append(member_readme_path)
-
-        print(f"Generated README for {name}")
+        readme_path = generate_member_readme(package, workspace_root, uv_version)
+        if readme_path is not None:
+            generated_paths.append(readme_path)
 
     # Format all generated READMEs once at the end
     subprocess.run(

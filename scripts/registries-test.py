@@ -76,6 +76,28 @@ KNOWN_REGISTRIES = [
 ]
 
 
+def op_item_credentials(item_data: dict) -> dict[str, str | None]:
+    credentials: dict[str, str | None] = dict.fromkeys(
+        ("USERNAME", "TOKEN", "URL", "PKG")
+    )
+    if "fields" not in item_data:
+        return credentials
+
+    for field in item_data["fields"]:
+        if field.get("id") == "username":
+            suffix = "USERNAME"
+        elif field.get("id") == "password":
+            suffix = "TOKEN"
+        elif field.get("label") == "url":
+            suffix = "URL"
+        elif field.get("label") == "pkg":
+            suffix = "PKG"
+        else:
+            continue
+        credentials[suffix] = field.get("value")
+    return credentials
+
+
 def fetch_op_items(vault_name: str, env: dict[str, str]) -> dict[str, str]:
     """Fetch items from the specified 1Password vault and add them to the environment.
 
@@ -102,45 +124,26 @@ def fetch_op_items(vault_name: str, env: dict[str, str]) -> dict[str, str]:
         item_title = item["title"]
 
         # Only process items that match the registry naming pattern
-        if item_title.startswith("UV_TEST_"):
-            # Extract the registry name (e.g., "AWS" from "UV_TEST_AWS")
-            registry_name = item_title.removeprefix("UV_TEST_")
+        if not item_title.startswith("UV_TEST_"):
+            continue
 
-            # Get the item details
-            item_details = subprocess.run(
-                ["op", "item", "get", item_id, "--format", "json"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+        # Extract the registry name (e.g., "AWS" from "UV_TEST_AWS")
+        registry_name = item_title.removeprefix("UV_TEST_")
 
-            item_data = json.loads(item_details.stdout)
+        # Get the item details
+        item_details = subprocess.run(
+            ["op", "item", "get", item_id, "--format", "json"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
 
-            username = None
-            password = None
-            url = None
-            pkg = None
+        item_data = json.loads(item_details.stdout)
+        for suffix, value in op_item_credentials(item_data).items():
+            if value:
+                updated_env[f"UV_TEST_{registry_name}_{suffix}"] = value
 
-            if "fields" in item_data:
-                for field in item_data["fields"]:
-                    if field.get("id") == "username":
-                        username = field.get("value")
-                    elif field.get("id") == "password":
-                        password = field.get("value")
-                    elif field.get("label") == "url":
-                        url = field.get("value")
-                    elif field.get("label") == "pkg":
-                        pkg = field.get("value")
-            if username:
-                updated_env[f"UV_TEST_{registry_name}_USERNAME"] = username
-            if password:
-                updated_env[f"UV_TEST_{registry_name}_TOKEN"] = password
-            if url:
-                updated_env[f"UV_TEST_{registry_name}_URL"] = url
-            if pkg:
-                updated_env[f"UV_TEST_{registry_name}_PKG"] = pkg
-
-            print(f"Added 1Password credentials for {registry_name}")
+        print(f"Added 1Password credentials for {registry_name}")
 
     return updated_env
 
@@ -177,6 +180,58 @@ default = true
     pyproject_file.write_text(pyproject_content)
 
 
+def authenticate_registry(
+    env: dict[str, str],
+    uv: Path,
+    registry_name: str,
+    registry_url: str,
+    username: str,
+    token: str | None,
+    auth_method: str,
+) -> None:
+    if token and auth_method == "env":
+        env[f"UV_INDEX_{registry_name.upper()}_USERNAME"] = username
+        env[f"UV_INDEX_{registry_name.upper()}_PASSWORD"] = token
+    elif token and auth_method == "text-store":
+        # Use uv's text store for authentication
+        subprocess.check_call(
+            [
+                uv,
+                "auth",
+                "login",
+                f"{registry_url}",
+                "--username",
+                username,
+                "--password",
+                token,
+            ],
+            env=env,
+        )
+    elif token:
+        raise ValueError(f"Unknown authentication method: {auth_method}")
+
+
+def report_installation(
+    result: subprocess.CompletedProcess[str],
+    registry_name: str,
+    package: str,
+    verbosity: int,
+) -> bool:
+    success = False
+    for line in result.stderr.strip().split("\n"):
+        if line.startswith(f" + {package}=="):
+            success = True
+    if success:
+        print(f"{Fore.GREEN}{registry_name}: PASS")
+        if verbosity > 0:
+            print(f"  stdout: {result.stdout.strip()}")
+            print(f"  stderr: {result.stderr.strip()}")
+        return True
+
+    print(f"{Fore.RED}{registry_name}: FAIL{Fore.RESET} - Failed to install {package}.")
+    return False
+
+
 def run_test(
     env: dict[str, str],
     uv: Path,
@@ -205,26 +260,9 @@ def run_test(
         )
     print(f"\nAttempting to install {package}")
 
-    if token and auth_method == "env":
-        env[f"UV_INDEX_{registry_name.upper()}_USERNAME"] = username
-        env[f"UV_INDEX_{registry_name.upper()}_PASSWORD"] = token
-    elif token and auth_method == "text-store":
-        # Use uv's text store for authentication
-        subprocess.check_call(
-            [
-                uv,
-                "auth",
-                "login",
-                f"{registry_url}",
-                "--username",
-                username,
-                "--password",
-                token,
-            ],
-            env=env,
-        )
-    elif token:
-        raise ValueError(f"Unknown authentication method: {auth_method}")
+    authenticate_registry(
+        env, uv, registry_name, registry_url, username, token, auth_method
+    )
 
     with tempfile.TemporaryDirectory() as project_dir:
         setup_test_project(registry_name, registry_url, project_dir, requires_python)
@@ -255,20 +293,8 @@ def run_test(
                 print(f"{Fore.RED}{registry_name}: FAIL{Fore.RESET} \n\n{error_msg}")
                 return False
 
-            success = False
-            for line in result.stderr.strip().split("\n"):
-                if line.startswith(f" + {package}=="):
-                    success = True
-            if success:
-                print(f"{Fore.GREEN}{registry_name}: PASS")
-                if verbosity > 0:
-                    print(f"  stdout: {result.stdout.strip()}")
-                    print(f"  stderr: {result.stderr.strip()}")
+            if report_installation(result, registry_name, package, verbosity):
                 return True
-            else:
-                print(
-                    f"{Fore.RED}{registry_name}: FAIL{Fore.RESET} - Failed to install {package}."
-                )
 
         except subprocess.TimeoutExpired:
             print(f"{Fore.RED}{registry_name}: TIMEOUT{Fore.RESET} (>{timeout}s)")
@@ -277,11 +303,12 @@ def run_test(
         except (subprocess.SubprocessError, OSError, ValueError) as e:
             print(f"{Fore.RED}{registry_name}: ERROR{Fore.RESET} - {e}")
 
-        if result:
-            if result.stdout:
-                print(f"{Fore.RED} stdout:{Fore.RESET} {result.stdout.strip()}")
-            if result.stderr:
-                print(f"\n{Fore.RED} stderr:{Fore.RESET} {result.stderr.strip()}")
+        if not result:
+            return False
+        if result.stdout:
+            print(f"{Fore.RED} stdout:{Fore.RESET} {result.stdout.strip()}")
+        if result.stderr:
+            print(f"\n{Fore.RED} stderr:{Fore.RESET} {result.stderr.strip()}")
         return False
 
 
@@ -340,38 +367,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    env = os.environ.copy()
-
-    if args.color == "always":
-        initialize_colorama(force_color=True)
-    elif args.color == "never":
-        initialize_colorama(force_color=False)
-    else:
-        initialize_colorama(force_color=sys.stdout.isatty())
-
-    # If using 1Password, fetch credentials from the vault
-    if args.use_op:
-        print(f"Fetching credentials from 1Password vault '{args.op_vault}'...")
-        try:
-            env = fetch_op_items(args.op_vault, env)
-        except (subprocess.SubprocessError, OSError, ValueError) as e:
-            print(f"{Fore.RED}Error accessing 1Password: {e}{Fore.RESET}")
-            print(
-                f"{Fore.YELLOW}Hint: If you're not authenticated, run 'op signin' first.{Fore.RESET}"
-            )
-            sys.exit(1)
-
-    if args.uv:
-        # We change the working directory for the subprocess calls, so we have to
-        # absolutize the path.
-        uv = Path.cwd().joinpath(args.uv)
-    else:
-        subprocess.run(["cargo", "build"], check=False)
-        executable_suffix = ".exe" if os.name == "nt" else ""
-        uv = cwd.parent.joinpath(f"target/debug/uv{executable_suffix}")
-
+def run_registry_tests(
+    env: dict[str, str], uv: Path, args: argparse.Namespace
+) -> tuple[list[str], list[str], list[str], set[str]]:
     passed = []
     failed = []
     skipped = []
@@ -426,6 +424,17 @@ def main() -> None:
 
         untested_registries.discard(registry_name)
 
+    return passed, failed, skipped, untested_registries
+
+
+def report_results(
+    passed: list[str],
+    failed: list[str],
+    skipped: list[str],
+    untested_registries: set[str],
+    *,
+    require_all: bool,
+) -> None:
     total = len(passed) + len(failed)
 
     print("----------------")
@@ -444,7 +453,7 @@ def main() -> None:
 
     print(f"\nResults: {len(passed)}/{total} tests passed, {len(skipped)} skipped")
 
-    if args.all and len(untested_registries) > 0:
+    if require_all and len(untested_registries) > 0:
         print(
             f"\n{Fore.RED}Failed to test all known registries (requested via --all).{Fore.RESET}\nMissing:"
         )
@@ -465,6 +474,42 @@ def main() -> None:
         sys.exit(1)
 
     sys.exit(0 if len(failed) == 0 else 1)
+
+
+def main() -> None:
+    args = parse_args()
+    env = os.environ.copy()
+
+    if args.color == "always":
+        initialize_colorama(force_color=True)
+    elif args.color == "never":
+        initialize_colorama(force_color=False)
+    else:
+        initialize_colorama(force_color=sys.stdout.isatty())
+
+    # If using 1Password, fetch credentials from the vault
+    if args.use_op:
+        print(f"Fetching credentials from 1Password vault '{args.op_vault}'...")
+        try:
+            env = fetch_op_items(args.op_vault, env)
+        except (subprocess.SubprocessError, OSError, ValueError) as e:
+            print(f"{Fore.RED}Error accessing 1Password: {e}{Fore.RESET}")
+            print(
+                f"{Fore.YELLOW}Hint: If you're not authenticated, run 'op signin' first.{Fore.RESET}"
+            )
+            sys.exit(1)
+
+    if args.uv:
+        # We change the working directory for the subprocess calls, so we have to
+        # absolutize the path.
+        uv = Path.cwd().joinpath(args.uv)
+    else:
+        subprocess.run(["cargo", "build"], check=False)
+        executable_suffix = ".exe" if os.name == "nt" else ""
+        uv = cwd.parent.joinpath(f"target/debug/uv{executable_suffix}")
+
+    passed, failed, skipped, untested_registries = run_registry_tests(env, uv, args)
+    report_results(passed, failed, skipped, untested_registries, require_all=args.all)
 
 
 if __name__ == "__main__":
