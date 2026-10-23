@@ -172,10 +172,12 @@ impl WorkspaceCache {
         match result {
             Ok(workspace) => {
                 let mut root_project_name = None;
-                for (name, package) in workspace.packages.iter() {
+                // `OnceMap::done` replaces an existing entry, so insert in reverse workspace
+                // order to preserve the first project name when member roots overlap.
+                for (project_name, package) in workspace.packages.iter().rev() {
                     // Publish the root once below, even when it is also a project member.
                     if package.root == workspace.install_path {
-                        root_project_name = Some(name.clone());
+                        root_project_name = Some(project_name.clone());
                         continue;
                     }
                     // Historically, upward workspace discovery stopped at an intermediate
@@ -189,7 +191,7 @@ impl WorkspaceCache {
                         package.root.clone(),
                         Ok(CachedWorkspace {
                             workspace: workspace.clone(),
-                            project_name: Some(name.clone()),
+                            project_name: Some(project_name.clone()),
                         }),
                     );
                 }
