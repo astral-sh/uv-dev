@@ -1456,6 +1456,27 @@ impl TestContext {
         command
     }
 
+    /// Create a fixture keyring installation command, allowing a caller to select its dependencies.
+    pub fn keyring_plugin_install_command(&self) -> Command {
+        let mut command = self.pip_install();
+        command.arg(
+            self.workspace_root
+                .join("test")
+                .join("packages")
+                .join("keyring_test_plugin"),
+        );
+        command
+    }
+
+    /// Install the fixture keyring plugin into this context's virtual environment.
+    ///
+    /// Returns its executable directory. Keep this context alive while commands use that directory.
+    #[must_use]
+    pub fn install_keyring_plugin(&self) -> PathBuf {
+        self.keyring_plugin_install_command().assert().success();
+        venv_bin_path(&self.venv)
+    }
+
     /// Create a `pip uninstall` command with options shared across scenarios.
     pub fn pip_uninstall(&self) -> Command {
         let mut command = self.new_command();
