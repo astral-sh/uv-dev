@@ -33,7 +33,14 @@ schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, optional = true }
+# Filesystem helpers do not need the workspace network, process, or signal features.
+tokio = { version = "1.40.0", default-features = false, features = [
+  "fs",
+  "io-util",
+  "rt",
+  "sync",
+  "time",
+], optional = true }
 tracing = { workspace = true }
 walkdir = { workspace = true }
 
