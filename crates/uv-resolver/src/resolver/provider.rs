@@ -164,6 +164,11 @@ impl<'a, Context: BuildContext> DefaultResolverProvider<'a, Context> {
             uv_client::ErrorKind::MetadataParseError(_, _, error) => {
                 Ok(MetadataUnavailable::InvalidMetadata(Arc::new(*error)))
             }
+            kind @ uv_client::ErrorKind::VersionMismatch { .. } => {
+                Ok(MetadataUnavailable::InconsistentMetadata(Arc::new(
+                    uv_distribution::Error::Client(uv_client::Error::new(kind, retries, duration)),
+                )))
+            }
             uv_client::ErrorKind::Metadata(_, error) => {
                 Ok(MetadataUnavailable::InvalidStructure(Arc::new(error)))
             }
@@ -301,12 +306,9 @@ impl<Context: BuildContext> ResolverProvider for DefaultResolverProvider<'_, Con
                         Err(error) => Err(error.into()),
                     }
                 }
-                uv_distribution::Error::WheelMetadataVersionMismatch { .. } => {
-                    Ok(MetadataResponse::Unavailable(
-                        MetadataUnavailable::InconsistentMetadata(Arc::new(err)),
-                    ))
-                }
-                uv_distribution::Error::WheelMetadataNameMismatch { .. } => {
+                uv_distribution::Error::WheelMetadataVersionMismatch { .. }
+                | uv_distribution::Error::WheelFilenameVersionMismatch { .. }
+                | uv_distribution::Error::WheelMetadataNameMismatch { .. } => {
                     Ok(MetadataResponse::Unavailable(
                         MetadataUnavailable::InconsistentMetadata(Arc::new(err)),
                     ))

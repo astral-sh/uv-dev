@@ -1278,7 +1278,12 @@ impl PubGrubReportFormatter<'_> {
                             hints.insert(PubGrubHint::InconsistentVersionMetadata {
                                 package: name.clone(),
                                 version: version.clone(),
-                                reason: reason.to_string(),
+                                reason: iter::successors(
+                                    Some(reason.as_ref() as &dyn Error),
+                                    |&error| error.source(),
+                                )
+                                .map(ToString::to_string)
+                                .join(": "),
                             });
                         }
                         MetadataUnavailable::InvalidStructure(reason) => {
