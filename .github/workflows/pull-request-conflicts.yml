@@ -1,4 +1,5 @@
-name: Rebase conflicted pull requests
+name: Rebase
+run-name: "${{ inputs.pull_request && format('Rebase pull request #{0}', inputs.pull_request) || 'Rebase conflicted pull requests' }}"
 
 on:
   push:
@@ -34,7 +35,7 @@ env:
 
 jobs:
   identify:
-    name: Identify conflicted pull requests
+    name: identify conflicts
     if: github.repository == 'astral-sh/uv-dev' || github.repository == 'astral-sh/uv'
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
     timeout-minutes: 5
@@ -140,7 +141,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   rebase-and-push:
-    name: "Rebase pull request #${{ matrix.number }}"
+    name: rebase
     needs: identify
     if: needs.identify.outputs.rebasable != '0'
     permissions:
@@ -161,7 +162,7 @@ jobs:
       head-repository: ${{ matrix.head_repository }}
 
   remove-rebase-label:
-    name: "Remove rebase label from pull request #${{ inputs.pull_request }}"
+    name: remove label
     needs: rebase-and-push
     if: inputs.pull_request != ''
     runs-on: ${{ github.repository_owner == 'astral-sh' && 'github-ubuntu-24.04-x86_64-2' || 'ubuntu-slim' }}
