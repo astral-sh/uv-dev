@@ -102,7 +102,7 @@ pub async fn find(
             cache,
             python_downloads_json_url,
         )
-        .await?;
+        .await;
 
     // Warn if the discovered Python version is incompatible with the current workspace
     if let Err(err) = project_python.check(python.interpreter()) {
