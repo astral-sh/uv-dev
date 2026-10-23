@@ -17,7 +17,7 @@ use uv_build_backend::check_direct_build;
 use uv_build_frontend::SourceBuild;
 use uv_cache::{Cache, CacheBucket};
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
-use uv_command_support::{ExitStatus, Printer};
+use uv_command_support::{ExitStatus, Printer, UvError};
 use uv_configuration::{
     BuildIsolation, BuildKind, BuildOptions, BuildOutput, Concurrency, Constraints,
     DependencyGroupsWithDefaults, DependencyMode, DependencyModifiers, HashCheckingMode,
@@ -245,7 +245,6 @@ pub async fn build_frontend(
     workspace_cache: &WorkspaceCache,
     printer: Printer,
     preview: Preview,
-    render_error: fn(&anyhow::Error, Printer) -> std::fmt::Result,
 ) -> Result<ExitStatus> {
     // Extract the resolver settings.
     let ResolverSettings {
@@ -494,7 +493,7 @@ pub async fn build_frontend(
     }))
     .await;
 
-    let mut success = true;
+    let mut errors = Vec::new();
     for (source, result) in results {
         match result {
             Ok(messages) => {
@@ -503,18 +502,16 @@ pub async fn build_frontend(
                 }
             }
             Err(err) => {
-                let err = anyhow::Error::from(err).context(format!("Failed to build `{source}`"));
-                render_error(&err, printer)?;
-
-                success = false;
+                errors
+                    .push(anyhow::Error::from(err).context(format!("Failed to build `{source}`")));
             }
         }
     }
 
-    if success {
+    if errors.is_empty() {
         Ok(ExitStatus::Success)
     } else {
-        Ok(ExitStatus::Error)
+        Err(UvError::batch(errors.into_iter().map(UvError::unexpected)).into())
     }
 }
 
