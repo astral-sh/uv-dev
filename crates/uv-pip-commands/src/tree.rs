@@ -557,7 +557,7 @@ impl<'env> DisplayDependencyGraph<'env> {
             },
         );
 
-        let mut merged = lower
+        let merged = lower
             .into_iter()
             .chain(upper)
             .chain(others)
@@ -565,9 +565,12 @@ impl<'env> DisplayDependencyGraph<'env> {
 
         let mut seen = FxHashSet::default();
 
-        merged.retain(|spec| seen.insert(spec.to_string()));
-
-        VersionSpecifiers::from_iter(merged)
+        VersionSpecifiers::from_iter(
+            merged
+                .iter()
+                .filter(|spec| seen.insert(spec.exact_key()))
+                .cloned(),
+        )
     }
 
     fn prefer_lower(
@@ -713,6 +716,18 @@ mod tests {
         assert_eq!(
             simplify_specs(&[">=0.3.7", "<0.4", "!=0.3.9", ">=0.3.7"]).to_string(),
             ">=0.3.7, !=0.3.9, <0.4"
+        );
+    }
+
+    #[test]
+    fn retains_distinct_specifier_precision() {
+        assert_eq!(
+            simplify_specs(&["==1.*", "==1.0.*", "==1.*"]).to_string(),
+            "==1.*, ==1.0.*"
+        );
+        assert_eq!(
+            simplify_specs(&["!=1", "!=1.0", "!=1"]).to_string(),
+            "!=1, !=1.0"
         );
     }
 
