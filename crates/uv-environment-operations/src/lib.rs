@@ -56,6 +56,7 @@ use uv_python_discovery::EnvironmentIncompatibilityError;
 use uv_python_discovery::EnvironmentKind;
 use uv_python_discovery::ProjectPythonRequest;
 use uv_python_discovery::PythonDownloadReporter;
+use uv_python_discovery::PythonRequestSource;
 use uv_python_discovery::ScriptInterpreter;
 use uv_python_discovery::check_environment_compatibility;
 use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
@@ -269,6 +270,7 @@ fn existing_project_environment(
 /// Discover a compatible project environment at `root`.
 fn discover_project_environment(
     root: &Path,
+    source: &PythonRequestSource,
     python_request: Option<&PythonRequest>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
@@ -331,6 +333,15 @@ fn discover_project_environment(
             Ok(Some(environment))
         }
         Err(err) => {
+            if let ProjectEnvironmentPolicy::Compatible = policy
+                && !centralized
+                && let EnvironmentIncompatibilityError::PythonRequest(..) = &err
+                && let PythonRequestSource::DotPythonVersion(_) = source
+                && let Some(request) = python_request
+                && !environment.interpreter().matches_request(request, cache)
+            {
+                warn_user_once!("{err} (from {source})");
+            }
             debug!("{err}");
             Ok(None)
         }
@@ -625,6 +636,7 @@ impl ProjectInterpreter {
         cache: &Cache,
         printer: Printer,
     ) -> Result<Self, EnvironmentError> {
+        let source = project_python.source();
         let python_request = project_python.python_request.as_ref();
         let requires_python = project_python.requires_python();
         let upgrade_policy =
@@ -653,6 +665,7 @@ impl ProjectInterpreter {
                 );
                 if let Some(environment) = discover_project_environment(
                     &root,
+                    source,
                     python_request,
                     python_preference,
                     python_arch,
@@ -675,6 +688,7 @@ impl ProjectInterpreter {
                     .is_ok_and(|target| is_centralized_environment_path(&target, cache)))
                 && let Some(environment) = discover_project_environment(
                     &project_environment_path,
+                    source,
                     python_request,
                     python_preference,
                     python_arch,
@@ -710,6 +724,7 @@ impl ProjectInterpreter {
                 centralized_environment_root(target, python.interpreter(), upgrade_policy, cache);
             if let Some(environment) = discover_project_environment(
                 &root,
+                source,
                 python_request,
                 python_preference,
                 python_arch,
