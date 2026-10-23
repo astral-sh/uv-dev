@@ -7880,6 +7880,7 @@ dependencies = [
  "fs-err",
  "schemars",
  "serde",
+ "temp-env",
  "textwrap",
  "thiserror",
  "toml",
