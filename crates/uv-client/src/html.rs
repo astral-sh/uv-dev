@@ -112,6 +112,16 @@ impl SimpleDetailHTML {
         })
     }
 
+    /// Parse project status without interpreting the artifact links on the page.
+    pub(crate) fn parse_status(text: &str) -> Result<ProjectStatus, Error> {
+        let dom = Document::parse(text)?;
+        Ok(dom
+            .elements()
+            .find(|element| element.is("head"))
+            .and_then(Self::parse_project_status)
+            .unwrap_or_default())
+    }
+
     /// Parse a [`ProjectStatus`] from the `<meta>` tags in the given `<head>`.
     ///
     /// Precondition: `head` is a `<head>` tag.

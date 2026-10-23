@@ -466,6 +466,100 @@ impl RegistryClient {
         Ok(results)
     }
 
+    /// Fetch the PEP 792 status of a project from a Simple API index.
+    ///
+    /// Remote indexes use the full-metadata cache when present, or a separate status cache
+    /// otherwise. Local indexes use the full-metadata path.
+    #[instrument(skip_all, fields(package = % package_name))]
+    pub async fn project_status(
+        &self,
+        package_name: &PackageName,
+        index: &IndexUrl,
+        capabilities: &IndexCapabilities,
+        download_concurrency: &Semaphore,
+    ) -> Result<ProjectStatus, Error> {
+        if self.indexes.no_index() {
+            return Err(ErrorKind::NoIndex(package_name.to_string()).into());
+        }
+
+        let _permit = download_concurrency.acquire().await;
+        let status_code_strategy = match self.index_strategy_for(package_name) {
+            IndexStrategy::FirstIndex => self.indexes.status_code_strategy_for(index),
+            IndexStrategy::UnsafeBestMatch | IndexStrategy::UnsafeFirstMatch => {
+                IndexStatusCodeStrategy::ignore_authentication_error_codes()
+            }
+        };
+        match self
+            .project_status_single_index(package_name, index, capabilities, &status_code_strategy)
+            .await?
+        {
+            SimpleMetadataSearchOutcome::Found(status) => Ok(status),
+            SimpleMetadataSearchOutcome::NotFound
+            | SimpleMetadataSearchOutcome::StatusCodeFailure(_) => match self.connectivity {
+                Connectivity::Online => {
+                    Err(ErrorKind::RemotePackageNotFound(package_name.clone()).into())
+                }
+                Connectivity::Offline => Err(ErrorKind::Offline(package_name.to_string()).into()),
+            },
+        }
+    }
+
+    async fn project_status_single_index(
+        &self,
+        package_name: &PackageName,
+        index: &IndexUrl,
+        capabilities: &IndexCapabilities,
+        status_code_strategy: &IndexStatusCodeStrategy,
+    ) -> Result<SimpleMetadataSearchOutcome<ProjectStatus>, Error> {
+        let full_cache_entry = self.cache.entry(
+            CacheBucket::Simple,
+            WheelCache::Index(index).root(),
+            format!("{package_name}.rkyv"),
+        );
+
+        // Use the full-metadata cache when present, including its revalidation policy.
+        // Local indexes use the uncached full-metadata path.
+        if matches!(index, IndexUrl::Path(_))
+            || full_cache_entry
+                .path()
+                .try_exists()
+                .map_err(ErrorKind::Io)?
+        {
+            return match self
+                .simple_detail_single_index(package_name, index, capabilities, status_code_strategy)
+                .await?
+            {
+                SimpleMetadataSearchOutcome::Found(metadata) => {
+                    let status = rkyv::deserialize::<ProjectStatus, rkyv::rancor::Error>(
+                        metadata.project_status(),
+                    )
+                    .map_err(|err| ErrorKind::ArchiveRead(err.to_string()))?;
+                    Ok(SimpleMetadataSearchOutcome::Found(status))
+                }
+                SimpleMetadataSearchOutcome::NotFound => Ok(SimpleMetadataSearchOutcome::NotFound),
+                SimpleMetadataSearchOutcome::StatusCodeFailure(status) => {
+                    Ok(SimpleMetadataSearchOutcome::StatusCodeFailure(status))
+                }
+            };
+        }
+
+        let url = simple_api_url(package_name, index)?;
+        let cache_entry = full_cache_entry.with_file(format!("{package_name}.status.rkyv"));
+        let cache_control = self.simple_api_cache_control(package_name, index, &cache_entry)?;
+
+        #[cfg(windows)]
+        let _lock = {
+            let lock_entry = cache_entry.with_file(format!("{package_name}.status.lock"));
+            lock_entry.lock().await.map_err(ErrorKind::CacheLock)?
+        };
+
+        let result = self
+            .fetch_remote_project_status(package_name, &url, &cache_entry, cache_control)
+            .await
+            .map(|archive| OwnedArchive::deserialize(&archive));
+        simple_metadata_result(result, index, capabilities, status_code_strategy)
+    }
+
     /// Fetch and combine entries for a package from the configured legacy `--find-links` locations.
     #[instrument(skip_all, fields(package = % package_name))]
     pub async fn find_links_entries(
@@ -544,15 +638,7 @@ impl RegistryClient {
         capabilities: &IndexCapabilities,
         status_code_strategy: &IndexStatusCodeStrategy,
     ) -> Result<SimpleMetadataSearchOutcome, Error> {
-        // Format the URL for PyPI.
-        let mut url = index.url().clone();
-        url.path_segments_mut()
-            .map_err(|()| ErrorKind::CannotBeABase(index.url().clone()))?
-            .pop_if_empty()
-            .push(package_name.as_ref())
-            // The URL *must* end in a trailing slash for proper relative path behavior
-            // ref https://github.com/servo/rust-url/issues/333
-            .push("");
+        let url = simple_api_url(package_name, index)?;
 
         trace!("Fetching metadata for `{package_name}` from `{url}`");
 
@@ -561,19 +647,7 @@ impl RegistryClient {
             WheelCache::Index(index).root(),
             format!("{package_name}.rkyv"),
         );
-        let cache_control = match self.connectivity {
-            Connectivity::Online
-                if let Some(header) = self.indexes.simple_api_cache_control_for(index) =>
-            {
-                CacheControl::Override(header)
-            }
-            Connectivity::Online => CacheControl::from(
-                self.cache
-                    .freshness(&cache_entry, Some(package_name), None)
-                    .map_err(ErrorKind::Io)?,
-            ),
-            Connectivity::Offline => CacheControl::AllowStale,
-        };
+        let cache_control = self.simple_api_cache_control(package_name, index, &cache_entry)?;
 
         // Acquire an advisory lock, to guard against concurrent writes.
         #[cfg(windows)]
@@ -589,36 +663,28 @@ impl RegistryClient {
                 .await
         };
 
-        match result {
-            Ok(metadata) => Ok(SimpleMetadataSearchOutcome::Found(metadata)),
-            Err(err) => match err.kind() {
-                // The package could not be found in the remote index.
-                ErrorKind::WrappedReqwestError(.., reqwest_err) => {
-                    let Some(status_code) = reqwest_err.status() else {
-                        return Err(err);
-                    };
-                    let decision =
-                        status_code_strategy.handle_status_code(status_code, index, capabilities);
-                    if let IndexStatusCodeDecision::Fail(status_code) = decision {
-                        if !matches!(
-                            status_code,
-                            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-                        ) {
-                            return Err(err);
-                        }
-                    }
-                    Ok(SimpleMetadataSearchOutcome::from(decision))
-                }
+        simple_metadata_result(result, index, capabilities, status_code_strategy)
+    }
 
-                // The package is unavailable due to a lack of connectivity.
-                ErrorKind::Offline(_) => Ok(SimpleMetadataSearchOutcome::NotFound),
-
-                // The package could not be found in the local index.
-                ErrorKind::LocalPackageNotFound(_) => Ok(SimpleMetadataSearchOutcome::NotFound),
-
-                _ => Err(err),
-            },
-        }
+    fn simple_api_cache_control(
+        &self,
+        package_name: &PackageName,
+        index: &IndexUrl,
+        cache_entry: &CacheEntry,
+    ) -> Result<CacheControl, Error> {
+        Ok(match self.connectivity {
+            Connectivity::Online
+                if let Some(header) = self.indexes.simple_api_cache_control_for(index) =>
+            {
+                CacheControl::Override(header)
+            }
+            Connectivity::Online => CacheControl::from(
+                self.cache
+                    .freshness(cache_entry, Some(package_name), None)
+                    .map_err(ErrorKind::Io)?,
+            ),
+            Connectivity::Offline => CacheControl::AllowStale,
+        })
     }
 
     /// Fetch the [`SimpleDetailMetadata`] from a remote URL, using the PEP 503 Simple Repository API.
@@ -629,35 +695,14 @@ impl RegistryClient {
         cache_entry: &CacheEntry,
         cache_control: CacheControl,
     ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
-        let simple_request = self
-            .uncached_client(url)
-            .get(url.clone())
-            .header("Accept-Encoding", "gzip, deflate, zstd")
-            .header("Accept", MediaType::pypi())
-            .build()
-            .map_err(|err| {
-                ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
-            })?;
+        let simple_request = self.simple_api_request(url)?;
         let parse_simple_response = |response: Response, _: &mut RetryState| {
             async {
                 // Use the response URL, rather than the request URL, as the base for relative URLs.
                 // This ensures that we handle redirects and other URL transformations correctly.
                 let url = SafeUrl::from_url(response.url().clone());
 
-                let content_type = response
-                    .headers()
-                    .get("content-type")
-                    .ok_or_else(|| Error::from(ErrorKind::MissingContentType(url.clone())))?;
-                let content_type = content_type.to_str().map_err(|err| {
-                    Error::from(ErrorKind::InvalidContentTypeHeader(url.clone(), err))
-                })?;
-                let media_type = content_type.split(';').next().unwrap_or(content_type);
-                let media_type = MediaType::from_str(media_type).ok_or_else(|| {
-                    Error::from(ErrorKind::UnsupportedMediaType(
-                        url.clone(),
-                        media_type.to_string(),
-                    ))
-                })?;
+                let media_type = simple_api_media_type(&response, &url)?;
 
                 let package_name = package_name.clone();
                 match media_type {
@@ -715,17 +760,84 @@ impl RegistryClient {
         Ok(simple)
     }
 
+    fn simple_api_request(&self, url: &SafeUrl) -> Result<reqwest::Request, Error> {
+        self.uncached_client(url)
+            .get(url.clone())
+            .header("Accept-Encoding", "gzip, deflate, zstd")
+            .header("Accept", MediaType::pypi())
+            .build()
+            .map_err(|err| {
+                ErrorKind::from_reqwest(url.clone(), err, self.client.certificate_source())
+            })
+            .map_err(Error::from)
+    }
+
+    async fn fetch_remote_project_status(
+        &self,
+        package_name: &PackageName,
+        url: &SafeUrl,
+        cache_entry: &CacheEntry,
+        cache_control: CacheControl,
+    ) -> Result<OwnedArchive<ProjectStatus>, Error> {
+        let request = self.simple_api_request(url)?;
+        let parse_status = |response: Response, _: &mut RetryState| {
+            async {
+                let url = SafeUrl::from_url(response.url().clone());
+                let media_type = simple_api_media_type(&response, &url)?;
+                match media_type {
+                    MediaType::PypiV1Json => {
+                        let bytes = response.bytes().await.map_err(|err| {
+                            ErrorKind::from_reqwest(
+                                url.clone(),
+                                err,
+                                self.client.certificate_source(),
+                            )
+                        })?;
+                        self.parse_simple_body(bytes.len(), move || {
+                            let data: SimpleProjectStatus = serde_json::from_slice(&bytes)
+                                .map_err(|err| Error::from_json_err(err, url))?;
+                            OwnedArchive::from_unarchived(&data.project_status)
+                        })
+                        .await
+                    }
+                    MediaType::PypiV1Html | MediaType::TextHtml => {
+                        let text = response.text().await.map_err(|err| {
+                            ErrorKind::from_reqwest(
+                                url.clone(),
+                                err,
+                                self.client.certificate_source(),
+                            )
+                        })?;
+                        self.parse_simple_body(text.len(), move || {
+                            let status = SimpleDetailHTML::parse_status(&text)
+                                .map_err(|err| Error::from_html_err(err, url))?;
+                            OwnedArchive::from_unarchived(&status)
+                        })
+                        .await
+                    }
+                }
+            }
+            .boxed_local()
+            .instrument(info_span!("parse_project_status", package = %package_name))
+        };
+        let status = self
+            .cached_client()
+            .get_cacheable_with_retry(request, cache_entry, cache_control, parse_status)
+            .await?;
+        Ok(status)
+    }
+
     /// Offload large remote index parsing so sibling HTTP futures can make progress.
     ///
     /// `body_size` counts decoded input bytes, excluding allocations produced by parsing. Small
     /// bodies or bodies that cannot fit the shared worker and byte budgets are parsed inline
     /// without waiting. Offloaded work retains both permits until its result is collected or
     /// dropped, even if the caller is cancelled.
-    async fn parse_simple_body(
+    async fn parse_simple_body<T: Send + 'static>(
         &self,
         body_size: usize,
-        parse: impl FnOnce() -> Result<OwnedArchive<SimpleDetailMetadata>, Error> + Send + 'static,
-    ) -> Result<OwnedArchive<SimpleDetailMetadata>, Error> {
+        parse: impl FnOnce() -> Result<T, Error> + Send + 'static,
+    ) -> Result<T, Error> {
         // Small responses are cheaper to parse inline than to dispatch to another thread.
         if body_size < 512 * 1024 {
             return parse();
@@ -1413,10 +1525,84 @@ impl RegistryClient {
     }
 }
 
+/// Project status from a Simple API response.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct SimpleProjectStatus {
+    #[serde(default)]
+    project_status: ProjectStatus,
+}
+
+fn simple_api_url(package_name: &PackageName, index: &IndexUrl) -> Result<SafeUrl, Error> {
+    let mut url = index.url().clone();
+    url.path_segments_mut()
+        .map_err(|()| ErrorKind::CannotBeABase(index.url().clone()))?
+        .pop_if_empty()
+        .push(package_name.as_ref())
+        // Relative artifact URLs require the trailing slash.
+        .push("");
+    Ok(url)
+}
+
+fn simple_api_media_type(response: &Response, url: &SafeUrl) -> Result<MediaType, Error> {
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .ok_or_else(|| Error::from(ErrorKind::MissingContentType(url.clone())))?;
+    let content_type = content_type
+        .to_str()
+        .map_err(|err| Error::from(ErrorKind::InvalidContentTypeHeader(url.clone(), err)))?;
+    let media_type = content_type.split(';').next().unwrap_or(content_type);
+    MediaType::from_str(media_type).ok_or_else(|| {
+        Error::from(ErrorKind::UnsupportedMediaType(
+            url.clone(),
+            media_type.to_string(),
+        ))
+    })
+}
+
+fn simple_metadata_result<T>(
+    result: Result<T, Error>,
+    index: &IndexUrl,
+    capabilities: &IndexCapabilities,
+    status_code_strategy: &IndexStatusCodeStrategy,
+) -> Result<SimpleMetadataSearchOutcome<T>, Error> {
+    match result {
+        Ok(metadata) => Ok(SimpleMetadataSearchOutcome::Found(metadata)),
+        Err(err) => match err.kind() {
+            // Handle HTTP status errors according to the index strategy.
+            ErrorKind::WrappedReqwestError(.., reqwest_err) => {
+                let Some(status_code) = reqwest_err.status() else {
+                    return Err(err);
+                };
+                let decision =
+                    status_code_strategy.handle_status_code(status_code, index, capabilities);
+                if let IndexStatusCodeDecision::Fail(status_code) = decision {
+                    if !matches!(
+                        status_code,
+                        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+                    ) {
+                        return Err(err);
+                    }
+                }
+                Ok(SimpleMetadataSearchOutcome::from(decision))
+            }
+
+            // The package is unavailable due to a lack of connectivity.
+            ErrorKind::Offline(_) => Ok(SimpleMetadataSearchOutcome::NotFound),
+
+            // The package could not be found in the local index.
+            ErrorKind::LocalPackageNotFound(_) => Ok(SimpleMetadataSearchOutcome::NotFound),
+
+            _ => Err(err),
+        },
+    }
+}
+
 #[derive(Debug)]
-enum SimpleMetadataSearchOutcome {
+enum SimpleMetadataSearchOutcome<T = OwnedArchive<SimpleDetailMetadata>> {
     /// Simple metadata was found
-    Found(OwnedArchive<SimpleDetailMetadata>),
+    Found(T),
     /// Simple metadata was not found
     NotFound,
     /// A status code failure was encountered when searching for
@@ -1424,7 +1610,7 @@ enum SimpleMetadataSearchOutcome {
     StatusCodeFailure(StatusCode),
 }
 
-impl From<IndexStatusCodeDecision> for SimpleMetadataSearchOutcome {
+impl<T> From<IndexStatusCodeDecision> for SimpleMetadataSearchOutcome<T> {
     fn from(item: IndexStatusCodeDecision) -> Self {
         match item {
             IndexStatusCodeDecision::Ignore => Self::NotFound,
@@ -1936,7 +2122,7 @@ mod tests {
         IndexUrl, ToUrlError, VariantsJsonFilename,
     };
     use uv_small_str::SmallString;
-    use wiremock::matchers::{basic_auth, method, path_regex};
+    use wiremock::matchers::{basic_auth, header, method, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     type Error = Box<dyn std::error::Error>;
@@ -1996,6 +2182,378 @@ mod tests {
                 .expect("request recording should be enabled")
                 .is_empty()
         );
+    }
+
+    const PROJECT_STATUS_JSON: &str = r#"{
+        "project-status": {"status": "archived", "reason": "No longer maintained"},
+        "files": [{
+            "filename": "demo-1.0.0-py3-none-any.whl",
+            "url": "https://example.com/demo-1.0.0-py3-none-any.whl",
+            "hashes": {}
+        }]
+    }"#;
+
+    async fn project_status_server(body: &str, content_type: &str) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/simple/demo/$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=3600")
+                    .set_body_raw(body, content_type),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    #[tokio::test]
+    async fn project_status_reads_json_and_html_without_artifact_metadata() -> Result<(), Error> {
+        // Project status can be read even when artifact fields are invalid.
+        let json = r#"{
+            "files": [{"filename": false, "hashes": 42}],
+            "project-status": {"status": "deprecated", "reason": "Use another project"}
+        }"#;
+        let html = r#"<!doctype html><html><head>
+            <meta name="pypi:project-status" content="deprecated">
+            <meta name="pypi:project-status-reason" content="Use another project">
+            <base href="://invalid">
+            </head><body><a href="demo.whl#sha256=invalid">demo.whl</a></body></html>"#;
+        for (body, content_type) in [
+            (json, "application/vnd.pypi.simple.v1+json"),
+            (html, "application/vnd.pypi.simple.v1+html"),
+            (html, "text/html"),
+        ] {
+            let server = project_status_server(body, content_type).await;
+            let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+            let client =
+                RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?).build()?;
+            let status = client
+                .project_status(
+                    &PackageName::from_str("demo")?,
+                    &index,
+                    &IndexCapabilities::default(),
+                    &Semaphore::new(1),
+                )
+                .await?;
+            assert_eq!(status.status, uv_pypi_types::Status::Deprecated);
+            assert_eq!(status.reason.as_deref(), Some("Use another project"));
+            assert_eq!(
+                server
+                    .received_requests()
+                    .await
+                    .expect("request recording should be enabled")
+                    .len(),
+                1
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn project_status_reuses_full_metadata_cache() -> Result<(), Error> {
+        let server =
+            project_status_server(PROJECT_STATUS_JSON, "application/vnd.pypi.simple.v1+json").await;
+        let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+        let cache = Cache::temp()?;
+        let client =
+            RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone()).build()?;
+        let package = PackageName::from_str("demo")?;
+        let capabilities = IndexCapabilities::default();
+        let concurrency = Semaphore::new(1);
+        client
+            .simple_detail(&package, Some((&index).into()), &capabilities, &concurrency)
+            .await?;
+        let status = client
+            .project_status(&package, &index, &capabilities, &concurrency)
+            .await?;
+        assert_eq!(status.status, uv_pypi_types::Status::Archived);
+        assert_eq!(status.reason.as_deref(), Some("No longer maintained"));
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("request recording should be enabled")
+                .len(),
+            1
+        );
+        assert!(
+            !cache
+                .entry(
+                    uv_cache::CacheBucket::Simple,
+                    uv_cache::WheelCache::Index(&index).root(),
+                    "demo.status.rkyv",
+                )
+                .path()
+                .exists()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn project_status_cache_does_not_replace_distribution_metadata() -> Result<(), Error> {
+        let server =
+            project_status_server(PROJECT_STATUS_JSON, "application/vnd.pypi.simple.v1+json").await;
+        let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+        let client =
+            RegistryClientBuilder::new(BaseClientBuilder::default(), Cache::temp()?).build()?;
+        let package = PackageName::from_str("demo")?;
+        let capabilities = IndexCapabilities::default();
+        let concurrency = Semaphore::new(1);
+        for _ in 0..2 {
+            let status = client
+                .project_status(&package, &index, &capabilities, &concurrency)
+                .await?;
+            assert_eq!(status.status, uv_pypi_types::Status::Archived);
+        }
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("request recording should be enabled")
+                .len(),
+            1
+        );
+        let results = client
+            .simple_detail(&package, Some((&index).into()), &capabilities, &concurrency)
+            .await?;
+        let [(_, crate::MetadataFormat::Simple(metadata))] = results.as_slice() else {
+            return Err("expected full Simple API metadata".into());
+        };
+        assert_eq!(metadata.iter().count(), 1);
+        assert_eq!(
+            metadata
+                .datum(0)
+                .expect("the response contains one version")
+                .files
+                .wheels
+                .len(),
+            1
+        );
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("request recording should be enabled")
+                .len(),
+            2
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn project_status_cache_is_removed_with_package() -> Result<(), Error> {
+        let server =
+            project_status_server(PROJECT_STATUS_JSON, "application/vnd.pypi.simple.v1+json").await;
+        let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+        let cache = Cache::temp()?;
+        let client =
+            RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone()).build()?;
+        let package = PackageName::from_str("demo")?;
+        let capabilities = IndexCapabilities::default();
+        let concurrency = Semaphore::new(1);
+        client
+            .project_status(&package, &index, &capabilities, &concurrency)
+            .await?;
+        cache.remove(&package)?;
+        client
+            .project_status(&package, &index, &capabilities, &concurrency)
+            .await?;
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("request recording should be enabled")
+                .len(),
+            2
+        );
+        Ok(())
+    }
+
+    /// Revalidation and offline reads must retain the status-only archive payload.
+    #[tokio::test]
+    async fn project_status_revalidates_and_reuses_stale_cache_offline() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+        let cache = Cache::temp()?;
+        let client =
+            RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone()).build()?;
+        let offline = RegistryClientBuilder::new(
+            BaseClientBuilder::default().connectivity(Connectivity::Offline),
+            cache,
+        )
+        .build()?;
+        let package = PackageName::from_str("demo")?;
+        let capabilities = IndexCapabilities::default();
+        let concurrency = Semaphore::new(1);
+
+        let initial = Mock::given(method("GET"))
+            .and(path_regex("^/simple/demo/$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .insert_header("ETag", "\"status-1\"")
+                    .set_body_raw(PROJECT_STATUS_JSON, "application/vnd.pypi.simple.v1+json"),
+            )
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        let status = client
+            .project_status(&package, &index, &capabilities, &concurrency)
+            .await?;
+        assert_eq!(status.status, uv_pypi_types::Status::Archived);
+        assert_eq!(status.reason.as_deref(), Some("No longer maintained"));
+        drop(initial);
+
+        // The expired entry requires a conditional request. A 304 has no status payload.
+        let unchanged = Mock::given(method("GET"))
+            .and(path_regex("^/simple/demo/$"))
+            .and(header("if-none-match", "\"status-1\""))
+            .respond_with(
+                ResponseTemplate::new(304)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .insert_header("ETag", "\"status-1\""),
+            )
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        let status = client
+            .project_status(&package, &index, &capabilities, &concurrency)
+            .await?;
+        assert_eq!(status.status, uv_pypi_types::Status::Archived);
+        assert_eq!(status.reason.as_deref(), Some("No longer maintained"));
+        drop(unchanged);
+
+        let status = offline
+            .project_status(&package, &index, &capabilities, &concurrency)
+            .await?;
+        assert_eq!(status.status, uv_pypi_types::Status::Archived);
+        assert_eq!(status.reason.as_deref(), Some("No longer maintained"));
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("request recording should be enabled")
+                .len(),
+            2
+        );
+
+        let changed = Mock::given(method("GET"))
+            .and(path_regex("^/simple/demo/$"))
+            .and(header("if-none-match", "\"status-1\""))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Cache-Control", "public, max-age=0")
+                    .insert_header("ETag", "\"status-2\"")
+                    .set_body_raw(
+                        r#"{"project-status":{"status":"deprecated","reason":"Use another project"}}"#,
+                        "application/vnd.pypi.simple.v1+json",
+                    ),
+            )
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        let status = client
+            .project_status(&package, &index, &capabilities, &concurrency)
+            .await?;
+        assert_eq!(status.status, uv_pypi_types::Status::Deprecated);
+        assert_eq!(status.reason.as_deref(), Some("Use another project"));
+        drop(changed);
+
+        let status = offline
+            .project_status(&package, &index, &capabilities, &concurrency)
+            .await?;
+        assert_eq!(status.status, uv_pypi_types::Status::Deprecated);
+        assert_eq!(status.reason.as_deref(), Some("Use another project"));
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("request recording should be enabled")
+                .len(),
+            3
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn project_status_reuses_both_cache_formats_offline() -> Result<(), Error> {
+        for full_metadata in [false, true] {
+            let server =
+                project_status_server(PROJECT_STATUS_JSON, "application/vnd.pypi.simple.v1+json")
+                    .await;
+            let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+            let cache = Cache::temp()?;
+            let client =
+                RegistryClientBuilder::new(BaseClientBuilder::default(), cache.clone()).build()?;
+            let package = PackageName::from_str("demo")?;
+            let capabilities = IndexCapabilities::default();
+            let concurrency = Semaphore::new(1);
+            if full_metadata {
+                client
+                    .simple_detail(&package, Some((&index).into()), &capabilities, &concurrency)
+                    .await?;
+            } else {
+                client
+                    .project_status(&package, &index, &capabilities, &concurrency)
+                    .await?;
+            }
+            let offline = RegistryClientBuilder::new(
+                BaseClientBuilder::default().connectivity(Connectivity::Offline),
+                cache,
+            )
+            .build()?;
+            let status = offline
+                .project_status(&package, &index, &capabilities, &concurrency)
+                .await?;
+            assert_eq!(status.status, uv_pypi_types::Status::Archived);
+            assert_eq!(
+                server
+                    .received_requests()
+                    .await
+                    .expect("request recording should be enabled")
+                    .len(),
+                1
+            );
+            let error = offline
+                .project_status(
+                    &PackageName::from_str("uncached")?,
+                    &index,
+                    &capabilities,
+                    &concurrency,
+                )
+                .await
+                .expect_err("offline lookup without a cache entry should fail");
+            assert_matches!(error.kind(), crate::ErrorKind::Offline(_));
+            assert_eq!(
+                server
+                    .received_requests()
+                    .await
+                    .expect("request recording should be enabled")
+                    .len(),
+                1
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn no_index_disables_project_status() -> Result<(), Error> {
+        let server = MockServer::start().await;
+        let index = IndexUrl::from_str(&format!("{}/simple", server.uri()))?;
+        let client = no_index_client(vec![])?;
+        let error = client
+            .project_status(
+                &PackageName::from_str("demo")?,
+                &index,
+                &IndexCapabilities::default(),
+                &Semaphore::new(1),
+            )
+            .await
+            .expect_err("project-status lookup should be disabled");
+        assert_matches!(error.kind(), crate::ErrorKind::NoIndex(_));
+        assert_no_requests(&server).await;
+        Ok(())
     }
 
     #[tokio::test]

@@ -1262,13 +1262,16 @@ pub enum CacheBucket {
     ///
     /// [PEP 508]: https://peps.python.org/pep-0508/#environment-markers
     Interpreter,
-    /// Index responses through the simple metadata API.
+    /// Index responses through the Simple API.
     ///
     /// Cache structure:
     ///  * `simple-v0/pypi/<package_name>.rkyv`
-    ///  * `simple-v0/<digest(index_url)>/<package_name>.rkyv`
+    ///  * `simple-v0/pypi/<package_name>.status.rkyv`
+    ///  * `simple-v0/index/<digest(index_url)>/<package_name>.rkyv`
+    ///  * `simple-v0/index/<digest(index_url)>/<package_name>.status.rkyv`
     ///
-    /// The response is parsed into `uv_client::SimpleDetailMetadata` before storage.
+    /// The payload of `<package_name>.rkyv` is `uv_client::SimpleDetailMetadata`.
+    /// The payload of `<package_name>.status.rkyv` is `uv_pypi_types::ProjectStatus`.
     Simple,
     /// A cache of unzipped wheels, stored as directories. This is used internally within the cache.
     /// When other buckets need to store directories, they should persist them to
@@ -1424,12 +1427,14 @@ impl CacheBucket {
                 // For `pypi` wheels, we expect a rkyv file per package, indexed by name.
                 let root = cache.bucket(self).join(WheelCacheKind::Pypi);
                 summary += cache.remove_path(root.join(format!("{name}.rkyv")))?;
+                summary += cache.remove_path(root.join(format!("{name}.status.rkyv")))?;
 
                 // For alternate indices, we expect a directory for every index (under an `index`
                 // subdirectory), followed by a directory per package (indexed by name).
                 let root = cache.bucket(self).join(WheelCacheKind::Index);
                 for directory in directories(root)? {
                     summary += cache.remove_path(directory.join(format!("{name}.rkyv")))?;
+                    summary += cache.remove_path(directory.join(format!("{name}.status.rkyv")))?;
                 }
             }
             Self::FlatIndex => {
