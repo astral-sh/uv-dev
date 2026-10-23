@@ -235,6 +235,9 @@ pub(super) async fn run(
         },
     );
 
+    // Metadata queries are read-only; the parent check owns lockfile updates.
+    command.env(EnvVars::UV_ISOLATED_LOCK, "1");
+
     if workspace_root.is_some() {
         // Forward enabled settings and remove disabled ones so CLI overrides of inherited
         // settings also apply when ty invokes `uv workspace metadata`.
