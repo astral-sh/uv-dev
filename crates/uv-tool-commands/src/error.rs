@@ -23,6 +23,8 @@ pub(crate) enum ToolError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
+    SitePackages(#[from] uv_installer::SitePackagesError),
+    #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
 }
 
@@ -58,6 +60,7 @@ impl From<ToolError> for UvError {
             | ToolError::ClientBuild(_)
             | ToolError::Tags(_)
             | ToolError::Io(_)
+            | ToolError::SitePackages(_)
             | ToolError::Anyhow(_)) => Self::unexpected(error.into()),
         }
     }

@@ -34,6 +34,9 @@ pub enum Error {
     #[error(transparent)]
     Fmt(#[from] std::fmt::Error),
     #[error(transparent)]
+    SitePackages(#[from] uv_installer::SitePackagesError),
+
+    #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
     #[error("The environment is outdated; run `{}` to update the environment", "uv sync".cyan())]
     OutdatedEnvironment(Box<Changelog>),
@@ -53,6 +56,7 @@ impl Error {
             | Self::Hash(_)
             | Self::Io(_)
             | Self::Fmt(_)
+            | Self::SitePackages(_)
             | Self::Anyhow(_) => None,
         }
     }
@@ -69,6 +73,7 @@ impl Error {
             | Self::CompileFiles(_)
             | Self::Io(_)
             | Self::Fmt(_)
+            | Self::SitePackages(_)
             | Self::Anyhow(_) => false,
         }
     }
@@ -99,6 +104,7 @@ impl uv_errors::Hinted for Error {
             | Self::Hash(_)
             | Self::Io(_)
             | Self::Fmt(_)
+            | Self::SitePackages(_)
             | Self::Anyhow(_)
             | Self::OutdatedEnvironment(_) => uv_errors::Hints::none(),
         }
