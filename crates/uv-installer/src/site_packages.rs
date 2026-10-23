@@ -6,6 +6,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use fs_err as fs;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use uv_configuration::{
     DependencyMode, DependencyModifierScope, DependencyModifiers, ExcludeDependency, Excludes,
@@ -43,9 +44,20 @@ pub struct SitePackages {
     /// The installed distributions, keyed by name. Although the Python runtime does not support it,
     /// it is possible to have multiple distributions with the same name to be present in the
     /// virtual environment, which we handle gracefully.
-    by_name: FxHashMap<PackageName, Vec<usize>>,
+    by_name: FxHashMap<PackageName, SmallVec<[usize; 1]>>,
     /// The installed editable distributions, keyed by URL.
-    by_url: FxHashMap<SafeUrl, Vec<usize>>,
+    by_url: FxHashMap<SafeUrl, SmallVec<[usize; 1]>>,
+}
+
+/// Append an installed distribution index, keeping a single index inline.
+///
+/// When adding a second index, reserve capacity for at least four entries to avoid
+/// reallocations for short lists of duplicates.
+fn push_index(indices: &mut SmallVec<[usize; 1]>, index: usize) {
+    if indices.len() == 1 {
+        indices.reserve(3);
+    }
+    indices.push(index);
 }
 
 impl SitePackages {
@@ -74,8 +86,8 @@ impl SitePackages {
         package_names: Option<&FxHashSet<&PackageName>>,
     ) -> Result<Self> {
         let mut distributions: Vec<Option<InstalledDist>> = Vec::new();
-        let mut by_name: FxHashMap<PackageName, Vec<usize>> = FxHashMap::default();
-        let mut by_url: FxHashMap<SafeUrl, Vec<usize>> = FxHashMap::default();
+        let mut by_name: FxHashMap<PackageName, SmallVec<[usize; 1]>> = FxHashMap::default();
+        let mut by_url: FxHashMap<SafeUrl, SmallVec<[usize; 1]>> = FxHashMap::default();
 
         for site_packages in interpreter.site_packages() {
             // Read the site-packages directory.
@@ -132,14 +144,11 @@ impl SitePackages {
                 let idx = distributions.len();
 
                 // Index the distribution by name.
-                by_name
-                    .entry(dist_info.name().clone())
-                    .or_default()
-                    .push(idx);
+                push_index(by_name.entry(dist_info.name().clone()).or_default(), idx);
 
                 // Index the distribution by URL.
                 if let InstalledDistKind::Url(dist) = &dist_info.kind {
-                    by_url.entry(dist.url.clone()).or_default().push(idx);
+                    push_index(by_url.entry(dist.url.clone()).or_default(), idx);
                 }
 
                 // Add the distribution to the database.
