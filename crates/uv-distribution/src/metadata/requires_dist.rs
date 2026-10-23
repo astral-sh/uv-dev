@@ -15,7 +15,9 @@ use uv_workspace::pyproject::{Sources, ToolUvSources};
 use uv_workspace::{DiscoveryOptions, MemberDiscovery, ProjectWorkspace, WorkspaceCache};
 
 use crate::Metadata;
-use crate::metadata::{GitWorkspaceMember, LoweredRequirement, MetadataError};
+use crate::metadata::{
+    GitWorkspaceMember, LoweredRequirement, MetadataError, validate_source_group,
+};
 
 #[derive(Debug, Clone)]
 pub struct RequiresDist {
@@ -271,25 +273,7 @@ impl RequiresDist {
                 }
 
                 if let Some(group) = source.group() {
-                    // If the group doesn't exist at all, error.
-                    let Some(flat_group) = dependency_groups.get(group) else {
-                        return Err(MetadataError::MissingSourceGroup(
-                            name.clone(),
-                            group.clone(),
-                        ));
-                    };
-
-                    // If there is no such requirement with the group, error.
-                    if !flat_group
-                        .requirements
-                        .iter()
-                        .any(|requirement| requirement.name == *name)
-                    {
-                        return Err(MetadataError::IncompleteSourceGroup(
-                            name.clone(),
-                            group.clone(),
-                        ));
-                    }
+                    validate_source_group(name, group, dependency_groups)?;
                 }
             }
         }

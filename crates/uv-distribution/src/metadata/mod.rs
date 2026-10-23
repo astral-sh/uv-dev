@@ -10,7 +10,7 @@ use uv_distribution_types::{GitDirectorySourceUrl, IndexLocations, Requirement};
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::{Version, VersionSpecifiers};
 use uv_pypi_types::{HashDigests, ResolutionMetadata};
-use uv_workspace::dependency_groups::DependencyGroupError;
+use uv_workspace::dependency_groups::{DependencyGroupError, FlatDependencyGroups};
 use uv_workspace::{WorkspaceCache, WorkspaceError};
 
 pub use crate::metadata::build_requires::{BuildRequires, LoweredExtraBuildDependencies};
@@ -23,6 +23,31 @@ mod build_requires;
 mod dependency_groups;
 mod lowering;
 mod requires_dist;
+
+/// Validate that a group-scoped source refers to a dependency in the named group.
+fn validate_source_group(
+    name: &PackageName,
+    group: &GroupName,
+    dependency_groups: &FlatDependencyGroups,
+) -> Result<(), MetadataError> {
+    let Some(flat_group) = dependency_groups.get(group) else {
+        return Err(MetadataError::MissingSourceGroup(
+            name.clone(),
+            group.clone(),
+        ));
+    };
+    if !flat_group
+        .requirements
+        .iter()
+        .any(|requirement| requirement.name == *name)
+    {
+        return Err(MetadataError::IncompleteSourceGroup(
+            name.clone(),
+            group.clone(),
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Error)]
 pub enum MetadataError {
