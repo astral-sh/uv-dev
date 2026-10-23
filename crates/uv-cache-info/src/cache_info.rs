@@ -134,9 +134,10 @@ impl CacheInfo {
                         continue;
                     }
                     let timestamp = Timestamp::from_metadata(&metadata);
-                    if last_changed.as_ref().is_none_or(|(_, prev_timestamp)| {
-                        *prev_timestamp < Timestamp::from_metadata(&metadata)
-                    }) {
+                    if last_changed
+                        .as_ref()
+                        .is_none_or(|(_, prev_timestamp)| *prev_timestamp < timestamp)
+                    {
                         last_changed = Some((path, timestamp));
                     }
                 }
@@ -271,9 +272,10 @@ impl CacheInfo {
                         continue;
                     }
                     let timestamp = Timestamp::from_metadata(&metadata);
-                    if last_changed.as_ref().is_none_or(|(_, prev_timestamp)| {
-                        *prev_timestamp < Timestamp::from_metadata(&metadata)
-                    }) {
+                    if last_changed
+                        .as_ref()
+                        .is_none_or(|(_, prev_timestamp)| *prev_timestamp < timestamp)
+                    {
                         last_changed = Some((entry.into_path(), timestamp));
                     }
                 }
