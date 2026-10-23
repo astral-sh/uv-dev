@@ -8,6 +8,7 @@ use uv_macros::DebugNoInline;
 use uv_normalize::{ExtraName, GroupName, PackageName};
 use uv_pep440::Version;
 use uv_python_discovery::format_requires_python_sources;
+use uv_python_types::PythonInstallationKey;
 use uv_requirements::ScriptRequirementsError;
 use uv_workspace::RequiresPythonSources;
 use uv_workspace::dependency_groups::DependencyGroupError;
@@ -45,6 +46,12 @@ pub enum EnvironmentError {
     DisjointLockedRequiresPython {
         locked: RequiresPython,
         groups: RequiresPythonSources,
+    },
+
+    #[error("The base interpreter ({base}) does not match the selected interpreter ({selected})")]
+    ScriptInterpreterMismatch {
+        base: Box<PythonInstallationKey>,
+        selected: Box<PythonInstallationKey>,
     },
 
     #[error(
@@ -222,6 +229,7 @@ impl From<EnvironmentError> for UvError {
             | EnvironmentError::MissingExtraProjects(..)
             | EnvironmentError::MissingExtraScript(..)
             | EnvironmentError::DisjointLockedRequiresPython { .. }
+            | EnvironmentError::ScriptInterpreterMismatch { .. }
             | EnvironmentError::LockedPythonIncompatibility(..)
             | EnvironmentError::LockedPlatformIncompatibility(..)
             | EnvironmentError::InvalidProjectEnvironmentDir(..)
@@ -276,6 +284,7 @@ impl uv_errors::Hinted for EnvironmentError {
             | Self::MissingExtraProjects(..)
             | Self::MissingExtraScript(..)
             | Self::DisjointLockedRequiresPython { .. }
+            | Self::ScriptInterpreterMismatch { .. }
             | Self::LockedPythonIncompatibility(..)
             | Self::LockedPlatformIncompatibility(..)
             | Self::InvalidProjectEnvironmentDir(..)
