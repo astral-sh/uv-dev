@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::fixture::{ChildPath, FileWriteStr, PathChild, PathCreateDir};
 use async_zip::base::write::ZipFileWriter;
@@ -1385,6 +1385,198 @@ fn workspace_metadata_exact_sync_removes_extraneous_packages() -> Result<()> {
     ----- stdout -----
     metadata-required==0.1.0
     ");
+
+    Ok(())
+}
+
+#[test]
+fn workspace_metadata_installed_packages_are_independent_of_lock() -> Result<()> {
+    let context = uv_test::test_context!("3.12")
+        .with_filtered_python_names()
+        .with_filtered_virtualenv_bin();
+
+    let locked = context
+        .temp_dir
+        .child("metadata_required-0.1.0-py3-none-any.whl");
+    write_wheel(
+        locked.path(),
+        "metadata-required",
+        "metadata_required-0.1.0",
+        &[("required_module.py", "")],
+    )?;
+    let locked_url = Url::from_file_path(locked.path())
+        .map_err(|()| anyhow::anyhow!("failed to convert wheel path to file URL"))?;
+
+    let installed = context
+        .temp_dir
+        .child("metadata_required-0.2.0-py3-none-any.whl");
+    write_wheel_with_metadata(
+        installed.path(),
+        "metadata-required",
+        "0.2.0",
+        "metadata_required-0.2.0",
+        "",
+        &[("required_module.py", "")],
+    )?;
+    let extraneous = context
+        .temp_dir
+        .child("metadata_extra-0.1.0-py3-none-any.whl");
+    write_wheel(
+        extraneous.path(),
+        "metadata-extra",
+        "metadata_extra-0.1.0",
+        &[("extra_module.py", "")],
+    )?;
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+            [project]
+            name = "module-owner-root"
+            version = "0.1.0"
+            requires-python = ">=3.12"
+            dependencies = ["metadata-required @ {locked_url}"]
+            "#
+        })?;
+    context.lock().assert().success();
+    context
+        .pip_install()
+        .arg(installed.path())
+        .arg(extraneous.path())
+        .assert()
+        .success();
+
+    let before = context
+        .pip_list()
+        .arg("--format")
+        .arg("json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mut filters = context.filters();
+    filters.push((r#""sha256": "[0-9a-f]{64}""#, r#""sha256": "[SHA256]""#));
+    let output = uv_snapshot!(filters, context.workspace_metadata().arg("--frozen"), @r#"
+    exit_code: 0 (success)
+    ----- stdout -----
+    {
+      "schema": {
+        "version": "preview"
+      },
+      "workspace_root": "[TEMP_DIR]/",
+      "environment": {
+        "root": "[VENV]/",
+        "python": {
+          "path": "[VENV]/[BIN]/[PYTHON]",
+          "version": "3.12.[X]",
+          "implementation": "cpython"
+        },
+        "packages": {
+          "metadata-extra==0.1.0@unmanaged+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info": {
+            "name": "metadata-extra",
+            "version": "0.1.0",
+            "path": "[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info",
+            "editable": false
+          },
+          "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl": {
+            "name": "metadata-required",
+            "version": "0.2.0",
+            "path": "[SITE_PACKAGES]/metadata_required-0.2.0.dist-info",
+            "editable": false
+          }
+        }
+      },
+      "workspace": {
+        "path": "[TEMP_DIR]/",
+        "id": "workspace+[TEMP_DIR]/"
+      },
+      "requires_python": ">=3.12",
+      "conflicts": {
+        "sets": []
+      },
+      "module_owners": {
+        "extra_module": [
+          {
+            "package_id": "metadata-extra==0.1.0@unmanaged+[SITE_PACKAGES]/metadata_extra-0.1.0.dist-info"
+          }
+        ],
+        "required_module": [
+          {
+            "package_id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
+          }
+        ]
+      },
+      "members": [
+        {
+          "name": "module-owner-root",
+          "path": "[TEMP_DIR]/",
+          "id": "module-owner-root==0.1.0@virtual+[TEMP_DIR]/"
+        }
+      ],
+      "resolution": {
+        "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl": {
+          "name": "metadata-required",
+          "version": "0.1.0",
+          "source": {
+            "path": "[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
+          },
+          "kind": "package",
+          "dependencies": [],
+          "wheels": [
+            {
+              "hashes": {
+                "sha256": "[SHA256]"
+              },
+              "filename": "metadata_required-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "module-owner-root==0.1.0@virtual+[TEMP_DIR]/": {
+          "name": "module-owner-root",
+          "version": "0.1.0",
+          "source": {
+            "virtual": "[TEMP_DIR]/"
+          },
+          "kind": "package",
+          "dependencies": [
+            {
+              "id": "metadata-required==0.1.0@path+[TEMP_DIR]/metadata_required-0.1.0-py3-none-any.whl"
+            }
+          ]
+        },
+        "workspace+[TEMP_DIR]/": {
+          "kind": "workspace",
+          "path": "[TEMP_DIR]/",
+          "dependencies": []
+        }
+      }
+    }
+
+    ----- stderr -----
+    warning: The `uv workspace metadata` command is experimental and may change without warning. Pass `--preview-features workspace-metadata` to disable this warning.
+    "#);
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let packages = metadata["environment"]["packages"]
+        .as_object()
+        .context("missing installed package inventory")?;
+    for package in packages.values() {
+        let path = package["path"]
+            .as_str()
+            .context("missing installed metadata path")?;
+        assert!(Path::new(path).is_dir());
+    }
+    let after = context
+        .pip_list()
+        .arg("--format")
+        .arg("json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(before, after);
 
     Ok(())
 }
