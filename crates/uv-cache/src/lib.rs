@@ -583,6 +583,15 @@ impl Cache {
         // Waiters may have already opened the lock. Retain its path and directory so they acquire
         // the same lock as new uv processes. Resolve only the root: never follow links inside it.
         let root = fs_err::canonicalize(&self.root)?;
+        if !fs_err::metadata(&root)?.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotADirectory,
+                format!(
+                    "Cache link target is not a directory: {}",
+                    root.simplified_display()
+                ),
+            ));
+        }
         Remover::new(reporter)
             .with_removal_accounting(self.removal_accounting)
             .rm_rf(&root, true)
