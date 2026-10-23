@@ -1,0 +1,94 @@
+{
+  "fast": { "latency_ms": 0, "bytes_per_second": 0 },
+  "slow": { "latency_ms": 150, "bytes_per_second": 1250000 },
+  "body-slow": {
+    "latency_ms": 150,
+    "bytes_per_second": 1250000,
+    "path_failures": {
+      "/simple/iniconfig/": { "cut_after_bytes": 32, "count": 1 }
+    }
+  },
+  "body-fast": {
+    "latency_ms": 0,
+    "bytes_per_second": 0,
+    "path_failures": {
+      "/simple/iniconfig/": { "cut_after_bytes": 32, "count": 1 }
+    }
+  },
+  "body-constrained": {
+    "latency_ms": 400,
+    "bytes_per_second": 125000,
+    "path_failures": {
+      "/simple/iniconfig/": { "cut_after_bytes": 32, "count": 1 }
+    }
+  },
+  "body-metadata": {
+    "latency_ms": 150,
+    "bytes_per_second": 1250000,
+    "path_failures": {
+      "/files/iniconfig-2.1.0-py3-none-any.whl.metadata": {
+        "cut_after_bytes": 128,
+        "count": 1
+      }
+    }
+  },
+  "body-two": {
+    "latency_ms": 150,
+    "bytes_per_second": 1250000,
+    "path_failures": {
+      "/simple/iniconfig/": { "cut_after_bytes": 32, "count": 2 }
+    }
+  },
+  "body-three": {
+    "latency_ms": 150,
+    "bytes_per_second": 1250000,
+    "path_failures": {
+      "/simple/iniconfig/": { "cut_after_bytes": 32, "count": 3 }
+    }
+  },
+  "body-both": {
+    "latency_ms": 150,
+    "bytes_per_second": 1250000,
+    "path_failures": {
+      "/simple/iniconfig/": { "cut_after_bytes": 32, "count": 1 },
+      "/files/iniconfig-2.1.0-py3-none-any.whl.metadata": {
+        "cut_after_bytes": 128,
+        "count": 1
+      }
+    }
+  },
+  "flat-body": {
+    "latency_ms": 150,
+    "bytes_per_second": 1250000,
+    "path_failures": { "/flat/all": { "cut_after_bytes": 32, "count": 1 } }
+  },
+  "flat-metadata": {
+    "latency_ms": 150,
+    "bytes_per_second": 1250000,
+    "path_failures": {
+      "/files/iniconfig-2.1.0-py3-none-any.whl.metadata": {
+        "cut_after_bytes": 128,
+        "count": 1
+      }
+    }
+  },
+  "disconnect-slow": {
+    "latency_ms": 150,
+    "bytes_per_second": 1250000,
+    "path_failures": {
+      "/simple/iniconfig/": { "disconnect": true, "count": 1 }
+    }
+  },
+  "status-slow": {
+    "latency_ms": 150,
+    "bytes_per_second": 1250000,
+    "path_failures": { "/simple/iniconfig/": { "status": 503, "count": 1 } }
+  },
+  "retry-after-zero": {
+    "latency_ms": 150,
+    "bytes_per_second": 1250000,
+    "path_failures": {
+      "/simple/iniconfig/": { "status": 503, "count": 1, "retry_after": "0" }
+    }
+  }
+}
