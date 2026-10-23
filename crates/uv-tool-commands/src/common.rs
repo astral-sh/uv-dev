@@ -385,19 +385,15 @@ impl ToolLock {
         }
     }
 
-    /// Write or remove the lock for a tool.
-    pub(super) fn write(directory: &Path, lock: Option<&Self>) -> anyhow::Result<()> {
-        let path = directory.join("uv.lock");
-        if let Some(lock) = lock {
-            uv_fs::write_atomic_sync(&path, lock.lock.to_toml()?)?;
-        } else {
-            match fs_err::remove_file(path) {
-                Ok(()) => (),
-                Err(err) if err.kind() == io::ErrorKind::NotFound => (),
-                Err(err) => return Err(err.into()),
-            }
-        }
-        Ok(())
+    /// Serialize the optional lock and publish it with the tool receipt.
+    pub(super) fn write_metadata(
+        installed_tools: &InstalledTools,
+        name: &PackageName,
+        tool: Tool,
+        lock: Option<&Self>,
+    ) -> anyhow::Result<()> {
+        let lock = lock.map(|lock| lock.lock.to_toml()).transpose()?;
+        Ok(installed_tools.write_tool_metadata(name, tool, lock)?)
     }
 
     /// Validate the lock against the current resolution inputs.
@@ -951,8 +947,7 @@ pub(super) fn finalize_tool_install(
         installed_entrypoints,
         options.clone(),
     );
-    ToolLock::write(&installed_tools.tool_dir(name), lock)?;
-    installed_tools.add_tool_receipt(name, tool)?;
+    ToolLock::write_metadata(installed_tools, name, tool, lock)?;
 
     warn_out_of_path(&executable_directory);
 

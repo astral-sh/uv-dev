@@ -21,9 +21,11 @@ use uv_static::EnvVars;
 use uv_virtualenv::UpgradePolicy;
 use uv_warnings::warn_user;
 
+use metadata::ToolMetadata;
 pub(crate) use receipt::ToolReceipt;
 pub use tool::{Tool, ToolEntrypoint};
 
+mod metadata;
 mod receipt;
 mod tool;
 
@@ -72,6 +74,17 @@ pub enum Error {
     ReceiptWrite(PathBuf, #[source] Box<toml_edit::ser::Error>),
     #[error("Failed to read `uv-receipt.toml` at `{0}`")]
     ReceiptRead(PathBuf, #[source] Box<toml::de::Error>),
+    #[error("Failed to recover tool metadata at `{0}`")]
+    MetadataRecover(PathBuf, #[source] Box<io::Error>),
+    #[error(
+        "Failed to commit tool metadata at `{directory}`; recovery remains pending: {recovery}"
+    )]
+    MetadataRecovery {
+        directory: PathBuf,
+        #[source]
+        operation: Box<io::Error>,
+        recovery: Box<io::Error>,
+    },
     #[error(transparent)]
     VirtualEnvError(#[from] uv_virtualenv::Error),
     #[error("Failed to read package entry points {0}")]
@@ -98,6 +111,8 @@ impl Error {
             Self::VirtualEnvError(uv_virtualenv::Error::Io(err)) => Some(err),
             Self::ReceiptWrite(_, _)
             | Self::ReceiptRead(_, _)
+            | Self::MetadataRecover(_, _)
+            | Self::MetadataRecovery { .. }
             | Self::VirtualEnvError(_)
             | Self::EntrypointRead(_)
             | Self::NoExecutableDirectory
@@ -170,6 +185,10 @@ impl InstalledTools {
                 );
                 continue;
             };
+            if let Err(err) = Self::recover_metadata(&directory) {
+                tools.push((name, Err(err)));
+                continue;
+            }
             let path = directory.join("uv-receipt.toml");
             let contents = match fs_err::read_to_string(&path) {
                 Ok(contents) => contents,
@@ -196,9 +215,11 @@ impl InstalledTools {
     /// If the tool is not installed, returns `Ok(None)`. If the receipt is invalid, returns an
     /// error.
     ///
-    /// Note it is generally incorrect to use this without [`Self::acquire_lock`].
+    /// The caller must hold the guard returned by [`Self::lock`] or [`Self::lock_for_removal`].
     pub fn get_tool_receipt(&self, name: &PackageName) -> Result<Option<Tool>, Error> {
-        let path = self.tool_dir(name).join("uv-receipt.toml");
+        let directory = self.tool_dir(name);
+        Self::recover_metadata(&directory)?;
+        let path = directory.join("uv-receipt.toml");
         match ToolReceipt::from_path(&path) {
             Ok(tool_receipt) => Ok(Some(tool_receipt.tool)),
             Err(Error::Io(err)) if err.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -208,12 +229,54 @@ impl InstalledTools {
 
     /// Grab a file lock for the tools directory to prevent concurrent access across processes.
     pub async fn lock(&self) -> Result<LockedFile, Error> {
+        let lock = self.acquire_lock().await?;
+        // Readers must see a complete metadata pair before interpreting any receipt or lock.
+        for directory in uv_fs::directories(self.root())? {
+            Self::recover_metadata(&directory)?;
+        }
+        Ok(lock)
+    }
+
+    /// Lock the store for removal even when a tool's metadata cannot be recovered.
+    ///
+    /// Receipt access still attempts recovery and reports the affected tool as broken. Removal
+    /// can discard that environment without using its inconsistent entrypoint metadata.
+    pub async fn lock_for_removal(&self) -> Result<LockedFile, Error> {
+        self.acquire_lock().await
+    }
+
+    async fn acquire_lock(&self) -> Result<LockedFile, Error> {
         Ok(LockedFile::acquire(
             self.root.join(".lock"),
             LockedFileMode::Exclusive,
             self.root.user_display(),
         )
         .await?)
+    }
+
+    fn recover_metadata(directory: &Path) -> Result<(), Error> {
+        metadata::recover(directory)
+            .map_err(|err| Error::MetadataRecover(directory.to_path_buf(), Box::new(err)))
+    }
+
+    /// Publish a receipt and its optional lock as one metadata update.
+    ///
+    /// Receipt serialization completes before either metadata file changes. The caller must hold
+    /// the guard returned by [`Self::lock`]. An interrupted publication is rolled back the next
+    /// time that lock is acquired. This does not roll back installed packages.
+    /// Files are replaced as uv-owned directory entries, retaining their [`std::fs::Permissions`]
+    /// but not their inode identity or links from other paths.
+    pub fn write_tool_metadata(
+        &self,
+        name: &PackageName,
+        tool: Tool,
+        lock: Option<String>,
+    ) -> Result<(), Error> {
+        let receipt = ToolReceipt::from(tool).to_toml().map_err(|err| {
+            Error::ReceiptWrite(self.tool_dir(name).join("uv-receipt.toml"), Box::new(err))
+        })?;
+        let metadata = ToolMetadata::new(receipt, lock);
+        metadata::commit(&self.tool_dir(name), &metadata)
     }
 
     /// Add a receipt for a tool.
