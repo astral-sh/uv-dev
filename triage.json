@@ -1,0 +1,10 @@
+{
+  "related": {
+    "items": [],
+    "search_scope": "Searched astral-sh/uv with authenticated gh across open and closed issues and open, closed, and merged pull requests. Literal queries covered “just testing something”, title terms “testing ignore”, and “please ignore”. Conceptual queries covered “test issue” and testing under internal:automations. Historical searches also explicitly checked closed pull requests under internal:automations; no pull requests matched. Inspected bodies and comments for astral-sh/uv#22584 and astral-sh/uv#1855, ruling them out because they concern Git integration-test failures and version matching, respectively. The new issue reports neither behavior and supplies no error or version for a specific fix search."
+  },
+  "type": "question",
+  "type_reason": "The title identifies a test post, and the body is empty. No incorrect behavior, requested improvement, or matching underlying problem was established. Although no substantive question is asked, question is the closest permitted classification.",
+  "summary": "No meaningfully related issues or pull requests were found. The issue-context README has been updated.",
+  "draft_response": "This issue doesn't describe a uv problem or feature request. Please close it once you've finished testing."
+}
