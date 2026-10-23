@@ -10,6 +10,7 @@ use std::time::Duration;
 use either::Either;
 
 pub mod child;
+pub mod command_header;
 mod printer;
 pub mod progress;
 pub mod update_shell;
