@@ -671,7 +671,8 @@ fn help_subsubcommand() {
               If multiple Python versions are requested, uv will exit with an error.
 
           --compile-bytecode
-              Compile Python's standard library to bytecode after installation.
+              Compile Python's standard library to bytecode after installation. [env:
+              `UV_COMPILE_BYTECODE`=]
 
               By default, uv does not compile Python (`.py`) files to bytecode (`__pycache__/*.pyc`);
               instead, compilation is performed lazily the first time a module is imported. For
@@ -681,8 +682,6 @@ fn help_subsubcommand() {
 
               When enabled, uv will process the Python version's `stdlib` directory. It will ignore any
               compilation errors.
-
-              [env: UV_COMPILE_BYTECODE=]
 
     Cache options:
       -n, --no-cache
@@ -933,8 +932,8 @@ fn help_flag_subsubcommand() {
           --default
               Use as the default Python version
           --compile-bytecode
-              Compile Python's standard library to bytecode after installation [env:
-              UV_COMPILE_BYTECODE=]
+              Compile Python's standard library to bytecode after installation. [env:
+              `UV_COMPILE_BYTECODE`=]
 
     Cache options:
       -n, --no-cache               Avoid reading from or writing to the cache, instead using a temporary

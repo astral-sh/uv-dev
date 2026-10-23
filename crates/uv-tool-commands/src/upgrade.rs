@@ -51,6 +51,7 @@ pub async fn upgrade(
     python_platform: Option<TargetTriple>,
     install_mirrors: PythonInstallMirrors,
     args: ResolverInstallerOptions,
+    environment_options: ResolverInstallerOptions,
     filesystem: ResolverInstallerOptions,
     client_builder: BaseClientBuilder<'_>,
     python_preference: PythonPreference,
@@ -143,6 +144,7 @@ pub async fn upgrade(
             printer,
             &installed_tools,
             &args,
+            &environment_options,
             &client_builder,
             cache,
             workspace_cache,
@@ -276,6 +278,7 @@ async fn upgrade_tool(
     printer: Printer,
     installed_tools: &InstalledTools,
     args: &ResolverInstallerOptions,
+    environment_options: &ResolverInstallerOptions,
     client_builder: &BaseClientBuilder<'_>,
     cache: &Cache,
     workspace_cache: &WorkspaceCache,
@@ -348,7 +351,10 @@ async fn upgrade_tool(
     }
 
     // Resolve the appropriate settings, preferring: CLI > receipt > user.
-    let options = args.clone().combine(receipt.combine(filesystem.clone()));
+    let options = args.clone().combine_with_environment(
+        environment_options.clone(),
+        receipt.combine(filesystem.clone()),
+    );
     let settings = ResolverInstallerSettings::from(options.clone());
 
     let build_constraints = existing_tool_receipt.build_constraints().to_vec();

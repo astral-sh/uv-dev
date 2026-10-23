@@ -1810,6 +1810,7 @@ pub async fn run(cli: Cli, global_initialization: GlobalInitialization) -> Resul
                 args.python_platform,
                 args.install_mirrors,
                 args.args,
+                args.environment,
                 args.filesystem,
                 client_builder.subcommand(vec!["tool".to_owned(), "upgrade".to_owned()]),
                 globals.python_preference,

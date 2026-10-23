@@ -13,6 +13,7 @@ use uv_normalize::PackageName;
 use uv_settings::{
     Combine, EnvFlag, IndexOptions, PipOptions, ResolverInstallerOptions, ResolverOptions,
 };
+use uv_static::{EnvVars, parse_boolish_environment_variable};
 use uv_warnings::owo_colors::OwoColorize;
 
 use crate::{
@@ -55,6 +56,26 @@ pub(crate) fn flag(yes: bool, no: bool, name: &str) -> anyhow::Result<Option<boo
             )));
         }
     }
+}
+
+/// Read an environment boolean only when the CLI did not select a value.
+pub(crate) fn env_flag(cli: Option<bool>, variable: &'static str) -> anyhow::Result<Option<bool>> {
+    if cli.is_some() {
+        Ok(None)
+    } else {
+        Ok(parse_boolish_environment_variable(variable)?)
+    }
+}
+
+/// Resolve a whole CLI flag pair before consulting its environment fallback.
+pub(crate) fn flag_with_env(
+    yes: bool,
+    no: bool,
+    name: &str,
+    variable: &'static str,
+) -> anyhow::Result<Option<bool>> {
+    let cli = flag(yes, no, name)?;
+    Ok(cli.or(env_flag(cli, variable)?))
 }
 
 /// The source of a boolean flag value.
@@ -386,7 +407,12 @@ impl IntoPipOptions for InstallerArgs {
             exclude_newer,
             exclude_newer_package: exclude_newer_package.map(ExcludeNewerPackage::from_iter),
             link_mode,
-            compile_bytecode: flag(compile_bytecode, no_compile_bytecode, "compile-bytecode")?,
+            compile_bytecode: flag_with_env(
+                compile_bytecode,
+                no_compile_bytecode,
+                "compile-bytecode",
+                EnvVars::UV_COMPILE_BYTECODE,
+            )?,
             no_sources: if no_sources { Some(true) } else { None },
             no_sources_package: if no_sources_package.is_empty() {
                 None
@@ -489,7 +515,12 @@ impl IntoPipOptions for ResolverInstallerArgs {
             exclude_newer,
             exclude_newer_package: exclude_newer_package.map(ExcludeNewerPackage::from_iter),
             link_mode,
-            compile_bytecode: flag(compile_bytecode, no_compile_bytecode, "compile-bytecode")?,
+            compile_bytecode: flag_with_env(
+                compile_bytecode,
+                no_compile_bytecode,
+                "compile-bytecode",
+                EnvVars::UV_COMPILE_BYTECODE,
+            )?,
             no_sources: if no_sources { Some(true) } else { None },
             no_sources_package: if no_sources_package.is_empty() {
                 None
@@ -847,7 +878,12 @@ pub(crate) fn resolver_installer_options(
         exclude_newer,
         exclude_newer_package: exclude_newer_package.map(ExcludeNewerPackage::from_iter),
         link_mode,
-        compile_bytecode: flag(compile_bytecode, no_compile_bytecode, "compile-bytecode")?,
+        compile_bytecode: flag_with_env(
+            compile_bytecode,
+            no_compile_bytecode,
+            "compile-bytecode",
+            EnvVars::UV_COMPILE_BYTECODE,
+        )?,
         no_build: flag(no_build, build, "build")?,
         no_build_package: if no_build_package.is_empty() {
             None
