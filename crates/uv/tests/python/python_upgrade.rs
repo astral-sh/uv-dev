@@ -9,6 +9,7 @@ use insta::assert_snapshot;
 use uv_python_managed::platform_key_from_env;
 use uv_static::EnvVars;
 use uv_test::{LATEST_PYTHON_3_12, TestContext, uv_snapshot};
+use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 #[test]
 fn python_upgrade() {
@@ -71,6 +72,26 @@ fn python_upgrade() {
     Installed Python 3.14.[LATEST] in [TIME]
      + cpython-3.14.[LATEST]-[PLATFORM] (python3.14)
     ");
+}
+
+#[tokio::test]
+async fn python_upgrade_empty_skips_catalog() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&[]).with_managed_python_dirs();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    uv_snapshot!(context.filters(), context.python_upgrade()
+        .arg("--python-downloads-json-url")
+        .arg(server.uri()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    There are no installed versions to upgrade
+    ");
+    server.verify().await;
+    Ok(())
 }
 
 #[test]
