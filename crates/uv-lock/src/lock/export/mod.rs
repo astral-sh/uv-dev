@@ -18,11 +18,11 @@ use uv_pypi_types::{ConflictItem, ConflictSet, Conflicts};
 
 use uv_resolver_types::universal_marker::encode_conflict_item;
 
-pub use crate::lock::export::metadata::{Metadata, PythonReport};
 pub(crate) use crate::lock::export::metadata::{
-    MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript, MetadataWorkspace,
-    MetadataWorkspaceMember,
+    MarkerTreeFormatter, MetadataNode, MetadataNodeId, MetadataNodeKind, MetadataScript,
+    MetadataWorkspace, MetadataWorkspaceMember,
 };
+pub use crate::lock::export::metadata::{Metadata, PythonReport};
 pub use crate::lock::export::pylock_toml::{PylockToml, PylockTomlError, PylockTomlErrorKind};
 pub use crate::lock::export::requirements_txt::RequirementsTxtExport;
 use crate::lock::{LockErrorKind, PackageIndex, Source};
