@@ -231,7 +231,7 @@ fn requires_package_does_not_exist() {
     exit_code: 1 (failure)
     ----- stderr -----
     error: No solution found when resolving dependencies
-      cause: Because a was not found in the package registry and you require a, we can conclude that your requirements are unsatisfiable.
+      cause: a was not found in the package registry.
     ");
 
     context.assert_not_installed("a");
