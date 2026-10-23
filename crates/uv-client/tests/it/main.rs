@@ -1,4 +1,5 @@
 mod cached_client;
+mod connect_timeout;
 mod http_util;
 mod proxy;
 mod remote_metadata;
