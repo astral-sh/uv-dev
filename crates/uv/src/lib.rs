@@ -2491,6 +2491,7 @@ async fn run_project(
             Box::pin(commands::lock(
                 project_dir,
                 args.lock_check,
+                &args.check_packages,
                 args.frozen,
                 args.dry_run,
                 args.refresh,

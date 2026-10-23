@@ -15,6 +15,12 @@ As such, `uv lock` operates on the entire workspace at once, while `uv run` and 
 the workspace root by default, though both accept a `--package` argument, allowing you to run a
 command in a particular workspace member from any workspace directory.
 
+To check the shared lockfile for a particular member, use `uv lock --check-package <name>`. This
+checks the member and its locked dependency closure, including optional dependencies and dependency
+groups, without updating the lockfile. Unrelated member changes are ignored, but workspace-wide
+resolver settings are still checked. Repeat `--check-package` to check multiple members in one
+invocation, or use `uv lock --check` to check the entire workspace.
+
 ## Getting started
 
 To create a workspace, add a `tool.uv.workspace` table to a `pyproject.toml`, which will implicitly
