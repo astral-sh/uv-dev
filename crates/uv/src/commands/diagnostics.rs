@@ -1,3 +1,5 @@
+use uv_errors::{Hinted, Hints};
+
 use crate::commands::pip::install::ExternallyManagedError;
 use crate::commands::project::ProjectError;
 use crate::commands::project::add::AddDependencyError;
@@ -7,15 +9,16 @@ use crate::commands::python::install::InvalidUpgradeRequestError;
 use crate::commands::tool::NoExecutablesError;
 use crate::commands::tool::run::{ToolRunScriptError, ToolRunUsageError};
 use uv_build_commands::Error as BuildError;
-use uv_command_support::Printer;
+use uv_command_support::{Printer, diagnostic_for_error};
 
-use uv_errors::{Hinted, Hints};
 /// Format an error chain with the default user-facing hints and output settings.
 pub(crate) fn write_error_chain(err: &anyhow::Error, printer: Printer) -> std::fmt::Result {
     uv_errors::write_error_chain_with_options(
         err.as_ref(),
         &hints_for_error(err),
-        uv_errors::ErrorOptions::default().with_stream(printer.stderr_important()),
+        uv_errors::ErrorOptions::default()
+            .with_diagnostic(diagnostic_for_error)
+            .with_stream(printer.stderr_important()),
     )
 }
 
@@ -79,14 +82,87 @@ fn collect_hint<T: Hinted + std::error::Error + 'static>(
 
 #[cfg(test)]
 mod tests {
-    use insta::assert_debug_snapshot;
+    use std::error::Error;
 
+    use assert_fs::prelude::*;
+    use insta::{assert_debug_snapshot, assert_snapshot};
+
+    use uv_errors::{ErrorOptions, Hints, write_error_chain_with_options};
+    use uv_fs::Simplified;
     use uv_lock_operations::LockError;
     use uv_project_commands::ProjectError;
-    use uv_settings::{LockedFlag, LockedSource};
-    use uv_workspace::pyproject::{PyprojectTomlError, SourceError};
+    use uv_settings::{FilesystemOptions, LockedFlag, LockedSource};
+    use uv_workspace::pyproject::{PyProjectToml, PyprojectTomlError, SourceError};
 
-    use super::hints_for_error;
+    use super::{diagnostic_for_error, hints_for_error};
+
+    #[test]
+    fn settings_parse_error_retains_source() -> anyhow::Result<()> {
+        let file = assert_fs::NamedTempFile::new("uv.toml")?;
+        file.write_str(indoc::indoc! {r#"
+            index-url = "https://user:first-secret@example.com/simple"
+            preview-features = 123
+            publish-url = "https://user:second-secret@example.com/legacy/"
+        "#})?;
+        let error = FilesystemOptions::from_file(file.path())
+            .expect_err("invalid preview setting in test input");
+        assert!(
+            error
+                .source()
+                .expect("settings retain the original TOML cause")
+                .is::<Box<toml::de::Error>>()
+        );
+
+        file.write_str("preview-features = []\n")?;
+        let mut output = String::new();
+        write_error_chain_with_options(
+            &error,
+            &Hints::none(),
+            ErrorOptions::default()
+                .with_diagnostic(diagnostic_for_error)
+                .with_stream(&mut output),
+        )?;
+        let output = anstream::adapter::strip_str(&output);
+        let display_path = regex::escape(&file.path().user_display().to_string());
+        let filters = [(display_path.as_str(), "[CONFIG]")];
+        insta::with_settings!({ filters => filters }, {
+            assert_snapshot!(output, @"
+            error: Failed to parse: [CONFIG]
+              cause: invalid type: integer `123`, expected a boolean or a list of preview feature names
+               --> [CONFIG]:2:20
+                |
+              2 | preview-features = 123
+                |                    ^^^
+            ");
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn pyproject_diagnostics_retain_parser_sources() {
+        let error = uv_pypi_types::PyProjectToml::from_toml("123 - 456", "pyproject.toml")
+            .expect_err("invalid TOML in test input");
+        assert!(
+            error
+                .source()
+                .expect("metadata retains the original syntax error")
+                .is::<toml_edit::TomlError>()
+        );
+        assert!(diagnostic_for_error(&error).is_some());
+        assert!(diagnostic_for_error(&Box::new(error)).is_some());
+
+        let error =
+            uv_pypi_types::PyProjectToml::from_toml("[project]\nname = 42\n", "pyproject.toml")
+                .expect_err("invalid project name in test input");
+        assert!(error.source().is_none());
+        assert!(diagnostic_for_error(&error).is_some());
+
+        let error = PyProjectToml::from_string("[project]\n".to_owned(), "pyproject.toml")
+            .expect_err("missing project name in test input");
+        assert!(error.source().is_none());
+        assert!(diagnostic_for_error(&error).is_some());
+        assert!(diagnostic_for_error(&Box::new(error)).is_some());
+    }
 
     #[test]
     fn collects_source_hints_through_pyproject_errors() {

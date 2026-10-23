@@ -6286,11 +6286,15 @@ dependencies = [
  "tokio",
  "tracing",
  "uv-console",
+ "uv-errors",
  "uv-fs",
+ "uv-pypi-types",
  "uv-redacted",
+ "uv-settings",
  "uv-shell",
  "uv-static",
  "uv-warnings",
+ "uv-workspace",
 ]
 
 [[package]]
@@ -6633,6 +6637,7 @@ dependencies = [
  "terminal_size",
  "textwrap",
  "thiserror",
+ "unicode-width 0.2.2",
  "uv-static",
 ]
 
@@ -7443,6 +7448,7 @@ dependencies = [
  "url",
  "uv-cache-key",
  "uv-distribution-filename",
+ "uv-errors",
  "uv-git-types",
  "uv-macros",
  "uv-normalize",
@@ -7450,6 +7456,7 @@ dependencies = [
  "uv-pep508",
  "uv-redacted",
  "uv-small-str",
+ "uv-toml",
 ]
 
 [[package]]
@@ -7880,7 +7887,6 @@ dependencies = [
  "fs-err",
  "schemars",
  "serde",
- "textwrap",
  "thiserror",
  "toml",
  "tracing",
@@ -7889,6 +7895,7 @@ dependencies = [
  "uv-configuration",
  "uv-dirs",
  "uv-distribution-types",
+ "uv-errors",
  "uv-flags",
  "uv-fs",
  "uv-install-wheel",
@@ -7902,6 +7909,7 @@ dependencies = [
  "uv-python-types",
  "uv-redacted",
  "uv-static",
+ "uv-toml",
  "uv-torch",
  "uv-version",
  "uv-warnings",
@@ -8013,7 +8021,10 @@ dependencies = [
 name = "uv-toml"
 version = "0.0.97"
 dependencies = [
+ "insta",
  "serde",
+ "toml",
+ "uv-errors",
 ]
 
 [[package]]

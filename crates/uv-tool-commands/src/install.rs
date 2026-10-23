@@ -20,6 +20,7 @@ use uv_distribution_types::{
     ExtraBuildRequires, IndexCapabilities, NameRequirementSpecification, Requirement,
     RequirementSource, UnresolvedRequirementSpecification,
 };
+use uv_errors::{ErrorOptions, Hints};
 use uv_installer::{BuildSettings, InstallationStrategy, Planner, SatisfiesResult, SitePackages};
 use uv_normalize::PackageName;
 use uv_pep440::{VersionSpecifier, VersionSpecifiers};
@@ -47,7 +48,7 @@ use crate::common::{
 use crate::error::ToolLockError;
 use crate::requirements::resolve_names;
 use crate::{Target, ToolRequest};
-use uv_command_support::{ExitStatus, Printer, UvError};
+use uv_command_support::{ExitStatus, Printer, UvError, diagnostic_for_error};
 use uv_environment_operations::{
     EnvironmentError, EnvironmentResolution, EnvironmentSpecification, resolve_environment,
     sync_environment, update_environment,
@@ -566,7 +567,9 @@ pub async fn install(
                     warn_user_with_chain!(
                         anyhow::Error::from(err)
                             .context("Failed to validate existing tool lock")
-                            .as_ref()
+                            .as_ref(),
+                        Hints::none(),
+                        ErrorOptions::default().with_diagnostic(diagnostic_for_error),
                     );
                     None
                 }
