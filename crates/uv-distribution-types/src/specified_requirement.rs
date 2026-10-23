@@ -6,7 +6,7 @@ use std::path::Path;
 use uv_git_types::{GitLfs, GitReference};
 use uv_normalize::ExtraName;
 use uv_pep508::{MarkerEnvironment, MarkerTree, UnnamedRequirement};
-use uv_pypi_types::{HashError, Hashes, ParsedUrl};
+use uv_pypi_types::{HashDigestInput, HashError, Hashes, ParsedUrl};
 
 use crate::{Requirement, RequirementSource, VerbatimParsedUrl};
 
@@ -20,7 +20,7 @@ pub struct NameRequirementSpecification {
     pub requirement: Requirement,
     /// Hashes of the downloadable packages.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub hashes: Vec<String>,
+    pub hashes: Vec<HashDigestInput>,
 }
 
 impl NameRequirementSpecification {
@@ -49,7 +49,7 @@ pub struct UnresolvedRequirementSpecification {
     /// The actual requirement.
     pub requirement: UnresolvedRequirement,
     /// Hashes of the downloadable packages.
-    pub hashes: Vec<String>,
+    pub hashes: Vec<HashDigestInput>,
 }
 
 /// A requirement read from a `requirements.txt` or `pyproject.toml` file.
