@@ -1547,12 +1547,9 @@ mod tests {
     #[test]
     fn test_marker_parsing() {
         let marker = r#"python_version == "2.7" and(sys_platform == "win32" or(os_name == "linux" and implementation_name == 'cpython'))"#;
-        let actual = parse::parse_markers_cursor::<VerbatimUrl>(
-            &mut Cursor::new(marker),
-            &mut TracingReporter,
-        )
-        .unwrap()
-        .unwrap();
+        let actual = parse::parse_markers_cursor(&mut Cursor::new(marker), &mut TracingReporter)
+            .unwrap()
+            .unwrap();
 
         let a = MarkerTree::expression(MarkerExpression::Version {
             key: MarkerValueVersion::PythonVersion,

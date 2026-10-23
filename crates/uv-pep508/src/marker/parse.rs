@@ -13,14 +13,32 @@ use crate::{
     MarkerValueVersion, MarkerWarningKind, Pep508Error, Pep508ErrorSource, Pep508Url, Reporter,
 };
 
+/// A marker syntax error, independent of the requirement's URL representation.
+#[derive(Debug)]
+pub(crate) struct MarkerParseError {
+    pub(crate) message: String,
+    pub(crate) start: usize,
+    pub(crate) len: usize,
+    pub(crate) input: String,
+}
+
+impl<T: Pep508Url> From<MarkerParseError> for Pep508Error<T> {
+    fn from(error: MarkerParseError) -> Self {
+        Self {
+            message: Pep508ErrorSource::String(error.message),
+            start: error.start,
+            len: error.len,
+            input: error.input,
+        }
+    }
+}
+
 /// ```text
 /// version_cmp   = wsp* <'<=' | '<' | '!=' | '==' | '>=' | '>' | '~=' | '==='>
 /// marker_op     = version_cmp | (wsp* 'in') | (wsp* 'not' wsp+ 'in')
 /// ```
 /// The `wsp*` has already been consumed by the caller.
-fn parse_marker_operator<T: Pep508Url>(
-    cursor: &mut Cursor,
-) -> Result<MarkerOperator, Pep508Error<T>> {
+fn parse_marker_operator(cursor: &mut Cursor) -> Result<MarkerOperator, MarkerParseError> {
     let (start, len) = if cursor.peek_char().is_some_and(char::is_alphabetic) {
         // "in" or "not"
         cursor.take_while(|char| !char.is_whitespace() && char != '\'' && char != '"')
@@ -33,10 +51,8 @@ fn parse_marker_operator<T: Pep508Url>(
         // 'not' wsp+ 'in'
         match cursor.next() {
             None => {
-                return Err(Pep508Error {
-                    message: Pep508ErrorSource::String(
-                        "Expected whitespace after 'not', found end of input".to_string(),
-                    ),
+                return Err(MarkerParseError {
+                    message: "Expected whitespace after 'not', found end of input".to_string(),
                     start: cursor.pos(),
                     len: 1,
                     input: cursor.to_string(),
@@ -44,10 +60,8 @@ fn parse_marker_operator<T: Pep508Url>(
             }
             Some((_, whitespace)) if whitespace.is_whitespace() => {}
             Some((pos, other)) => {
-                return Err(Pep508Error {
-                    message: Pep508ErrorSource::String(format!(
-                        "Expected whitespace after `not`, found `{other}`"
-                    )),
+                return Err(MarkerParseError {
+                    message: format!("Expected whitespace after `not`, found `{other}`"),
                     start: pos,
                     len: other.len_utf8(),
                     input: cursor.to_string(),
@@ -59,10 +73,10 @@ fn parse_marker_operator<T: Pep508Url>(
         cursor.next_expect_char('n', cursor.pos())?;
         return Ok(MarkerOperator::NotIn);
     }
-    MarkerOperator::from_str(operator).map_err(|_| Pep508Error {
-        message: Pep508ErrorSource::String(format!(
+    MarkerOperator::from_str(operator).map_err(|_| MarkerParseError {
+        message: format!(
             "Expected a valid marker operator (such as `>=` or `not in`), found `{operator}`"
-        )),
+        ),
         start,
         len,
         input: cursor.to_string(),
@@ -73,20 +87,18 @@ fn parse_marker_operator<T: Pep508Url>(
 /// '`os_name`', '`sys_platform`', '`platform_release`', '`platform_system`', '`platform_version`',
 /// '`platform_machine`', '`platform_python_implementation`', '`implementation_name`',
 /// '`implementation_version`', 'extra'
-fn parse_marker_value<T: Pep508Url>(
+fn parse_marker_value(
     cursor: &mut Cursor,
     reporter: &mut impl Reporter,
-) -> Result<MarkerValue, Pep508Error<T>> {
+) -> Result<MarkerValue, MarkerParseError> {
     // > User supplied constants are always encoded as strings with either ' or " quote marks. Note
     // > that backslash escapes are not defined, but existing implementations do support them. They
     // > are not included in this specification because they add complexity and there is no observable
     // > need for them today. Similarly we do not define non-ASCII character support: all the runtime
     // > variables we are referencing are expected to be ASCII-only.
     match cursor.peek() {
-        None => Err(Pep508Error {
-            message: Pep508ErrorSource::String(
-                "Expected marker value, found end of dependency specification".to_string(),
-            ),
+        None => Err(MarkerParseError {
+            message: "Expected marker value, found end of dependency specification".to_string(),
             start: cursor.pos(),
             len: 1,
             input: cursor.to_string(),
@@ -106,10 +118,10 @@ fn parse_marker_value<T: Pep508Url>(
             });
             let key = cursor.slice(start, len);
             MarkerValue::from_str(key)
-                .map_err(|_| Pep508Error {
-                    message: Pep508ErrorSource::String(format!(
+                .map_err(|_| MarkerParseError {
+                    message: format!(
                         "Expected a quoted string or a valid marker name, found `{key}`"
-                    )),
+                    ),
                     start,
                     len,
                     input: cursor.to_string(),
@@ -166,10 +178,10 @@ fn parse_marker_value<T: Pep508Url>(
 /// ```text
 /// marker_var:l marker_op:o marker_var:r
 /// ```
-pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
+pub(crate) fn parse_marker_key_op_value(
     cursor: &mut Cursor,
     reporter: &mut impl Reporter,
-) -> Result<Option<MarkerExpression>, Pep508Error<T>> {
+) -> Result<Option<MarkerExpression>, MarkerParseError> {
     cursor.eat_whitespace();
     let start = cursor.pos();
     let l_value = parse_marker_value(cursor, reporter)?;
@@ -245,10 +257,10 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
         }
         // `extras in "test"` or `dependency_groups not in "dev"` are invalid.
         MarkerValue::MarkerEnvList(key) => {
-            return Err(Pep508Error {
-                message: Pep508ErrorSource::String(format!(
+            return Err(MarkerParseError {
+                message: format!(
                     "The marker {key} must be on the right hand side of the expression"
-                )),
+                ),
                 start,
                 len,
                 input: cursor.to_string(),
@@ -304,10 +316,10 @@ pub(crate) fn parse_marker_key_op_value<T: Pep508Url>(
                 MarkerValue::MarkerEnvList(key) => {
                     let operator =
                         ContainerOperator::from_marker_operator(operator).ok_or_else(|| {
-                            Pep508Error {
-                                message: Pep508ErrorSource::String(format!(
+                            MarkerParseError {
+                                message: format!(
                                     "The operator {operator} is not supported with the marker {key}, only the `in` and `not in` operators are supported"
-                                )),
+                                ),
                                 start,
                                 len,
                                 input: cursor.to_string(),
@@ -576,10 +588,10 @@ fn parse_extra_expr(
 /// marker_expr   = marker_var:l marker_op:o marker_var:r -> (o, l, r)
 ///               | wsp* '(' marker:m wsp* ')' -> m
 /// ```
-fn parse_marker_expr<T: Pep508Url>(
+fn parse_marker_expr(
     cursor: &mut Cursor,
     reporter: &mut impl Reporter,
-) -> Result<Option<MarkerTree>, Pep508Error<T>> {
+) -> Result<Option<MarkerTree>, MarkerParseError> {
     cursor.eat_whitespace();
     if let Some(start_pos) = cursor.eat_char('(') {
         let marker = parse_marker_or(cursor, reporter)?;
@@ -594,10 +606,10 @@ fn parse_marker_expr<T: Pep508Url>(
 /// marker_and    = marker_expr:l wsp* 'and' marker_expr:r -> ('and', l, r)
 ///               | marker_expr:m -> m
 /// ```
-fn parse_marker_and<T: Pep508Url>(
+fn parse_marker_and(
     cursor: &mut Cursor,
     reporter: &mut impl Reporter,
-) -> Result<Option<MarkerTree>, Pep508Error<T>> {
+) -> Result<Option<MarkerTree>, MarkerParseError> {
     parse_marker_op(cursor, "and", MarkerTree::and, parse_marker_expr, reporter)
 }
 
@@ -605,10 +617,10 @@ fn parse_marker_and<T: Pep508Url>(
 /// marker_or     = marker_and:l wsp* 'or' marker_and:r -> ('or', l, r)
 ///                   | marker_and:m -> m
 /// ```
-fn parse_marker_or<T: Pep508Url>(
+fn parse_marker_or(
     cursor: &mut Cursor,
     reporter: &mut impl Reporter,
-) -> Result<Option<MarkerTree>, Pep508Error<T>> {
+) -> Result<Option<MarkerTree>, MarkerParseError> {
     parse_marker_op(
         cursor,
         "or",
@@ -619,14 +631,13 @@ fn parse_marker_or<T: Pep508Url>(
 }
 
 /// Parses both `marker_and` and `marker_or`
-#[expect(clippy::type_complexity)]
-fn parse_marker_op<T: Pep508Url, R: Reporter>(
+fn parse_marker_op<R: Reporter>(
     cursor: &mut Cursor,
     op: &str,
     apply: fn(MarkerTree, MarkerTree) -> MarkerTree,
-    parse_inner: fn(&mut Cursor, &mut R) -> Result<Option<MarkerTree>, Pep508Error<T>>,
+    parse_inner: fn(&mut Cursor, &mut R) -> Result<Option<MarkerTree>, MarkerParseError>,
     reporter: &mut R,
-) -> Result<Option<MarkerTree>, Pep508Error<T>> {
+) -> Result<Option<MarkerTree>, MarkerParseError> {
     let first = parse_inner(cursor, reporter)?;
     cursor.eat_whitespace();
     let (start, len) = cursor.peek_while(|c| !c.is_whitespace() && c != '(');
@@ -670,20 +681,20 @@ fn parse_marker_op<T: Pep508Url, R: Reporter>(
 /// ```text
 /// marker        = marker_or^
 /// ```
-pub(crate) fn parse_markers_cursor<T: Pep508Url>(
+pub(crate) fn parse_markers_cursor(
     cursor: &mut Cursor,
     reporter: &mut impl Reporter,
-) -> Result<Option<MarkerTree>, Pep508Error<T>> {
+) -> Result<Option<MarkerTree>, MarkerParseError> {
     let marker = parse_marker_or(cursor, reporter)?;
     cursor.eat_whitespace();
     if let Some((pos, unexpected)) = cursor.next() {
         // If we're here, both parse_marker_or and parse_marker_and returned because the next
         // character was neither "and" nor "or"
         let input = cursor.to_string();
-        return Err(Pep508Error {
-            message: Pep508ErrorSource::String(format!(
+        return Err(MarkerParseError {
+            message: format!(
                 "Unexpected character '{unexpected}', expected 'and', 'or' or end of input"
-            )),
+            ),
             start: pos,
             len: input.len() - pos,
             input,
@@ -695,10 +706,10 @@ pub(crate) fn parse_markers_cursor<T: Pep508Url>(
 
 /// Parses markers such as `python_version < '3.8'` or
 /// `python_version == "3.10" and (sys_platform == "win32" or (os_name == "linux" and implementation_name == 'cpython'))`
-pub(crate) fn parse_markers<T: Pep508Url>(
+pub(crate) fn parse_markers(
     markers: &str,
     reporter: &mut impl Reporter,
-) -> Result<MarkerTree, Pep508Error<T>> {
+) -> Result<MarkerTree, MarkerParseError> {
     let mut chars = Cursor::new(markers);
 
     // If the tree consisted entirely of arbitrary expressions
