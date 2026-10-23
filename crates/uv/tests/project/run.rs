@@ -3589,6 +3589,78 @@ fn run_no_project() -> Result<()> {
     Ok(())
 }
 
+/// An inherited frozen setting warns even when project handling is explicitly disabled.
+#[test]
+fn run_no_project_frozen_env_var() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+
+    let test_script = context.temp_dir.child("main.py");
+    test_script.write_str(indoc! { r#"
+        print("script ran")
+        "#
+    })?;
+
+    // This warning adds noise for inherited CI settings (astral-sh/uv#22755).
+    uv_snapshot!(context.filters(), context.run().env(EnvVars::UV_FROZEN, "1").arg("--no-project").arg("main.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    script ran
+
+    ----- stderr -----
+    warning: `--frozen` has no effect when used alongside `--no-project`
+    ");
+
+    Ok(())
+}
+
+/// An inherited locked setting warns even when project handling is explicitly disabled.
+#[test]
+fn run_no_project_locked_env_var() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+
+    let test_script = context.temp_dir.child("main.py");
+    test_script.write_str(indoc! { r#"
+        print("script ran")
+        "#
+    })?;
+
+    // This warning adds noise for inherited CI settings (astral-sh/uv#22755).
+    uv_snapshot!(context.filters(), context.run().env(EnvVars::UV_LOCKED, "1").arg("--no-project").arg("main.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    script ran
+
+    ----- stderr -----
+    warning: `UV_LOCKED=1` has no effect when used alongside `--no-project`
+    ");
+
+    Ok(())
+}
+
+/// An inherited no-sync setting warns even when project handling is explicitly disabled.
+#[test]
+fn run_no_project_no_sync_env_var() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+
+    let test_script = context.temp_dir.child("main.py");
+    test_script.write_str(indoc! { r#"
+        print("script ran")
+        "#
+    })?;
+
+    // This warning adds noise for inherited CI settings (astral-sh/uv#22755).
+    uv_snapshot!(context.filters(), context.run().env(EnvVars::UV_NO_SYNC, "1").arg("--no-project").arg("main.py"), @"
+    exit_code: 0 (success)
+    ----- stdout -----
+    script ran
+
+    ----- stderr -----
+    warning: `--no-sync` has no effect when used alongside `--no-project`
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn run_stdin() -> Result<()> {
     let context = uv_test::test_context!("3.12");
