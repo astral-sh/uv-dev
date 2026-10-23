@@ -23,7 +23,7 @@ use uv_python_types::{
 use uv_scripts::Pep723ItemRef;
 use uv_settings::PythonInstallMirrors;
 use uv_static::EnvVars;
-use uv_warnings::{warn_user, warn_user_once};
+use uv_warnings::warn_user;
 
 use crate::PythonDownloadReporter;
 use crate::PythonRequestSource;
@@ -188,14 +188,7 @@ impl ScriptInterpreter {
                         );
                         return from_virtual_env;
                     }
-                    ActiveEnvironment::Ignore => {}
-                    ActiveEnvironment::Warn => {
-                        warn_user_once!(
-                            "`VIRTUAL_ENV={}` does not match the script environment path `{}` and will be ignored; use `--active` to target the active environment instead",
-                            from_virtual_env.user_display(),
-                            cache_env.user_display()
-                        );
-                    }
+                    ActiveEnvironment::Ignore | ActiveEnvironment::Warn => {}
                 }
             }
         } else {

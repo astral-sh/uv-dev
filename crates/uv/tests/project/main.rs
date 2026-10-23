@@ -29,3 +29,6 @@ mod tree;
 
 #[cfg(all(feature = "test-python", feature = "test-pypi"))]
 mod workflow;
+
+#[cfg(feature = "test-python")]
+mod script_active_environment;
