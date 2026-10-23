@@ -1,6 +1,5 @@
 use indexmap::IndexMap;
 use itertools::Itertools;
-use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, Bound};
@@ -8,6 +7,7 @@ use std::ffi::OsStr;
 use std::fmt::Display;
 use std::fmt::Write;
 use std::iter;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::str::{self, FromStr};
 use tracing::{debug, trace, warn};
@@ -27,7 +27,9 @@ use uv_pypi_types::{
     BuildKind, Identifier, IdentifierParseError, Keywords, Metadata23, ProjectUrls,
     VerbatimParsedUrl,
 };
-use uv_toml::deserialize_unique_map;
+use uv_pyproject_toml::{
+    BuildSystem as PyProjectBuildSystem, Contact, License, OptionalDependencies, Readme,
+};
 
 use crate::serde_verbatim::SerdeVerbatim;
 use crate::{BuildBackendSettings, Error, error_on_venv};
@@ -38,19 +40,6 @@ pub(crate) const DEFAULT_EXCLUDES: &[&str] = &["__pycache__", "*.pyc", "*.pyo"];
 /// No breaking changes were introduced to the uv build backend since these releases, so we can use
 /// the fast path for them too.
 const COMPATIBLE_VERSIONS: &[&str] = &["0.9.30", "0.10.12", "0.11.33", "0.12.24"];
-
-fn deserialize_optional_dependencies<'de, D, V>(
-    deserializer: D,
-) -> Result<Option<BTreeMap<ExtraName, V>>, D::Error>
-where
-    D: Deserializer<'de>,
-    V: Deserialize<'de>,
-{
-    deserialize_unique_map(deserializer, |key: &ExtraName| {
-        format!("duplicate normalized extra name `{key}`")
-    })
-    .map(Some)
-}
 
 #[derive(Debug, Error)]
 pub enum ValidationError {
@@ -628,7 +617,7 @@ impl PyProjectToml {
             .project
             .optional_dependencies
             .iter()
-            .flat_map(|optional_dependencies| optional_dependencies.keys())
+            .flat_map(|dependencies| dependencies.keys())
             .collect::<Vec<_>>();
 
         let requires_dist =
@@ -1010,8 +999,8 @@ struct Project {
     /// The dependencies of the project.
     dependencies: Option<Vec<Requirement>>,
     /// The optional dependencies of the project.
-    #[serde(default, deserialize_with = "deserialize_optional_dependencies")]
-    optional_dependencies: Option<BTreeMap<ExtraName, Vec<Requirement>>>,
+    optional_dependencies:
+        Option<OptionalDependencies<Requirement, BTreeMap<ExtraName, Vec<Requirement>>>>,
     /// Import names exclusively provided by the project.
     ///
     /// From PEP 794.
@@ -1025,134 +1014,6 @@ struct Project {
     ///
     /// Not supported, an error if anything but the default empty list.
     dynamic: Option<Vec<String>>,
-}
-
-/// The optional `project.readme` key in a pyproject.toml as specified in
-/// <https://packaging.python.org/en/latest/specifications/pyproject-toml/#readme>.
-#[derive(Deserialize, Debug, Clone)]
-#[serde(untagged, rename_all_fields = "kebab-case")]
-pub(crate) enum Readme {
-    /// Relative path to the README.
-    String(PathBuf),
-    /// Relative path to the README.
-    File {
-        file: PathBuf,
-        content_type: String,
-        charset: Option<String>,
-    },
-    /// The full description of the project as an inline value.
-    Text {
-        text: String,
-        content_type: String,
-        charset: Option<String>,
-    },
-}
-
-impl Readme {
-    /// If the readme is a file, return the path to the file.
-    pub(crate) fn path(&self) -> Option<&Path> {
-        match self {
-            Self::String(path) => Some(path),
-            Self::File { file, .. } => Some(file),
-            Self::Text { .. } => None,
-        }
-    }
-}
-
-/// The optional `project.license` key in a pyproject.toml as specified in
-/// <https://packaging.python.org/en/latest/specifications/pyproject-toml/#license>.
-#[derive(Deserialize, Debug, Clone)]
-#[serde(untagged)]
-pub(crate) enum License {
-    /// An SPDX Expression.
-    ///
-    /// From the provisional PEP 639.
-    Spdx(String),
-    Text {
-        /// The full text of the license.
-        text: String,
-    },
-    File {
-        /// The file containing the license text.
-        file: String,
-    },
-}
-
-impl License {
-    fn file(&self) -> Option<&str> {
-        if let Self::File { file } = self {
-            Some(file)
-        } else {
-            None
-        }
-    }
-}
-
-/// A `project.authors` or `project.maintainers` entry as specified in
-/// <https://packaging.python.org/en/latest/specifications/pyproject-toml/#authors-maintainers>.
-///
-/// The entry is derived from the email format of `John Doe <john.doe@example.net>`. You need to
-/// provide at least name or email.
-#[derive(Debug, Clone)]
-pub(crate) enum Contact {
-    /// TODO(konsti): RFC 822 validation.
-    NameEmail { name: String, email: String },
-    /// TODO(konsti): RFC 822 validation.
-    Name { name: String },
-    /// TODO(konsti): RFC 822 validation.
-    Email { email: String },
-}
-
-impl<'de> Deserialize<'de> for Contact {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Fields {
-            #[serde(default, deserialize_with = "deserialize_string")]
-            name: Option<String>,
-            #[serde(default, deserialize_with = "deserialize_string")]
-            email: Option<String>,
-        }
-
-        fn deserialize_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            String::deserialize(deserializer).map(Some)
-        }
-
-        struct ContactVisitor;
-
-        impl<'de> Visitor<'de> for ContactVisitor {
-            type Value = Contact;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a table with 'name' and/or 'email' keys")
-            }
-
-            fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                let Fields { name, email } = Fields::deserialize(MapAccessDeserializer::new(map))?;
-                match (name, email) {
-                    (Some(name), Some(email)) => Ok(Contact::NameEmail { name, email }),
-                    (Some(name), None) => Ok(Contact::Name { name }),
-                    (None, Some(email)) => Ok(Contact::Email { email }),
-                    (None, None) => Err(serde::de::Error::custom(
-                        "a table with 'name' and/or 'email' keys",
-                    )),
-                }
-            }
-        }
-
-        deserializer
-            .deserialize_map(ContactVisitor)
-            .map_err(|_| serde::de::Error::custom("a table with 'name' and/or 'email' keys"))
-    }
 }
 
 /// A trove classifier as originally specified in PEP 301.
@@ -1219,17 +1080,20 @@ pub(crate) struct ToolUv {
 /// The frontend resolves these dependencies. Only direct-build validation needs to classify URLs
 /// as distributions that uv can install.
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case", bound(deserialize = ""))]
-struct BuildSystem<T: Pep508Url = VerbatimUrl> {
-    /// PEP 508 dependencies required to execute the build system.
-    requires: Vec<SerdeVerbatim<Requirement<T>>>,
-    /// A string naming a Python object that will be used to perform the build.
-    build_backend: Option<String>,
-    /// <https://peps.python.org/pep-0517/#in-tree-build-backends>
-    backend_path: Option<Vec<String>>,
+#[serde(transparent, bound(deserialize = ""))]
+struct BuildSystem<T: Pep508Url = VerbatimUrl>(
+    PyProjectBuildSystem<SerdeVerbatim<Requirement<T>>, Vec<String>>,
+);
+
+impl<T: Pep508Url> Deref for BuildSystem<T> {
+    type Target = PyProjectBuildSystem<SerdeVerbatim<Requirement<T>>, Vec<String>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
-impl BuildSystem {
+impl<T: Pep508Url> BuildSystem<T> {
     /// Check if the `[build-system]` table matches the uv build backend expectations and return
     /// a list of warnings if it looks suspicious.
     ///
