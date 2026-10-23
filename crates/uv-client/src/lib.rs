@@ -24,6 +24,7 @@ mod file_hash;
 mod flat_index;
 mod html;
 mod httpcache;
+mod index_parser;
 mod linehaul;
 mod middleware;
 mod registry_client;
