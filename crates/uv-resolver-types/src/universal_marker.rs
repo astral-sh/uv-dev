@@ -5,7 +5,7 @@ use std::str::FromStr;
 use rustc_hash::FxHashMap;
 
 use uv_normalize::{ExtraName, GroupName, InvalidNameError, PackageName};
-use uv_pep508::{MarkerEnvironment, MarkerExpression, MarkerOperator, MarkerTree};
+use uv_pep508::{MarkerEnvironment, MarkerOperator, MarkerTree};
 use uv_pypi_types::{ConflictItem, ConflictKind, Conflicts, Inference};
 
 #[derive(Debug, thiserror::Error)]
@@ -455,26 +455,9 @@ impl UniversalMarker {
     /// conflict expressions. For example, given `sys_platform == 'linux' or extra == 'foo'`, the
     /// conflict marker is always true on Linux but still depends on `foo` elsewhere.
     pub fn conflict_for_environment(self, env: &MarkerEnvironment) -> ConflictMarker {
-        let mut remaining = MarkerTree::FALSE;
-
-        'conjunctions: for conjunction in self.marker.to_dnf() {
-            let mut conflict = MarkerTree::TRUE;
-            for expression in conjunction {
-                match expression {
-                    expression @ MarkerExpression::Extra { .. } => {
-                        conflict = conflict.and(MarkerTree::expression(expression));
-                    }
-                    expression => {
-                        if !MarkerTree::expression(expression).evaluate(env, &[]) {
-                            continue 'conjunctions;
-                        }
-                    }
-                }
-            }
-            remaining = remaining.or(conflict);
+        ConflictMarker {
+            marker: self.marker.only_extras_for_environment(env),
         }
-
-        ConflictMarker { marker: remaining }
     }
 }
 
