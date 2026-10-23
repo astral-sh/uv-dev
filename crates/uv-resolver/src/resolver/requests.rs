@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use tokio::sync::mpsc::Sender;
@@ -13,7 +14,9 @@ use crate::prioritized_distribution::RegistryVariantsJson;
 use crate::pubgrub::Range;
 use crate::resolved::ResolvedDistRef;
 use crate::resolver::index::{FxRegisteredEntry, ParsedVariantsJsonResponse};
-use crate::resolver::{InMemoryIndex, MetadataResponse, Request, VersionsResponse};
+use crate::resolver::{
+    InMemoryIndex, MetadataResponse, MetadataTarget, PackageProducer, Request, VersionsResponse,
+};
 use crate::{PythonRequirement, ResolveError};
 
 /// A blocking solver-side handle for requesting metadata from the asynchronous fetcher.
@@ -38,10 +41,10 @@ impl MetadataRequest<'_> {
         }
     }
 
-    fn into_request(self) -> Request {
+    fn into_target(self) -> MetadataTarget {
         match self {
-            Self::Dist(dist) => Request::Dist(dist),
-            Self::Resolved(dist) => Request::from(dist),
+            Self::Dist(dist) => MetadataTarget::Dist(Arc::new(dist)),
+            Self::Resolved(dist) => MetadataTarget::from(dist),
         }
     }
 }
@@ -56,13 +59,13 @@ impl Name for MetadataRequest<'_> {
 }
 
 /// A registered version-list request, bound to its package and index scope.
-pub(crate) enum PendingVersions<'index> {
+enum PendingVersionsEntry<'index> {
     Implicit(FxRegisteredEntry<'index, PackageName, Arc<VersionsResponse>>),
     Explicit(FxRegisteredEntry<'index, (PackageName, IndexUrl), Arc<VersionsResponse>>),
 }
 
-impl PendingVersions<'_> {
-    pub(crate) fn wait(self) -> Arc<VersionsResponse> {
+impl PendingVersionsEntry<'_> {
+    fn wait(&self) -> Option<Arc<VersionsResponse>> {
         match self {
             Self::Implicit(entry) => entry.wait_blocking(),
             Self::Explicit(entry) => entry.wait_blocking(),
@@ -70,33 +73,88 @@ impl PendingVersions<'_> {
     }
 }
 
+pub(crate) struct PendingVersions<'index> {
+    requests: &'index MetadataRequests,
+    name: PackageName,
+    index: Option<IndexMetadata>,
+    entry: PendingVersionsEntry<'index>,
+}
+
+impl PendingVersions<'_> {
+    pub(crate) fn wait(mut self) -> Result<Arc<VersionsResponse>, ResolveError> {
+        loop {
+            if let Some(versions) = self.entry.wait() {
+                return Ok(versions);
+            }
+            self.entry = self
+                .requests
+                .register_package(&self.name, self.index.as_ref())?;
+        }
+    }
+}
+
 /// A distribution whose metadata was registered or supplied before resolution.
 ///
-/// Selected pins retain a registered entry that prevents cache removal while borrowed.
-#[derive(Clone, Debug)]
-pub(crate) struct RegisteredMetadata<'index>(
-    FxRegisteredEntry<'index, DistributionId, Arc<MetadataResponse>>,
-);
+/// Selected pins retain a registered entry that prevents explicit cache removal while borrowed.
+#[derive(Clone)]
+pub(crate) struct RegisteredMetadata<'index> {
+    requests: &'index MetadataRequests,
+    target: MetadataTarget,
+    entry: FxRegisteredEntry<'index, DistributionId, Arc<MetadataResponse>>,
+}
+
+impl Debug for RegisteredMetadata<'_> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RegisteredMetadata")
+            .field("target", &self.target)
+            .field("entry", &self.entry)
+            .finish()
+    }
+}
 
 impl RegisteredMetadata<'_> {
     pub(crate) fn id(&self) -> &DistributionId {
-        self.0.key()
+        self.entry.key()
     }
 
-    pub(crate) fn wait(&self) -> Arc<MetadataResponse> {
-        self.0.wait_blocking()
+    pub(crate) fn wait(&self) -> Result<Arc<MetadataResponse>, ResolveError> {
+        let mut entry = self.entry.clone();
+        loop {
+            if let Some(metadata) = entry.wait_blocking() {
+                return Ok(metadata);
+            }
+            entry = self.requests.register_metadata(&self.target)?;
+        }
     }
 }
 
 /// Index-level variant metadata registered for a selected package version.
-#[derive(Clone, Debug)]
-pub(crate) struct RegisteredVariantsJson<'index>(
-    FxRegisteredEntry<'index, RegistryVariantsJson, Arc<ParsedVariantsJsonResponse>>,
-);
+#[derive(Clone)]
+pub(crate) struct RegisteredVariantsJson<'index> {
+    requests: &'index MetadataRequests,
+    entry: FxRegisteredEntry<'index, RegistryVariantsJson, Arc<ParsedVariantsJsonResponse>>,
+}
+
+impl Debug for RegisteredVariantsJson<'_> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RegisteredVariantsJson")
+            .field("entry", &self.entry)
+            .finish()
+    }
+}
 
 impl RegisteredVariantsJson<'_> {
-    pub(crate) fn wait(&self) -> Arc<ParsedVariantsJsonResponse> {
-        self.0.wait_blocking()
+    pub(crate) fn wait(&self) -> Result<Arc<ParsedVariantsJsonResponse>, ResolveError> {
+        let mut entry = self.entry.clone();
+        loop {
+            if let Some(response) = entry.wait_blocking() {
+                return Ok(response);
+            }
+            let target = entry.key().clone();
+            entry = self.requests.register_variants_json(&target)?;
+        }
     }
 }
 
@@ -122,18 +180,48 @@ impl MetadataRequests {
         if let Some(recorder) = &self.recorder {
             recorder.exclude_newer(name);
         }
-        let registered = if let Some(index) = index {
-            self.index
-                .explicit()
-                .register((name.clone(), index.url().clone()))
-        } else {
-            self.index.implicit().register(name.clone())
-        };
-        if registered {
-            self.sender
-                .blocking_send(Request::Package(name.clone(), index.cloned()))?;
-        }
+        self.register_package(name, index)?;
         Ok(())
+    }
+
+    fn register_package<'index>(
+        &'index self,
+        name: &PackageName,
+        index: Option<&IndexMetadata>,
+    ) -> Result<PendingVersionsEntry<'index>, ResolveError> {
+        if let Some(index) = index {
+            match self
+                .index
+                .explicit()
+                .register_entry_with_producer((name.clone(), index.url().clone()))
+            {
+                Registration::New((entry, producer)) => {
+                    self.sender.blocking_send(Request::Package {
+                        package_name: name.clone(),
+                        index: Some(index.clone()),
+                        producer: PackageProducer::Explicit(producer),
+                    })?;
+                    Ok(PendingVersionsEntry::Explicit(entry))
+                }
+                Registration::Existing(entry) => Ok(PendingVersionsEntry::Explicit(entry)),
+            }
+        } else {
+            match self
+                .index
+                .implicit()
+                .register_entry_with_producer(name.clone())
+            {
+                Registration::New((entry, producer)) => {
+                    self.sender.blocking_send(Request::Package {
+                        package_name: name.clone(),
+                        index: None,
+                        producer: PackageProducer::Implicit(producer),
+                    })?;
+                    Ok(PendingVersionsEntry::Implicit(entry))
+                }
+                Registration::Existing(entry) => Ok(PendingVersionsEntry::Implicit(entry)),
+            }
+        }
     }
 
     /// Request the versions of a package once for the selected index scope.
@@ -145,31 +233,13 @@ impl MetadataRequests {
         if let Some(recorder) = &self.recorder {
             recorder.exclude_newer(name);
         }
-        if let Some(index) = index {
-            let entry = match self
-                .index
-                .explicit()
-                .register_entry((name.clone(), index.url().clone()))
-            {
-                Registration::New(entry) => {
-                    self.sender
-                        .blocking_send(Request::Package(name.clone(), Some(index.clone())))?;
-                    entry
-                }
-                Registration::Existing(entry) => entry,
-            };
-            Ok(PendingVersions::Explicit(entry))
-        } else {
-            let entry = match self.index.implicit().register_entry(name.clone()) {
-                Registration::New(entry) => {
-                    self.sender
-                        .blocking_send(Request::Package(name.clone(), None))?;
-                    entry
-                }
-                Registration::Existing(entry) => entry,
-            };
-            Ok(PendingVersions::Implicit(entry))
-        }
+        let entry = self.register_package(name, index)?;
+        Ok(PendingVersions {
+            requests: self,
+            name: name.clone(),
+            index: index.cloned(),
+            entry,
+        })
     }
 
     /// Schedule metadata retrieval without retaining or cloning its cache identity.
@@ -180,8 +250,13 @@ impl MetadataRequests {
         if let Some(recorder) = &self.recorder {
             recorder.dependency_metadata(request.name());
         }
-        if self.index.distributions().register(request.id()) {
-            self.sender.blocking_send(request.into_request())?;
+        if let Some(producer) = self
+            .index
+            .distributions()
+            .register_with_producer(request.id())
+        {
+            self.sender
+                .blocking_send(request.into_target().into_request(producer))?;
         }
         Ok(())
     }
@@ -197,15 +272,44 @@ impl MetadataRequests {
         if let Some(recorder) = &self.recorder {
             recorder.dependency_metadata(request.name());
         }
-        let entry = match self.index.distributions().register_entry(request.id()) {
-            Registration::New(entry) => {
+        let (entry, target) = match self
+            .index
+            .distributions()
+            .register_entry_with_producer(request.id())
+        {
+            Registration::New((entry, producer)) => {
                 validate(&request)?;
-                self.sender.blocking_send(request.into_request())?;
-                entry
+                let target = request.into_target();
+                self.sender
+                    .blocking_send(target.clone().into_request(producer))?;
+                (entry, target)
             }
-            Registration::Existing(entry) => entry,
+            Registration::Existing(entry) => (entry, request.into_target()),
         };
-        Ok(RegisteredMetadata(entry))
+        Ok(RegisteredMetadata {
+            requests: self,
+            target,
+            entry,
+        })
+    }
+
+    fn register_metadata<'index>(
+        &'index self,
+        target: &MetadataTarget,
+    ) -> Result<FxRegisteredEntry<'index, DistributionId, Arc<MetadataResponse>>, ResolveError>
+    {
+        match self
+            .index
+            .distributions()
+            .register_entry_with_producer(target.id())
+        {
+            Registration::New((entry, producer)) => {
+                self.sender
+                    .blocking_send(target.clone().into_request(producer))?;
+                Ok(entry)
+            }
+            Registration::Existing(entry) => Ok(entry),
+        }
     }
 
     /// Schedule variant metadata retrieval once for the selected package version.
@@ -213,19 +317,34 @@ impl MetadataRequests {
         &self,
         variants_json: &RegistryVariantsJson,
     ) -> Result<RegisteredVariantsJson<'_>, ResolveError> {
-        let entry = match self
+        let entry = self.register_variants_json(variants_json)?;
+        Ok(RegisteredVariantsJson {
+            requests: self,
+            entry,
+        })
+    }
+
+    fn register_variants_json<'index>(
+        &'index self,
+        variants_json: &RegistryVariantsJson,
+    ) -> Result<
+        FxRegisteredEntry<'index, RegistryVariantsJson, Arc<ParsedVariantsJsonResponse>>,
+        ResolveError,
+    > {
+        match self
             .index
             .variants_json()
-            .register_entry(variants_json.clone())
+            .register_entry_with_producer(variants_json.clone())
         {
-            Registration::New(entry) => {
-                self.sender
-                    .blocking_send(Request::VariantsJson(variants_json.clone()))?;
-                entry
+            Registration::New((entry, producer)) => {
+                self.sender.blocking_send(Request::VariantsJson {
+                    variants_json: variants_json.clone(),
+                    producer,
+                })?;
+                Ok(entry)
             }
-            Registration::Existing(entry) => entry,
-        };
-        Ok(RegisteredVariantsJson(entry))
+            Registration::Existing(entry) => Ok(entry),
+        }
     }
 
     /// Schedule speculative candidate selection using an already-requested package version map.
@@ -248,10 +367,16 @@ impl MetadataRequests {
         if let Some(recorder) = &self.recorder {
             recorder.dependency_metadata(dist.name());
         }
-        self.index
+        let target = MetadataTarget::Dist(Arc::new(dist.clone()));
+        let entry = self
+            .index
             .distributions()
-            .get_registered(dist.distribution_id())
-            .map(RegisteredMetadata)
-            .ok_or_else(|| ResolveError::UnregisteredTask(dist.to_string()))
+            .get_registered(target.id())
+            .ok_or_else(|| ResolveError::UnregisteredTask(dist.to_string()))?;
+        Ok(RegisteredMetadata {
+            requests: self,
+            target,
+            entry,
+        })
     }
 }

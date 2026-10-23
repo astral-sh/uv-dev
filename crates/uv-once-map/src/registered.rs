@@ -2,13 +2,14 @@ use std::borrow::Borrow;
 use std::fmt::{self, Debug};
 use std::hash::{BuildHasher, Hash, RandomState};
 
-use crate::OnceMap;
+use crate::{OnceMap, Producer};
 
 /// A [`OnceMap`] with registered entry handles.
-/// Entries can only be removed with exclusive access.
+/// Explicit removal requires exclusive access. Dropping a producer can also abandon a pending
+/// registration while the map is borrowed.
 ///
 /// Registration and completion use shared references, so jobs can run concurrently. Registered
-/// handles borrow the map, preventing removal until they are dropped.
+/// handles borrow the map, preventing explicit removal until they are dropped.
 ///
 /// ```compile_fail,E0502
 /// use uv_once_map::RegisteredOnceMap;
@@ -16,11 +17,11 @@ use crate::OnceMap;
 /// let mut map = RegisteredOnceMap::<_, _>::default();
 /// map.done("package", 42);
 /// let entry = map.get_registered("package").expect("completed entry");
-/// map.remove(&"package"); // Cannot remove entries while a handle borrows the map.
-/// assert_eq!(entry.wait_blocking(), 42);
+/// map.remove(&"package"); // Cannot explicitly remove entries while a handle borrows the map.
+/// assert_eq!(entry.wait_blocking(), Some(42));
 /// ```
 ///
-/// Shared ownership does not grant the ability to remove entries:
+/// Shared ownership does not grant the ability to explicitly remove entries:
 ///
 /// ```compile_fail,E0596
 /// use std::sync::Arc;
@@ -46,6 +47,11 @@ impl<K: Eq + Hash + Clone, V: Clone, S: BuildHasher + Clone> RegisteredOnceMap<K
         self.0.register(key)
     }
 
+    /// Register a job and return its producer, or return `None` if the key is already present.
+    pub fn register_with_producer(&self, key: K) -> Option<Producer<K, V, S>> {
+        self.0.register_with_producer(key)
+    }
+
     /// Register a job and retain its identity. [`Registration::New`] requires the caller to
     /// start the job and eventually call [`Self::done`].
     pub fn register_entry(&self, key: K) -> Registration<RegisteredEntry<'_, K, V, S>> {
@@ -53,6 +59,17 @@ impl<K: Eq + Hash + Clone, V: Clone, S: BuildHasher + Clone> RegisteredOnceMap<K
         let entry = RegisteredEntry { map: &self.0, key };
         if registered {
             Registration::New(entry)
+        } else {
+            Registration::Existing(entry)
+        }
+    }
+
+    /// Register a job and retain both a waiter and cancellation-safe ownership of new work.
+    pub fn register_entry_with_producer(&self, key: K) -> ProducerRegistration<'_, K, V, S> {
+        let producer = self.0.register_with_producer(key.clone());
+        let entry = RegisteredEntry { map: &self.0, key };
+        if let Some(producer) = producer {
+            Registration::New((entry, producer))
         } else {
             Registration::Existing(entry)
         }
@@ -112,12 +129,16 @@ impl<K: Eq + Hash, V, S: Default + BuildHasher + Clone> FromIterator<(K, V)>
 
 /// Whether the caller must start a job or can share its existing registration.
 #[derive(Debug)]
-pub enum Registration<T> {
+pub enum Registration<T, U = T> {
     New(T),
-    Existing(T),
+    Existing(U),
 }
 
-/// A registered job in a map that cannot remove entries while borrowed.
+/// A newly owned job and its waiter, or a waiter for existing work.
+pub type ProducerRegistration<'a, K, V, S = RandomState> =
+    Registration<(RegisteredEntry<'a, K, V, S>, Producer<K, V, S>), RegisteredEntry<'a, K, V, S>>;
+
+/// A registered job whose handle prevents explicit removal while borrowed.
 #[derive(Clone)]
 pub struct RegisteredEntry<'a, K, V, S = RandomState> {
     map: &'a OnceMap<K, V, S>,
@@ -138,17 +159,14 @@ impl<K: Eq + Hash + Clone, V: Clone, S: BuildHasher + Clone> RegisteredEntry<'_,
         &self.key
     }
 
-    /// Wait for the registered job. The producer must eventually call [`RegisteredOnceMap::done`].
-    pub async fn wait(&self) -> V {
-        // Only RegisteredOnceMap constructs handles, and removal requires an exclusive borrow.
-        self.map
-            .wait_registered(&self.key)
-            .await
-            .expect("registered entries cannot be removed while borrowed")
+    /// Wait for the job associated with this key, returning `None` if the registration is absent
+    /// or the pending registration is abandoned while waiting.
+    pub async fn wait(&self) -> Option<V> {
+        self.map.wait_registered(&self.key).await
     }
 
     /// Wait for the registered job in a blocking context.
-    pub fn wait_blocking(&self) -> V {
+    pub fn wait_blocking(&self) -> Option<V> {
         futures::executor::block_on(self.wait())
     }
 }

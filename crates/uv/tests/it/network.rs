@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::future::ready;
 use std::io;
@@ -26,6 +27,7 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 #[cfg(feature = "test-pypi")]
 use uv_redacted::SafeUrl;
 use uv_static::EnvVars;
+use uv_test::packse::WheelBuilder;
 use uv_test::{TestContext, uv_snapshot};
 
 /// Creates a CONNECT tunnel proxy that forwards connections to the target.
@@ -250,6 +252,357 @@ where
         });
     });
     (server, shutdown_tx)
+}
+
+/// Emit a response body only after the gate opens.
+fn gated_body(
+    bytes: Bytes,
+    mut gate: tokio::sync::watch::Receiver<bool>,
+) -> BoxBody<Bytes, Infallible> {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        while !*gate.borrow_and_update() {
+            if gate.changed().await.is_err() {
+                return;
+            }
+        }
+        let _ = tx.send(Ok(Frame::data(bytes))).await;
+    });
+    StreamBody::new(ReceiverStream::new(rx)).boxed()
+}
+
+/// A completed resolution does not wait for unused batch-prefetch response bodies.
+#[test]
+fn resolver_stops_unused_prefetch() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (started_tx, started_rx) = tokio::sync::watch::channel(false);
+    let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+    let observed_started = started_rx.clone();
+    let (server, _guard) = streaming_server(move |request| {
+        let path = request.uri().path();
+        let (data, content_type, gate) = if let Some(name) = path
+            .strip_prefix("/simple/")
+            .and_then(|path| path.strip_suffix('/'))
+        {
+            let maximum = if name == "choice" { 30 } else { 1 };
+            let files = (1..=maximum)
+                .map(|version| {
+                    json!({
+                        "filename": format!("{name}-{version}.0-py3-none-any.whl"),
+                        "url": format!("/files/{name}-{version}.0-py3-none-any.whl"),
+                        "hashes": {},
+                        "core-metadata": true,
+                        "upload-time": "2024-01-01T00:00:00Z",
+                    })
+                })
+                .collect::<Vec<_>>();
+            (
+                json!({"name": name, "files": files}).to_string(),
+                "application/vnd.pypi.simple.v1+json",
+                None,
+            )
+        } else if let Some(filename) = path
+            .strip_prefix("/files/")
+            .and_then(|path| path.strip_suffix("-py3-none-any.whl.metadata"))
+        {
+            let (name, version) = filename.split_once('-').expect("fixture filename");
+            let number = version
+                .strip_suffix(".0")
+                .expect("fixture version")
+                .parse::<u32>()
+                .expect("numeric fixture version");
+            let mut metadata = format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n");
+            let gate = if name == "choice" {
+                metadata.push_str(if number > 15 {
+                    "Requires-Dist: pin==2.0\n"
+                } else {
+                    "Requires-Dist: pin==1.0\n"
+                });
+                match number {
+                    0..=14 => {
+                        started_tx.send_replace(true);
+                        Some(release_rx.clone())
+                    }
+                    15 => {
+                        // Make the usable version wait until an unused prefetch is in flight.
+                        Some(started_rx.clone())
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            (metadata, "text/plain", gate)
+        } else {
+            return hyper::Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(http_body_util::Full::new(Bytes::new()).boxed());
+        };
+        let length = data.len();
+        let body = if let Some(gate) = gate {
+            gated_body(Bytes::from(data), gate)
+        } else {
+            http_body_util::Full::new(Bytes::from(data)).boxed()
+        };
+        hyper::Response::builder()
+            .header("Content-Type", content_type)
+            .header(CONTENT_LENGTH, length)
+            .body(body)
+    });
+    context
+        .temp_dir
+        .child("requirements.in")
+        .write_str("choice\npin==1.0\n")?;
+    let mut child = context
+        .pip_compile()
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .arg("--default-index")
+        .arg(format!("{server}/simple"))
+        .arg("requirements.in")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let completed = loop {
+        if child.try_wait()?.is_some() {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    release_tx.send_replace(true);
+    if !completed {
+        child.kill()?;
+    }
+    let output = child.wait_with_output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(*observed_started.borrow(), "no unused prefetch started");
+    assert!(completed, "resolution waited for unused prefetches");
+    assert_eq!(
+        String::from_utf8(output.stdout)?,
+        "choice==15.0\npin==1.0\n"
+    );
+    Ok(())
+}
+
+/// A canceled build-requirements prefetch can be retried by a later resolution.
+#[test]
+fn canceled_build_prefetch_allows_followup_resolution() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let mut wheels = BTreeMap::new();
+    for (name, maximum) in [("choice", 30), ("pin", 1)] {
+        let package_name = name.parse()?;
+        for number in 1..=maximum {
+            let version = format!("{number}.0").parse()?;
+            let (filename, wheel) = WheelBuilder::new(&package_name, &version).build();
+            wheels.insert(filename, Bytes::from(wheel));
+        }
+    }
+    let wheels = Arc::new(wheels);
+
+    let (started_tx, started_rx) = tokio::sync::watch::channel(false);
+    let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+    let choice_14_requests = Arc::new(AtomicUsize::new(0));
+    let observed_choice_14_requests = Arc::clone(&choice_14_requests);
+    let (server, _guard) = streaming_server(move |request| {
+        let path = request.uri().path();
+        let (data, content_type, gate) = if let Some(name) = path
+            .strip_prefix("/simple/")
+            .and_then(|path| path.strip_suffix('/'))
+        {
+            let maximum = if name == "choice" { 30 } else { 1 };
+            let files = (1..=maximum)
+                .map(|version| {
+                    json!({
+                        "filename": format!("{name}-{version}.0-py3-none-any.whl"),
+                        "url": format!("/files/{name}-{version}.0-py3-none-any.whl"),
+                        "hashes": {},
+                        "core-metadata": true,
+                        "upload-time": "2024-01-01T00:00:00Z",
+                    })
+                })
+                .collect::<Vec<_>>();
+            (
+                Bytes::from(json!({"name": name, "files": files}).to_string()),
+                "application/vnd.pypi.simple.v1+json",
+                None,
+            )
+        } else if let Some(filename) = path
+            .strip_prefix("/files/")
+            .and_then(|path| path.strip_suffix("-py3-none-any.whl.metadata"))
+        {
+            let (name, version) = filename.split_once('-').expect("fixture filename");
+            let number = version
+                .strip_suffix(".0")
+                .expect("fixture version")
+                .parse::<u32>()
+                .expect("numeric fixture version");
+            let mut metadata = format!("Metadata-Version: 2.3\nName: {name}\nVersion: {version}\n");
+            let gate = if name == "choice" {
+                metadata.push_str(if number > 15 {
+                    "Requires-Dist: pin==2.0\n"
+                } else {
+                    "Requires-Dist: pin==1.0\n"
+                });
+                match number {
+                    14 if choice_14_requests.fetch_add(1, Ordering::SeqCst) == 0 => {
+                        started_tx.send_replace(true);
+                        Some(release_rx.clone())
+                    }
+                    15 => Some(started_rx.clone()),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            (Bytes::from(metadata), "text/plain", gate)
+        } else if let Some(filename) = path.strip_prefix("/files/") {
+            let Some(wheel) = wheels.get(filename) else {
+                return hyper::Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(http_body_util::Full::new(Bytes::new()).boxed());
+            };
+            (wheel.clone(), "application/octet-stream", None)
+        } else {
+            return hyper::Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(http_body_util::Full::new(Bytes::new()).boxed());
+        };
+        let length = data.len();
+        let body = if let Some(gate) = gate {
+            gated_body(data, gate)
+        } else {
+            http_body_util::Full::new(data).boxed()
+        };
+        hyper::Response::builder()
+            .header("Content-Type", content_type)
+            .header(CONTENT_LENGTH, length)
+            .body(body)
+    });
+
+    let project = context.temp_dir.child("project");
+    project
+        .child("pyproject.toml")
+        .write_str(indoc::indoc! {r#"
+        [project]
+        name = "project"
+        version = "1.0.0"
+        dynamic = ["dependencies"]
+
+        [build-system]
+        requires = ["choice", "pin==1.0"]
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    project.child("backend.py").write_str(indoc::indoc! {r#"
+        import atexit
+        import time
+        from pathlib import Path
+
+        HERE = Path(__file__).parent
+
+        def get_requires_for_build_wheel(config_settings=None):
+            (HERE / "get-requires-started").touch()
+            while not (HERE / "continue").exists():
+                time.sleep(0.01)
+            atexit.register(lambda: (HERE / "backend-exited").touch())
+            return ["choice==14.0"]
+
+        def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
+            dist_info = Path(metadata_directory) / "project-1.0.0.dist-info"
+            dist_info.mkdir()
+            (dist_info / "METADATA").write_text(
+                "Metadata-Version: 2.3\nName: project\nVersion: 1.0.0\n"
+            )
+            return dist_info.name
+    "#})?;
+
+    let mut child = context
+        .pip_compile()
+        .arg("--no-header")
+        .arg("--no-annotate")
+        .arg("--default-index")
+        .arg(format!("{server}/simple"))
+        .arg("project/pyproject.toml")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    let backend_started_path = project.child("get-requires-started");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !backend_started_path.exists() && child.try_wait()?.is_none() && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let backend_started = backend_started_path.exists();
+    let initial_choice_14_requests = observed_choice_14_requests.load(Ordering::SeqCst);
+
+    // Eliminate the network gate before allowing the backend to request a second resolution.
+    release_tx.send_replace(true);
+    project.child("continue").write_str("")?;
+
+    let backend_exited_path = project.child("backend-exited");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !backend_exited_path.exists() && child.try_wait()?.is_none() && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let backend_exited = backend_exited_path.exists();
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let completed = loop {
+        if child.try_wait()?.is_some() {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    if !completed {
+        child.kill()?;
+    }
+    let output = child.wait_with_output()?;
+    assert!(
+        backend_started,
+        "the first build-requirements resolution did not reach the backend:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        initial_choice_14_requests,
+        1,
+        "the canceled speculative request did not start:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        backend_exited,
+        "the backend did not return its additional build requirement:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        completed,
+        "the follow-up resolution did not complete:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        observed_choice_14_requests.load(Ordering::SeqCst),
+        2,
+        "the follow-up resolution did not retry the canceled metadata request"
+    );
+    Ok(())
 }
 
 /// Invalid explicit certificate files disable the default trust roots rather than being ignored.
