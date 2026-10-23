@@ -9013,9 +9013,7 @@ impl Wheel {
 
     fn from_path_dist(path_dist: &PathBuiltDist, hashes: &[HashDigest]) -> Self {
         Self {
-            url: WheelWireSource::Filename {
-                filename: path_dist.filename.clone(),
-            },
+            url: WheelWireSource::Filename,
             hash: hashes.iter().max().cloned(),
             size: None,
             upload_time: None,
@@ -9025,9 +9023,7 @@ impl Wheel {
 
     fn from_git_path_dist(path_dist: &GitPathBuiltDist, hashes: &[HashDigest]) -> Self {
         Self {
-            url: WheelWireSource::Filename {
-                filename: path_dist.filename.clone(),
-            },
+            url: WheelWireSource::Filename,
             hash: hashes.iter().max().cloned(),
             size: None,
             upload_time: None,
@@ -9048,7 +9044,7 @@ impl Wheel {
                     WheelWireSource::Url { url: file_url } => {
                         FileLocation::AbsoluteUrl(file_url.clone())
                     }
-                    WheelWireSource::Path { .. } | WheelWireSource::Filename { .. } => {
+                    WheelWireSource::Path { .. } | WheelWireSource::Filename => {
                         return Err(LockErrorKind::MissingUrl {
                             name: filename.name,
                             version: filename.version,
@@ -9090,7 +9086,7 @@ impl Wheel {
                         })?;
                         FileLocation::AbsoluteUrl(UrlString::from(file_url))
                     }
-                    WheelWireSource::Filename { .. } => {
+                    WheelWireSource::Filename => {
                         return Err(LockErrorKind::MissingPath {
                             name: filename.name,
                             version: filename.version,
@@ -9165,47 +9161,34 @@ enum WheelWireSource {
     },
     /// Used for path wheels.
     ///
-    /// We only store the filename for path wheel, since we can't store a relative path in the url
-    Filename {
-        /// We duplicate the filename since a lot of code relies on having the filename on the
-        /// wheel entry.
-        filename: WheelFilename,
-    },
+    /// The filename is stored in [`Wheel::filename`], since a relative path cannot be
+    /// represented as a URL.
+    Filename,
 }
 
 impl TryFrom<WheelWire> for Wheel {
     type Error = String;
 
     fn try_from(wire: WheelWire) -> Result<Self, String> {
-        let source = if let Some(url) = wire.url {
-            WheelWireSource::Url { url }
+        let (source, filename) = if let Some(url) = wire.url {
+            let filename = url.filename().map_err(|err| err.to_string())?;
+            let filename = filename
+                .parse::<WheelFilename>()
+                .map_err(|err| format!("failed to parse `{filename}` as wheel filename: {err}"))?;
+            (WheelWireSource::Url { url }, filename)
         } else if let Some(path) = wire.path {
-            WheelWireSource::Path { path }
+            let filename = path
+                .file_name()
+                .and_then(|file_name| file_name.to_str())
+                .ok_or_else(|| format!("path `{}` has no filename component", path.display()))?;
+            let filename = filename
+                .parse::<WheelFilename>()
+                .map_err(|err| format!("failed to parse `{filename}` as wheel filename: {err}"))?;
+            (WheelWireSource::Path { path }, filename)
         } else if let Some(filename) = wire.filename {
-            WheelWireSource::Filename { filename }
+            (WheelWireSource::Filename, filename)
         } else {
             return Err("wheel has no URL, path, or filename".to_string());
-        };
-
-        let filename = match &source {
-            WheelWireSource::Url { url } => {
-                let filename = url.filename().map_err(|err| err.to_string())?;
-                filename.parse::<WheelFilename>().map_err(|err| {
-                    format!("failed to parse `{filename}` as wheel filename: {err}")
-                })?
-            }
-            WheelWireSource::Path { path } => {
-                let filename = path
-                    .file_name()
-                    .and_then(|file_name| file_name.to_str())
-                    .ok_or_else(|| {
-                        format!("path `{}` has no filename component", path.display())
-                    })?;
-                filename.parse::<WheelFilename>().map_err(|err| {
-                    format!("failed to parse `{filename}` as wheel filename: {err}")
-                })?
-            }
-            WheelWireSource::Filename { filename } => filename.clone(),
         };
 
         Ok(Self {
@@ -10740,6 +10723,9 @@ wheels = [{ filename = "local-1.0.0-py3-none-any.whl", hash = "sha256:53a42340ae
 "#,
         )
         .expect("valid lock");
+        let serialized = lock.to_toml().expect("valid lock serialization");
+        let roundtrip = toml::from_str::<Lock>(&serialized).expect("valid serialized lock");
+        assert_eq!(lock, roundtrip);
         let root = std::env::current_dir().expect("current directory");
         let hasher = lock
             .hash_strategy(&root, &FxHashSet::default())
