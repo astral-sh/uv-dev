@@ -528,6 +528,26 @@ impl<'env> TreeDisplay<'env> {
         }
     }
 
+    /// Iterate over packages reachable in the selected marker and extra contexts.
+    ///
+    /// This includes descendants beyond the display depth and repeated subtrees.
+    pub fn packages(&self) -> impl Iterator<Item = &'env Package> {
+        self.traverse(usize::MAX)
+            .nodes
+            .into_iter()
+            .filter_map(|node| match self.graph[node] {
+                Node::Root => None,
+                Node::Package(index) => Some(self.lock.package(index)),
+            })
+    }
+
+    /// Attach the latest versions to the selected graph.
+    #[must_use]
+    pub fn with_latest(mut self, latest: &'env PackageMap<Version>) -> Self {
+        self.latest = latest;
+        self
+    }
+
     /// Perform a depth-first traversal of the given package and its dependencies.
     fn visit(
         &'env self,
@@ -803,7 +823,7 @@ impl<'env> TreeDisplay<'env> {
     /// node, so its direct requirements remain at depth zero despite appearing one edge away from
     /// a root in the serialized graph. Structural extra-to-package relationships likewise do not
     /// participate in depth traversal.
-    fn json_traversal(&self) -> JsonTraversal {
+    fn traverse(&self, depth: usize) -> TreeTraversal {
         let mut distances = FxHashMap::default();
         let mut queue = VecDeque::new();
         let mut nodes = FxHashSet::default();
@@ -816,7 +836,7 @@ impl<'env> TreeDisplay<'env> {
                         let Node::Package(package_index) = self.graph[edge.target()] else {
                             continue;
                         };
-                        let state = JsonTraversalNode {
+                        let state = TreeTraversalNode {
                             index: edge.target(),
                             expanded_extras: self.expanded_extras(
                                 self.lock.package(package_index),
@@ -832,7 +852,7 @@ impl<'env> TreeDisplay<'env> {
                     }
                 }
                 Node::Package(package_index) => {
-                    let state = JsonTraversalNode {
+                    let state = TreeTraversalNode {
                         index: *root,
                         expanded_extras: self
                             .expanded_extras(self.lock.package(package_index), None),
@@ -853,7 +873,7 @@ impl<'env> TreeDisplay<'env> {
 
         while let Some(source) = queue.pop_front() {
             let distance = distances[&source];
-            if distance >= self.depth || self.invert && source.reached_via_dependency_group {
+            if distance >= depth || self.invert && source.reached_via_dependency_group {
                 continue;
             }
 
@@ -900,7 +920,7 @@ impl<'env> TreeDisplay<'env> {
                 let Node::Package(package_index) = self.graph[target] else {
                     continue;
                 };
-                let state = JsonTraversalNode {
+                let state = TreeTraversalNode {
                     index: target,
                     expanded_extras: self
                         .expanded_extras(self.lock.package(package_index), Some(edge.weight())),
@@ -916,18 +936,18 @@ impl<'env> TreeDisplay<'env> {
             }
         }
 
-        JsonTraversal { nodes, edges }
+        TreeTraversal { nodes, edges }
     }
 }
 
 #[derive(Debug)]
-struct JsonTraversal {
+struct TreeTraversal {
     nodes: FxHashSet<NodeIndex>,
     edges: FxHashSet<EdgeIndex>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct JsonTraversalNode<'env> {
+struct TreeTraversalNode<'env> {
     index: NodeIndex,
     expanded_extras: BTreeSet<&'env ExtraName>,
     marker: UniversalMarker,
@@ -1049,7 +1069,7 @@ struct JsonGraph {
 
 impl JsonGraph {
     fn new(tree: &TreeDisplay<'_>, target: TreeJsonTarget<'_>) -> Self {
-        let traversal = tree.json_traversal();
+        let traversal = tree.traverse(tree.depth);
         let workspace_root = PortablePathBuf::from(target.root());
         let mut builder = JsonGraphBuilder::new(tree, workspace_root.clone());
 
@@ -1215,7 +1235,7 @@ impl<'tree, 'env> JsonGraphBuilder<'tree, 'env> {
         }
     }
 
-    fn add_target_edges(&mut self, target: TreeJsonTarget<'_>, traversal: &JsonTraversal) {
+    fn add_target_edges(&mut self, target: TreeJsonTarget<'_>, traversal: &TreeTraversal) {
         // Forward edges from the synthetic root establish the target's depth-zero packages, so
         // they are retained even though they are not part of `traversal.edges`. Inverted target
         // edges must have been reached while traversing the reversed graph.

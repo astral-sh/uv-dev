@@ -264,15 +264,28 @@ pub async fn tree(
         )
     });
 
-    // If necessary, look up the latest version of each package.
+    let empty_latest = PackageMap::default();
+    let tree = TreeDisplay::new(
+        lock,
+        markers.as_ref(),
+        &empty_latest,
+        depth.into(),
+        &prune,
+        &package,
+        &groups,
+        no_dedupe,
+        invert,
+        show_sizes,
+    );
+
+    // If necessary, look up the latest version of each selected package.
     let latest = if let TreeSource::Manifest(target) = source
         && outdated
     {
         let install_path = target.install_path();
         // Filter to packages that are derived from a registry.
-        let packages = lock
+        let packages = tree
             .packages()
-            .iter()
             .filter_map(|package| {
                 // TODO(charlie): We would need to know the format here.
                 let index = match package.index(install_path) {
@@ -371,19 +384,8 @@ pub async fn tree(
         PackageMap::default()
     };
 
-    // Render the tree.
-    let tree = TreeDisplay::new(
-        lock,
-        markers.as_ref(),
-        &latest,
-        depth.into(),
-        &prune,
-        &package,
-        &groups,
-        no_dedupe,
-        invert,
-        show_sizes,
-    );
+    // Render the selected tree with its latest versions.
+    let tree = tree.with_latest(&latest);
 
     match format {
         TreeFormat::Text => print!("{tree}"),
