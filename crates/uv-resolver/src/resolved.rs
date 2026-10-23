@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use uv_distribution_types::{
     BuiltDist, Dist, DistributionId, DistributionMetadata, Identifier, IndexUrl, InstalledDist,
-    Name, RegistryBuiltWheel, RegistrySourceDist, ResolvedDist, ResourceId, SourceDist,
-    VersionOrUrlRef,
+    Name, RegistryBuiltWheel, RegistrySourceDist, RequestedDist, ResolvedDist, ResourceId,
+    SourceDist, VersionOrUrlRef,
 };
 use uv_normalize::PackageName;
 
@@ -32,39 +32,18 @@ pub(crate) enum ResolvedDistRef<'a> {
 
 impl ResolvedDistRef<'_> {
     pub(crate) fn to_owned(&self) -> ResolvedDist {
-        match self {
-            Self::InstallableRegistrySourceDist { sdist, prioritized } => {
-                // This is okay because we're only here if the prioritized dist
-                // has an sdist, so this always succeeds.
-                let source = prioritized.source_dist().expect("a source distribution");
-                assert_eq!(
-                    (&sdist.name, &sdist.version),
-                    (&source.name, &source.version),
-                    "expected chosen sdist to match prioritized sdist"
-                );
-                ResolvedDist::Installable {
-                    dist: Arc::new(Dist::Source(SourceDist::Registry(source))),
-                    version: Some(sdist.version.clone()),
-                }
-            }
-            Self::InstallableRegistryBuiltDist {
-                wheel, prioritized, ..
-            } => {
-                assert_eq!(
-                    Some(&wheel.filename),
-                    prioritized.best_wheel().map(|(wheel, _)| &wheel.filename),
-                    "expected chosen wheel to match best wheel"
-                );
-                // This is okay because we're only here if the prioritized dist
-                // has at least one wheel, so this always succeeds.
-                let built = prioritized.built_dist().expect("at least one wheel");
-                ResolvedDist::Installable {
-                    dist: Arc::new(Dist::Built(BuiltDist::Registry(built))),
-                    version: Some(wheel.filename.version.clone()),
-                }
-            }
-            Self::Installed { dist } => ResolvedDist::Installed {
-                dist: Arc::new((*dist).clone()),
+        let selected_version = match self {
+            Self::InstallableRegistrySourceDist { sdist, .. } => Some(&sdist.version),
+            Self::InstallableRegistryBuiltDist { wheel, .. } => Some(&wheel.filename.version),
+            Self::Installed { .. } => None,
+        };
+        match RequestedDist::from(self) {
+            RequestedDist::Installable(dist) => ResolvedDist::Installable {
+                dist: Arc::new(dist),
+                version: selected_version.cloned(),
+            },
+            RequestedDist::Installed(dist) => ResolvedDist::Installed {
+                dist: Arc::new(dist),
             },
         }
     }
@@ -75,6 +54,38 @@ impl ResolvedDistRef<'_> {
             Self::InstallableRegistrySourceDist { sdist, .. } => Some(&sdist.index),
             Self::InstallableRegistryBuiltDist { wheel, .. } => Some(&wheel.index),
             Self::Installed { .. } => None,
+        }
+    }
+}
+
+impl From<&ResolvedDistRef<'_>> for RequestedDist {
+    fn from(dist: &ResolvedDistRef<'_>) -> Self {
+        match dist {
+            ResolvedDistRef::InstallableRegistrySourceDist { sdist, prioritized } => {
+                // This is okay because we're only here if the prioritized dist
+                // has an sdist, so this always succeeds.
+                let source = prioritized.source_dist().expect("a source distribution");
+                assert_eq!(
+                    (&sdist.name, &sdist.version),
+                    (&source.name, &source.version),
+                    "expected chosen sdist to match prioritized sdist"
+                );
+                Self::Installable(Dist::Source(SourceDist::Registry(source)))
+            }
+            ResolvedDistRef::InstallableRegistryBuiltDist {
+                wheel, prioritized, ..
+            } => {
+                assert_eq!(
+                    Some(&wheel.filename),
+                    prioritized.best_wheel().map(|(wheel, _)| &wheel.filename),
+                    "expected chosen wheel to match best wheel"
+                );
+                // This is okay because we're only here if the prioritized dist
+                // has at least one wheel, so this always succeeds.
+                let built = prioritized.built_dist().expect("at least one wheel");
+                Self::Installable(Dist::Built(BuiltDist::Registry(built)))
+            }
+            ResolvedDistRef::Installed { dist } => Self::Installed((*dist).clone()),
         }
     }
 }
@@ -123,6 +134,123 @@ impl Identifier for ResolvedDistRef<'_> {
             Self::Installed { dist } => dist.resource_id(),
             Self::InstallableRegistrySourceDist { sdist, .. } => sdist.resource_id(),
             Self::InstallableRegistryBuiltDist { wheel, .. } => wheel.resource_id(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use uv_distribution_filename::SourceDistExtension;
+    use uv_distribution_types::{
+        File, FileLocation, RegistryBuiltDist, RegistryBuiltWheel, RegistrySourceDist,
+    };
+    use uv_pypi_types::{HashDigests, Yanked};
+
+    use crate::prioritized_distribution::{
+        HashComparison, SourceDistCompatibility, WheelCompatibility,
+    };
+
+    use super::*;
+
+    fn file(filename: &str, size: u64) -> File {
+        File {
+            dist_info_metadata: Some(HashDigests::empty()),
+            filename: filename.into(),
+            hashes: HashDigests::empty(),
+            requires_python: Some(Arc::new(">=3.10".parse().unwrap())),
+            size: Some(size),
+            upload_time_utc_ms: Some(123),
+            url: FileLocation::RelativeUrl("https://files.example.org/".into(), filename.into()),
+            yanked: Some(Box::new(Yanked::Bool(false))),
+        }
+    }
+
+    fn wheel(filename: &str, index: &str, size: u64, authoritative: bool) -> RegistryBuiltWheel {
+        RegistryBuiltWheel {
+            filename: filename.parse().unwrap(),
+            file: Box::new(file(filename, size)),
+            index: index.parse::<IndexUrl>().unwrap(),
+            size_is_authoritative: authoritative,
+        }
+    }
+
+    #[test]
+    fn registry_conversions_keep_payloads_and_version() {
+        let source = RegistrySourceDist {
+            name: "demo".parse().unwrap(),
+            version: "1.2.3".parse().unwrap(),
+            file: Box::new(file("demo-1.2.3.tar.gz", 103)),
+            ext: SourceDistExtension::TarGz,
+            index: "https://source.example.org/simple".parse().unwrap(),
+            wheels: Vec::new(),
+            size_is_authoritative: true,
+        };
+        let other = wheel(
+            "demo-1.2.3-1-py3-none-any.whl",
+            "https://other.example.org/simple",
+            101,
+            false,
+        );
+        let chosen = wheel(
+            "demo-1.2.3-2-py3-none-any.whl",
+            "https://chosen.example.org/simple",
+            102,
+            true,
+        );
+        let mut prioritized = PrioritizedDist::default();
+        prioritized.insert_built(
+            other.clone(),
+            Vec::new(),
+            WheelCompatibility::Compatible(HashComparison::Missing, None, None),
+            None,
+        );
+        prioritized.insert_built(
+            chosen.clone(),
+            [],
+            WheelCompatibility::Compatible(HashComparison::Matched, None, None),
+            None,
+        );
+        prioritized.insert_source(
+            source.clone(),
+            [],
+            SourceDistCompatibility::Compatible(HashComparison::Matched),
+        );
+        let (selected, _) = prioritized.best_wheel().unwrap();
+
+        let mut expected_source = source.clone();
+        expected_source.wheels = vec![other.clone(), chosen.clone()];
+        let expected_built = RegistryBuiltDist {
+            wheels: vec![other, chosen],
+            best_wheel_index: 1,
+            sdist: Some(source.clone()),
+        };
+        for (borrowed, expected, selected_version) in [
+            (
+                ResolvedDistRef::InstallableRegistrySourceDist {
+                    sdist: &source,
+                    prioritized: &prioritized,
+                },
+                Dist::Source(SourceDist::Registry(expected_source)),
+                &source.version,
+            ),
+            (
+                ResolvedDistRef::InstallableRegistryBuiltDist {
+                    wheel: selected,
+                    prioritized: &prioritized,
+                },
+                Dist::Built(BuiltDist::Registry(expected_built)),
+                &selected.filename.version,
+            ),
+        ] {
+            let RequestedDist::Installable(requested) = RequestedDist::from(&borrowed) else {
+                panic!("expected an installable request");
+            };
+            let ResolvedDist::Installable { dist, version } = borrowed.to_owned() else {
+                panic!("expected an installable resolved distribution");
+            };
+            assert_eq!(requested, expected);
+            assert_eq!(dist.as_ref(), &expected);
+            assert_eq!(version.as_ref(), Some(selected_version));
         }
     }
 }
