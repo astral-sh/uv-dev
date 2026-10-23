@@ -261,7 +261,7 @@ fn write_source_dist(
     let pyproject_path = source_tree.join("pyproject.toml");
     let pyproject_contents = fs_err::read_to_string(&pyproject_path)?;
     let mut pyproject_value: toml::Value = toml::from_str(&pyproject_contents)
-        .map_err(|err| Error::Toml(pyproject_path.clone(), err))?;
+        .map_err(|err| Error::Toml(pyproject_path.clone(), Box::new(err)))?;
     // See https://github.com/toml-rs/toml/issues/1088 for `to_string_pretty`.
     normalize_toml10_datetimes(&mut pyproject_value);
     let pyproject_rewritten =
