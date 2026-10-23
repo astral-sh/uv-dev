@@ -255,7 +255,8 @@ impl CachedEnvironment {
             true,
             uv_virtualenv::Seed::Disabled,
             UpgradePolicy::Fixed,
-        )?;
+        )?
+        .into_environment();
 
         sync_environment(
             venv,

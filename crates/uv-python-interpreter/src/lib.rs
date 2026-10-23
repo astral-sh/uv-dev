@@ -7,8 +7,8 @@ mod requested;
 mod virtualenv;
 
 pub use environment::{
-    EnvironmentNotFound, Error as PythonEnvironmentError, InvalidEnvironment,
-    InvalidEnvironmentKind, PythonEnvironment,
+    CreatedVirtualEnvironment, EnvironmentNotFound, Error as PythonEnvironmentError,
+    InvalidEnvironment, InvalidEnvironmentKind, PythonEnvironment,
 };
 pub use interpreter::{
     BrokenLink, Error as InterpreterError, ExternallyManaged, Interpreter, InterpreterInfoError,

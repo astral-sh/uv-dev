@@ -343,16 +343,21 @@ pub async fn check(
         };
 
         temp_dir = cache.venv_dir()?;
-        Some(uv_virtualenv::create_venv(
-            temp_dir.path(),
-            interpreter,
-            uv_virtualenv::Prompt::None,
-            false,
-            uv_virtualenv::OnExisting::Remove(uv_virtualenv::RemovalReason::TemporaryEnvironment),
-            false,
-            uv_virtualenv::Seed::Disabled,
-            UpgradePolicy::Fixed,
-        )?)
+        Some(
+            uv_virtualenv::create_venv(
+                temp_dir.path(),
+                interpreter,
+                uv_virtualenv::Prompt::None,
+                false,
+                uv_virtualenv::OnExisting::Remove(
+                    uv_virtualenv::RemovalReason::TemporaryEnvironment,
+                ),
+                false,
+                uv_virtualenv::Seed::Disabled,
+                UpgradePolicy::Fixed,
+            )?
+            .into_environment(),
+        )
     } else {
         None
     };

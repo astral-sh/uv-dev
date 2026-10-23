@@ -387,6 +387,7 @@ impl SourceBuild {
                 uv_virtualenv::Seed::Disabled,
                 UpgradePolicy::Fixed,
             )?
+            .into_environment()
         };
 
         // Set up the build environment. If build isolation is disabled, we assume the build

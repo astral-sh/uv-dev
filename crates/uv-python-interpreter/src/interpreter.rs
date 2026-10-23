@@ -28,10 +28,8 @@ use uv_platform_tags::{Platform, Tags, TagsError, TagsOptions};
 use uv_pypi_types::{ResolverMarkerEnvironment, Scheme};
 use uv_static::EnvVars;
 
-use crate::PointerSize;
-use crate::PyVenvConfiguration;
-use crate::VirtualEnvironment;
 use crate::virtualenv::virtualenv_python_executable;
+use crate::{CreatedVirtualEnvironment, PointerSize, PyVenvConfiguration, VirtualEnvironment};
 use uv_python_types::{
     ImplementationName, LenientImplementationName, Prefix, PythonDownloadRequest,
     PythonInstallationKey, PythonRequest, PythonVariant, Target, VersionRequest,
@@ -42,7 +40,7 @@ use which::which;
 use windows::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_CANT_ACCESS_FILE, WIN32_ERROR};
 
 /// A Python executable and its associated platform markers.
-#[cfg_attr(unix, expect(clippy::struct_excessive_bools))]
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct Interpreter {
     platform: Platform,
@@ -50,6 +48,7 @@ pub struct Interpreter {
     scheme: Scheme,
     virtualenv: Scheme,
     manylinux_compatible: bool,
+    manylinux_compatibility_override: bool,
     sys_prefix: PathBuf,
     sys_base_prefix: PathBuf,
     sys_base_executable: Option<PathBuf>,
@@ -57,7 +56,6 @@ pub struct Interpreter {
     site_packages: Vec<PathBuf>,
     stdlib: PathBuf,
     extension_suffixes: Vec<Box<str>>,
-    #[cfg(unix)]
     standalone: bool,
     tags: OnceLock<Tags>,
     target: Option<Target>,
@@ -66,13 +64,82 @@ pub struct Interpreter {
     gil_disabled: bool,
     real_executable: PathBuf,
     debug_enabled: bool,
+    cache_source: Option<InterpreterCacheSource>,
+}
+
+// Equality describes interpreter metadata, independently of memoized tags or cache provenance.
+impl PartialEq for Interpreter {
+    fn eq(&self, other: &Self) -> bool {
+        self.platform == other.platform
+            && self.markers == other.markers
+            && self.scheme == other.scheme
+            && self.virtualenv == other.virtualenv
+            && self.manylinux_compatible == other.manylinux_compatible
+            && self.manylinux_compatibility_override == other.manylinux_compatibility_override
+            && self.sys_prefix == other.sys_prefix
+            && self.sys_base_prefix == other.sys_base_prefix
+            && self.sys_base_executable == other.sys_base_executable
+            && self.sys_executable == other.sys_executable
+            && self.site_packages == other.site_packages
+            && self.stdlib == other.stdlib
+            && self.extension_suffixes == other.extension_suffixes
+            && self.standalone == other.standalone
+            && self.target == other.target
+            && self.prefix == other.prefix
+            && self.pointer_size == other.pointer_size
+            && self.gil_disabled == other.gil_disabled
+            && self.real_executable == other.real_executable
+            && self.debug_enabled == other.debug_enabled
+    }
+}
+
+impl Eq for Interpreter {}
+
+/// The executable fingerprint observed before querying or accepting cached metadata.
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct InterpreterCacheSource {
+    executable: PathBuf,
+    canonical: PathBuf,
+    modified: Timestamp,
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+impl InterpreterCacheSource {
+    fn read(executable: &Path) -> io::Result<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+
+        let executable = std::path::absolute(executable)?;
+        let canonical = canonicalize_executable(&executable)?;
+        let metadata = fs::metadata(&canonical)?;
+        Ok(Self {
+            executable,
+            canonical,
+            modified: Timestamp::from_metadata(&metadata),
+            #[cfg(unix)]
+            device: metadata.dev(),
+            #[cfg(unix)]
+            inode: metadata.ino(),
+        })
+    }
+
+    #[cfg(unix)]
+    fn same_executable(&self, other: &Self) -> bool {
+        self.canonical == other.canonical
+            && self.modified == other.modified
+            && self.device == other.device
+            && self.inode == other.inode
+    }
 }
 
 impl Interpreter {
     /// Detect the interpreter info for the given Python executable.
     pub fn query(executable: impl AsRef<Path>, cache: &Cache) -> Result<Self, Error> {
         let executable = executable.as_ref();
-        let info = InterpreterInfo::query_cached(executable, cache)?;
+        let (info, cache_source) = InterpreterInfo::query_cached(executable, cache)?;
 
         debug_assert!(
             info.sys_executable.is_absolute(),
@@ -86,6 +153,7 @@ impl Interpreter {
             scheme: info.scheme,
             virtualenv: info.virtualenv,
             manylinux_compatible: info.manylinux_compatible,
+            manylinux_compatibility_override: info.manylinux_compatibility_override,
             sys_prefix: info.sys_prefix,
             pointer_size: info.pointer_size,
             gil_disabled: info.gil_disabled,
@@ -96,12 +164,12 @@ impl Interpreter {
             site_packages: info.site_packages,
             stdlib: info.stdlib,
             extension_suffixes: info.extension_suffixes,
-            #[cfg(unix)]
             standalone: info.standalone,
             tags: OnceLock::new(),
             target: None,
             prefix: None,
             real_executable: executable.to_path_buf(),
+            cache_source,
         })
     }
 
@@ -118,19 +186,72 @@ impl Interpreter {
         }
     }
 
-    /// Return a new [`Interpreter`] with the given virtual environment root.
-    #[must_use]
-    pub fn with_virtualenv(self, virtualenv: VirtualEnvironment) -> Self {
-        Self {
+    /// Cache inferred metadata only while the executable used to obtain it is unchanged.
+    pub(crate) fn cache_virtualenv(&self, cache: &Cache) -> Result<bool, Error> {
+        let Some(source) = self.cache_source.as_ref() else {
+            return Ok(false);
+        };
+        // Capture the destination timestamp before checking the source. A later replacement
+        // must invalidate this entry instead of assigning its timestamp to older metadata.
+        let destination = InterpreterCacheSource::read(self.sys_executable())?;
+        #[cfg(unix)]
+        if !source.same_executable(&destination) {
+            return Ok(false);
+        }
+        if !InterpreterCacheSource::read(&source.executable).is_ok_and(|current| current == *source)
+        {
+            return Ok(false);
+        }
+        let cache_entry =
+            InterpreterInfo::cache_entry(&destination.executable, &destination.canonical, cache);
+        InterpreterInfo::try_from(self)?.write_cache(&cache_entry, destination.modified)?;
+        Ok(true)
+    }
+
+    /// Infer interpreter metadata for a newly created [`VirtualEnvironment`].
+    pub fn with_virtualenv(self, virtualenv: VirtualEnvironment) -> CreatedVirtualEnvironment {
+        // Match `site.getsitepackages()` for the new environment instead of retaining the
+        // parent interpreter's site-packages paths.
+        // Note: This is not `sys.path`, but a distinct list.
+        let mut site_packages = Vec::new();
+        if self.markers.os_name() == "nt" {
+            site_packages.push(virtualenv.root.clone());
+            site_packages.push(virtualenv.scheme.purelib.clone());
+        } else {
+            if virtualenv.scheme.platlib == virtualenv.scheme.purelib {
+                site_packages.push(virtualenv.scheme.purelib.clone());
+            } else {
+                site_packages.push(virtualenv.scheme.platlib.clone());
+                site_packages.push(virtualenv.scheme.purelib.clone());
+            }
+            // Some distributions add import paths that are not part of the installation scheme,
+            // e.g., Debian's `dist-packages`. Build those paths as relative to the new environment,
+            // excluding paths outside the parent's prefix (such as an existing venv's system site
+            // packages).
+            for path in &self.site_packages {
+                if let Ok(relative) = path.strip_prefix(&self.sys_prefix) {
+                    let path = virtualenv.root.join(relative);
+                    if !site_packages.contains(&path) {
+                        site_packages.push(path);
+                    }
+                }
+            }
+        }
+        let interpreter = Self {
             scheme: virtualenv.scheme,
             sys_base_executable: Some(virtualenv.base_executable),
             sys_executable: virtualenv.executable,
             sys_prefix: virtualenv.root,
             target: None,
             prefix: None,
-            site_packages: vec![],
+            site_packages,
             ..self
-        }
+        };
+        CreatedVirtualEnvironment::new(
+            interpreter,
+            virtualenv.system_site_packages,
+            virtualenv.preserved_existing,
+        )
     }
 
     /// Return a new [`Interpreter`] to install into the given `--target` directory.
@@ -478,6 +599,11 @@ impl Interpreter {
     /// Return whether this interpreter is `manylinux` compatible.
     pub fn manylinux_compatible(&self) -> bool {
         self.manylinux_compatible
+    }
+
+    /// Whether the compatibility query loaded an environment-specific `_manylinux` override.
+    pub(crate) fn has_manylinux_compatibility_override(&self) -> bool {
+        self.manylinux_compatibility_override
     }
 
     /// Return the [`PointerSize`] of the Python interpreter (i.e., 32- vs. 64-bit).
@@ -1139,9 +1265,72 @@ struct InterpreterInfo {
     pointer_size: PointerSize,
     gil_disabled: bool,
     debug_enabled: bool,
+    manylinux_compatibility_override: bool,
+}
+
+impl TryFrom<&Interpreter> for InterpreterInfo {
+    type Error = Error;
+
+    /// Convert interpreter metadata to the cache representation without querying Python.
+    fn try_from(interpreter: &Interpreter) -> Result<Self, Self::Error> {
+        // Python reports ordinary Windows paths even when uv uses a verbatim path.
+        let scheme = Scheme {
+            purelib: interpreter.scheme.purelib.simplified().to_path_buf(),
+            platlib: interpreter.scheme.platlib.simplified().to_path_buf(),
+            scripts: interpreter.scheme.scripts.simplified().to_path_buf(),
+            // Joining the empty relative data path adds a trailing separator that sysconfig omits.
+            data: interpreter.scheme.data.simplified().components().collect(),
+            include: interpreter.scheme.include.simplified().to_path_buf(),
+        };
+        Ok(Self {
+            platform: interpreter.platform.clone(),
+            markers: (*interpreter.markers).clone(),
+            scheme,
+            virtualenv: interpreter.virtualenv.clone(),
+            manylinux_compatible: interpreter.manylinux_compatible,
+            sys_prefix: interpreter.sys_prefix.simplified().to_path_buf(),
+            // These fields are unused by `Interpreter`, but retained in the cache format.
+            sys_base_exec_prefix: PathBuf::new(),
+            sys_path: Vec::new(),
+            sys_base_prefix: interpreter.sys_base_prefix.clone(),
+            // Simplification removes Windows verbatim prefixes without resolving aliases.
+            sys_base_executable: interpreter
+                .sys_base_executable
+                .as_ref()
+                .map(|path| path.simplified().to_path_buf()),
+            sys_executable: std::path::absolute(interpreter.sys_executable())?
+                .simplified()
+                .to_path_buf(),
+            site_packages: interpreter
+                .site_packages
+                .iter()
+                .map(|path| path.simplified().to_path_buf())
+                .collect(),
+            stdlib: interpreter.stdlib.clone(),
+            extension_suffixes: interpreter.extension_suffixes.clone(),
+            standalone: interpreter.standalone,
+            pointer_size: interpreter.pointer_size,
+            gil_disabled: interpreter.gil_disabled,
+            debug_enabled: interpreter.debug_enabled,
+            manylinux_compatibility_override: interpreter.manylinux_compatibility_override,
+        })
+    }
 }
 
 impl InterpreterInfo {
+    /// Write interpreter metadata using the same format for queried and inferred interpreters.
+    fn write_cache(&self, cache_entry: &CacheEntry, modified: Timestamp) -> Result<(), Error> {
+        fs::create_dir_all(cache_entry.dir())?;
+        write_atomic_sync(
+            cache_entry.path(),
+            rmp_serde::to_vec(&CachedByTimestamp {
+                timestamp: modified,
+                data: self,
+            })?,
+        )?;
+        Ok(())
+    }
+
     /// Return the resolved [`InterpreterInfo`] for the given Python executable.
     fn query(interpreter: &Path, cache: &Cache) -> Result<Self, Error> {
         let tempdir = tempfile::tempdir_in(cache.root())?;
@@ -1341,7 +1530,10 @@ impl InterpreterInfo {
     /// Running a Python script is (relatively) expensive, and the markers won't change
     /// unless the Python executable changes, so we use the executable's last modified
     /// time as a cache key.
-    fn query_cached(executable: &Path, cache: &Cache) -> Result<Self, Error> {
+    fn query_cached(
+        executable: &Path,
+        cache: &Cache,
+    ) -> Result<(Self, Option<InterpreterCacheSource>), Error> {
         let absolute = std::path::absolute(executable)?;
 
         // Provide a better error message if the link is broken or the file does not exist. Since
@@ -1368,12 +1560,12 @@ impl InterpreterInfo {
             }
         };
 
-        let canonical = canonicalize_executable(&absolute).map_err(handle_io_error)?;
-        let cache_entry = Self::cache_entry(&absolute, &canonical, cache);
+        let source = InterpreterCacheSource::read(&absolute).map_err(handle_io_error)?;
+        let cache_entry = Self::cache_entry(&absolute, &source.canonical, cache);
 
         // We check the timestamp of the canonicalized executable to check if an underlying
         // interpreter has been modified.
-        let modified = Timestamp::from_path(canonical).map_err(handle_io_error)?;
+        let modified = source.modified;
 
         // Read from the cache.
         if cache
@@ -1389,7 +1581,7 @@ impl InterpreterInfo {
                                 cached.data.markers.python_full_version(),
                                 executable.user_display()
                             );
-                            return Ok(cached.data);
+                            return Ok((cached.data, Some(source)));
                         }
 
                         trace!(
@@ -1418,17 +1610,11 @@ impl InterpreterInfo {
         // If `executable` is a pyenv shim, a bash script that redirects to the activated
         // python executable at another path, we're not allowed to cache the interpreter info.
         if is_same_file(executable, &info.sys_executable).unwrap_or(false) {
-            fs::create_dir_all(cache_entry.dir())?;
-            write_atomic_sync(
-                cache_entry.path(),
-                rmp_serde::to_vec(&CachedByTimestamp {
-                    timestamp: modified,
-                    data: &info,
-                })?,
-            )?;
+            info.write_cache(&cache_entry, modified)?;
+            Ok((info, Some(source)))
+        } else {
+            Ok((info, None))
         }
-
-        Ok(info)
     }
 }
 
@@ -1557,7 +1743,8 @@ mod tests {
                 },
                 "arch": "x86_64"
             },
-            "manylinux_compatible": false,
+            "manylinux_compatible": true,
+            "manylinux_compatibility_override": false,
             "standalone": false,
             "markers": {
                 "implementation_name": "cpython",
@@ -1710,6 +1897,196 @@ mod tests {
                 queried
             "}
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_inferred_cache_queries_pypy_metadata() -> Result<()> {
+        let directory = tempdir()?;
+        let base_executable = directory.path().join("pypy3.11");
+        let response_file = directory.path().join("response.json");
+        let query_log = directory.path().join("queries");
+        let mut response = serde_json::from_str::<Value>(
+            &mocked_interpreter_response()
+                .replace(
+                    "/home/ferris/.pyenv/versions/3.12.0",
+                    &directory.path().display().to_string(),
+                )
+                .replace("python3.12", "pypy3.11")
+                .replace("3.12.0", "3.11.15")
+                .replace("3.12", "3.11"),
+        )?;
+        response["markers"]["implementation_name"] = "pypy".into();
+        response["markers"]["implementation_version"] = "7.3.23".into();
+        response["markers"]["platform_python_implementation"] = "PyPy".into();
+        response["gil_disabled"] = false.into();
+        response["extension_suffixes"] = serde_json::json!([".pypy311-pp73-x86_64-linux-gnu.so"]);
+        response["sys_executable"] = serde_json::to_value(&base_executable)?;
+        response["sys_base_executable"] = serde_json::to_value(&base_executable)?;
+        response["sys_prefix"] = serde_json::to_value(directory.path())?;
+        response["sys_base_prefix"] = serde_json::to_value(directory.path())?;
+        fs::write(&response_file, serde_json::to_vec(&response)?)?;
+        fs::write(
+            &base_executable,
+            formatdoc! {r#"
+                #!/bin/sh
+                echo queried >> "{}"
+                cat "{}"
+                "#, query_log.display(), response_file.display()},
+        )?;
+        fs::set_permissions(
+            &base_executable,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+        let cache = Cache::temp()?.init().await?;
+        let interpreter = Interpreter::query(&base_executable, &cache)?;
+        let root = directory.path().join("venv");
+        fs::create_dir_all(root.join("bin"))?;
+        let executable = root.join("bin/python");
+        fs::os::unix::fs::symlink(&base_executable, &executable)?;
+        fs::write(
+            root.join("pyvenv.cfg"),
+            format!("home = {}\n", directory.path().display()),
+        )?;
+        let scheme = uv_pypi_types::Scheme {
+            purelib: root.join(&interpreter.virtualenv.purelib),
+            platlib: root.join(&interpreter.virtualenv.platlib),
+            scripts: root.join(&interpreter.virtualenv.scripts),
+            data: root.clone(),
+            include: root.join(&interpreter.virtualenv.include),
+        };
+        // PyPy reports the environment executable as its base, even with a regular base binary.
+        response["sys_executable"] = serde_json::to_value(&executable)?;
+        response["sys_base_executable"] = serde_json::to_value(&executable)?;
+        response["sys_prefix"] = serde_json::to_value(&root)?;
+        response["scheme"] = serde_json::to_value(&scheme)?;
+        response["site_packages"] = serde_json::to_value([&scheme.purelib])?;
+        fs::write(&response_file, serde_json::to_vec(&response)?)?;
+        interpreter
+            .with_virtualenv(crate::VirtualEnvironment {
+                root,
+                executable: executable.clone(),
+                base_executable,
+                scheme,
+                system_site_packages: false,
+                preserved_existing: false,
+            })
+            .cache(&cache)?;
+
+        let cached = Interpreter::query(&executable, &cache)?;
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\nqueried\n");
+        let fresh_cache = Cache::temp()?.init().await?;
+        let queried = Interpreter::query(&executable, &fresh_cache)?;
+        assert_eq!(queried.to_base_python()?, executable);
+        assert_eq!(cached, queried);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_inferred_cache_skips_removed_source_alias() -> Result<()> {
+        let directory = tempdir()?;
+        let executable = directory.path().join("python");
+        let alias = directory.path().join("alias");
+        let response = mocked_interpreter_response()
+            .replace("{sys_executable}", &executable.display().to_string());
+        fs::write(
+            &executable,
+            formatdoc! {r"
+                #!/bin/sh
+                echo '{response}'
+                "},
+        )?;
+        fs::set_permissions(
+            &executable,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+        fs::os::unix::fs::symlink(&executable, &alias)?;
+        let cache = Cache::temp()?.init().await?;
+        let interpreter = Interpreter::query(&alias, &cache)?;
+        fs::remove_file(&alias)?;
+
+        // Losing a discovery alias must only disable inference while the executable survives.
+        assert!(!interpreter.cache_virtualenv(&cache)?);
+        assert_eq!(
+            Interpreter::query(&executable, &cache)?.python_version(),
+            &Version::from_str("3.12.0")?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_inferred_cache_rejects_replaced_executable() -> Result<()> {
+        let directory = tempdir()?;
+        let base_executable = directory.path().join("python");
+        let query_log = directory.path().join("queries");
+        let cache = Cache::temp()?.init().await?;
+        let response = mocked_interpreter_response()
+            .replace("{sys_executable}", &base_executable.display().to_string());
+        fs::write(
+            &base_executable,
+            formatdoc! {r"
+                #!/bin/sh
+                echo queried >> '{}'
+                echo '{response}'
+                ", query_log.display()},
+        )?;
+        fs::set_permissions(
+            &base_executable,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+        let original = Interpreter::query(&base_executable, &cache)?;
+        let cached_original = Interpreter::query(&base_executable, &cache)?;
+        assert_eq!(original, cached_original);
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\n");
+
+        let root = directory.path().join("venv");
+        fs::create_dir_all(root.join("bin"))?;
+        let executable = root.join("bin/python");
+        fs::os::unix::fs::symlink(&base_executable, &executable)?;
+        fs::write(
+            root.join("pyvenv.cfg"),
+            format!("home = {}\n", directory.path().display()),
+        )?;
+        let scheme = uv_pypi_types::Scheme {
+            purelib: root.join(&original.virtualenv.purelib),
+            platlib: root.join(&original.virtualenv.platlib),
+            scripts: root.join(&original.virtualenv.scripts),
+            data: root.clone(),
+            include: root.join(&original.virtualenv.include),
+        };
+        let created = cached_original.with_virtualenv(crate::VirtualEnvironment {
+            root,
+            executable: executable.clone(),
+            base_executable: base_executable.clone(),
+            scheme,
+            system_site_packages: false,
+            preserved_existing: false,
+        });
+
+        // Replace the regular executable after discovery, without relying on timestamp granularity.
+        let replacement = directory.path().join("replacement");
+        let response = response.replace("3.12", "3.13").replace(
+            &base_executable.display().to_string(),
+            &executable.display().to_string(),
+        );
+        fs::write(
+            &replacement,
+            formatdoc! {r"
+                #!/bin/sh
+                echo queried >> '{}'
+                echo '{response}'
+                ", query_log.display()},
+        )?;
+        fs::set_permissions(
+            &replacement,
+            std::os::unix::fs::PermissionsExt::from_mode(0o770),
+        )?;
+        fs::rename(&replacement, &base_executable)?;
+        created.cache(&cache)?;
+
+        let queried = Interpreter::query(&executable, &cache)?;
+        assert_eq!(queried.python_version(), &Version::from_str("3.13.0")?);
+        assert_eq!(fs::read_to_string(&query_log)?, "queried\nqueried\n");
         Ok(())
     }
 
