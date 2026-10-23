@@ -1675,6 +1675,31 @@ werkzeug==3.0.1
 }
 
 #[test]
+fn install_script_from_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        # /// script
+        # dependencies = ["iniconfig==2.0.0"]
+        # ///
+        import iniconfig
+    "#})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("-r").arg("-")
+        .stdin(File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Resolved 1 package in [TIME]
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + iniconfig==2.0.0
+    ");
+
+    Ok(())
+}
+
+#[test]
 fn install_with_dependencies_from_script() -> Result<()> {
     let context = uv_test::test_context!("3.12");
     let script = context.temp_dir.child("script.py");
@@ -14491,6 +14516,189 @@ fn change_layout_custom_directory() -> Result<()> {
 }
 
 #[test]
+fn pep_751_install_stdin() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let (filename, wheel) = WheelBuilder::new(&"stdin-probe".parse()?, &"1.0.0".parse()?).build();
+    let hash = hex::encode(Sha256::digest(&wheel));
+    context.temp_dir.child(&filename).write_binary(&wheel)?;
+
+    let input = context.temp_dir.child("input");
+    input.write_str(&formatdoc! {r#"
+        # The format is independent of key order and quoting.
+        created-by = "uv"
+        "lock-version" = "1.0"
+        extras = ["selected"]
+        dependency-groups = ["test"]
+
+        [[packages]]
+        name = "stdin-probe"
+        version = "1.0.0"
+        marker = "'selected' in extras and 'test' in dependency_groups"
+        archive = {{ path = "{filename}", hashes = {{ sha256 = "{hash}" }} }}
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview")
+        .arg("--offline")
+        .arg("--require-hashes")
+        .arg("--extra").arg("selected")
+        .arg("--group").arg("test")
+        .arg("-r").arg("-")
+        .stdin(File::open(input.path())?.into_file()), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Prepared 1 package in [TIME]
+    Installed 1 package in [TIME]
+     + stdin-probe==1.0.0 (from file://[TEMP_DIR]/stdin_probe-1.0.0-py3-none-any.whl)
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn pep_751_stdin_rejects_additional_requirements() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("--offline")
+        .arg("anyio")
+        .arg("-r").arg("-")
+        .stdin(File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot specify additional requirements alongside a `pylock.toml` file
+    ");
+
+    Ok(())
+}
+
+/// Reusing stdin must retain its detected format and report duplicate lockfiles.
+#[test]
+fn pep_751_stdin_rejects_duplicate_sources() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("--offline")
+        .arg("-r").arg("-")
+        .arg("-r").arg("-")
+        .stdin(File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Multiple `pylock.toml` files specified: `-` vs. `-`
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn pep_751_stdin_as_constraints() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("--offline")
+        .arg("anyio")
+        .arg("-c").arg("-")
+        .stdin(File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot use `-` as a constraint file
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn pep_751_stdin_as_overrides() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("--offline")
+        .arg("anyio")
+        .arg("--override").arg("-")
+        .stdin(File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot use `-` as an override file
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn pep_751_stdin_as_excludes() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+        packages = []
+    "#})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("--offline")
+        .arg("anyio")
+        .arg("--exclude").arg("-")
+        .stdin(File::open(input.path())?.into_file()), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Cannot use `-` as an exclude file
+    ");
+
+    Ok(())
+}
+
+#[test]
+fn pep_751_stdin_invalid_schema() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let input = context.temp_dir.child("input");
+    input.write_str(indoc! {r#"
+        lock-version = "1.0"
+        created-by = "uv"
+    "#})?;
+
+    uv_snapshot!(context.pip_install()
+        .arg("--preview")
+        .arg("--offline")
+        .arg("-r").arg("-")
+        .stdin(File::open(input.path())?.into_file()), @r#"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: Not a valid `pylock.toml` file: -
+      cause: TOML parse error at line 1, column 1
+               |
+             1 | lock-version = "1.0"
+               | ^
+             missing field `packages`
+    "#);
+
+    Ok(())
+}
+
+#[test]
 fn pep_751_install_registry_wheel() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -19186,6 +19394,39 @@ fn compile_bytecode_excludes_stdlib() -> Result<()> {
     let stdlib_sources = count_python_sources(&stdlib)?;
     assert!(stdlib_sources > site_packages_sources);
     assert!(compiled <= site_packages_sources);
+
+    Ok(())
+}
+
+/// Remote lockfiles can use credentials supplied by an index on the same host.
+#[tokio::test]
+async fn pep_751_remote_index_credentials() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .and(basic_auth("user", "password"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(indoc! {r#"
+            lock-version = "1.0"
+            created-by = "uv"
+            packages = []
+        "#}))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/pylock.toml"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&server)
+        .await;
+
+    uv_snapshot!(context.filters(), context.pip_install()
+        .arg("--preview")
+        .arg("--index-url").arg(format!("{}/simple", server.uri().replace("http://", "http://user:password@")))
+        .arg("-r").arg(format!("{}/pylock.toml", server.uri())), @"
+    exit_code: 0 (success)
+    ----- stderr -----
+    Checked in [TIME]
+    ");
 
     Ok(())
 }
