@@ -8,6 +8,7 @@ use arcstr::ArcStr;
 use itertools::Itertools;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use smallvec::SmallVec;
 use version_ranges::Ranges;
 
 use uv_normalize::{ExtraName, GroupName};
@@ -1027,148 +1028,126 @@ impl MarkerTree {
         extras: ExtrasEnvironment,
         reporter: &mut impl Reporter,
     ) -> bool {
-        match self.kind() {
-            MarkerTreeKind::True => return true,
-            MarkerTreeKind::False => return false,
-            MarkerTreeKind::Version(marker) => {
-                for (range, tree) in marker.edges() {
-                    if range.contains(env.get_version(marker.key())) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
+        let mut tree = self;
+        loop {
+            tree = match tree.kind() {
+                MarkerTreeKind::True => return true,
+                MarkerTreeKind::False => return false,
+                MarkerTreeKind::Version(marker) => marker
+                    .edges()
+                    .find_map(|(range, child)| {
+                        range
+                            .contains(env.get_version(marker.key()))
+                            .then_some(child)
+                    })
+                    .unwrap_or(Self::FALSE),
+                MarkerTreeKind::String(marker) => {
+                    let value = env.get_string(marker.key());
+                    marker
+                        .children()
+                        .find_map(|(range, child)| {
+                            if matches!(
+                                marker.key(),
+                                CanonicalMarkerValueString::PlatformRelease
+                                    | CanonicalMarkerValueString::PlatformVersion
+                            ) && range.as_singleton().is_none()
+                                && let Some((start, end)) = range.bounding_range()
+                            {
+                                if let Bound::Included(bound) | Bound::Excluded(bound) = start {
+                                    reporter.report(
+                                        MarkerWarningKind::LexicographicComparison,
+                                        format!("Comparing {value} and {bound} lexicographically"),
+                                    );
+                                }
+                                if let Bound::Included(bound) | Bound::Excluded(bound) = end {
+                                    reporter.report(
+                                        MarkerWarningKind::LexicographicComparison,
+                                        format!("Comparing {value} and {bound} lexicographically"),
+                                    );
+                                }
+                            }
+                            range.contains(value).then_some(child)
+                        })
+                        .unwrap_or(Self::FALSE)
                 }
-            }
-            MarkerTreeKind::String(marker) => {
-                for (range, tree) in marker.children() {
-                    let l_string = env.get_string(marker.key());
-
-                    if matches!(
-                        marker.key(),
-                        CanonicalMarkerValueString::PlatformRelease
-                            | CanonicalMarkerValueString::PlatformVersion
-                    ) && range.as_singleton().is_none()
-                        && let Some((start, end)) = range.bounding_range()
-                    {
-                        if let Bound::Included(value) | Bound::Excluded(value) = start {
-                            reporter.report(
-                                MarkerWarningKind::LexicographicComparison,
-                                format!("Comparing {l_string} and {value} lexicographically"),
-                            );
+                MarkerTreeKind::VersionString(marker) => {
+                    let Ok(version) = env.get_string(marker.key()).parse::<Version>() else {
+                        return false;
+                    };
+                    marker
+                        .edges()
+                        .find_map(|(range, child)| range.contains(&version).then_some(child))
+                        .unwrap_or(Self::FALSE)
+                }
+                MarkerTreeKind::In(marker) => {
+                    marker.edge(marker.value().contains(env.get_string(marker.key())))
+                }
+                MarkerTreeKind::Contains(marker) => {
+                    marker.edge(env.get_string(marker.key()).contains(marker.value()))
+                }
+                MarkerTreeKind::Extra(marker) => {
+                    marker.edge(extras.extra().contains(marker.name().extra()))
+                }
+                MarkerTreeKind::List(marker) => {
+                    let edge = match marker.pair() {
+                        CanonicalMarkerListPair::Extras(extra) => extras.extras().contains(extra),
+                        CanonicalMarkerListPair::DependencyGroup(dependency_group) => {
+                            extras.dependency_groups().contains(dependency_group)
                         }
-
-                        if let Bound::Included(value) | Bound::Excluded(value) = end {
-                            reporter.report(
-                                MarkerWarningKind::LexicographicComparison,
-                                format!("Comparing {l_string} and {value} lexicographically"),
-                            );
-                        }
-                    }
-
-                    if range.contains(l_string) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
+                        CanonicalMarkerListPair::Arbitrary { .. } => return false,
+                    };
+                    marker.edge(edge)
                 }
-            }
-            MarkerTreeKind::VersionString(marker) => {
-                let Ok(version) = env.get_string(marker.key()).parse::<Version>() else {
-                    return false;
-                };
-                for (range, tree) in marker.edges() {
-                    if range.contains(&version) {
-                        return tree.evaluate_reporter_impl(env, extras, reporter);
-                    }
-                }
-            }
-            MarkerTreeKind::In(marker) => {
-                return marker
-                    .edge(marker.value().contains(env.get_string(marker.key())))
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
-            MarkerTreeKind::Contains(marker) => {
-                return marker
-                    .edge(env.get_string(marker.key()).contains(marker.value()))
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
-            MarkerTreeKind::Extra(marker) => {
-                return marker
-                    .edge(extras.extra().contains(marker.name().extra()))
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
-            MarkerTreeKind::List(marker) => {
-                let edge = match marker.pair() {
-                    CanonicalMarkerListPair::Extras(extra) => extras.extras().contains(extra),
-                    CanonicalMarkerListPair::DependencyGroup(dependency_group) => {
-                        extras.dependency_groups().contains(dependency_group)
-                    }
-                    // Invalid marker expression
-                    CanonicalMarkerListPair::Arbitrary { .. } => return false,
-                };
-
-                return marker
-                    .edge(edge)
-                    .evaluate_reporter_impl(env, extras, reporter);
-            }
+            };
         }
-
-        false
     }
 
     /// Checks if the requirement should be activated with the given set of active extras without evaluating
     /// the remaining environment markers, i.e. if there is potentially an environment that could activate this
     /// requirement.
     fn evaluate_extras(self, extras: &[ExtraName]) -> bool {
-        match self.kind() {
-            MarkerTreeKind::True => true,
-            MarkerTreeKind::False => false,
-            MarkerTreeKind::Version(marker) => {
-                marker.edges().any(|(_, tree)| tree.evaluate_extras(extras))
-            }
-            MarkerTreeKind::VersionString(marker) => {
-                marker.edges().any(|(_, tree)| tree.evaluate_extras(extras))
-            }
-            MarkerTreeKind::String(marker) => marker
-                .children()
-                .any(|(_, tree)| tree.evaluate_extras(extras)),
-            MarkerTreeKind::In(marker) => marker
-                .children()
-                .any(|(_, tree)| tree.evaluate_extras(extras)),
-            MarkerTreeKind::Contains(marker) => marker
-                .children()
-                .any(|(_, tree)| tree.evaluate_extras(extras)),
-            MarkerTreeKind::List(marker) => marker
-                .children()
-                .any(|(_, tree)| tree.evaluate_extras(extras)),
-            MarkerTreeKind::Extra(marker) => marker
-                .edge(extras.contains(marker.name().extra()))
-                .evaluate_extras(extras),
-        }
+        self.has_terminal(extras, true)
     }
 
     /// Returns true if this marker simplifies to true if the given set of extras is activated.
     pub fn evaluate_only_extras(self, extras: &[ExtraName]) -> bool {
-        match self.kind() {
-            MarkerTreeKind::True => true,
-            MarkerTreeKind::False => false,
-            MarkerTreeKind::Version(marker) => marker
-                .edges()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::VersionString(marker) => marker
-                .edges()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::String(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::In(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::Contains(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::List(marker) => marker
-                .children()
-                .all(|(_, tree)| tree.evaluate_only_extras(extras)),
-            MarkerTreeKind::Extra(marker) => marker
-                .edge(extras.contains(marker.name().extra()))
-                .evaluate_only_extras(extras),
+        !self.has_terminal(extras, false)
+    }
+
+    /// Returns whether a terminal with the given value is reachable after evaluating extras.
+    fn has_terminal(self, extras: &[ExtraName], terminal: bool) -> bool {
+        let mut tree = self;
+        let mut pending = SmallVec::<[_; 4]>::new();
+        loop {
+            match tree.kind() {
+                MarkerTreeKind::True | MarkerTreeKind::False => {
+                    if tree.is_true() == terminal {
+                        return true;
+                    }
+                }
+                MarkerTreeKind::Extra(marker) => {
+                    tree = marker.edge(extras.contains(marker.name().extra()));
+                    continue;
+                }
+                MarkerTreeKind::Version(_)
+                | MarkerTreeKind::VersionString(_)
+                | MarkerTreeKind::String(_)
+                | MarkerTreeKind::In(_)
+                | MarkerTreeKind::Contains(_)
+                | MarkerTreeKind::List(_) => {
+                    pending.push((tree.0, INTERNER.shared.node(tree.0).children.nodes()));
+                }
+            }
+            loop {
+                let Some((parent, children)) = pending.last_mut() else {
+                    return false;
+                };
+                if let Some(child) = children.next() {
+                    tree = Self(child.negate(*parent));
+                    break;
+                }
+                pending.pop();
+            }
         }
     }
 
@@ -1319,11 +1298,6 @@ impl MarkerTree {
     /// The predicate must return a consistent result for each extra during this call.
     #[must_use]
     pub fn simplify_extras_with(self, is_extra: impl Fn(&ExtraName) -> bool) -> Self {
-        // Because `simplify_extras_with_impl` is recursive, and we need to use
-        // our predicate in recursive calls, we need the predicate itself to
-        // have some indirection (or else we'd have to clone it). To avoid a
-        // recursive type at codegen time, we just introduce the indirection
-        // here, but keep the calling API ergonomic.
         self.simplify_extras_with_impl(&is_extra)
     }
 
@@ -1357,11 +1331,6 @@ impl MarkerTree {
     /// The predicate must return a consistent result for each extra during this call.
     #[must_use]
     pub fn simplify_not_extras_with(self, is_extra: impl Fn(&ExtraName) -> bool) -> Self {
-        // Because `simplify_extras_with_impl` is recursive, and we need to use
-        // our predicate in recursive calls, we need the predicate itself to
-        // have some indirection (or else we'd have to clone it). To avoid a
-        // recursive type at codegen time, we just introduce the indirection
-        // here, but keep the calling API ergonomic.
         self.simplify_not_extras_with_impl(&is_extra)
     }
 
@@ -2102,6 +2071,20 @@ mod test {
             m("extra == 'a' and(extra == 'b' or(extra == 'c'))"),
             m("extra == 'a'").and(m("extra == 'b'").or(m("extra == 'c'"))),
         );
+    }
+
+    /// Distinct extras create a deep decision tree even without nested parentheses.
+    #[test]
+    fn parse_and_evaluate_long_conjunction() {
+        let marker = (0..2_048)
+            .rev()
+            .map(|index| format!("extra != 'x{index:04}'"))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let marker = m(&marker);
+        assert!(marker.evaluate(&env37(), &[]));
+        assert!(marker.evaluate_only_extras(&[]));
+        assert!(marker.simplify_not_extras_with(|_| true).is_true());
     }
 
     #[test]
