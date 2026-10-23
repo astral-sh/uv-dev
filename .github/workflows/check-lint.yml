@@ -37,6 +37,8 @@ jobs:
           version: "0.13.5"
           checksum: "f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f"
       - run: uv run --only-group check ruff check .
+      - name: "Test Python scripts"
+        run: python3 -m unittest discover -s scripts/tests
 
   ty:
     timeout-minutes: 10
