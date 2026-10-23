@@ -39,3 +39,5 @@ which = { workspace = true }
 
 [dev-dependencies]
 indoc = { workspace = true }
+temp-env = { workspace = true }
+tempfile = { workspace = true }
