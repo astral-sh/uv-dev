@@ -1,20 +1,357 @@
 #![expect(clippy::disallowed_types)]
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
 use predicates::{prelude::predicate, str::contains};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use uv_cache::CacheBucket;
+use uv_fs::{LockedFile, LockedFileMode};
 use uv_python_discovery::PYTHON_VERSION_FILENAME;
 use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot};
+
+fn gated_cached_environment_package(
+    context: &TestContext,
+    name: &str,
+    port: u16,
+) -> Result<(PathBuf, PathBuf)> {
+    let directory = context.temp_dir.child(name);
+    directory.create_dir_all()?;
+    directory
+        .child("pyproject.toml")
+        .write_str(&formatdoc! {r#"
+        [project]
+        name = "{name}"
+        version = "1.0"
+        dependencies = []
+
+        [build-system]
+        requires = []
+        build-backend = "backend"
+        backend-path = ["."]
+    "#})?;
+    let (filename, wheel) = uv_test::packse::generate_wheel(
+        &name.parse()?,
+        &"1.0".parse()?,
+        &[],
+        &BTreeMap::new(),
+        None,
+        "py3-none-any",
+        &[],
+    );
+    let wheel_path = directory.child(&filename);
+    fs_err::write(&wheel_path, wheel)?;
+    directory.child("backend.py").write_str(&formatdoc! {r#"
+        import shutil
+        import socket
+        from pathlib import Path
+
+        def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+            with socket.create_connection(("127.0.0.1", {port}), timeout=30) as gate:
+                gate.sendall(b"{name}\n")
+                if gate.recv(1) != b"S":
+                    raise RuntimeError("gated build failed")
+            shutil.copyfile(Path(__file__).with_name("{filename}"), Path(wheel_directory) / "{filename}")
+            return "{filename}"
+    "#})?;
+    Ok((directory.path().to_owned(), wheel_path.path().to_owned()))
+}
+
+fn cached_environment_command(command: Command) -> tokio::process::Command {
+    let mut command = tokio::process::Command::from(command);
+    command
+        .kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+async fn accept_cached_environment_build(listener: &TcpListener, name: &str) -> Result<TcpStream> {
+    let (mut connection, _) =
+        tokio::time::timeout(Duration::from_secs(30), listener.accept()).await??;
+    let mut received = String::new();
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::io::BufReader::new(&mut connection).read_line(&mut received),
+    )
+    .await??;
+    assert_eq!(received.trim(), name);
+    Ok(connection)
+}
+
+/// Callers with the same resolution wait for and reuse one completed environment.
+#[tokio::test]
+async fn run_cached_environment_coordinates_misses() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let (source, _) =
+        gated_cached_environment_package(&context, "demo", listener.local_addr()?.port())?;
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let creator = cached_environment_command(command).spawn()?;
+    let mut gate = accept_cached_environment_build(&listener, "demo").await?;
+    let locks = context
+        .cache_files(CacheBucket::Environments)?
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "lock")
+        })
+        .collect::<Vec<_>>();
+    if locks.len() != 1 {
+        gate.write_all(b"F").await?;
+        creator.wait_with_output().await?;
+        anyhow::bail!("expected one environment claim, found {locks:?}");
+    }
+    let lock_path = &locks[0];
+    assert!(
+        LockedFile::acquire_no_wait(lock_path, LockedFileMode::Exclusive, "cached environment")
+            .is_none()
+    );
+
+    // A live waiter reuses the completed environment after the constructor releases its claim.
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let mut command = cached_environment_command(command);
+    command.env(EnvVars::RUST_LOG, "uv_fs=info");
+    let mut waiter = command.spawn()?;
+    let stderr = waiter.stderr.take().context("captured waiter stderr")?;
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(line) = lines.next_line().await? {
+            if line.contains("Waiting to acquire exclusive lock") && line.contains("environments-v")
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+        anyhow::bail!("caller exited without waiting for the environment claim")
+    })
+    .await??;
+    let stderr = tokio::spawn(async move {
+        let mut output = Vec::new();
+        lines.into_inner().read_to_end(&mut output).await?;
+        Ok::<_, std::io::Error>(output)
+    });
+    gate.write_all(b"S").await?;
+    let creator = creator.wait_with_output().await?.assert().success();
+    let mut output = waiter.wait_with_output().await?;
+    output.stderr = stderr.await??;
+    let waiter = output.assert().success();
+    assert_eq!(creator.get_output().stdout, waiter.get_output().stdout);
+
+    Ok(())
+}
+
+/// A different resolution can finish while another environment is being constructed.
+#[tokio::test]
+async fn run_cached_environment_independent_resolutions() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let (source, _) =
+        gated_cached_environment_package(&context, "demo", listener.local_addr()?.port())?;
+    let (_, other_wheel) =
+        gated_cached_environment_package(&context, "other", listener.local_addr()?.port())?;
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let creator = cached_environment_command(command).spawn()?;
+    let mut gate = accept_cached_environment_build(&listener, "demo").await?;
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&other_wheel)
+        .args(["python", "-c", "import other; print(other.__file__)"]);
+    let independent = cached_environment_command(command).spawn()?;
+    tokio::time::timeout(Duration::from_secs(30), independent.wait_with_output())
+        .await??
+        .assert()
+        .success();
+
+    gate.write_all(b"S").await?;
+    creator.wait_with_output().await?.assert().success();
+    Ok(())
+}
+
+/// Cancelling a queued caller does not leave an environment claim behind.
+#[tokio::test]
+async fn run_cached_environment_cancelled_waiter() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let (source, _) =
+        gated_cached_environment_package(&context, "demo", listener.local_addr()?.port())?;
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let creator = cached_environment_command(command).spawn()?;
+    let mut gate = accept_cached_environment_build(&listener, "demo").await?;
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let mut command = cached_environment_command(command);
+    command.env(EnvVars::RUST_LOG, "uv_fs=info");
+    let mut cancelled_waiter = command.spawn()?;
+    let stderr = cancelled_waiter
+        .stderr
+        .take()
+        .context("captured cancelled waiter stderr")?;
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(line) = lines.next_line().await? {
+            if line.contains("Waiting to acquire exclusive lock") && line.contains("environments-v")
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+        anyhow::bail!("caller exited without waiting for the environment claim")
+    })
+    .await??;
+    cancelled_waiter.kill().await?;
+    drop(lines);
+
+    gate.write_all(b"S").await?;
+    creator.wait_with_output().await?.assert().success();
+    let locks = context
+        .cache_files(CacheBucket::Environments)?
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "lock")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(locks.len(), 1);
+    let _lock =
+        LockedFile::acquire_no_wait(&locks[0], LockedFileMode::Exclusive, "cached environment")
+            .context("constructor claim released after waiter cancellation")?;
+    Ok(())
+}
+
+/// A completed cache entry can be reused while another process holds its claim.
+#[tokio::test]
+async fn run_cached_environment_warm_bypasses_claim() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let (source, _) =
+        gated_cached_environment_package(&context, "demo", listener.local_addr()?.port())?;
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let creator = cached_environment_command(command).spawn()?;
+    let mut gate = accept_cached_environment_build(&listener, "demo").await?;
+    gate.write_all(b"S").await?;
+    let creator = creator.wait_with_output().await?.assert().success();
+    let locks = context
+        .cache_files(CacheBucket::Environments)?
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "lock")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(locks.len(), 1);
+    let lock_path = &locks[0];
+
+    let _lock =
+        LockedFile::acquire_no_wait(lock_path, LockedFileMode::Exclusive, "cached environment")
+            .context("released constructor claim")?;
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let warm = cached_environment_command(command).spawn()?;
+    let warm = tokio::time::timeout(Duration::from_secs(30), warm.wait_with_output())
+        .await??
+        .assert()
+        .success();
+    assert_eq!(creator.get_output().stdout, warm.get_output().stdout);
+    Ok(())
+}
+
+#[tokio::test]
+async fn run_cached_environment_failed_creator_releases_claim() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let (source, _) =
+        gated_cached_environment_package(&context, "demo", listener.local_addr()?.port())?;
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let failed = cached_environment_command(command).spawn()?;
+    let mut gate = accept_cached_environment_build(&listener, "demo").await?;
+    gate.write_all(b"F").await?;
+    failed.wait_with_output().await?.assert().failure();
+    let locks = context
+        .cache_files(CacheBucket::Environments)?
+        .into_iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "lock")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(locks.len(), 1);
+    {
+        let _lock =
+            LockedFile::acquire_no_wait(&locks[0], LockedFileMode::Exclusive, "cached environment")
+                .context("failed constructor released its claim")?;
+    }
+
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let retry = cached_environment_command(command).spawn()?;
+    let mut gate = accept_cached_environment_build(&listener, "demo").await?;
+    gate.write_all(b"S").await?;
+    let retry = retry.wait_with_output().await?.assert().success();
+    let mut command = context.run();
+    command
+        .args(["--no-project", "--offline", "--with"])
+        .arg(&source)
+        .args(["python", "-c", "import demo; print(demo.__file__)"]);
+    let warm = cached_environment_command(command)
+        .output()
+        .await?
+        .assert()
+        .success();
+    assert_eq!(retry.get_output().stdout, warm.get_output().stdout);
+    Ok(())
+}
 
 #[test]
 fn run_with_python_version() -> Result<()> {
