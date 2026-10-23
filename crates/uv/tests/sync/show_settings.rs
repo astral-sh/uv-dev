@@ -4034,6 +4034,7 @@ fn preview_features() {
     +            BuildLazyImports,
     +            BuildDependencyHashes,
     +            WheelVariants,
+    +            RemotePythonDownloadMetadata,
     +        ],
          },
          python_preference: Managed,

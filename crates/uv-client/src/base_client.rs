@@ -28,7 +28,7 @@ use uv_distribution_types::IndexCredentialsError;
 use uv_git::GitHttpSettings;
 use uv_pep508::MarkerEnvironment;
 use uv_platform_tags::Platform;
-use uv_preview::Preview;
+use uv_preview::{Preview, PreviewFeature};
 use uv_redacted::SafeUrl;
 use uv_redacted::SafeUrlError;
 use uv_redacted::policy::SerializationPolicy;
@@ -245,6 +245,12 @@ impl Default for BaseClientBuilder<'_> {
 }
 
 impl<'a> BaseClientBuilder<'a> {
+    /// Return whether remote Python download metadata was enabled explicitly.
+    pub fn remote_python_download_metadata_enabled(&self) -> bool {
+        self.preview
+            .is_enabled_explicitly(PreviewFeature::RemotePythonDownloadMetadata)
+    }
+
     pub fn new(
         connectivity: Connectivity,
         system_certs: bool,
@@ -883,7 +889,7 @@ impl RedirectClientWithMiddleware {
     }
 
     /// Convenience method to make a `HEAD` request to a URL.
-    pub(crate) fn head<P: SerializationPolicy>(&self, url: SafeUrl<P>) -> RequestBuilder<'_> {
+    pub fn head<P: SerializationPolicy>(&self, url: SafeUrl<P>) -> RequestBuilder<'_> {
         RequestBuilder::new(self.client.head(url.into_unsafe_url()), self)
     }
 
