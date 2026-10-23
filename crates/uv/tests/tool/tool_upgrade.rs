@@ -18,6 +18,144 @@ use uv_test::package_server::PackageServer;
 use uv_test::packse::{PackseServer, scenario::Scenario};
 use uv_test::{uv_snapshot, venv_bin_path};
 
+#[tokio::test]
+#[cfg(feature = "test-git")]
+async fn tool_upgrade_all_reuses_git_reference() -> Result<()> {
+    const REPOSITORY: &str = "https://github.com/uv-network-benchmark/tool-upgrade";
+    for tool_locks in [false, true] {
+        let context = uv_test::test_context!("3.12").with_tool_dirs();
+        let repository = context.temp_dir.child("repository");
+        for name in ["first", "second"] {
+            repository.child(format!("{name}/backend.py")).write_str(indoc! {r#"
+                import pathlib
+                import tomllib
+                import zipfile
+
+                def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                    project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]
+                    name = project["name"].replace("-", "_")
+                    version = project["version"]
+                    dist_info = f"{name}-{version}.dist-info"
+                    filename = f"{name}-{version}-py3-none-any.whl"
+                    with zipfile.ZipFile(pathlib.Path(wheel_directory) / filename, "w") as wheel:
+                        wheel.writestr(f"{name}.py", "def main():\n    return 0\n")
+                        wheel.writestr(f"{dist_info}/METADATA", f"Metadata-Version: 2.3\nName: {project['name']}\nVersion: {version}\n")
+                        wheel.writestr(f"{dist_info}/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+                        wheel.writestr(f"{dist_info}/entry_points.txt", f"[console_scripts]\n{project['name']} = {name}:main\n")
+                        wheel.writestr(f"{dist_info}/RECORD", "")
+                    return filename
+            "#})?;
+        }
+        let write_version = |version: &str| -> Result<()> {
+            for name in ["first", "second"] {
+                repository.child(format!("{name}/pyproject.toml")).write_str(&format!(
+                    "[project]\nname = \"uv-git-{name}\"\nversion = \"{version}\"\nrequires-python = \">=3.12\"\ndependencies = []\n[project.scripts]\nuv-git-{name} = \"uv_git_{name}:main\"\n[build-system]\nrequires = []\nbuild-backend = \"backend\"\nbackend-path = [\".\"]\n"
+                ))?;
+            }
+            Ok(())
+        };
+        let commit = || -> Result<String> {
+            Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args(["add", "."])
+                .assert()
+                .success();
+            Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args([
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-m",
+                    "Update tools",
+                ])
+                .assert()
+                .success();
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(repository.path())
+                .args(["rev-parse", "HEAD"])
+                .output()?;
+            assert!(output.status.success());
+            Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+        };
+        write_version("1.0")?;
+        Command::new("git")
+            .args(["init", "--initial-branch=main"])
+            .arg(repository.path())
+            .assert()
+            .success();
+        let first_commit = commit()?;
+        let repository_url = url::Url::from_directory_path(repository.path())
+            .map_err(|()| anyhow::anyhow!("failed to convert repository path to file URL"))?;
+        let repository_url = repository_url.as_str().trim_end_matches('/');
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(first_commit))
+            .mount(&server)
+            .await;
+        let configure = |command: &mut Command| {
+            command
+                .arg("--no-index")
+                .env("GIT_CONFIG_COUNT", "2")
+                .env(
+                    "GIT_CONFIG_KEY_0",
+                    format!("url.{repository_url}.insteadOf"),
+                )
+                .env("GIT_CONFIG_VALUE_0", REPOSITORY)
+                .env("GIT_CONFIG_KEY_1", "protocol.file.allow")
+                .env("GIT_CONFIG_VALUE_1", "always")
+                .env(EnvVars::UV_GITHUB_FAST_PATH_URL, server.uri());
+            if tool_locks {
+                command.args(["--preview-features", "tool-install-locks"]);
+            }
+        };
+        for name in ["first", "second"] {
+            let mut command = context.tool_install();
+            configure(&mut command);
+            command
+                .arg(format!(
+                    "uv-git-{name} @ git+{REPOSITORY}@main#subdirectory={name}"
+                ))
+                .assert()
+                .success();
+        }
+        write_version("2.0")?;
+        let second_commit = commit()?;
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/uv-network-benchmark/tool-upgrade/commits/main"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(second_commit.clone()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut command = context.tool_upgrade();
+        configure(&mut command);
+        command.arg("--all").assert().success();
+        server.verify().await;
+        context
+            .tool_list()
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("uv-git-first v2.0"))
+            .stdout(predicate::str::contains("uv-git-second v2.0"));
+        for name in ["first", "second"] {
+            let environment = context.temp_dir.child(format!("tools/uv-git-{name}"));
+            let direct_url = uv_test::site_packages_path(environment.path(), "python3.12")
+                .join(format!("uv_git_{name}-2.0.dist-info/direct_url.json"));
+            let contents = fs_err::read_to_string(direct_url)?;
+            assert!(contents.contains(&second_commit), "{contents}");
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn tool_upgrade_empty() {
     let context = uv_test::test_context!("3.12")
