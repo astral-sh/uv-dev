@@ -267,10 +267,9 @@ impl BatchPrefetcherRunner {
                 continue;
             };
 
-            // Avoid prefetching built distributions that don't support _either_ PEP 658 (`.metadata`)
-            // or range requests.
+            // Speculative versions need either a metadata sidecar or confirmed range support.
             if !(wheel.file.dist_info_metadata.is_some()
-                || self.capabilities.supports_range_requests(&wheel.index))
+                || self.capabilities.has_known_range_support(&wheel.index))
             {
                 debug!("Abandoning prefetch for {wheel} due to missing registry capabilities");
                 return Ok(());
