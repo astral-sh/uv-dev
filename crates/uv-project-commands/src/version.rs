@@ -630,7 +630,7 @@ async fn lock_and_sync(
         PackageSelection::from_args(false, &[], project.project_name()),
     );
 
-    let state = state.fork();
+    let state = state.into_platform();
 
     match sync_from_lock(
         target,

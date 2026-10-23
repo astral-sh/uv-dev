@@ -807,6 +807,19 @@ impl UniversalState {
     pub fn fork(&self) -> PlatformState {
         PlatformState(self.0.fork())
     }
+
+    /// Consume the [`UniversalState`] to begin platform-specific resolution with empty caches.
+    ///
+    /// Retains Git references, index capabilities, and build directories while dropping this
+    /// state's ownership of the universal resolution and download caches.
+    #[must_use]
+    pub fn into_platform(self) -> PlatformState {
+        PlatformState(SharedState {
+            index: InMemoryIndex::default(),
+            in_flight: InFlight::default(),
+            ..self.0
+        })
+    }
 }
 
 /// A [`SharedState`] instance to use for platform-specific resolution.
@@ -830,5 +843,13 @@ impl PlatformState {
     /// Create a [`SharedState`] from the [`PlatformState`].
     pub fn into_inner(self) -> SharedState {
         self.0
+    }
+
+    /// Consume the [`PlatformState`], retaining build directories until the returned arena is dropped.
+    ///
+    /// Resolution and download caches are no longer needed once environment preparation is complete.
+    #[must_use]
+    pub fn into_build_arena(self) -> BuildArena<SourceBuild> {
+        self.0.build_arena
     }
 }
