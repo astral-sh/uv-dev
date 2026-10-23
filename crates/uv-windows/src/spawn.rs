@@ -7,6 +7,8 @@
 //! See: <https://github.com/astral-sh/uv/issues/17492>
 
 use std::convert::Infallible;
+use std::error::Error;
+use std::fmt;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command};
@@ -64,8 +66,7 @@ pub fn spawn_child(cmd: &mut Command, hide_console: bool) -> std::io::Result<Inf
 
     let child = cmd.spawn()?;
 
-    let supervised =
-        SupervisedChild::new(&child).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let supervised = SupervisedChild::new(&child).map_err(std::io::Error::other)?;
 
     // Ignore control-C/control-Break/logout/etc.; the same event will be delivered
     // to the child, so we let them decide whether to exit or not.
@@ -82,8 +83,24 @@ pub fn spawn_child(cmd: &mut Command, hide_console: bool) -> std::io::Result<Inf
     let mut exit_code = 0u32;
     // SAFETY: The handle is valid because `supervised` borrows `child`.
     unsafe { GetExitCodeProcess(supervised.raw_handle(), &raw mut exit_code) }
-        .map_err(|e| std::io::Error::other(format!("Failed to get exit code: {e}")))?;
+        .map_err(|error| std::io::Error::other(ExitCodeError(error)))?;
 
     #[expect(clippy::exit, clippy::cast_possible_wrap)]
     std::process::exit(exit_code as i32)
+}
+
+/// An exit-code query failure with its Windows error intact.
+#[derive(Debug)]
+struct ExitCodeError(windows::core::Error);
+
+impl fmt::Display for ExitCodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "Failed to get exit code: {}", self.0)
+    }
+}
+
+impl Error for ExitCodeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.0)
+    }
 }
