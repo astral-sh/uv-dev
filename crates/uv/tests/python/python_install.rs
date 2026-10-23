@@ -2629,9 +2629,7 @@ fn python_install_prerelease_specific() {
     ");
 }
 
-/// A duplicate of [`python_install`] with an isolated `UV_PYTHON_CACHE_DIR`.
-///
-/// See also, [`python_install_no_cache`].
+/// A downloaded archive remains available for a fresh offline installation after uninstalling.
 #[test]
 fn python_install_cached() {
     // Skip this test if the developer has set `UV_PYTHON_CACHE_DIR` locally since it's slow
@@ -2644,74 +2642,79 @@ fn python_install_cached() {
         .without_python_download_cache()
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
-        .with_managed_python_dirs()
-        .with_filtered_latest_python_versions();
+        .with_managed_python_dirs();
 
     let python_cache = context.temp_dir.child("python-cache");
 
-    // Install the latest version
+    // Install PyPy 3.10
     uv_snapshot!(context.filters(), context
         .python_install()
+        .arg("pypy3.10")
         .env(EnvVars::UV_PYTHON_CACHE_DIR, python_cache.as_ref()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed Python 3.15.[LATEST] in [TIME]
-     + cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
+    Installed Python 3.10.16 in [TIME]
+     + pypy-3.10.16-[PLATFORM] (pypy3.10)
     ");
 
     let bin_python = context
         .bin_dir
-        .child(format!("python3.15{}", std::env::consts::EXE_SUFFIX));
+        .child(format!("pypy3.10{}", std::env::consts::EXE_SUFFIX));
 
     // The executable should be installed in the bin directory
     bin_python.assert(predicate::path::exists());
 
-    // Should be a no-op when already installed
+    // An already installed version needs no archive request.
     uv_snapshot!(context.filters(), context
         .python_install()
+        .arg("pypy3.10")
         .env(EnvVars::UV_PYTHON_CACHE_DIR, python_cache.as_ref()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Python is already installed. Use `uv python install <request>` to install another version.
+    PyPy 3.10 is already installed
     ");
 
-    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.15"), @"
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("pypy3.10"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Searching for Python versions matching: Python 3.15
-    Uninstalled Python 3.15.[LATEST] in [TIME]
-     - cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
+    Searching for Python versions matching: PyPy 3.10
+    Uninstalled Python 3.10.16 in [TIME]
+     - pypy-3.10.16-[PLATFORM] (pypy3.10)
     ");
 
-    // The cached archive can be installed offline
+    // The cached archive can be installed offline.
     uv_snapshot!(context.filters(), context
         .python_install()
+        .arg("pypy3.10")
         .arg("--offline")
         .env(EnvVars::UV_PYTHON_CACHE_DIR, python_cache.as_ref()), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed Python 3.15.[LATEST] in [TIME]
-     + cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
+    Installed Python 3.10.16 in [TIME]
+     + pypy-3.10.16-[PLATFORM] (pypy3.10)
     ");
 
-    // 3.12 isn't cached, so it can't be installed
-    let context = context.with_filter((
-        r"https://[^`]+/cpython-3\.12[^`]+\.tar\.gz",
-        "[PYTHON_DOWNLOAD_URL]",
-    ));
+    // A different archive is still unavailable offline.
+    let context = context
+        .with_filter((
+            r"https://downloads\.python\.org/pypy/[^`\s]+",
+            "[PYTHON_DOWNLOAD_URL]",
+        ))
+        .with_filter((r"pypy-3\.11\.\d+", "pypy-3.11.[PATCH]"));
     uv_snapshot!(context.filters(), context
         .python_install()
-        .arg("3.12")
+        .arg("pypy3.11")
         .arg("--offline")
         .env(EnvVars::UV_PYTHON_CACHE_DIR, python_cache.as_ref()), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to install cpython-3.12.[LATEST]-[PLATFORM]
-      cause: An offline Python installation was requested, but `cpython-3.12.[LATEST]-[PLATFORM]` (from `[PYTHON_DOWNLOAD_URL]`) is missing in `python-cache`
+    error: Failed to install pypy-3.11.[PATCH]-[PLATFORM]
+      cause: An offline Python installation was requested, but `pypy-3.11.[PATCH]-[PLATFORM]` (from `[PYTHON_DOWNLOAD_URL]`) is missing in `python-cache`
     ");
 }
 
-/// Duplicate of [`python_install`] with the cache directory disabled.
+/// Without archive caching, a forced reinstall downloads again, and a fresh offline installation
+/// cannot reuse the archive after uninstalling.
 #[test]
 fn python_install_no_cache() {
     // Skip this test if the developer has set `UV_PYTHON_CACHE_DIR` locally since it's slow
@@ -2724,82 +2727,60 @@ fn python_install_no_cache() {
         .without_python_download_cache()
         .with_filtered_python_keys()
         .with_filtered_exe_suffix()
-        .with_managed_python_dirs()
-        .with_filtered_latest_python_versions();
+        .with_managed_python_dirs();
 
-    // Install the latest version
-    uv_snapshot!(context.filters(), context.python_install(), @"
+    // Install PyPy 3.10
+    uv_snapshot!(context.filters(), context.python_install().arg("pypy3.10"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed Python 3.15.[LATEST] in [TIME]
-     + cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
+    Installed Python 3.10.16 in [TIME]
+     + pypy-3.10.16-[PLATFORM] (pypy3.10)
     ");
 
     let bin_python = context
         .bin_dir
-        .child(format!("python3.15{}", std::env::consts::EXE_SUFFIX));
+        .child(format!("pypy3.10{}", std::env::consts::EXE_SUFFIX));
 
-    // The executable should not present in the bin directory
+    // The executable should be installed in the bin directory
     bin_python.assert(predicate::path::exists());
 
-    // Should be a no-op when already installed
-    uv_snapshot!(context.filters(), context.python_install(), @"
+    // An already installed version needs no archive request.
+    uv_snapshot!(context.filters(), context.python_install().arg("pypy3.10"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Python is already installed. Use `uv python install <request>` to install another version.
+    PyPy 3.10 is already installed
     ");
 
-    // Similarly, when a requested version is already installed
-    uv_snapshot!(context.filters(), context.python_install().arg("3.15"), @"
+    // A forced reinstall must download the archive again.
+    uv_snapshot!(context.filters(), context.python_install().arg("pypy3.10").arg("--reinstall"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Python 3.15 is already installed
+    Installed Python 3.10.16 in [TIME]
+     ~ pypy-3.10.16-[PLATFORM] (pypy3.10)
     ");
 
-    // You can opt-in to a reinstall
-    uv_snapshot!(context.filters(), context.python_install().arg("3.15").arg("--reinstall"), @"
+    uv_snapshot!(context.filters(), context.python_uninstall().arg("pypy3.10"), @"
     exit_code: 0 (success)
     ----- stderr -----
-    Installed Python 3.15.[LATEST] in [TIME]
-     ~ cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
+    Searching for Python versions matching: PyPy 3.10
+    Uninstalled Python 3.10.16 in [TIME]
+     - pypy-3.10.16-[PLATFORM] (pypy3.10)
     ");
 
-    // Uninstallation requires an argument
-    uv_snapshot!(context.filters(), context.python_uninstall(), @"
-    exit_code: 2 (failure)
-    ----- stderr -----
-    error: the following required arguments were not provided:
-      <TARGETS>...
-
-    Usage: uv python uninstall --cache-dir [CACHE_DIR] --install-dir <INSTALL_DIR> <TARGETS>...
-
-    For more information, try '--help'.
-    ");
-
-    uv_snapshot!(context.filters(), context.python_uninstall().arg("3.15"), @"
-    exit_code: 0 (success)
-    ----- stderr -----
-    Searching for Python versions matching: Python 3.15
-    Uninstalled Python 3.15.[LATEST] in [TIME]
-     - cpython-3.15.[LATEST]-[PLATFORM] (python3.15)
-    ");
-
-    // 3.12 isn't cached, so it can't be installed
-    let context = context
-        .with_filter((
-            "cpython-3.12.*.tar.gz",
-            "cpython-3.12.[PATCH]-[DATE]-[PLATFORM].tar.gz",
-        ))
-        .with_filter((r"releases/download/\d{8}/", "releases/download/[DATE]/"));
+    // Even the previously downloaded archive is unavailable offline.
+    let context = context.with_filter((
+        r"https://downloads\.python\.org/pypy/[^`\s]+",
+        "[PYTHON_DOWNLOAD_URL]",
+    ));
     uv_snapshot!(context.filters(), context
         .python_install()
-        .arg("3.12")
+        .arg("pypy3.10")
         .arg("--offline"), @"
     exit_code: 1 (failure)
     ----- stderr -----
-    error: Failed to install cpython-3.12.[LATEST]-[PLATFORM]
-      cause: Failed to download `https://github.com/astral-sh/python-build-standalone/releases/download/[DATE]/cpython-3.12.[PATCH]-[DATE]-[PLATFORM].tar.gz`
-      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: https://github.com/astral-sh/python-build-standalone/releases/download/[DATE]/cpython-3.12.[PATCH]-[DATE]-[PLATFORM].tar.gz
+    error: Failed to install pypy-3.10.16-[PLATFORM]
+      cause: Failed to download `[PYTHON_DOWNLOAD_URL]`
+      cause: Network connectivity is disabled, but the requested data wasn't found in the cache: [PYTHON_DOWNLOAD_URL]
     ");
 }
 
