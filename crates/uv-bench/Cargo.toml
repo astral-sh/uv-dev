@@ -64,6 +64,11 @@ path = "benches/uv_pep508.rs"
 harness = false
 
 [[bench]]
+name = "lock_dependency_merge"
+path = "benches/lock_dependency_merge.rs"
+harness = false
+
+[[bench]]
 name = "uv_settings"
 path = "benches/uv_settings.rs"
 harness = false
