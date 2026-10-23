@@ -1176,6 +1176,10 @@ impl InterpreterInfo {
         #[cfg(target_os = "macos")]
         command.env("SYSTEM_VERSION_COMPAT", "0");
 
+        trace!(
+            "Starting interpreter query process at `{}`",
+            interpreter.display()
+        );
         let output = command.output().map_err(|err| {
             match err.kind() {
                 io::ErrorKind::NotFound => return Error::NotFound(interpreter.to_path_buf()),
@@ -1205,6 +1209,12 @@ impl InterpreterInfo {
                 err,
             }
         })?;
+
+        trace!(
+            "Interpreter query process at `{}` exited with {}",
+            interpreter.display(),
+            output.status
+        );
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
