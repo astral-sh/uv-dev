@@ -473,12 +473,13 @@ impl TryFrom<&PythonInstallationKey> for PythonDownloadRequest {
                 key.minor(),
                 *key.variant(),
             )),
-            Some(implementation),
+            None,
             Some(ArchRequest::Explicit(*key.arch())),
             Some(*key.os()),
             Some(*key.libc()),
             Some(key.prerelease().is_some()),
-        ))
+        )
+        .with_implementation(implementation))
     }
 }
 
@@ -919,6 +920,16 @@ mod tests {
         let result = PythonDownloadRequest::from_str("any-any-any-any-any-any");
 
         assert_matches!(result, Err(PythonDownloadRequestError::TooManyParts(_)));
+    }
+
+    #[test]
+    fn pyodide_download_request_from_key() {
+        let key = PythonInstallationKey::from_str("cpython-3.13.2-emscripten-wasm32-musl")
+            .expect("Pyodide key should be valid");
+        let request = PythonDownloadRequest::try_from(&key)
+            .expect("Pyodide key should produce a download request");
+
+        assert!(request.satisfied_by_key(&key));
     }
 
     #[test]
