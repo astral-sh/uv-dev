@@ -28,6 +28,11 @@ pub enum LinkMode {
     #[cfg_attr(feature = "serde", serde(alias = "reflink"))]
     #[cfg_attr(feature = "clap", value(alias = "reflink"))]
     Clone,
+    /// Clone files, with a fallback to copying when reflinks are unavailable.
+    #[cfg_attr(feature = "clap", clap(skip))]
+    #[cfg_attr(feature = "serde", serde(skip))]
+    #[cfg_attr(feature = "schemars", schemars(skip))]
+    CloneOrCopy,
     /// Copy packages from the source into the destination.
     Copy,
     /// Hard link packages from the source into the destination.
@@ -81,7 +86,7 @@ where
     F: Fn(&Path) -> bool,
 {
     match options.mode {
-        LinkMode::Clone => clone_dir(src, dst, options),
+        LinkMode::Clone | LinkMode::CloneOrCopy => clone_dir(src, dst, options),
         mode => walk_and_link(src, dst, mode, options),
     }
 }
@@ -266,6 +271,7 @@ impl LinkState {
     /// Transition to the next fallback strategy in the chain.
     ///
     /// - [`LinkMode::Clone`] → [`LinkMode::Hardlink`]
+    /// - [`LinkMode::CloneOrCopy`] → [`LinkMode::Copy`]
     /// - [`LinkMode::Hardlink`] → [`LinkMode::Copy`]
     /// - [`LinkMode::Symlink`] → [`LinkMode::Copy`]
     /// - [`LinkMode::Copy`] → Failure
@@ -276,7 +282,9 @@ impl LinkState {
         );
         Self::new(match self.mode {
             LinkMode::Clone => LinkMode::Hardlink,
-            LinkMode::Hardlink | LinkMode::Symlink | LinkMode::Copy => LinkMode::Copy,
+            LinkMode::CloneOrCopy | LinkMode::Hardlink | LinkMode::Symlink | LinkMode::Copy => {
+                LinkMode::Copy
+            }
         })
     }
 }
@@ -345,7 +353,7 @@ where
         }
     }
 
-    walk_and_link(src, dst, LinkMode::Clone, options)
+    walk_and_link(src, dst, options.mode, options)
 }
 
 /// Walk a directory tree and link each file using the given starting [`LinkMode`].
@@ -384,7 +392,11 @@ where
         state = link_file(path, &target, state, options)?;
     }
 
-    Ok(state.mode)
+    Ok(if state.mode == LinkMode::CloneOrCopy {
+        LinkMode::Clone
+    } else {
+        state.mode
+    })
 }
 
 /// Dispatch a single file to the appropriate linking strategy based on the current state.
@@ -402,7 +414,9 @@ where
     F: Fn(&Path) -> bool,
 {
     match state.mode {
-        LinkMode::Clone => reflink_file_with_fallback(path, target, state, options),
+        LinkMode::Clone | LinkMode::CloneOrCopy => {
+            reflink_file_with_fallback(path, target, state, options)
+        }
         LinkMode::Hardlink => hardlink_file_with_fallback(path, target, state, options),
         LinkMode::Symlink => symlink_file_with_fallback(path, target, state, options),
         LinkMode::Copy => {

@@ -46,6 +46,7 @@ use uv_environment_operations::{
 use uv_fs::which::is_executable;
 use uv_fs::{PythonExt, Simplified, create_symlink};
 use uv_install_operations::loggers::{DefaultInstallLogger, SummaryInstallLogger};
+use uv_install_wheel::LinkMode;
 use uv_installer::{InstallationStrategy, SatisfiesResult, SitePackages};
 use uv_lock::{Installable, Lock};
 use uv_lock_operations::{LockError, LockMode, LockOperation, LockTarget};
@@ -116,7 +117,7 @@ pub async fn run(
     python: Option<String>,
     python_platform: Option<TargetTriple>,
     install_mirrors: PythonInstallMirrors,
-    settings: ResolverInstallerSettings,
+    mut settings: ResolverInstallerSettings,
     client_builder: BaseClientBuilder<'_>,
     python_preference: PythonPreference,
     python_arch: Option<PythonArchitecture>,
@@ -617,7 +618,21 @@ pub async fn run(
             let groups = groups.with_defaults(default_groups);
             let extras = extras.with_defaults(default_extras);
 
-            let try_cached = preview.is_enabled(PreviewFeature::RunCachedWheels)
+            let private = preview.is_enabled(PreviewFeature::RunPrivateEnvironment);
+            if private {
+                if no_sync {
+                    bail!("`run-private-environment` requires environment synchronization");
+                }
+                if !requirements.is_empty() || !cached_wheels.is_empty() {
+                    bail!("`run-private-environment` does not support additional run requirements");
+                }
+                // A private installation must never fall back to a hardlink into the cache.
+                if settings.resolver.link_mode != LinkMode::Copy {
+                    settings.resolver.link_mode = LinkMode::CloneOrCopy;
+                }
+            }
+            let try_cached = !private
+                && preview.is_enabled(PreviewFeature::RunCachedWheels)
                 && !no_sync
                 && requirements.is_empty()
                 && cached_wheels.is_empty()
@@ -655,7 +670,7 @@ pub async fn run(
                 .await?
                 .into_environment()
             };
-            let mut venv = if isolated || try_cached {
+            let mut venv = if private || isolated || try_cached {
                 debug!("Creating isolated virtual environment");
 
                 // If we're isolating the environment, use an ephemeral virtual environment as the
