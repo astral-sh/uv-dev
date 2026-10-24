@@ -72,6 +72,8 @@ jobs:
 
       - uses: astral-sh/github-actions/rust-workspace-cache@52ea66bbf7dbe95fc9e2baae530cb3827214c530
         if: matrix.arm == 'timestamps'
+        env:
+          CARGO_UNSTABLE_MTIME_ON_USE: "false"
         with:
           prefix-key: v1-bench-windows-build-inputs-20261024
           key: ${{ hashFiles('Cargo.toml') }}
