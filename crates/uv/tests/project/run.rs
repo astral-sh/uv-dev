@@ -17,7 +17,8 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot};
+use uv_test::packse::{PackseServer, WheelBuilder};
+use uv_test::{TestContext, copy_dir_ignore, uv_snapshot};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -1797,6 +1798,65 @@ fn run_cached_wheels_preview_missing_lock() -> Result<()> {
         .assert()
         .success();
     assert!(lock.path().is_file());
+    Ok(())
+}
+
+/// When the package directories and modules are installed together, both imports select the
+/// packages. With separate wheel roots, one module takes precedence regardless of root order.
+#[test]
+fn run_cached_wheels_preview_conflicting_imports() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let links = context.temp_dir.child("wheels");
+    links.create_dir_all()?;
+    let version = "1".parse()?;
+    let (filename, bytes) = WheelBuilder::new(&"first".parse()?, &version)
+        .files(&[
+            ("left.py", "kind = 'module'"),
+            ("right/__init__.py", "kind = 'package'"),
+        ])
+        .build();
+    links.child(filename).write_binary(&bytes)?;
+    let (filename, bytes) = WheelBuilder::new(&"second".parse()?, &version)
+        .files(&[
+            ("right.py", "kind = 'module'"),
+            ("left/__init__.py", "kind = 'package'"),
+        ])
+        .build();
+    links.child(filename).write_binary(&bytes)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1"
+        requires-python = "==3.12.*"
+        dependencies = ["first", "second"]
+        [tool.uv]
+        preview-features = ["run-cached-wheels"]
+        no-index = true
+        find-links = ["wheels"]
+    "#})?;
+    context
+        .sync()
+        .arg("--offline")
+        .env(
+            EnvVars::UV_PROJECT_ENVIRONMENT,
+            context.temp_dir.child("seed").path(),
+        )
+        .assert()
+        .success();
+    context
+        .run()
+        .args([
+            "--offline",
+            "python",
+            "-Ic",
+            "import left, right; assert left.kind == right.kind == 'package'",
+        ])
+        .assert()
+        .success();
+    assert!(context.temp_dir.child(".venv").path().is_dir());
     Ok(())
 }
 

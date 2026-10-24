@@ -1456,7 +1456,7 @@ fn wheel_importable(
     wheel: &WheelFilename,
     root: &Path,
     interpreter: &Interpreter,
-    mut top_level: Option<&mut FxHashSet<OsString>>,
+    mut top_level: Option<&mut FxHashSet<String>>,
 ) -> anyhow::Result<bool> {
     let metadata = uv_metadata::read_flat_wheel_metadata(wheel, root)?;
     if metadata.name != wheel.name || metadata.version != wheel.version {
@@ -1473,7 +1473,8 @@ fn wheel_importable(
     for child in fs_err::read_dir(root)? {
         let child = child?;
         let path = child.path();
-        if child.file_type()?.is_dir() && path.extension().is_some_and(|ext| ext == "data") {
+        let is_dir = child.file_type()?.is_dir();
+        if is_dir && path.extension().is_some_and(|ext| ext == "data") {
             return Ok(false);
         }
         if let Some(names) = top_level.as_deref_mut() {
@@ -1482,7 +1483,19 @@ fn wheel_importable(
                 return Ok(false);
             }
             let name = child.file_name();
-            if name != "__pycache__" && !names.insert(name) {
+            if name == "__pycache__" {
+                continue;
+            }
+            let Some(name) = name.to_str().filter(|name| name.is_ascii()) else {
+                return Ok(false);
+            };
+            // A package directory, `.py` file, and tagged extension can all provide the same import name.
+            let import = if is_dir {
+                name
+            } else {
+                name.split_once('.').map_or(name, |(stem, _)| stem)
+            };
+            if !names.insert(import.to_ascii_lowercase()) {
                 return Ok(false);
             }
         }

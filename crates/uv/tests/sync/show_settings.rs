@@ -4034,6 +4034,8 @@ fn preview_features() {
     +            BuildLazyImports,
     +            BuildDependencyHashes,
     +            WheelVariants,
+    +            RunCachedWheels,
+    +            RunPrivateEnvironment,
     +        ],
          },
          python_preference: Managed,
