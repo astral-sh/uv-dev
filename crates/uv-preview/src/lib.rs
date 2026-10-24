@@ -462,6 +462,9 @@ pub enum PreviewFeature {
     BuildDependencyHashes,
     /// Enables experimental support for [wheel variants](https://peps.python.org/pep-0825/).
     WheelVariants,
+    /// For isolated project runs and projects without an existing environment, `uv run` can import locked wheels
+    /// directly from the cache. See [running from cached wheels](./projects/run.md#running-from-cached-wheels).
+    RunCachedWheels,
 }
 
 impl Display for PreviewFeature {

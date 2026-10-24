@@ -375,6 +375,11 @@ mod tests {
         resolution can be retained even when their packages are absent from the final dependency
         graph.
 
+        ### `run-cached-wheels` {#run-cached-wheels}
+
+        For isolated project runs and projects without an existing environment, `uv run` can import locked wheels
+        directly from the cache. See [running from cached wheels](./projects/run.md#running-from-cached-wheels).
+
         ### `s3-endpoint` {#s3-endpoint}
 
         uv can authenticate requests to an S3-compatible storage endpoint using AWS Signature

@@ -1,10 +1,12 @@
+use std::borrow::Cow;
+
 use itertools::Itertools;
 use rustc_hash::FxHashSet;
 use uv_cache::Cache;
 use uv_client::{BaseClientBuilder, RegistryClientBuilder};
 use uv_command_support::Printer;
 use uv_configuration::{
-    Concurrency, DependencyGroupsWithDefaults, DryRun, EditableMode,
+    BuildOptions, Concurrency, DependencyGroupsWithDefaults, DryRun, EditableMode,
     ExtrasSpecificationWithDefaults, HashCheckingMode, InstallOptions, Modifications, TargetTriple,
 };
 use uv_dispatch::{BuildDispatch, PlatformState};
@@ -16,6 +18,7 @@ use uv_install_operations::{BytecodeCompilation, Changelog, InstallationPlan};
 use uv_installer::{InstallationStrategy, SitePackages};
 use uv_lock::Installable;
 use uv_pep508::{MarkerTree, VersionOrUrl};
+use uv_platform_tags::Tags;
 use uv_preview::Preview;
 use uv_pypi_types::{ParsedArchiveUrl, ParsedGitDirectoryUrl, ParsedGitPathUrl, ParsedUrl};
 use uv_python_interpreter::PythonEnvironment;
@@ -149,68 +152,15 @@ pub async fn sync_from_lock(
     // primary builder into the registry client below.
     let malware_check_client_builder = client_builder.clone();
 
-    // Validate that the Python version is supported by the lockfile.
-    if !target
-        .lock()
-        .requires_python()
-        .contains(venv.interpreter().python_version())
-    {
-        return Err(EnvironmentError::LockedPythonIncompatibility(
-            venv.interpreter().python_version().clone(),
-            target.lock().requires_python().clone(),
-        ));
-    }
-
-    // Validate that the set of requested extras and development groups are compatible.
-    detect_conflicts(&target, extras, groups)?;
-
-    // Validate that the set of requested extras and development groups are defined in the lockfile.
-    target.validate_extras(extras)?;
-    target.validate_groups(groups)?;
-
-    // Determine the markers to use for resolution.
-    let marker_env = resolution_markers(None, python_platform, venv.interpreter());
-
-    // Validate that the platform is supported by the lockfile.
-    let environments = target.lock().supported_environments();
-    if !environments.is_empty() {
-        if !environments
-            .iter()
-            .any(|env| env.evaluate(&marker_env, &[]))
-        {
-            return Err(EnvironmentError::LockedPlatformIncompatibility(
-                // For error reporting, we use the "simplified"
-                // supported environments, because these correspond to
-                // what the end user actually wrote. The non-simplified
-                // environments, by contrast, are explicitly
-                // constrained by `requires-python`.
-                target
-                    .lock()
-                    .simplified_supported_environments()
-                    .into_iter()
-                    .filter_map(MarkerTree::contents)
-                    .map(|env| format!("`{env}`"))
-                    .join(", "),
-            ));
-        }
-    }
-
-    // Determine the tags to use for the resolution.
-    let tags = resolution_tags(None, python_platform, venv.interpreter())
-        .map_err(EnvironmentError::from)?;
-
-    // Read the lockfile.
-    let resolution = target.to_resolution(
-        &marker_env,
-        &tags,
+    let (resolution, tags) = resolve_locked_environment(
+        target,
+        venv,
         extras,
         groups,
+        python_platform,
         build_options,
         &install_options,
     )?;
-
-    // Always skip virtual projects, which shouldn't be built or installed.
-    let resolution = apply_no_virtual_project(resolution);
 
     // If necessary, convert editable to non-editable distributions.
     let resolution = apply_editable_mode(resolution, editable);
@@ -365,6 +315,81 @@ pub async fn sync_from_lock(
         .await?;
 
     Ok(changelog)
+}
+
+/// Select the distributions that the target installs for this interpreter, platform, and dependency selection.
+pub fn resolve_locked_environment<'env>(
+    target: InstallTarget<'_>,
+    venv: &'env PythonEnvironment,
+    extras: &ExtrasSpecificationWithDefaults,
+    groups: &DependencyGroupsWithDefaults,
+    python_platform: Option<&TargetTriple>,
+    build_options: &BuildOptions,
+    install_options: &InstallOptions,
+) -> Result<(Resolution, Cow<'env, Tags>), EnvironmentError> {
+    // Validate that the Python version is supported by the lockfile.
+    if !target
+        .lock()
+        .requires_python()
+        .contains(venv.interpreter().python_version())
+    {
+        return Err(EnvironmentError::LockedPythonIncompatibility(
+            venv.interpreter().python_version().clone(),
+            target.lock().requires_python().clone(),
+        ));
+    }
+
+    // Validate that the set of requested extras and development groups are compatible.
+    detect_conflicts(&target, extras, groups)?;
+
+    // Validate that the set of requested extras and development groups are defined in the lockfile.
+    target.validate_extras(extras)?;
+    target.validate_groups(groups)?;
+
+    // Determine the markers to use for resolution.
+    let marker_env = resolution_markers(None, python_platform, venv.interpreter());
+
+    // Validate that the platform is supported by the lockfile.
+    let environments = target.lock().supported_environments();
+    if !environments.is_empty() {
+        if !environments
+            .iter()
+            .any(|env| env.evaluate(&marker_env, &[]))
+        {
+            return Err(EnvironmentError::LockedPlatformIncompatibility(
+                // For error reporting, we use the "simplified"
+                // supported environments, because these correspond to
+                // what the end user actually wrote. The non-simplified
+                // environments, by contrast, are explicitly
+                // constrained by `requires-python`.
+                target
+                    .lock()
+                    .simplified_supported_environments()
+                    .into_iter()
+                    .filter_map(MarkerTree::contents)
+                    .map(|env| format!("`{env}`"))
+                    .join(", "),
+            ));
+        }
+    }
+
+    // Determine the tags to use for the resolution.
+    let tags = resolution_tags(None, python_platform, venv.interpreter())
+        .map_err(EnvironmentError::from)?;
+
+    // Read the lockfile.
+    let resolution = target.to_resolution(
+        &marker_env,
+        &tags,
+        extras,
+        groups,
+        build_options,
+        install_options,
+    )?;
+
+    // Always skip virtual projects, which shouldn't be built or installed.
+    let resolution = apply_no_virtual_project(resolution);
+    Ok((resolution, tags))
 }
 
 /// Filter out any virtual workspace members.

@@ -5,7 +5,10 @@ use assert_cmd::assert::OutputAssertExt;
 use assert_fs::{fixture::ChildPath, prelude::*};
 use indoc::{formatdoc, indoc};
 use insta::assert_snapshot;
-use predicates::{prelude::predicate, str::contains};
+use predicates::{
+    prelude::{PredicateBooleanExt, predicate},
+    str::contains,
+};
 use serde_json::json;
 use std::io;
 use std::path::Path;
@@ -14,7 +17,8 @@ use uv_static::EnvVars;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-use uv_test::{TestContext, copy_dir_ignore, packse::PackseServer, uv_snapshot};
+use uv_test::packse::{PackseServer, WheelBuilder};
+use uv_test::{TestContext, copy_dir_ignore, uv_snapshot};
 
 #[test]
 fn run_with_python_version() -> Result<()> {
@@ -1660,6 +1664,264 @@ fn run_with_local_wheel_refreshes_rebuilt_wheel() -> Result<()> {
      + foo==0.1.0 (from file://[TEMP_DIR]/foo/dist/foo-0.1.0-py3-none-any.whl)
     ");
 
+    Ok(())
+}
+
+#[test]
+fn run_cached_wheels_preview() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let links = context.workspace_root.join("test/links");
+    let project = context.temp_dir.child("pyproject.toml");
+    let manifest = indoc! {r#"
+        [project]
+        name = "example"
+        version = "1.0.0"
+        requires-python = "==3.12.*"
+        dependencies = ["ok==1.0.0", "simple-launcher==0.1.0", "basic-package; python_version >= '3.13'"]
+
+        [dependency-groups]
+        tools = ["validation==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["run-cached-wheels"]
+    "#};
+    project.write_str(manifest)?;
+    context
+        .sync()
+        .args(["--offline", "--no-index", "--find-links"])
+        .arg(&links)
+        .env(
+            EnvVars::UV_PROJECT_ENVIRONMENT,
+            context.temp_dir.child("seed").path(),
+        )
+        .assert()
+        .success();
+    let lock = context.temp_dir.child("uv.lock");
+    let contents = fs_err::read(lock.path())?;
+    let project_env = context.temp_dir.child(".venv");
+    context.run().args(["--offline", "--no-index", "--find-links"]).arg(&links).args(["python", "-Ic", indoc! {"
+        from importlib.util import find_spec
+        from pathlib import Path
+        import sys, ok
+        assert Path(ok.__file__).resolve().is_relative_to(Path(sys.argv[1]).resolve() / 'archive-v0')
+        assert find_spec('validation') is None and find_spec('basic_package') is None
+    "}]).arg(context.cache_dir.path()).assert().success();
+    context
+        .run()
+        .args(["--offline", "--no-index", "--find-links"])
+        .arg(&links)
+        .arg("simple_launcher")
+        .assert()
+        .success()
+        .stdout(contains("Hi from the simple launcher!"));
+    assert_eq!(fs_err::read(lock.path())?, contents);
+    assert!(!project_env.path().exists());
+
+    project.write_str(&manifest.replace("ok==1.0.0", "ok==2.0.0"))?;
+    context
+        .run()
+        .args(["--offline", "--no-index", "--find-links"])
+        .arg(&links)
+        .args([
+            "--locked",
+            "python",
+            "-c",
+            "raise AssertionError('command started')",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("needs to be updated"));
+    assert_eq!(fs_err::read(lock.path())?, contents);
+    // A new group and version must be installed when their wheels are missing.
+    context
+        .run()
+        .args(["--offline", "--no-index", "--find-links"])
+        .arg(&links)
+        .args([
+            "--group",
+            "tools",
+            "python",
+            "-Ic",
+            indoc! {"
+        from importlib.metadata import version
+        from pathlib import Path
+        import ok, sys
+        assert version('validation') == '1.0.0' and version('ok') == '2.0.0'
+        assert Path(ok.__file__).is_relative_to(Path(sys.argv[1]))
+    "},
+        ])
+        .arg(project_env.path())
+        .assert()
+        .success();
+    assert_ne!(fs_err::read(lock.path())?, contents);
+    // A subsequent project run keeps the environment the user can see on disk.
+    context
+        .run()
+        .args(["--offline", "--no-index", "--find-links"])
+        .arg(&links)
+        .args([
+            "python",
+            "-Ic",
+            "import sys; assert sys.prefix == sys.argv[1]",
+        ])
+        .arg(project_env.path())
+        .assert()
+        .success();
+    Ok(())
+}
+
+#[test]
+fn run_cached_wheels_preview_missing_lock() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1.0.0"
+        requires-python = ">=3.12"
+        [tool.uv]
+        preview-features = ["run-cached-wheels"]
+    "#})?;
+    let lock = context.temp_dir.child("uv.lock");
+    context
+        .run()
+        .args(["--offline", "--frozen", "python", "-V"])
+        .assert()
+        .failure()
+        .stderr(contains("Unable to find lockfile"));
+    assert!(!lock.path().exists());
+    context
+        .run()
+        .args(["--offline", "python", "-V"])
+        .assert()
+        .success();
+    assert!(lock.path().is_file());
+    Ok(())
+}
+
+/// When the package directories and modules are installed together, both imports select the
+/// packages. With separate wheel roots, one module takes precedence regardless of root order.
+#[test]
+fn run_cached_wheels_preview_conflicting_imports() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let links = context.temp_dir.child("wheels");
+    links.create_dir_all()?;
+    let version = "1".parse()?;
+    let (filename, bytes) = WheelBuilder::new(&"first".parse()?, &version)
+        .files(&[
+            ("left.py", "kind = 'module'"),
+            ("right/__init__.py", "kind = 'package'"),
+        ])
+        .build();
+    links.child(filename).write_binary(&bytes)?;
+    let (filename, bytes) = WheelBuilder::new(&"second".parse()?, &version)
+        .files(&[
+            ("right.py", "kind = 'module'"),
+            ("left/__init__.py", "kind = 'package'"),
+        ])
+        .build();
+    links.child(filename).write_binary(&bytes)?;
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1"
+        requires-python = "==3.12.*"
+        dependencies = ["first", "second"]
+        [tool.uv]
+        preview-features = ["run-cached-wheels"]
+        no-index = true
+        find-links = ["wheels"]
+    "#})?;
+    context
+        .sync()
+        .arg("--offline")
+        .env(
+            EnvVars::UV_PROJECT_ENVIRONMENT,
+            context.temp_dir.child("seed").path(),
+        )
+        .assert()
+        .success();
+    context
+        .run()
+        .args([
+            "--offline",
+            "python",
+            "-Ic",
+            "import left, right; assert left.kind == right.kind == 'package'",
+        ])
+        .assert()
+        .success();
+    assert!(context.temp_dir.child(".venv").path().is_dir());
+    Ok(())
+}
+
+/// A hash on an incompatible wheel must not authorize the selected wheel.
+#[test]
+fn run_cached_wheels_preview_rejects_wrong_hash() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    let project = context.temp_dir.child("pyproject.toml");
+    let links = context.temp_dir.child("links");
+    links.create_dir_all()?;
+    let wheel = "ok-1.0.0-py3-none-any.whl";
+    fs_err::copy(
+        context.workspace_root.join("test/links").join(wheel),
+        links.child(wheel).path(),
+    )?;
+    project.write_str(indoc! {r#"
+        [project]
+        name = "example"
+        version = "1.0.0"
+        requires-python = "==3.12.*"
+        dependencies = ["ok==1.0.0"]
+
+        [tool.uv]
+        preview-features = ["run-cached-wheels"]
+        no-index = true
+        find-links = ["links"]
+    "#})?;
+    context.lock().arg("--offline").assert().success();
+    let lock = context.temp_dir.child("uv.lock");
+    let contents = fs_err::read_to_string(lock.path())?;
+    let valid = "79f0b33e6ce1e09eaa1784c8eee275dfe84d215d9c65c652f07c18e85fdaac5f";
+    let entry = format!(r#"{{ path = "{wheel}" }}"#);
+    assert!(contents.contains(&entry));
+    lock.write_str(&contents.replace(
+        &entry,
+        &format!(r#"{{ path = "{wheel}", hash = "sha256:{valid}" }}"#),
+    ))?;
+    context
+        .sync()
+        .args(["--frozen", "--offline"])
+        .env(
+            EnvVars::UV_PROJECT_ENVIRONMENT,
+            context.temp_dir.child("seed").path(),
+        )
+        .assert()
+        .success();
+    let invalid = "0".repeat(64);
+    let siblings = format!(
+        r#"{{ path = "{wheel}", hash = "sha256:{invalid}" }},
+    {{ path = "ok-1.0.0-cp27-cp27m-win32.whl", hash = "sha256:{valid}" }}"#
+    );
+    lock.write_str(&contents.replace(&entry, &siblings))?;
+    context
+        .run()
+        .args([
+            "--frozen",
+            "--offline",
+            "python",
+            "-c",
+            "print('job started')",
+        ])
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(contains("hash").or(contains("Hash")));
     Ok(())
 }
 
