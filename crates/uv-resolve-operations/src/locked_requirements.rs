@@ -1,16 +1,19 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
 use tracing::info_span;
 
 use uv_configuration::Upgrade;
-use uv_distribution_types::IndexUrl;
+use uv_distribution_types::{BuiltDist, Dist, IndexUrl, ResolvedDist, SourceDist};
 use uv_fs::CWD;
 use uv_git::ResolvedRepositoryReference;
 use uv_lock::{Lock, LockError, PylockToml, PylockTomlErrorKind};
 use uv_pep508::VerbatimUrl;
 use uv_requirements_txt::RequirementsTxt;
-use uv_resolver::{Preference, PreferenceError, UpgradePackages};
+use uv_resolver::{
+    Preference, PreferenceError, ResolverOutput, UpgradePackages, implied_markers_for_wheels,
+};
 
 #[derive(Debug, Default)]
 pub struct LockedRequirements {
@@ -72,24 +75,20 @@ pub fn read_lock_requirements(
     install_path: &Path,
     upgrade: &Upgrade,
 ) -> Result<LockedRequirements, LockError> {
-    // As an optimization, skip iterating over the lockfile is we're upgrading all packages anyway.
     if upgrade.is_all() {
         return Ok(LockedRequirements::default());
     }
 
     let upgrade_packages = lock.upgrade_packages(upgrade);
-
     let mut preferences = Vec::new();
     let mut git = Vec::new();
-
     for package in lock.packages() {
-        // Skip the distribution if it's included in the upgrade strategy (either by explicit
-        // package name or via a dependency group).
         if upgrade_packages.contains(package.name()) {
             continue;
         }
-
-        // Map each entry in the lockfile to a preference.
+        if let Some(git_ref) = package.as_git_ref()? {
+            git.push(git_ref);
+        }
         if let Some(version) = package.version() {
             preferences.push(Preference::from_locked(
                 package.name().clone(),
@@ -98,14 +97,67 @@ pub fn read_lock_requirements(
                 package.fork_markers().to_vec(),
             ));
         }
+    }
+    Ok(LockedRequirements { preferences, git })
+}
 
-        // Map each entry in the lockfile to a Git SHA.
-        if let Some(git_ref) = package.as_git_ref()? {
-            git.push(git_ref);
+/// Remove preferences whose selected registry artifacts do not cover a required environment.
+///
+/// Candidate selection records stable preference identities, including reuse on other indexes and
+/// through local variants. Reordering or removing input preferences does not change their identity.
+/// Preferences absent from this resolution remain available if a retry makes them reachable again.
+/// Returns whether any preference was removed.
+pub fn retain_wheel_ready_preferences(
+    preferences: &mut Vec<Preference>,
+    resolution: &ResolverOutput,
+) -> bool {
+    let required_environments = &resolution.options.wheel_preference_environments;
+    if preferences.is_empty() || required_environments.is_empty() {
+        return false;
+    }
+    let mut discarded = HashSet::new();
+    for (_, distribution) in resolution.base_dists() {
+        if distribution.preferences.is_empty() {
+            continue;
+        }
+        let ResolvedDist::Installable { dist, .. } = &distribution.dist else {
+            continue;
+        };
+        let (index, wheels) = match dist.as_ref() {
+            Dist::Built(BuiltDist::Registry(dist)) => (&dist.best_wheel().index, &dist.wheels),
+            Dist::Source(SourceDist::Registry(dist)) => (&dist.index, &dist.wheels),
+            Dist::Built(BuiltDist::DirectUrl(_) | BuiltDist::Path(_) | BuiltDist::GitPath(_))
+            | Dist::Source(
+                SourceDist::DirectUrl(_)
+                | SourceDist::Path(_)
+                | SourceDist::Directory(_)
+                | SourceDist::GitPath(_)
+                | SourceDist::GitDirectory(_),
+            ) => continue,
+        };
+        let coverage = implied_markers_for_wheels(
+            wheels
+                .iter()
+                .filter(|wheel| wheel.index == *index)
+                .map(|wheel| &wheel.filename),
+            resolution.options.minimum_libc_version,
+        );
+        for (preference, marker) in &distribution.preferences {
+            let activation = resolution
+                .requires_python
+                .complexify_markers(marker.pep508());
+            if required_environments.iter().any(|required| {
+                let applicable = activation.and(*required);
+                !applicable.is_false() && coverage.is_disjoint(applicable)
+            }) {
+                discarded.insert(*preference);
+            }
         }
     }
 
-    Ok(LockedRequirements { preferences, git })
+    let previous_count = preferences.len();
+    preferences.retain(|preference| !discarded.contains(&preference.id()));
+    preferences.len() != previous_count
 }
 
 /// Load the preferred requirements from an existing `pylock.toml` file, applying the upgrade strategy.

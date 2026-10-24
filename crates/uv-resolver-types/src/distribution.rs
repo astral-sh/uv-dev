@@ -1,5 +1,6 @@
 use std::fmt::Display;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use uv_distribution::Metadata;
 use uv_distribution_types::{
@@ -55,6 +56,24 @@ pub enum PackageRole {
     Dependency,
 }
 
+/// A stable identity shared by clones of an input preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PreferenceId(u64);
+
+impl PreferenceId {
+    /// Allocate a fresh preference identity for this process.
+    pub fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for PreferenceId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A pinned package with its resolved distribution and metadata. The [`ResolvedDist`] refers to a
 /// specific distribution (e.g., a specific wheel), while the [`Metadata`] describes
 /// the package-version pair.
@@ -74,6 +93,9 @@ pub struct AnnotatedDist {
     /// resolution, this marker corresponds to the disjunction of all paths to
     /// this distribution in the resolution graph.
     pub marker: UniversalMarker,
+    /// Input preferences used to select this distribution and their marker domains.
+    /// Resolver-generated preferences have no input identity and are not recorded here.
+    pub preferences: Vec<(PreferenceId, UniversalMarker)>,
 }
 
 impl AnnotatedDist {

@@ -24,7 +24,9 @@ use uv_pypi_types::{ConflictKind, SupportedEnvironments};
 use uv_python_interpreter::{Interpreter, PythonEnvironment};
 use uv_requirements::{ExtrasResolver, script_extra_build_requires};
 use uv_resolve_operations::Error as ResolveError;
-use uv_resolve_operations::locked_requirements::{LockedRequirements, read_lock_requirements};
+use uv_resolve_operations::locked_requirements::{
+    LockedRequirements, read_lock_requirements, retain_wheel_ready_preferences,
+};
 use uv_resolve_operations::loggers::{ResolveLogger, SummaryResolveLogger};
 use uv_resolve_operations::reporters::ResolverReporter;
 use uv_resolver::{
@@ -653,6 +655,7 @@ async fn do_lock(
         .index_strategy(*index_strategy)
         .build_options(build_options.clone())
         .artifact_environments(artifact_environments.clone())
+        .wheel_preference_environments(lock_required_environments.clone())
         .minimum_libc_version(minimum_libc_version)
         .build();
     // Checking an existing lockfile may build metadata and install build dependencies. Verify any
@@ -872,7 +875,10 @@ async fn do_lock(
             });
 
             // If an existing lockfile exists, build up a set of preferences.
-            let LockedRequirements { preferences, git } = versions_lock
+            let LockedRequirements {
+                mut preferences,
+                git,
+            } = versions_lock
                 .map(|lock| read_lock_requirements(lock, target.install_path(), upgrade))
                 .transpose()?
                 .unwrap_or_default();
@@ -922,57 +928,69 @@ async fn do_lock(
             let workspace_members = member_requirements
                 .iter()
                 .map(|requirement| (requirement.name.clone(), requirement.source.clone()))
-                .collect();
+                .collect::<BTreeMap<_, _>>();
 
-            // Resolve the requirements.
-            let (resolution, _) = uv_resolve_operations::resolve(
-                member_requirements
-                    .into_iter()
-                    .chain(target.group_requirements())
-                    .chain(requirements.iter().cloned())
-                    .chain(
-                        dependency_groups
-                            .values()
-                            .flat_map(|requirements| requirements.iter().cloned()),
-                    )
-                    .map(UnresolvedRequirementSpecification::from)
-                    .collect(),
-                constraints
-                    .iter()
-                    .cloned()
-                    .map(NameRequirementSpecification::from)
-                    .chain(external)
-                    .collect(),
-                Vec::new(),
-                overrides.clone(),
-                excludes.clone(),
-                source_trees,
-                // The root is always null in workspaces, it "depends on" the projects
-                None,
-                workspace_members,
-                &extras,
-                &groups,
-                preferences,
-                None,
-                &hasher,
-                &Reinstall::default(),
-                upgrade,
-                None,
-                resolver_env,
-                python_requirement,
-                interpreter.markers(),
-                conflicts.clone(),
-                &client,
-                &flat_index,
-                state.index(),
-                &build_dispatch,
-                concurrency,
-                options,
-                recorder.clone(),
-                Box::new(SummaryResolveLogger),
-                printer,
-            )
-            .await?;
+            let resolver_requirements = member_requirements
+                .into_iter()
+                .chain(target.group_requirements())
+                .chain(requirements.iter().cloned())
+                .chain(
+                    dependency_groups
+                        .values()
+                        .flat_map(|requirements| requirements.iter().cloned()),
+                )
+                .map(UnresolvedRequirementSpecification::from)
+                .collect::<Vec<_>>();
+            let resolver_constraints = constraints
+                .iter()
+                .cloned()
+                .map(NameRequirementSpecification::from)
+                .chain(external)
+                .collect::<Vec<_>>();
+
+            let resolution = loop {
+                let (resolution, _) = uv_resolve_operations::resolve(
+                    resolver_requirements.clone(),
+                    resolver_constraints.clone(),
+                    Vec::new(),
+                    overrides.clone(),
+                    excludes.clone(),
+                    source_trees.clone(),
+                    // The root is always null in workspaces, it "depends on" the projects
+                    None,
+                    workspace_members.clone(),
+                    &extras,
+                    &groups,
+                    preferences.clone(),
+                    None,
+                    &hasher,
+                    &Reinstall::default(),
+                    upgrade,
+                    None,
+                    resolver_env.clone(),
+                    python_requirement.clone(),
+                    interpreter.markers(),
+                    conflicts.clone(),
+                    &client,
+                    &flat_index,
+                    state.index(),
+                    &build_dispatch,
+                    concurrency,
+                    options.clone(),
+                    recorder.clone(),
+                    Box::new(SummaryResolveLogger),
+                    printer,
+                )
+                .await?;
+
+                // Registry revalidation can replace a preferred release without an explicit
+                // refresh request. Recheck wheel preferences against the actual selected graph.
+                // Each retry removes at least one retained preference; removed preferences are
+                // never restored, so the preference set strictly decreases until resolution settles.
+                if !retain_wheel_ready_preferences(&mut preferences, &resolution) {
+                    break resolution;
+                }
+            };
 
             // Print the success message after completing resolution.
             logger.on_complete(resolution.len(), start, printer)?;
