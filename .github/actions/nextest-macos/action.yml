@@ -1,0 +1,81 @@
+name: Run uv nextest on macos
+description: Prepare uv's macos test environment and run one partition.
+inputs:
+  partition:
+    description: One-based partition number.
+    default: "1"
+  partitions:
+    description: Total number of partitions.
+    default: "1"
+  save-cache:
+    description: Whether to save the Rust build cache.
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: "Install Rust toolchain"
+      shell: bash
+      run: rustup toolchain install --profile minimal
+
+    - uses: astral-sh/github-actions/rust-workspace-cache@3c9fe5db47e144ea224b57565e3ab1ab769ef41d
+      with:
+        prefix-key: v1-rust-workspace
+        key: ${{ hashFiles('Cargo.toml') }}
+        profile: fast-build-nightly
+        save-if: ${{ inputs.save-cache == 'true' }}
+
+    - name: "Create HFS+ disk image (no reflink support)"
+      shell: bash
+      run: |
+        hdiutil create -size 256m -fs HFS+ -volname NoReflink /tmp/noreflink.dmg
+        hdiutil attach /tmp/noreflink.dmg
+        echo "HFS_MOUNT=/Volumes/NoReflink" >> "$GITHUB_ENV"
+
+    - name: "Create CI keychain"
+      # Namespace macOS runners do not start with an unlocked default user keychain. Create an
+      # empty-password keychain for native-auth tests; GitHub and Depot runners provide one.
+      shell: bash
+      run: |
+        security create-keychain -p "" "$RUNNER_TEMP/uv-ci.keychain-db"
+        security set-keychain-settings -lut 21600 "$RUNNER_TEMP/uv-ci.keychain-db"
+        security unlock-keychain -p "" "$RUNNER_TEMP/uv-ci.keychain-db"
+        security list-keychains -d user -s "$RUNNER_TEMP/uv-ci.keychain-db"
+        security default-keychain -d user -s "$RUNNER_TEMP/uv-ci.keychain-db"
+
+    - name: "Configure Python archive cache"
+      shell: bash
+      run: echo "UV_PYTHON_CACHE_DIR=$RUNNER_TEMP/uv-python-cache" >> "$GITHUB_ENV"
+
+    - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      with:
+        # renovate: datasource=github-release-attachments depName=astral-sh/uv
+        version: "0.13.5"
+        checksum: "743f85035a1996ecb350659e01cd9faea9709829be09b1b4b03c73eaf3c9cd73"
+
+    - name: "Install required Python versions"
+      env:
+        UV_PYTHON_DOWNLOADS_JSON_URL: crates/uv-python-managed/download-metadata.json
+      shell: bash
+      run: |
+        uv python install
+        # Warm the cache for Unix-only tests
+        uv python install 3.12d 3.13d 3.13t 3.13td
+
+    - name: "Cargo test"
+      env:
+        # Retry more than default to reduce flakes in CI
+        UV_HTTP_RETRIES: 5
+        RUST_BACKTRACE: 1
+        # macOS tmpdir is on APFS which supports reflink
+        UV_INTERNAL__TEST_COW_FS: ${{ runner.temp }}
+        # HFS+ RAM disk does not support copy-on-write and is on a different device
+        UV_INTERNAL__TEST_NOCOW_FS: ${{ env.HFS_MOUNT }}
+        UV_INTERNAL__TEST_ALT_FS: ${{ env.HFS_MOUNT }}
+      uses: astral-sh/github-actions/nextest@583fb5711db77c8554775b551079742d8a341e91
+      with:
+        name: macos
+        partition: ${{ inputs.partition }}
+        partitions: ${{ inputs.partitions }}
+        junit-path: target/nextest/ci*/junit.xml
+        arguments: >-
+          ["--locked","--cargo-profile","fast-build-nightly","-Z","panic-abort-tests","-Z","checksum-freshness","--no-default-features","--features","test-python,test-python-managed,test-pypi,test-git,test-git-lfs,performance,test-crates-io,native-auth,apple-native","--workspace","--profile","ci-macos"]
